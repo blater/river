@@ -23,8 +23,8 @@ final class DurableWalQuorum {
       new LocalWalReservation[MAXIMUM_FOLLOWERS];
   private final LocalWalAppendResult[] appendResults =
       new LocalWalAppendResult[MAXIMUM_FOLLOWERS];
-  private final LocalWalForceResult[] forceResults =
-      new LocalWalForceResult[MAXIMUM_FOLLOWERS];
+  private final LocalWalForceTarget[] forceTargets =
+      new LocalWalForceTarget[MAXIMUM_FOLLOWERS];
   private final LocalWalReadResult primaryRead = new LocalWalReadResult();
   private final LocalWalForcedCursor primaryCursor = new LocalWalForcedCursor();
   private final DurableWalLogicalStreams logicalStreams;
@@ -45,7 +45,7 @@ final class DurableWalQuorum {
       available[index] = true;
       reservations[index] = new LocalWalReservation();
       appendResults[index] = new LocalWalAppendResult();
-      forceResults[index] = new LocalWalForceResult();
+      forceTargets[index] = new LocalWalForceTarget();
     }
   }
 
@@ -54,8 +54,8 @@ final class DurableWalQuorum {
   }
 
   StatusCode replicateLogicalStreamBatch(
-      LocalWal primary, long recordCount, LocalWalForceCause cause) {
-    return logicalStreams.replicate(primary, recordCount, cause);
+      LocalWal primary, LocalWalForceTarget target, LocalWalForceCause cause) {
+    return logicalStreams.replicate(primary, target, cause);
   }
 
   StatusCode cancelLogicalStreams() {
@@ -67,11 +67,12 @@ final class DurableWalQuorum {
   }
 
   StatusCode replicateForcedBatch(
-      LocalWal primary, long recordCount, LocalWalForceCause cause) {
+      LocalWal primary, LocalWalForceTarget target, LocalWalForceCause cause) {
+    long recordCount = target.recordCount();
     if (fenced || primary == null || recordCount <= 0) {
       return StatusCode.FENCED;
     }
-    StatusCode opened = primary.openForcedCursor(primaryCursor);
+    StatusCode opened = primary.openForcedCursor(target, target.token(), primaryCursor);
     if (!opened.isOk()) return fence(opened);
     for (long record = 0; record < recordCount; record++) {
       StatusCode read = primaryCursor.next(primaryRead);
@@ -86,13 +87,13 @@ final class DurableWalQuorum {
         if (!available[follower]) {
           continue;
         }
-        LocalWal target = followers[follower];
+        LocalWal followerWal = followers[follower];
         LocalWalReservation reservation = reservations[follower];
-        StatusCode status = target.reserve(header.payloadBytes(), reservation);
+        StatusCode status = followerWal.reserve(header.payloadBytes(), reservation);
         if (status.isOk()) {
           source.position(0);
           reservation.writablePayload().put(source);
-          status = target.appendUnforced(
+          status = followerWal.appendUnforced(
               reservation,
               header.transactionId(),
               header.commitSequence(),
@@ -114,9 +115,10 @@ final class DurableWalQuorum {
       if (!available[follower]) {
         continue;
       }
-      StatusCode status = followers[follower].forcePending(forceResults[follower], cause);
+      StatusCode status = followers[follower].forcePending(forceTargets[follower], cause);
       if (status.isOk()) {
-        status = followers[follower].releaseForcedBatch();
+        status = followers[follower].releaseForcedBatch(
+            forceTargets[follower], forceTargets[follower].token());
       }
       if (!status.isOk()) {
         retireFollower(follower);
@@ -129,7 +131,7 @@ final class DurableWalQuorum {
       fenced = true;
       return StatusCode.FENCED;
     }
-    quorumDurableCommitSequence = primary.currentCommitSequence();
+    quorumDurableCommitSequence = target.commitSequence();
     return StatusCode.OK;
   }
 

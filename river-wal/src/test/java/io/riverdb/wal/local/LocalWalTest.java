@@ -72,9 +72,9 @@ final class LocalWalTest {
       LocalWalAppendResult appended = new LocalWalAppendResult();
       assertEquals(StatusCode.OK, wal.appendUnforced(
           reservation, index + 2, index + 1, 1, 1, 1, appended));
-      LocalWalForceResult forced = new LocalWalForceResult();
+      LocalWalForceTarget forced = new LocalWalForceTarget();
       assertEquals(StatusCode.OK, wal.forcePending(forced, causes[index]));
-      assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+      assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
     }
 
     assertEquals(StatusCode.OK, wal.copyMetrics(after));
@@ -208,11 +208,11 @@ final class LocalWalTest {
     }
     assertEquals(StatusCode.CONFLICT, wal.close());
     assertEquals(initialForces, counters.forceCalls());
-    LocalWalForceResult forced = new LocalWalForceResult();
+    LocalWalForceTarget forced = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
     assertEquals(3, forced.recordCount());
     assertEquals(firstStart, forced.startOffset());
-    assertEquals(appended.endOffset(), forced.durableEnd());
+    assertEquals(appended.endOffset(), forced.endOffset());
     assertEquals(3, forced.commitSequence());
     assertEquals(appended.endOffset(), wal.durableEnd());
     assertEquals(3, wal.currentCommitSequence());
@@ -220,13 +220,13 @@ final class LocalWalTest {
 
     LocalWalReadResult forcedRead = new LocalWalReadResult();
     LocalWalForcedCursor cursor = new LocalWalForcedCursor();
-    assertEquals(StatusCode.OK, wal.openForcedCursor(cursor));
+    assertEquals(StatusCode.OK, wal.openForcedCursor(forced, forced.token(), cursor));
     for (int index = 0; index < 3; index++) {
       assertEquals(StatusCode.OK, cursor.next(forcedRead));
       assertEquals(index + 10L, forcedRead.payload().getLong(0));
     }
     assertEquals(StatusCode.OK, cursor.reset());
-    assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
 
     long offset = firstStart;
     LocalWalReadResult read = new LocalWalReadResult();
@@ -254,10 +254,10 @@ final class LocalWalTest {
           StatusCode.OK,
           wal.appendUnforced(single, 91, 0, 0, 3, 1, appended));
     }
-    LocalWalForceResult forced = new LocalWalForceResult();
+    LocalWalForceTarget forced = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
     assertEquals(records, forced.recordCount());
-    assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }
@@ -275,7 +275,7 @@ final class LocalWalTest {
     assertEquals(3, appended.recordCount());
     assertEquals(1, appended.firstJournalSequence());
 
-    LocalWalForceResult forced = new LocalWalForceResult();
+    LocalWalForceTarget forced = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
     assertEquals(3, forced.recordCount());
     assertEquals(11, forced.commitSequence());
@@ -292,7 +292,7 @@ final class LocalWalTest {
       expectedOffset = read.nextOffset();
     }
     assertEquals(appended.endOffset(), expectedOffset);
-    assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }
@@ -315,13 +315,13 @@ final class LocalWalTest {
     assertEquals(StatusCode.OK, wal.appendDecisionBatchUnforced(
         batch, 7, 2, appended));
     long forces = counters.forceCalls();
-    LocalWalForceResult forced = new LocalWalForceResult();
+    LocalWalForceTarget forced = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
     assertEquals(forces + 1, counters.forceCalls());
     assertEquals(6, forced.recordCount());
     LocalWalReadResult read = new LocalWalReadResult();
     LocalWalForcedCursor cursor = new LocalWalForcedCursor();
-    assertEquals(StatusCode.OK, wal.openForcedCursor(cursor));
+    assertEquals(StatusCode.OK, wal.openForcedCursor(forced, forced.token(), cursor));
     int group = 0;
     for (int record = 0; record < payloads.length; record++) {
       assertEquals(StatusCode.OK, cursor.next(read));
@@ -332,7 +332,7 @@ final class LocalWalTest {
       if (decision) group++;
     }
     assertEquals(StatusCode.OK, cursor.reset());
-    assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }
@@ -369,7 +369,7 @@ final class LocalWalTest {
     LocalWalAppendResult appended = new LocalWalAppendResult();
     assertEquals(StatusCode.OK, wal.appendUnforced(
         reservation, 101, 1, 1, 7, 1, appended));
-    LocalWalForceResult forced = new LocalWalForceResult();
+    LocalWalForceTarget forced = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
 
     assertEquals(StatusCode.OK, wal.fencePendingBatch());
@@ -391,10 +391,10 @@ final class LocalWalTest {
     assertEquals(1, continued.firstJournalSequence());
     assertEquals(1, wal.nextCommitSequence());
     assertEquals(197, wal.maximumTransactionId());
-    LocalWalForceResult forced = new LocalWalForceResult();
+    LocalWalForceTarget forced = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
     assertEquals(0, forced.commitSequence());
-    assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
 
     LocalWalRecordBatch decision = new BytesBatch(
         ByteBuffer.allocate(8).putLong(205).array(), new byte[] {(byte) 207});
@@ -403,7 +403,7 @@ final class LocalWalTest {
     assertEquals(3, decided.firstJournalSequence());
     assertEquals(StatusCode.OK, wal.forcePending(forced));
     assertEquals(7, forced.commitSequence());
-    assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
 
@@ -438,10 +438,10 @@ final class LocalWalTest {
     LocalWalGroupAppendResult appended = new LocalWalGroupAppendResult();
     assertEquals(StatusCode.OK,
         wal.appendContinuationGroupUnforced(continuation, 211, 5, 4, appended));
-    LocalWalForceResult forced = new LocalWalForceResult();
+    LocalWalForceTarget forced = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
     assertEquals(0, forced.commitSequence());
-    assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
 

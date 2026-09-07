@@ -34,7 +34,7 @@ public final class LocalWal {
   private final IoResult ioResult = new IoResult();
   private final FileSizeResult fileSizeResult = new FileSizeResult();
   private final WalRecordHeader recoveryHeader = new WalRecordHeader();
-  private final LocalWalForceResult publishForceResult = new LocalWalForceResult();
+  private final LocalWalForceTarget publishForceTarget = new LocalWalForceTarget();
   private final LocalWalBatchAdmissionResult batchAdmissionResult =
       new LocalWalBatchAdmissionResult();
   private final LocalWalReadResult suffixReadResult = new LocalWalReadResult();
@@ -53,7 +53,9 @@ public final class LocalWal {
   private long copiedPayloadBytes;
   private long pendingRecordCount;
   private DurableWalQuorum durableQuorum;
-  private boolean forcedBatch;
+  private LocalWalForceTarget activeForceTarget;
+  private long nextForceToken = 1;
+  private boolean forceInProgress;
   private boolean logicalStreamAppended;
   private boolean logicalStreamFinalAppended;
   private boolean recoveryTailOpen = true;
@@ -302,7 +304,7 @@ public final class LocalWal {
     StatusCode status = admission();
     if (!status.isOk()) return status;
     if (activeLogicalStreamToken != 0 || activeReservationToken != 0
-        || pendingRecordCount != 0 || forcedBatch) {
+        || pendingRecordCount != 0 || hasRetainedForceTarget()) {
       return StatusCode.CONFLICT;
     }
     long token = claimNextReservationToken();
@@ -339,22 +341,23 @@ public final class LocalWal {
   }
 
   public StatusCode forceLogicalStreamBatch(
-      LocalWalLogicalStream stream, LocalWalForceResult result) {
-    return forceLogicalStreamBatch(stream, result, LocalWalForceCause.OTHER);
+      LocalWalLogicalStream stream, LocalWalForceTarget target) {
+    return forceLogicalStreamBatch(stream, target, LocalWalForceCause.OTHER);
   }
 
   public StatusCode forceLogicalStreamBatch(
       LocalWalLogicalStream stream,
-      LocalWalForceResult result,
+      LocalWalForceTarget target,
       LocalWalForceCause cause) {
     if (cause == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
-    return LocalWalForceCoordinator.force(this, result, cause);
+    return LocalWalForceCoordinator.force(this, target, cause);
   }
 
-  public StatusCode releaseLogicalStreamBatch(LocalWalLogicalStream stream) {
+  public StatusCode releaseLogicalStreamBatch(
+      LocalWalLogicalStream stream, LocalWalForceTarget target, long token) {
     if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
-    StatusCode status = releaseForcedBatchInternal();
+    StatusCode status = releaseForcedBatchInternal(target, token);
     if (status.isOk() && logicalStreamFinalAppended) completeLogicalStream(stream);
     return status;
   }
@@ -362,7 +365,7 @@ public final class LocalWal {
   /** Cancels a stream only while no bytes from it have been accepted. */
   public StatusCode cancelLogicalStream(LocalWalLogicalStream stream) {
     if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
-    if (logicalStreamAppended || pendingRecordCount != 0 || forcedBatch) {
+    if (logicalStreamAppended || pendingRecordCount != 0 || hasRetainedForceTarget()) {
       return StatusCode.CONFLICT;
     }
     if (activeReservationToken != 0) return StatusCode.CONFLICT;
@@ -415,10 +418,10 @@ public final class LocalWal {
         formatVersion,
         result);
     if (status.isOk()) {
-      status = forcePending(publishForceResult, cause);
+      status = forcePending(publishForceTarget, cause);
     }
     if (status.isOk()) {
-      status = releaseForcedBatch();
+      status = releaseForcedBatch(publishForceTarget, publishForceTarget.token());
     }
     return status;
   }
@@ -477,40 +480,49 @@ public final class LocalWal {
   }
 
   /** Forces the current append batch and atomically advances its local durable frontier. */
-  public StatusCode forcePending(LocalWalForceResult result) {
-    return forcePending(result, LocalWalForceCause.OTHER);
+  public StatusCode forcePending(LocalWalForceTarget target) {
+    return forcePending(target, LocalWalForceCause.OTHER);
   }
 
   /** Forces pending WAL records with an explicit, mutually exclusive cause. */
   public StatusCode forcePending(
-      LocalWalForceResult result, LocalWalForceCause cause) {
+      LocalWalForceTarget target, LocalWalForceCause cause) {
     if (cause == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (hasOpenLogicalStream()) return StatusCode.CONFLICT;
-    return LocalWalForceCoordinator.force(this, result, cause);
+    return LocalWalForceCoordinator.force(this, target, cause);
   }
 
-  /** Opens a sequential view over the current forced range. */
-  public StatusCode openForcedCursor(LocalWalForcedCursor cursor) {
-    if (cursor == null || !forcedBatch || pendingRecordCount <= 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    return cursor.open(this, pendingStart, durableEnd, pendingRecordCount);
-  }
-
-  /** Releases provider-owned forced views so their fixed slots may be reused. */
-  public StatusCode releaseForcedBatch() {
-    if (hasOpenLogicalStream()) return StatusCode.CONFLICT;
-    return releaseForcedBatchInternal();
-  }
-
-  private StatusCode releaseForcedBatchInternal() {
-    if (!forcedBatch) {
+  /** Opens the locally forced captured range; quorum uses it before configured completion. */
+  public StatusCode openForcedCursor(
+      LocalWalForceTarget target, long token, LocalWalForcedCursor cursor) {
+    if (target == null || cursor == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!ownsForceTarget(target, token) || !target.locallyForced()) {
       return StatusCode.CONFLICT;
     }
-    forcedBatch = false;
+    return cursor.open(this, target, token);
+  }
+
+  /** Releases exactly the completed target, invalidating cursors before storage reuse. */
+  public StatusCode releaseForcedBatch(LocalWalForceTarget target, long token) {
+    if (hasOpenLogicalStream()) return StatusCode.CONFLICT;
+    return releaseForcedBatchInternal(target, token);
+  }
+
+  private StatusCode releaseForcedBatchInternal(LocalWalForceTarget target, long token) {
+    StatusCode status = admission();
+    if (!status.isOk()) return status;
+    if (forceInProgress || !ownsForceTarget(target, token) || !target.durabilityComplete()) {
+      return StatusCode.CONFLICT;
+    }
+    target.release();
+    activeForceTarget = null;
     pendingStart = 0;
     pendingRecordCount = 0;
     return StatusCode.OK;
+  }
+
+  boolean ownsForceTarget(LocalWalForceTarget target, long token) {
+    return target != null && activeForceTarget == target && target.ownedBy(this, token);
   }
 
   public StatusCode cancel(LocalWalReservation reservation) {
@@ -550,7 +562,7 @@ public final class LocalWal {
     StatusCode status = admission();
     if (!status.isOk()) return status;
     if (!recoveryTailOpen || durableQuorum != null || activeReservationToken != 0
-        || pendingRecordCount != 0 || forcedBatch || hasOpenLogicalStream()
+        || pendingRecordCount != 0 || hasRetainedForceTarget() || hasOpenLogicalStream()
         || startOffset < WalFileHeaderCodec.HEADER_BYTES || startOffset >= tailEnd
         || firstJournalSequence <= 0 || firstJournalSequence >= nextJournalSequence) {
       return StatusCode.CONFLICT;
@@ -582,7 +594,7 @@ public final class LocalWal {
     StatusCode status = admission();
     if (!status.isOk()) return status;
     if (activeReservationToken != 0 || pendingRecordCount != 0
-        || forcedBatch || hasOpenLogicalStream()) return StatusCode.CONFLICT;
+        || hasRetainedForceTarget() || hasOpenLogicalStream()) return StatusCode.CONFLICT;
     recoveryTailOpen = false;
     return StatusCode.OK;
   }
@@ -591,10 +603,16 @@ public final class LocalWal {
     if (closed) {
       return StatusCode.CLOSED;
     }
-    if ((pendingRecordCount != 0 || forcedBatch || hasOpenLogicalStream()) && !failed) {
+    if (!failed && (pendingRecordCount != 0
+        || hasRetainedForceTarget() || hasOpenLogicalStream())) {
       return StatusCode.CONFLICT;
     }
+    if (forceInProgress) return StatusCode.CONFLICT;
     closed = true;
+    if (activeForceTarget != null) {
+      activeForceTarget.release();
+      activeForceTarget = null;
+    }
     return file.close();
   }
 
@@ -722,8 +740,8 @@ public final class LocalWal {
     return pendingRecordCount != 0;
   }
 
-  boolean hasForcedBatch() {
-    return forcedBatch;
+  boolean hasRetainedForceTarget() {
+    return activeForceTarget != null;
   }
 
   StatusCode admissionStatus() {
@@ -827,8 +845,8 @@ public final class LocalWal {
     recoveryTailOpen = false;
   }
 
-  StatusCode forceAppendFile(LocalWalForceCause cause) {
-    return forceFile(cause, pendingForceBytes());
+  StatusCode forceAppendFile(LocalWalForceTarget target, LocalWalForceCause cause) {
+    return forceFile(cause, target.endOffset() - target.startOffset());
   }
 
   private StatusCode forceFile(LocalWalForceCause cause, long coveredBytes) {
@@ -838,25 +856,34 @@ public final class LocalWal {
     return status;
   }
 
-  long pendingForceBytes() {
-    return Math.max(0, tailEnd - durableEnd);
-  }
-
   void markFailed() {
     failed = true;
   }
 
-  void markForced(LocalWalForceResult result) {
-    durableEnd = tailEnd;
-    lastCommitSequence = lastAppendedCommitSequence;
-    result.set(pendingStart, durableEnd, pendingRecordCount, lastCommitSequence);
-    forcedBatch = true;
+  StatusCode captureForceTarget(LocalWalForceTarget target) {
+    if (target.retained()) return StatusCode.CONFLICT;
+    if (nextForceToken == 0) return StatusCode.RESOURCE_EXHAUSTED;
+    long token = nextForceToken;
+    nextForceToken = token == Long.MAX_VALUE ? 0 : token + 1;
+    target.capture(this, token, pendingStart, tailEnd, pendingRecordCount,
+        lastAppendedCommitSequence);
+    activeForceTarget = target;
+    forceInProgress = true;
+    return StatusCode.OK;
   }
 
-  StatusCode replicateForcedBatch(LocalWalForceCause cause) {
+  void markForced(LocalWalForceTarget target) {
+    durableEnd = target.endOffset();
+    lastCommitSequence = target.commitSequence();
+    target.completeLocalForce();
+  }
+
+  void finishForce() { forceInProgress = false; }
+
+  StatusCode replicateForcedBatch(LocalWalForceTarget target, LocalWalForceCause cause) {
     return hasOpenLogicalStream()
-        ? durableQuorum.replicateLogicalStreamBatch(this, pendingRecordCount, cause)
-        : durableQuorum.replicateForcedBatch(this, pendingRecordCount, cause);
+        ? durableQuorum.replicateLogicalStreamBatch(this, target, cause)
+        : durableQuorum.replicateForcedBatch(this, target, cause);
   }
 
   StatusCode adoptRotatedState(

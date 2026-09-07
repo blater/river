@@ -20,7 +20,7 @@ final class LocalWalQuorumAdmission {
         || primary.hasOpenLogicalStream()
         || primary.hasActiveReservation()
         || primary.hasPendingRecords()
-        || primary.hasForcedBatch()) {
+        || primary.hasRetainedForceTarget()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode admission = primary.admissionStatus();

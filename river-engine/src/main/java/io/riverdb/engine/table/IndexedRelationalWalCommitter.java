@@ -3,19 +3,20 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalForceCause;
-import io.riverdb.wal.local.LocalWalForceResult;
+import io.riverdb.wal.local.LocalWalForceTarget;
 import io.riverdb.wal.local.LocalWalGroupAppendResult;
 import io.riverdb.wal.local.LocalWalLogicalStream;
 
 /** Appends and forces one complete admitted logical transaction. */
 final class IndexedRelationalWalCommitter {
   private final LocalWalGroupAppendResult appendResult = new LocalWalGroupAppendResult();
-  private final LocalWalForceResult forceResult = new LocalWalForceResult();
+  private final LocalWalForceTarget forceTarget = new LocalWalForceTarget();
   private final LocalWalLogicalStream stream = new LocalWalLogicalStream();
   private final LocalWal wal;
   private final IndexedGroupCommitMetrics metrics;
   private IndexedRelationalWalPlan preparedPlan;
   private long preparedCommitSequence;
+  private long forceToken;
   private long logicalStart;
   private long logicalEnd;
   private long copiedPayloadBytes;
@@ -69,12 +70,17 @@ final class IndexedRelationalWalCommitter {
     logicalEnd = appendResult.endOffset();
     long forceStarted = System.nanoTime();
     status = wal.forceLogicalStreamBatch(
-        stream, forceResult, LocalWalForceCause.DIRECT_COMMIT);
+        stream, forceTarget, LocalWalForceCause.DIRECT_COMMIT);
     metrics.recordStage(
         IndexedCommitPath.DIRECT_COMMIT,
         IndexedCommitStage.DIRECT_FORCE,
         System.nanoTime() - forceStarted);
     if (!status.isOk()) return failStream(status);
+    if (!forceTarget.matchesAppend(appendResult)
+        || forceTarget.commitSequence() != preparedCommitSequence) {
+      return failStream(StatusCode.INVARIANT_BROKEN);
+    }
+    forceToken = forceTarget.token();
     forced = true;
     preparedPlan = null;
     preparedCommitSequence = 0;
@@ -93,11 +99,11 @@ final class IndexedRelationalWalCommitter {
 
   StatusCode releaseForced() {
     if (!forced) return StatusCode.CONFLICT;
-    StatusCode status = wal.releaseLogicalStreamBatch(stream);
+    StatusCode status = wal.releaseLogicalStreamBatch(stream, forceTarget, forceToken);
     if (status.isOk()) {
       forced = false;
       appended = false;
-      logicalStart = logicalEnd = 0;
+      logicalStart = logicalEnd = forceToken = 0;
     }
     return status;
   }

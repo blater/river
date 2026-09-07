@@ -5,7 +5,7 @@ import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalAppendDisposition;
 import io.riverdb.wal.local.LocalWalDecisionBatch;
 import io.riverdb.wal.local.LocalWalForceCause;
-import io.riverdb.wal.local.LocalWalForceResult;
+import io.riverdb.wal.local.LocalWalForceTarget;
 import io.riverdb.wal.local.LocalWalGroupAppendResult;
 import java.nio.ByteBuffer;
 
@@ -13,11 +13,13 @@ import java.nio.ByteBuffer;
 final class IndexedRelationalWalGroupAppender implements LocalWalDecisionBatch {
   private int[] groupEnds = new int[0];
   private final LocalWalGroupAppendResult append = new LocalWalGroupAppendResult();
-  private final LocalWalForceResult force = new LocalWalForceResult();
+  private final LocalWalForceTarget force = new LocalWalForceTarget();
   private final LocalWal wal;
   private IndexedRelationalWalPlan[] plans;
   private long[] commitSequences;
   private long copiedPayloadBytes;
+  private long finalCommitSequence;
+  private long forceToken;
   private int transactions;
   private int records;
   private boolean appended;
@@ -54,6 +56,7 @@ final class IndexedRelationalWalGroupAppender implements LocalWalDecisionBatch {
       for (int transaction = 0; transaction < count; transaction++) {
         copiedPayloadBytes += preparedPlans[transaction].copiedPayloadBytes();
       }
+      finalCommitSequence = sequences[count - 1];
       appended = true;
     }
     clearSource();
@@ -63,13 +66,21 @@ final class IndexedRelationalWalGroupAppender implements LocalWalDecisionBatch {
   StatusCode force(LocalWalForceCause cause) {
     if (!appended || forced || cause == null) return StatusCode.CONFLICT;
     StatusCode status = wal.forcePending(force, cause);
-    if (status.isOk()) forced = true;
+    if (status.isOk()) {
+      if (!force.matchesAppend(append)
+          || force.commitSequence() != finalCommitSequence) {
+        wal.fencePendingBatch();
+        return StatusCode.INVARIANT_BROKEN;
+      }
+      forceToken = force.token();
+      forced = true;
+    }
     return status;
   }
 
   StatusCode release() {
     if (!forced) return StatusCode.CONFLICT;
-    StatusCode status = wal.releaseForcedBatch();
+    StatusCode status = wal.releaseForcedBatch(force, forceToken);
     if (status.isOk()) reset();
     return status;
   }
@@ -80,6 +91,7 @@ final class IndexedRelationalWalGroupAppender implements LocalWalDecisionBatch {
 
   void reset() {
     append.reset();
+    finalCommitSequence = forceToken = 0;
     appended = false;
     forced = false;
   }

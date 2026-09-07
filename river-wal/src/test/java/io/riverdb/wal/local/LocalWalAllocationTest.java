@@ -105,7 +105,7 @@ final class LocalWalAllocationTest {
     LocalWal wal = open.wal();
     LocalWalReservation reservation = new LocalWalReservation();
     LocalWalAppendResult appended = new LocalWalAppendResult();
-    LocalWalForceResult forced = new LocalWalForceResult();
+    LocalWalForceTarget forced = new LocalWalForceTarget();
     LocalWalReadResult read = new LocalWalReadResult();
     LocalWalForcedCursor cursor = new LocalWalForcedCursor();
 
@@ -151,7 +151,7 @@ final class LocalWalAllocationTest {
       LocalWal wal,
       LocalWalReservation reservation,
       LocalWalAppendResult appended,
-      LocalWalForceResult forced,
+      LocalWalForceTarget forced,
       LocalWalForcedCursor cursor,
       LocalWalReadResult read,
       long batch) {
@@ -168,13 +168,13 @@ final class LocalWalAllocationTest {
           appended).ordinal();
     }
     allocationGuard += wal.forcePending(forced).ordinal();
-    allocationGuard += wal.openForcedCursor(cursor).ordinal();
+    allocationGuard += wal.openForcedCursor(forced, forced.token(), cursor).ordinal();
     for (int index = 0; index < 4; index++) {
       allocationGuard += cursor.next(read).ordinal();
       allocationGuard += read.payload().getLong(0);
     }
     allocationGuard += cursor.reset().ordinal();
-    allocationGuard += wal.releaseForcedBatch().ordinal();
+    allocationGuard += wal.releaseForcedBatch(forced, forced.token()).ordinal();
   }
 
   private static ThreadMXBean allocationBean() {
