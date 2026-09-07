@@ -29,8 +29,9 @@ Linux/ext4 and XFS, and Windows/NTFS.
 
 Compose the delivered instance, filesystem, audit, database, and transport
 owners in `river-server-app`. Own argument/resource configuration, installed
-packaging, readiness, and ordered shutdown. Follow
-[ADR 0014](../adr/0014-riverd-instance-security.md) for exact behavior.
+packaging, readiness, and ordered shutdown. Follow the
+[CLI contract](../riverd-cli.md) for user-facing behavior and
+[ADR 0014](../adr/0014-riverd-instance-security.md) for security and recovery.
 Migrate every River-owned plain listener/client caller, including JDBC, CLI,
 benchmarks and tests, to authenticated configuration and delete the superseded
 APIs in this delivery. Migration changes connection setup, not workload or SQL
