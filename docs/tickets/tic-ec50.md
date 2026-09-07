@@ -53,8 +53,11 @@ checks the assembled delivery; `tic-9640` owns power-loss qualification.
   loopback; the default IP is `127.0.0.1`. These replace `--listen` and `-L`.
   Help shows these examples and the
   data-directory option, defaults, foreground behavior and shutdown method.
-- `riverd --help` and `riverd start --help` explain the supported path in plain
-  language. Invalid options give a concise error and point to relevant help.
+- Bare `riverd` prints useful brief usage: short command descriptions, a start
+  example, defaults and a pointer to full help. It does not list instances.
+  `riverd help` and `riverd --help` print identical full help;
+  `riverd start --help` explains startup in plain language. `riverd ps` owns
+  instance listing. Invalid options give a concise error and point to help.
 - First start creates the credentials automatically. Startup identifies the
   generated client configuration path without displaying secrets. Explain that
   TLS authenticates the server and the instance token authenticates the client.
