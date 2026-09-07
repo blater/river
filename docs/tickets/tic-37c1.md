@@ -1,12 +1,15 @@
 ---
 id: tic-37c1
-status: in_progress
+status: closed
 type: investigation
 priority: 2
 assignee: blater
 delivery: evidence
 base-commit: 188012ceeaa09003b76224861def08ab06effa4e
 branch: ticket/tic-37c1-test-value-audit
+delivered-commit: fd6b269fe9b954b1c4b6829201ece4de45ae106d
+evidence:
+    - docs/delivery/evidence/2026-09-07-test-value-audit.md
 tags:
     - testing
     - maintenance
