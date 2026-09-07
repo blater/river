@@ -1,12 +1,13 @@
 ---
 id: tic-831a
-status: in_progress
+status: closed
 type: task
 priority: 2
 assignee: blater
 delivery: documentation
 base-commit: 0704daff7990ae0d0aa32930d749910efca8a86e
 branch: ticket/tic-831a-riverd-platform-requirements
+delivered-commit: 43c8b22d96431399273ee8cc981d26156f527080
 tags:
     - riverd
     - documentation
