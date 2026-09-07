@@ -1970,7 +1970,7 @@ single-run artifact and printed reminder do not calculate or enforce the
 ten-sample confidence gate.
 
 `tools/tps-p4.sh` is not a normative runner until it enforces this complete
-matrix. The current `tic-ed12` candidate requires `river-tps-tool-v3` metadata
+matrix. The current calculator requires `river-tps-tool-v3` metadata
 paired with the canonical, no-replace `river-tps-terminal-v2` success receipt
 validated by the shared TPS provenance owner. Each diagnostic binds the sealed
 prebuilt `make.sh` record, source manifest, ordered runtime classpath, and
@@ -1982,7 +1982,7 @@ missing, failure, mutated, or noncanonical terminal evidence are rejected. The
 historical accepted `tic-0636` implementation enforced stronger provenance
 than the current wiring: later `866f1f4` and `8609d49` removed the
 build/classpath/host gates. `tic-1fe7` reconciles the separate build workflow;
-acceptance of `tic-ed12` remains pending, and `tic-d7c2` must supply actual
+`tic-ed12` restores prebuilt artifact binding, and `tic-d7c2` must supply actual
 invocation ownership before these inputs can qualify. The calculator output
 remains explicitly `partial-river-point-calculator` evidence. It cannot emit a
 passing Alpha3 result without the warmup, scaling, cross-engine, absolute,

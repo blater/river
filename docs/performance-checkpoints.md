@@ -42,6 +42,85 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-07 prebuilt TPS artifact provenance (`tic-ed12`)
+
+**Accepted for integration as required evidence correctness; no TPS speedup
+claimed.** Measured candidate `bd66b13` (implementation `18ca330`, followed by
+the real-build correction) binds each TPS diagnostic to a successful separate
+`make.sh` invocation. Baseline `04d4c09` is production-identical to
+`perf-checkpoint-20260907-retained-snapshot-gauge`. No database Java, workload,
+isolation, retries, durability or resource budgets change. Ordered runtime
+class/JAR byte manifests are identical after normalizing only checkout roots.
+
+Gradle remains the classpath/input authority. Make records its fixed argv,
+source boundaries, selected compiler facts and ordered runtime bytes, publishes
+completion last, and cleans up its own build process group on interruption.
+TPS verifies and retains the record at lifecycle boundaries without building.
+Current tool-v3/terminal-v2 receipts bind the actual publisher and build record;
+host ownership is explicitly unsupported. P4 uses the same validator and
+rejects promotion until `tic-d7c2`, while ordinary diagnostic success remains
+available. These samples do not certify P0 or Alpha3.
+
+Independent source reviews and lead integration review resolved child cleanup,
+classpath metadata binding, late-mutation outcomes and symmetric cache-trust
+validation. Systems review rejected a common build-ID restriction: unique
+build events can produce equivalent runtime bytes. Real make also disproved a
+proposed `systemPropertiesArgs.isNotEmpty()` guard: Gradle itself populates
+encoding/locale defaults. The final design admits only make's fixed retained
+argv and checks external environment/configuration through Gradle, without
+copying Gradle defaults. Normal make succeeds; extra make `-D` arguments exit 2;
+harmless `GRADLE_OPTS` injection leaves an unsealed record and exits 1.
+
+Frozen shell suites pass **42 provenance boundary groups and 7 P4 groups**,
+including stale/missing/reordered bytes, source mutation, failed/interrupted
+builds, publication collisions and coherently rehashed false claims. The real
+candidate receipts pass canonical diagnostic validation and fail promotion
+validation for the stated absent host capability.
+
+Clean `GRADLE_USER_HOME=/private/tmp/river-gradle-tic-f8dd ./gradlew clean check
+--continue` restored **1,805 Java test results from Gradle cache**, zero
+failures/errors and two existing skips. This is not a fresh Java test execution.
+Build-policy, module graph and provenance fixtures passed. The full check is
+not green: 146 source-policy findings, 113 hot-path bytecode findings, SQL-shape
+ceiling 19 versus 13, and surplus dependency-verification metadata all reproduce
+on unchanged `04d4c09`; source differences only shift line numbers. No policy
+was relaxed. Make does not attest that the custom dependency ledger passed.
+The installed slopmark supports neither shell nor Kotlin, so before/after scans
+report no supported files; no numeric score is claimed for this tooling slice.
+
+Two fresh controls and candidates ran serially on user-confirmed AC power,
+separately from the earlier battery/throttled period. No further battery checks
+were made after the user's request. Fixed command after separate make builds:
+
+```sh
+RIVER_JAVA=/opt/homebrew/Cellar/openjdk/26.0.2.1/libexec/openjdk.jdk/Contents/Home/bin/java \
+  tools/tps-test.sh --seed=42 --warmup-seconds=1 --measured-seconds=10 \
+  --output-dir=/private/tmp/river-tic-ed12-evidence-20260907/<sample>
+```
+
+| Sample | Committed TPS | Retries / errors |
+| --- | ---: | ---: |
+| control-1 | 160.000 | 0 / 0 |
+| control-2 | 161.700 | 1 / 0 |
+| candidate-1 | 156.200 | 0 / 0 |
+| candidate-2 | 171.700 | 0 / 0 |
+
+All passed pre/post invariants, phase/capture and deadlock reconciliation.
+Both candidates ended with zero active transactions, retained snapshots, active
+locks and waiting locks at capture. The control retry is one measured Order Status DEADLOCK (attempt 1710,
+logical sequence 175, terminal 7, step 2): one server outcome equals one client
+retry, with no exhaustion, unclassified outcome or overflow. Candidate directions
+are mixed; no repeated directional regression is identified. Absolute throughput
+variation is retained and is not attributed to artifact verification.
+
+Evidence: `/private/tmp/river-tic-ed12-evidence-20260907`, including individual
+receipts/build records, source/runtime manifests, frozen tests, real input
+probes, policy control comparison and cached XML results. Build provenance
+trusts Gradle declared-input/cache correctness; selected launcher/options facts
+are not a full JDK or hermetic compilation proof. Boundary snapshots cannot
+prove absence of nonparticipating changes between observations. Host ownership
+and the remaining performance gates retain their separate owners.
+
 ### 2026-09-07 canonical retained-snapshot gauge (`tic-8e74`)
 
 **Accepted cold observability; no repeated regression identified in the short
@@ -97,8 +176,9 @@ versus controls 15.936/12.741ms. These single larger tails are retained; no
 repeated directional shift outside adjacent variation was identified. The
 samples do not prove throughput equivalence or a speedup.
 
-Current tool receipts do not establish launched-class provenance or complete
-host exclusion; these remain separately scoped prerequisites. Workloads/builds
+The receipts for these historical samples did not establish launched-class
+provenance or complete host exclusion. Later `tic-ed12` restores artifact
+binding; host ownership remains separately scoped. Workloads/builds
 were manually serialized, and the user's unrelated host load remains present.
 These are River-specific diagnostic checks, not P0 certification, a TPC-C
 claim, or a comparison with external harness artifacts.
@@ -224,9 +304,9 @@ Decision: accept the required `tic-1dda` observability prerequisite under the
 working agreement's explicit **inconclusive-performance exception**. This is
 neither a speedup nor proof of unchanged performance; observer cost remains
 unquantified. The existing `tic-f1bb` performance and recovery gates remain.
-Background host load and incomplete current TPS host/launched-byte provenance
-remain explicit: v2 success receipts authenticate the current diagnostic
-publication, not the removed stronger ownership/build contract. Builds and
+Background host load and incomplete TPS host/launched-byte provenance for
+these historical samples remain explicit: their v2 success receipts authenticate
+diagnostic publication, not the removed stronger ownership/build contract. Builds and
 workloads were manually serialized, and all raw negative results are retained.
 
 Evidence root: `/private/tmp/river-tic-af29-evidence-20260907`, including
