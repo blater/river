@@ -1,11 +1,12 @@
 ---
 id: tic-e2be
-status: in_progress
+status: closed
 type: bug
 assignee: blater
 delivery: code
 base-commit: 56ccd9d317e135a9f06cd2ec022bba2160c43a71
 branch: ticket/tic-e2be-wide-decimal-spill
+delivered-commit: 78e42cacd857013b9f7fde644e5a2ce32d57cb77
 tags:
     - p0
     - sql
@@ -90,3 +91,17 @@ first sandboxed invocation stopped before Gradle execution with a local
 Post-test slopmark scores equal the recorded baseline because production is
 unchanged. The ticket remains `in_progress` pending the joint affected-engine
 integration gate; no module run is claimed here.
+
+## 2026-09-07 delivered-source acceptance
+
+Implementation `78e42cacd857013b9f7fde644e5a2ce32d57cb77` is on pushed master. Independent reviewer
+`review_catalog_overlap` verified relevant current source/tests equal the accepted
+f8dd checkpoint, and independently checked the retained XML: 7 class cases
+pass, SHA-256 `29001d68692e1a95c44e3e04219a03d3cefdd55cbbba1e2fe624de5eda25cfc1`. The joint engine gate is 1,000 tests with no failures;
+clean full gate is 1,781 tests, zero failures/errors, two skips. These are existing
+checkpoint results, not a newly executed build.
+
+Preserved evidence: `/private/tmp/river-p0-closure-evidence-20260907`, including
+class XML, original clean log/summary and hash manifest. Checkpoint integration
+`0cf9970f5371f520b6a9639424b4446d9e4c3412` and annotated tag
+`perf-checkpoint-20260906-directory-cache-reload` are pushed ancestors.
