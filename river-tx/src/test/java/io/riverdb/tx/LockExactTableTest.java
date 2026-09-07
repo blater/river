@@ -14,6 +14,8 @@ import io.riverdb.tx.api.lock.LockWaitHandle;
 import io.riverdb.tx.api.lock.LockWaitState;
 import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 final class LockExactTableTest {
   @Test
@@ -230,9 +232,11 @@ final class LockExactTableTest {
     assertEquals(0, fixture.table.holdingCount());
   }
 
-  @Test
-  void terminalReleaseOfOverlappingHoldingsPreservesConversionPriority() {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void terminalReleaseOfOverlappingHoldingsPreservesConversionPriority(boolean capture) {
     Fixture fixture = new Fixture();
+    if (capture) assertEquals(StatusCode.OK, fixture.table.beginBlockCausalityCapture());
     LockRequest sharedRange = new LockRequest().setRange(
         11, 0, 11, 100, LockMode.SHARED, 0);
     LockRequest exclusiveRange = new LockRequest().setRange(
@@ -266,11 +270,19 @@ final class LockExactTableTest {
     for (int index = 1; index <= 16; index++) {
       assertEquals(-1, fixture.table.state.directory.resource(key(index, LockMode.SHARED)));
     }
+    if (capture) {
+      LockBlockCausalitySnapshot snapshot = new LockBlockCausalitySnapshot();
+      assertEquals(StatusCode.OK, fixture.table.endBlockCausalityCapture(snapshot));
+      assertTrue(snapshot.reconciles());
+      assertEquals(2, snapshot.revokedAfterHandoff());
+    }
   }
 
-  @Test
-  void terminalReleaseCancelsQueuedAndUnconsumedGrantsBeforeHandingOffHoldings() {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void terminalReleaseCancelsQueuedAndUnconsumedGrantsBeforeHandingOffHoldings(boolean capture) {
     Fixture fixture = new Fixture();
+    if (capture) assertEquals(StatusCode.OK, fixture.table.beginBlockCausalityCapture());
     LockToken retained = new LockToken();
     assertEquals(StatusCode.OK, fixture.table.tryAcquire(
         1, 1, 1, key(10, LockMode.EXCLUSIVE), retained));
@@ -312,6 +324,12 @@ final class LockExactTableTest {
     assertEquals(-1, fixture.table.state.directory.resource(key(10, LockMode.EXCLUSIVE)));
     assertEquals(-1, fixture.table.state.directory.resource(key(20, LockMode.EXCLUSIVE)));
     assertEquals(-1, fixture.table.state.directory.resource(key(30, LockMode.EXCLUSIVE)));
+    if (capture) {
+      LockBlockCausalitySnapshot snapshot = new LockBlockCausalitySnapshot();
+      assertEquals(StatusCode.OK, fixture.table.endBlockCausalityCapture(snapshot));
+      assertTrue(snapshot.reconciles());
+      assertEquals(1, snapshot.revokedAfterHandoff());
+    }
   }
 
   @Test

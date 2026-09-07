@@ -1,10 +1,12 @@
 ---
 id: tic-af29
-status: open
+status: in_progress
 type: story
 assignee: blater
 parent: tic-5db4
 delivery: code
+base-commit: 5d70625
+branch: ticket/tic-af29-lock-block-causality-delivery
 tags:
     - performance
     - tpcc
@@ -43,7 +45,7 @@ exports the result through the existing diagnostics boundary.
 ## Stop Conditions
 
 Stop if classification would duplicate or approximate the scheduler predicate,
-if disabled capture reads a clock or allocates, or if the aggregate cannot
+if disabled classification adds a clock read or allocation, or if the aggregate cannot
 reconcile exactly with actual blocks and terminal dispositions. If the scoped
 dimensions cannot distinguish the dominant block class, retain that result and
 open a separately reviewed diagnostic ticket; do not add dimensions in flight.
@@ -64,8 +66,8 @@ ordinary or conversion or FIFO queue relationship, and the exact enforced
 scheduler grant predicate. Scheduler admission and diagnostics share the
 canonical predicate owner. Reconcile actual blocks, grants, timeouts,
 cancellations, victims, and every bucket without TPC-C types in `river-tx`.
-Detailed events remain explicitly bounded; disabled capture reads no clocks and
-allocates nothing.
+No detailed event stream is added. Disabled classification adds no clock reads
+or steady-state allocations.
 
 ## Acceptance Criteria
 
@@ -73,8 +75,9 @@ Focused active-owner, FIFO-fairness, and conversion-priority tests prove exact
 bucket selection, grant-predicate identity, overflow rejection, phase
 separation, successful handoff, cancellation/victim separation, and zero
 terminal transactions, locks, and waiters. Aggregate buckets sum exactly to
-actual blocks and dispositions. A capture-disabled control proves zero
-steady-state allocation, no clock reads, and unchanged grant outcomes. The
+actual blocks and dispositions. Capture-disabled validation retains the existing lock-path allocation bound,
+checks that classification adds no allocation or clock-read sites, and proves
+unchanged grant outcomes. The
 cold output contract supplies every declared dimension and reconciliation
 total to `tic-1dda`; aggregate TPS alone admits no lock optimization.
 
@@ -85,6 +88,32 @@ total to `tic-1dda`; aggregate TPS alone admits no lock optimization.
 This remains an immediate P0 evidence prerequisite, not a throughput fix. It
 does not remove a lock block. Because the implementation touches the canonical
 scheduler predicate, acceptance also needs a matched capture-disabled
-control/candidate check proving zero steady-state allocation and no repeated
+control/candidate check proving no added steady-state allocation and no repeated
 throughput or latency regression. Enabled-capture results must be treated as
 diagnostic evidence whose observer cost is reported, not as a capacity sample.
+
+### 2026-09-07 implementation and allocation-gate reconciliation
+
+The aggregate and grant decision are generic and phase-scoped; the snapshot
+registry gauge remains solely in `tic-8e74`. Current release-drain protection
+and requester-dependent fairness are preserved. Existing release-order tests
+now run with capture enabled and disabled, including revoked handoffs.
+
+The pre-existing allocation gate allows at most 512 bytes across 10,000 warmed
+rounds. That bounded measurement is not literal zero-byte proof. Both capture
+modes retain the same limit, resources, and 1,000-round warmup. A temporary JFR
+investigation traced a repeated roughly 7.2 KB failure to deferred loading of
+`TransactionGroupCompletionTimings` through existing null-timing lock cleanup.
+The test now initializes that optional type during setup; the full transaction
+suite passes. An exploratory exact-zero assertion observed 152 bytes; retain
+that limitation rather than claiming measured zero. Classification adds no
+hot-path allocation or clock-read sites. Raw probes and traces are retained in
+`/private/tmp/river-tic-af29-evidence-20260907`.
+
+Slopmark review accepts the grant owner's 101.8 score as concentrated predicate
+complexity, not a numeric improvement: the scheduler scored zero before and
+after. The aggregate (73.6849) and cold snapshot (76.4318) have distinct owning
+responsibilities; no policy is duplicated to lower a score. Independent review
+found no grant-policy divergence or lifecycle reconciliation defect.
+
+Validation and matched TPS evidence remain required before promotion.

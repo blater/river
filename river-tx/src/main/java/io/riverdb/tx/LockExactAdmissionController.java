@@ -79,6 +79,7 @@ final class LockExactAdmissionController {
     if (createdHolding) table.nextCapability++;
     table.waitingCount++;
     table.waitCounters.entered();
+    table.blockCausality.entered();
     table.scheduler.schedule(affectedResource, affectedTransaction);
     if (table.state.requests.occupied(admittedRequest)) {
       LockExactRequestStore.Chunk requests = table.state.requests.record(admittedRequest);
@@ -87,6 +88,9 @@ final class LockExactAdmissionController {
         requests.blockedAtNanos[offset] = blockedClockNanos;
         requests.actuallyBlocked[offset] = 1;
         table.waitCounters.blocked();
+        if (table.blockCausality.active()) {
+          table.scheduler.recordActualBlock(admittedRequest);
+        }
       }
     }
     return handle.status();
