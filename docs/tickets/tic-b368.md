@@ -1,12 +1,13 @@
 ---
 id: tic-b368
-status: in_progress
+status: closed
 type: investigation
 assignee: blater
 parent: tic-e5ff
 delivery: evidence
 base-commit: 2a5e3ed
 branch: ticket/tic-b368-durability-reconciliation
+delivered-commit: 98baa4d336d84926b611bf530a061fb02b56e4bc
 tags:
     - performance
     - tpcc
@@ -62,3 +63,8 @@ proceed before P0 workload revalidation. Both production outcomes retain their
 explicit `tic-1dda` gate. The new architecture story has no independent TPS gain
 requirement; repeated unexplained regression blocks acceptance. Overlap must
 prove its declared mechanism and repeatable workload benefit.
+
+## Delivery
+
+Accepted evidence merged and pushed at `98baa4d`; source behavior is unchanged.
+This closes the design reconciliation, not the architecture or overlap code gates.
