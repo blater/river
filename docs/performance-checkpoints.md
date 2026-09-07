@@ -103,7 +103,34 @@ were manually serialized, and the user's unrelated host load remains present.
 These are River-specific diagnostic checks, not P0 certification, a TPC-C
 claim, or a comparison with external harness artifacts.
 
-Evidence root: `/private/tmp/river-tic-8e74-evidence-20260907`.
+The exact integration smoke (`2d8e4cb307135102a5457c5ffae9305f0183b0f6`,
+1s warmup/3s measured) completed at 142.667 TPS with zero errors and zero
+terminal transactions/snapshots/locks/waiters, but one measured Delivery
+`DEADLOCK` retry. Its attempt tag 513, logical sequence 53, terminal 1, step 23
+reconcile to one server outcome, one client retry and one captured victim;
+there is no exhaustion, unclassified outcome or overflow. Detailed cycle
+capture was disabled, so the cycle identity and cause remain unknown. The
+feature/tag had been pushed following the successful receipt check; ticket
+closure and further delivery were held for this new retry signal.
+
+Longer interleaved A/B/A/B (5s warmup, 30s measured, otherwise identical):
+**162.067 / 162.767 / 176.967 / 165.033 TPS**. A is the same `fa77adc` source
+baseline and B is the exact integration commit. All four had zero retries and
+errors, passing invariants, and both candidate terminal snapshot counts zero.
+Pairwise directions differ, with both candidate values inside the observed
+control range. The larger short Delivery tail did not recur (long candidate
+maxima 167.043/228.908ms, controls 212.025/208.557ms). This does not identify the
+smoke retry's cycle or prove throughput equivalence. Independent review found
+no measured-path invocation of the new getter: it runs only during final
+metrics writing after workload completion. Runtime content differs only in
+the four expected benchmark, engine API, engine and transaction artifacts.
+No repeated regression was identified; the smoke anomaly remains preserved.
+
+Integration: `2d8e4cb307135102a5457c5ffae9305f0183b0f6`; pushed annotated tag:
+`perf-checkpoint-20260907-retained-snapshot-gauge`. Feature evidence: `5f908e4`.
+Evidence root: `/private/tmp/river-tic-8e74-evidence-20260907`, including all
+short/long samples, smoke retry accounting, runtime delta, preserved clean XML,
+policy comparison, slopmark and independent review.
 
 
 

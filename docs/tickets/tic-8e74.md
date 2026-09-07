@@ -1,12 +1,14 @@
 ---
 id: tic-8e74
-status: in_progress
-base-commit: fa77adceeae9e1a0702971d122617b925a53701f
-branch: ticket/tic-8e74-terminal-snapshot-gauge
+status: closed
 type: story
 assignee: blater
 parent: tic-5db4
 delivery: code
+base-commit: fa77adceeae9e1a0702971d122617b925a53701f
+branch: ticket/tic-8e74-terminal-snapshot-gauge
+delivered-commit: 2d8e4cb307135102a5457c5ffae9305f0183b0f6
+checkpoint-tag: perf-checkpoint-20260907-retained-snapshot-gauge
 tags:
     - performance
     - tpcc
@@ -84,3 +86,11 @@ No repeated regression identified; no speedup or equivalence claim. Current
 provenance/host gaps remain separate P0 prerequisites. Full details and tail
 latency caveats are in `docs/performance-checkpoints.md`; raw evidence is at
 `/private/tmp/river-tic-8e74-evidence-20260907`.
+
+The exact merge smoke had one fully reconciled Delivery deadlock retry, zero
+errors and complete cleanup. This triggered longer interleaved A/B/A/B runs
+before closure: 162.067 / 162.767 / 176.967 / 165.033 TPS, all zero retries and
+errors. The direction differs between pairs; no repeated regression identified.
+The smoke cycle identity remains unknown because detailed capture was disabled.
+The new getter executes only at final metrics capture after workload completion.
+The checkpoint ledger retains the full sequence and qualification.
