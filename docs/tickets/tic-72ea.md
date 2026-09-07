@@ -1,10 +1,12 @@
 ---
 id: tic-72ea
-status: open
+status: in_progress
 type: story
 assignee: blater
 parent: tic-bf0b
 delivery: code
+base-commit: cda33bf2dc464f54b8935eb5b6c5fdef71103c9f
+branch: ticket/tic-72ea-riverd-audit
 tags:
     - riverd
     - security
@@ -35,3 +37,23 @@ Authentication and statement admission, group force, crash, corruption, exhausti
 ## Stop boundary
 
 Own only audit admission, byte accounting, group forcing, and recovery under the accepted audit design. No launcher, platform adapter, archival CLI, credentials, new audit format for convenience, or benchmark framework. `tic-b901` owns the archive command. Stop after focused failure tests and matched authenticated TPS validate this mechanism.
+
+## Control checkpoint (2026-09-07)
+
+The telemetry-only control preserves the existing 40-byte record format and
+one force per decision. The authenticated admission runner checks allowed
+reads, denied writes, prepared reads and both conditional-program branches;
+it verifies audit counts, restart and denied-write effects before publishing.
+The old audit supports aggregate counts only, not wire request correlation.
+The artifact labels that limitation and unavailable authenticator destruction.
+
+Validation: server module tests and `SecureRemoteJdbcGateTest` pass. The
+four-client, 40-requests-per-client smoke completed all 160 requests with
+208 expected and observed decisions, no capacity rejection, and no denied
+write effect. Evidence: `/private/tmp/riverd-delivery-evidence/`,
+`audit-runner-compile-3.log` (server/JDBC tests pass; the recorded runner compile
+error was fixed), and `audit-control-smoke-5/artifact.json` plus its digest.
+Slopmark: existing audit owner 78.5429; new runner 361.088, TLS helper 10.3519,
+snapshot 0. The runner has no promotion/comparison policy; its size is a review
+signal and no additional runner responsibilities are planned. Timed matched
+measurements remain outstanding; this is not acceptance of the candidate.

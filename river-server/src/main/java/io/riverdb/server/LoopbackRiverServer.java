@@ -188,6 +188,11 @@ public final class LoopbackRiverServer {
     return audit == null ? 0 : audit.recordCount();
   }
 
+  /** Returns a point-in-time copy of the audit persistence counters. */
+  public SecurityAuditSnapshot auditSnapshot() {
+    return audit == null ? SecurityAuditSnapshot.empty() : audit.snapshot();
+  }
+
   public boolean isDurablyAudited() {
     return audit != null;
   }

@@ -32,10 +32,19 @@ final class SecurityAuditLog {
   private final ByteBuffer record = ByteBuffer.allocateDirect(RECORD_BYTES)
       .order(ByteOrder.BIG_ENDIAN);
   private final IoResult io = new IoResult();
+  private final long[] cohortHistogram =
+      new long[SecurityAuditSnapshot.COHORT_HISTOGRAM_BUCKETS];
+  private long decisions;
+  private long appendedBytes;
+  private long batches;
+  private long forceCalls;
+  private long forceNanos;
+  private long capacityRejections;
+  private long durableFrontier;
   private int records;
   private boolean closed;
 
-  private SecurityAuditLog(
+  SecurityAuditLog(
       NioDurableDirectory openedDirectory,
       DurableFile openedFile,
       int maximumAuditRecords) {
@@ -104,6 +113,7 @@ final class SecurityAuditLog {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (records >= maximumRecords) {
+      capacityRejections = increment(capacityRejections);
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     long sequence = (long) records + 1;
@@ -121,12 +131,38 @@ final class SecurityAuditLog {
     record.flip();
     StatusCode status = writeExact((long) records * RECORD_BYTES);
     if (status.isOk()) {
+      appendedBytes = add(appendedBytes, RECORD_BYTES);
+    }
+    if (status.isOk()) {
+      batches = increment(batches);
+      forceCalls = increment(forceCalls);
+      long started = System.nanoTime();
       status = file.force(ForceMode.CONTENT_AND_METADATA);
+      forceNanos = add(forceNanos, elapsedNanos(started));
     }
     if (status.isOk()) {
       records++;
+      decisions = increment(decisions);
+      durableFrontier = sequence;
+      cohortHistogram[0] = increment(cohortHistogram[0]);
     }
     return status;
+  }
+
+  synchronized SecurityAuditSnapshot snapshot() {
+    return new SecurityAuditSnapshot(
+        decisions,
+        appendedBytes,
+        batches,
+        forceCalls,
+        forceNanos,
+        cohortHistogram,
+        0,
+        capacityRejections,
+        0,
+        0,
+        0,
+        durableFrontier);
   }
 
   synchronized int recordCount() {
@@ -183,7 +219,21 @@ final class SecurityAuditLog {
       }
     }
     records = count;
+    durableFrontier = count;
     return StatusCode.OK;
+  }
+
+  private static long increment(long value) {
+    return value == Long.MAX_VALUE ? Long.MAX_VALUE : value + 1;
+  }
+
+  private static long add(long value, long increment) {
+    return Long.MAX_VALUE - value < increment ? Long.MAX_VALUE : value + increment;
+  }
+
+  private static long elapsedNanos(long started) {
+    long elapsed = System.nanoTime() - started;
+    return elapsed < 0 ? 0 : elapsed;
   }
 
   private StatusCode readExact(long position) {
