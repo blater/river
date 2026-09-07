@@ -1,12 +1,13 @@
 ---
 id: tic-288d
-status: in_progress
+status: closed
 type: bug
 assignee: blater
 parent: tic-5db4
 delivery: code
 base-commit: 56ccd9d317e135a9f06cd2ec022bba2160c43a71
 branch: ticket/tic-288d-group-commit-fencing
+delivered-commit: 557688456bf9678589559ee21204bef58cb2bac2
 tags:
     - p0
     - transactions
@@ -25,7 +26,13 @@ Trace the one canonical group-commit terminal-failure path from injected durable
 
 ## Acceptance Criteria
 
-Both groupedFacadeCommitFailureDoesNotPublishAndFencesAdmission parameter cases return IO_FAILURE to accepted members, publish no rows or commit sequence, leave outcomes indeterminate, clear active transactions and locks, fence store admission, and reject a new session with FENCED. Focused class and affected river-engine tests pass without OOM. Record clean-baseline XML SHA-256 6c89fb7238a7cbc0314b4079f63fb4656d0a2a8350f1c3098fd9b715a2d9ed64 and independently reviewed candidate evidence.
+Both grouped facade write/force fault cases withhold acknowledgement, leave
+accepted outcomes indeterminate, clear active transactions and locks, fence store
+admission, and reject new sessions with FENCED. Force failure may follow internal
+visibility publication under the accepted pre-force handoff change f557af1; this
+supersedes the original no-publication criterion. Preserve the focused fault,
+recovery and affected-module gates.
+
 
 ## Notes
 
@@ -67,3 +74,17 @@ admission fence. Compact slopmark changed only `IndexedTableStore`, from
 `31.2329`, and table facade `19.3068` were unchanged. The ticket remains
 `in_progress` pending the joint affected-engine integration gate and independent
 review.
+
+## 2026-09-07 delivered-source acceptance
+
+Implementation `557688456bf9678589559ee21204bef58cb2bac2` is on pushed master. Independent reviewer
+`review_catalog_overlap` verified relevant current source/tests equal the accepted
+f8dd checkpoint, and independently checked the retained XML: 19 class cases
+pass, SHA-256 `1ca3417ae04ba9bfceffaa336e3e0286ff7bbfe515d8f9bcf62934e018c88a97`. The joint engine gate is 1,000 tests with no failures;
+clean full gate is 1,781 tests, zero failures/errors, two skips. These are existing
+checkpoint results, not a newly executed build.
+
+Preserved evidence: `/private/tmp/river-p0-closure-evidence-20260907`, including
+class XML, original clean log/summary and hash manifest. Checkpoint integration
+`0cf9970f5371f520b6a9639424b4446d9e4c3412` and annotated tag
+`perf-checkpoint-20260906-directory-cache-reload` are pushed ancestors.

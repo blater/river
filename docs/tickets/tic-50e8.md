@@ -1,11 +1,12 @@
 ---
 id: tic-50e8
-status: in_progress
+status: closed
 type: bug
 assignee: blater
 delivery: code
 base-commit: 36782a95925b7f29f4d6808080270391362d678a
 branch: ticket/tic-50e8-union-baseline
+delivered-commit: 8c7150207d307d4f3696282f441de6965686a735
 tags:
     - p0
     - sql
@@ -80,3 +81,17 @@ without heap exhaustion. Those regressions require separate P0 tickets and are
 not part of `tic-50e8`; no such tickets are created by this correction.
 `tic-50e8` remains `in_progress`, and the green affected-module claim remains a
 joint integration gate across all independently owned fixes.
+
+## 2026-09-07 delivered-source acceptance
+
+Implementation `8c7150207d307d4f3696282f441de6965686a735` is on pushed master. Independent reviewer
+`review_catalog_overlap` verified relevant current source/tests equal the accepted
+f8dd checkpoint, and independently checked the retained XML: 9 class cases
+pass, SHA-256 `ce1d4c26bcc90d8c55dcd7cbf374699489d8299af62254b52b78f16bd31920b1`. The joint engine gate is 1,000 tests with no failures;
+clean full gate is 1,781 tests, zero failures/errors, two skips. These are existing
+checkpoint results, not a newly executed build.
+
+Preserved evidence: `/private/tmp/river-p0-closure-evidence-20260907`, including
+class XML, original clean log/summary and hash manifest. Checkpoint integration
+`0cf9970f5371f520b6a9639424b4446d9e4c3412` and annotated tag
+`perf-checkpoint-20260906-directory-cache-reload` are pushed ancestors.
