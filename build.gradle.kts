@@ -2407,7 +2407,31 @@ val verifyProjectDependencyVisibility = tasks.register(
     "policy-fixtures/project-dependency-visibility"
   )
   outputs.dir(fixtureDirectory)
-  outputs.upToDateWhen { false }
+  inputs.files(
+    rootProject.buildFile,
+    rootDir.resolve("settings.gradle.kts"),
+    rootDir.resolve("buildSrc/build.gradle.kts"),
+    rootDir.resolve("gradle.properties"),
+    rootDir.resolve("gradle/wrapper/gradle-wrapper.properties")
+  )
+  inputs.files(subprojects.map { it.buildFile })
+  inputs.files(fileTree("buildSrc/src/main") { include("**/*.java", "**/*.kts") })
+  inputs.property("gradleVersion", gradle.gradleVersion)
+  inputs.property("gradleHome", gradle.gradleHomeDir?.absolutePath ?: "")
+  inputs.property("javaHome", System.getProperty("java.home"))
+  inputs.property("javaRuntimeVersion", System.getProperty("java.runtime.version"))
+  inputs.property("javaVendor", System.getProperty("java.vendor"))
+  val fixtureCompiler = project(":river-base").extensions
+      .getByType<org.gradle.jvm.toolchain.JavaToolchainService>().compilerFor {
+        languageVersion.set(JavaLanguageVersion.of(25))
+      }
+  inputs.property("fixtureCompilerHome", fixtureCompiler.map {
+    it.metadata.installationPath.asFile.absolutePath
+  })
+  inputs.property("fixtureCompilerVersion", fixtureCompiler.map {
+    it.metadata.javaRuntimeVersion
+  })
+  inputs.property("fixtureCompilerVendor", fixtureCompiler.map { it.metadata.vendor })
 
   doLast {
     val root = fixtureDirectory.get().asFile
@@ -2555,17 +2579,22 @@ val verifyProjectDependencyVisibility = tasks.register(
       val gradleHome = gradle.gradleHomeDir
           ?: throw GradleException("Gradle installation directory is unavailable")
       val gradleExecutable = gradleHome.resolve("bin/gradle")
+      val compilerHome = fixtureCompiler.get().metadata.installationPath.asFile.absolutePath
       val process = ProcessBuilder(
         gradleExecutable.absolutePath,
         "--offline",
         "--no-daemon",
         "--console=plain",
+        "-Porg.gradle.java.installations.paths=$compilerHome",
+        "-Porg.gradle.java.installations.auto-detect=false",
+        "-Porg.gradle.java.installations.auto-download=false",
         task
       )
           .directory(root)
           .redirectErrorStream(true)
           .apply {
             environment()["GRADLE_USER_HOME"] = gradle.gradleUserHomeDir.absolutePath
+            environment()["JAVA_HOME"] = compilerHome
           }
           .start()
       val output = process.inputStream.bufferedReader().use { it.readText() }
