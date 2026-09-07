@@ -251,3 +251,22 @@ fixture rework rather than hiding them outside the review total. Known invalid
 evidence still blocks acceptance. This slice has source approval after the
 known timeout/publication corrections; proceed to the existing focused suites
 and real make/TPS validation without opening another broad review.
+
+
+### Accepted candidate validation (2026-09-07)
+
+Candidate `bcc15a6db7baab4027654eb63bb26b4a9519bb9f`: 45 focused provenance tests
+and seven P4 tests pass. Independent source review approved the corrected
+ownership/publication/shutdown paths. Clean full test reports: 1,805 tests,
+zero failures/errors, two existing skips; four existing policy gates remain
+red, with no new remaining touched-file violation. See the performance ledger
+for cache details and baseline policy comparison.
+
+Controls 159.300/163.900 TPS; candidates 162.000/161.000 TPS, zero retries/errors,
+passing invariants and zero terminal transactions, locks, waiters and retained
+snapshots. Both candidate receipts pass host-qualified validation. Ordered
+runtime class/JAR bytes match controls modulo the cache-directory prefix.
+Accepted as required diagnostic correctness, with no observed repeated short-run
+regression and no speedup claim. Raw evidence is
+`/private/tmp/river-tic-d7c2-evidence-20260907`; failed development attempts are
+retained separately. Integration and push remain required before closure.

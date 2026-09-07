@@ -42,6 +42,56 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-07 separate build and TPS host ownership (`tic-d7c2`)
+
+Accepted for diagnostic evidence correctness; no database or workload change
+and no throughput claim. Candidate: `bcc15a6db7baab4027654eb63bb26b4a9519bb9f`,
+from pushed `e470a5d` (the documentation closure of
+`perf-checkpoint-20260907-prebuilt-tps-provenance`). Separate make and TPS
+invocations acquire one canonical cooperative lease, retain bounded boundary
+observations and release before their final completion attestation. Obsolete
+monitoring and schemas are replaced. Independent lease/lifecycle review passed;
+focused suites passed 45 provenance and seven P4 cases.
+
+`./gradlew --no-daemon clean check --continue` produced 383 suites / 1,805 tests,
+zero failures/errors and two existing skips in 8m 5s. Seven small modules reused
+cached test results; engine, transaction, WAL, protocol, client/server, JDBC,
+benchmark and other affected test tasks executed. The full check remains red
+on the four recorded baseline policy gates: dependency ledger, hot bytecode,
+source policy and SQL shape (19 against 13). After fixing touched indentation,
+the narrow source-policy rerun reports 134 existing findings versus the earlier
+146; none remain in touched scripts. No allowlist or acceptance rule was relaxed.
+
+Identical tiny standard, serializable, ten-terminal, one-warehouse, seed-42,
+synchronous-WAL samples used one-second warmup and ten-second measurement with
+OpenJDK 26.0.2.1: controls **159.300 / 163.900 TPS**; candidates **162.000 /
+161.000 TPS**. All four have zero retries/errors and passing invariants, capture,
+and cleanup. Both candidate receipts qualify through the shared host validator;
+legacy controls do not prove the new host contract. Ordered runtime bytes are
+identical after normalizing only the Gradle cache directory prefix. No repeated
+regression was observed; these short diagnostics establish no speedup or
+statistical equivalence.
+
+The user requires `--no-daemon` for every subsequent Gradle invocation; defaults
+and working instructions now match. Candidate builds used the normal Gradle
+registry after this task retired its two private idle daemons. The user confirms
+AC power. Slopmark cannot score shell/Kotlin, so before/after captures record its
+unsupported-language result rather than a fabricated score.
+
+Raw evidence: `/private/tmp/river-tic-d7c2-evidence-20260907`, including
+`clean-check.log`, `clean-tests.json`, `source-policy-final.log`,
+`frozen-provenance-tests-13.log`, `frozen-p4-tests-14.log`, `samples.json`, and
+`runtime-byte-comparison.json`. Failed development fixtures and rejected
+`real-smoke-1` remain recorded; the latter exposed the inventory counting its
+own capture shell, corrected by direct bounded capture. They are not accepted
+performance samples.
+
+This slice exceeded the new review budgets; review-only time was not separately
+tracked (about 1h 40m of total slice work had elapsed at the user's check-in).
+Future provenance overhead is governed by the **8-minute / 15-minute** limits
+in `AGENTS.md`, counting reconciliation and fixture rework and reporting automated
+waiting separately. No further broad provenance review is a delivery gate.
+
 ### 2026-09-07 prebuilt TPS artifact provenance (`tic-ed12`)
 
 **Accepted required evidence correctness; no TPS speedup claimed.** Measured candidate `bd66b13` (implementation `18ca330`, followed by
