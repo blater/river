@@ -74,7 +74,11 @@ final class EmbeddedDatabaseTest {
     IndexedTransactionSession session = sessionResult.session();
     TransactionOutcome outcome = new TransactionOutcome();
 
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.RETRY, database.beginPerformanceCapture());
+    assertEquals(StatusCode.OK, session.abort(outcome));
     assertEquals(StatusCode.OK, database.beginPerformanceCapture());
+    assertEquals(StatusCode.CONFLICT, database.beginPerformanceCapture());
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.RETRY, database.endPerformanceCapture(new StringBuilder()));
     assertEquals(StatusCode.OK, session.insert(0, 57, row(570)));
@@ -85,6 +89,13 @@ final class EmbeddedDatabaseTest {
     assertEquals(true, captured.contains("server_performance_capture_valid=true\n"));
     assertEquals(true, captured.contains("server_capture_commit_submissions=1\n"));
     assertEquals(true, captured.contains("server_capture_wal_force_count=1\n"));
+    assertEquals(true, captured.contains("server_capture_lock_block_valid=true\n"));
+    assertEquals(StatusCode.CONFLICT, database.endPerformanceCapture(new StringBuilder()));
+    assertEquals(StatusCode.OK, database.beginPerformanceCapture());
+    StringBuilder next = new StringBuilder();
+    assertEquals(StatusCode.OK, database.endPerformanceCapture(next));
+    assertEquals(true, next.toString().contains("server_capture_lock_waits_actually_blocked=0\n"));
+    assertEquals(StatusCode.OK, database.beginPerformanceCapture());
     assertEquals(StatusCode.OK, database.close());
   }
 

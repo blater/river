@@ -24,6 +24,15 @@ final class LockExactAllocationTest {
 
   @Test
   void warmedExactImmediateAndReactivePathsAllocateNoSteadyStateMemory() {
+    exerciseCapture(false);
+  }
+
+  @Test
+  void enabledBlockClassificationAllocatesNoSteadyStateMemory() {
+    exerciseCapture(true);
+  }
+
+  private static void exerciseCapture(boolean capture) {
     java.lang.management.ThreadMXBean standard = ManagementFactory.getThreadMXBean();
     Assumptions.assumeTrue(standard instanceof ThreadMXBean);
     ThreadMXBean bean = (ThreadMXBean) standard;
@@ -36,6 +45,7 @@ final class LockExactAllocationTest {
         2L << 20, 1, 4, 12_000, 1, 4, diagnosticResult));
     LockDeadlockDiagnosticsConfig diagnostics = diagnosticResult.config();
     LockManager locks = new LockManager(new LockMemoryEnvelope(8L << 20), diagnostics);
+    if (capture) assertEquals(StatusCode.OK, locks.beginBlockCausalityCapture());
     LockService service = locks;
     TransactionContext owner = context(locks, 1);
     TransactionContext waiter = context(locks, 2);
@@ -57,6 +67,8 @@ final class LockExactAllocationTest {
     LockExecutionLane cycleVictimLane = new LockExecutionLane();
     LockWaitHandle cycleVictimWait = new LockWaitHandle();
     StatusDetail detail = new StatusDetail(64);
+    // Resolve the optional release-timing type before compiled null-timing branches run.
+    new TransactionGroupCompletionTimings().reset();
 
     for (int index = 0; index < 1_000; index++) {
       exercise(service, owner, waiter, request, ownerToken, grantedToken, lane, handle, detail);
@@ -84,6 +96,12 @@ final class LockExactAllocationTest {
     assertEquals(11_000, snapshot.totalVictimSelections());
     assertEquals(1, snapshot.signatureCount());
     assertEquals(0, snapshot.victimEventOverflows());
+    if (capture) {
+      LockBlockCausalitySnapshot blocks = new LockBlockCausalitySnapshot();
+      assertEquals(StatusCode.OK, locks.endBlockCausalityCapture(blocks));
+      assertEquals(33_000, blocks.actualBlocks());
+      assertTrue(blocks.reconciles());
+    }
   }
 
   private static void exercise(
