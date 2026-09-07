@@ -1,12 +1,13 @@
 ---
 id: tic-ff83
-status: in_progress
+status: closed
 type: task
 priority: 2
 assignee: blater
 delivery: code
 base-commit: 5627543e624ac5a22d35e940e1f8bf6cf506b325
 branch: ticket/tic-ff83-test-build
+delivered-commit: 06fc84250a888089cceda2448f2f5539b1f8691e
 tags:
     - testing
     - maintenance
@@ -45,3 +46,5 @@ Logs are under `/private/tmp/river-test-streamline-evidence-20260907/` as
 `build-first.log`, `build-repeat.log`, and `build-invalidated.log`. These times
 include Gradle startup and are diagnostic samples. Clean integration validation
 is recorded with the final test-streamlining delivery.
+
+Combined clean validation and integration evidence: [test streamlining delivery](../delivery/evidence/2026-09-07-test-streamlining.md).
