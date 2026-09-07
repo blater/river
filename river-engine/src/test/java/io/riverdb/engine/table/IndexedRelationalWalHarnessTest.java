@@ -215,18 +215,36 @@ final class IndexedRelationalWalHarnessTest {
   }
 
   @Test
-  void descriptorShapeCacheIsBoundedAroundCallerCapacity() throws Exception {
-    Field cache = IndexedRelationalMutationDescriptors.class.getDeclaredField("shapeCache");
-    cache.setAccessible(true);
-    int[] capacities = {0, 1, IndexedRelationalMutationBuffer.MAX_INDEX_DESCRIPTORS};
-    int[] expected = {0, 2, 64};
-    for (int index = 0; index < capacities.length; index++) {
-      int capacity = capacities[index];
-      IndexedRelationalMutationDescriptors descriptors =
-          new IndexedRelationalMutationDescriptors(capacity, capacity);
-      check(((TupleShape[]) cache.get(descriptors)).length == expected[index],
-          "descriptor shape cache ignored caller capacity");
+  void descriptorShapeCacheRetentionStaysWithinBoundedAccounting() {
+    int capacity = 128;
+    IndexedRelationalMutationDescriptors descriptors =
+        new IndexedRelationalMutationDescriptors(capacity, capacity);
+    IndexedRelationalMutationDescriptors addressable =
+        new IndexedRelationalMutationDescriptors(
+            IndexedRelationalMutationBuffer.MAX_INDEX_DESCRIPTORS,
+            IndexedRelationalMutationBuffer.MAX_INDEX_DESCRIPTORS);
+    check(addressable.accountedBytes()
+            < descriptors.accountedBytesForReservation(capacity, capacity),
+        "unused addressable capacity exceeded a small populated reservation");
+    addressable.release();
+    requireOk(descriptors.reserve(capacity, capacity));
+    long before = descriptors.accountedBytes();
+
+    for (int index = 0; index < capacity; index++) {
+      int[] shape = {SqlTypeDescriptor.varchar(index + 1)};
+      check(descriptors.append(
+          OWNER_OBJECT_ID,
+          1_000 + index,
+          KEY_SCHEMA_ID,
+          descriptorHash(shape),
+          shape,
+          0,
+          1).isOk(), "descriptor shape append failed");
     }
+
+    check(descriptors.count() == capacity, "descriptor shapes were not retained");
+    check(descriptors.accountedBytes() == before,
+        "descriptor shape cache grew beyond its bounded retained accounting");
   }
 
   @Test

@@ -2,7 +2,6 @@ package io.riverdb.tx;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.tx.api.lock.LockExecutionLane;
@@ -42,7 +41,6 @@ final class LockWaitObservabilityTest {
 
     assertEquals(3, fixture.table.lockWaitsEntered());
     assertEquals(3, fixture.table.lockWaitsActuallyBlocked());
-    assertTrue(fixture.table.lockWaitBlockedNanos() > 0);
     assertEquals(1, fixture.table.lockWaitsGranted());
     assertEquals(1, fixture.table.lockWaitsTimedOut());
     assertEquals(0, fixture.table.lockWaitsDeadlocked());

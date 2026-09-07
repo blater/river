@@ -14,7 +14,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 final class IndexedLockWaitTest {
@@ -38,13 +37,10 @@ final class IndexedLockWaitTest {
         olderWait.acquireKey(older, 7, 30, LockMode.EXCLUSIVE));
 
     ExecutorService executor = Executors.newSingleThreadExecutor();
-    AtomicReference<Thread> worker = new AtomicReference<>();
     try {
-      Future<StatusCode> youngerBlocked = executor.submit(() -> {
-        worker.set(Thread.currentThread());
-        return youngerWait.acquireKey(younger, 7, 30, LockMode.EXCLUSIVE);
-      });
-      awaitParked(worker, youngerBlocked);
+      Future<StatusCode> youngerBlocked = executor.submit(() ->
+          youngerWait.acquireKey(younger, 7, 30, LockMode.EXCLUSIVE));
+      awaitLockWait(manager, youngerBlocked);
       assertEquals(StatusCode.OK,
           olderWait.acquireKey(older, 7, 20, LockMode.EXCLUSIVE));
       assertEquals(StatusCode.DEADLOCK, youngerBlocked.get(1, TimeUnit.SECONDS));
@@ -56,18 +52,14 @@ final class IndexedLockWaitTest {
     }
   }
 
-  private static void awaitParked(AtomicReference<Thread> worker, Future<?> future) {
+  private static void awaitLockWait(TransactionManager manager, Future<?> future) {
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
-    Thread.State state = Thread.State.NEW;
-    while (!future.isDone() && System.nanoTime() < deadline) {
-      Thread thread = worker.get();
-      if (thread != null) {
-        state = thread.getState();
-        if (state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING) break;
-      }
+    while (manager.waitingLockCount() == 0
+        && !future.isDone()
+        && System.nanoTime() < deadline) {
       Thread.onSpinWait();
     }
     assertFalse(future.isDone());
-    assertTrue(state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING);
+    assertEquals(1, manager.waitingLockCount());
   }
 }
