@@ -124,12 +124,16 @@ The canonical receipt validator and P4 consumer migrate together; current
 host ownership remains explicitly unsupported.
 
 Independent reviews identified and resolved owned-child cleanup, classpath
-metadata binding, late-mutation failure reporting, symmetric cache-trust
-validation, and Gradle system-property input classification. The lead's systems
-review rejected a proposed common build-ID requirement: invocation identity is
-unique by design, while comparison checks source bytes, ordered launched bytes,
-and runtime launcher identity. Separate builds with equivalent runtime inputs
-must not be rejected solely because their evidence identities differ.
+metadata binding, late-mutation failure reporting, and symmetric cache-trust
+validation. The descriptor does not classify `StartParameter.systemPropertiesArgs`
+directly because Gradle populates it with synthesized defaults; `make.sh`'s
+fixed retained argv is the supported invocation authority, while external
+environment and configuration injection remains unsupported. The lead's
+systems review rejected a proposed common build-ID requirement: invocation
+identity is unique by design, while comparison checks source bytes, ordered
+launched bytes, and runtime launcher identity. Separate builds with equivalent
+runtime inputs must not be rejected solely because their evidence identities
+differ.
 
 Validation evidence is retained at
 `/private/tmp/river-tic-ed12-evidence-20260907`. Java test outcomes restored by

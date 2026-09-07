@@ -46,13 +46,16 @@ tasks.register("writeRiverTpsRuntimeClasspath") {
     val entries = sourceSets.main.get().runtimeClasspath.files.toList()
     val buildId = riverTpsBuildId.get()
     check(buildId.matches(Regex("[0-9a-f]{64}"))) { "invalid TPS build identity" }
+    // make.sh owns the admitted invocation and retains its fixed argv. Gradle
+    // also synthesizes default values in systemPropertiesArgs, so that map
+    // cannot distinguish user -D input; environment/configuration injection
+    // remains unsupported below.
     val externalConfiguration = gradle.startParameter.allInitScripts.isNotEmpty()
         || gradle.gradleUserHomeDir.resolve("gradle.properties").exists()
         || gradle.gradleHomeDir?.resolve("gradle.properties")?.exists() == true
         || gradle.startParameter.projectProperties.keys.any {
           it != "riverTpsClasspathOutput" && it != "riverTpsBuildId"
         }
-        || gradle.startParameter.systemPropertiesArgs.isNotEmpty()
         || System.getenv().any { (name, value) ->
           value.isNotEmpty() && (name.startsWith("ORG_GRADLE_PROJECT_")
               || name in setOf("GRADLE_OPTS", "JAVA_OPTS", "JAVA_TOOL_OPTIONS",
