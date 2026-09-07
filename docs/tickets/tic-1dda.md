@@ -17,9 +17,11 @@ tags:
 deps:
     - tic-af29
     - tic-8e74
-    - tic-0636
+    - tic-ed12
     - tic-d7c2
 links:
+    - tic-0636
+    - tic-1fe7
     - tic-b368
     - tic-7352
 created: 2026-09-04T15:10:06.990273Z
@@ -38,7 +40,7 @@ failed criterion without making a performance claim.
 
 This investigation owns only the predeclared workload execution,
 reconciliation, statistical evaluation, and evidence record. It consumes the
-diagnostics and guards delivered by `tic-af29`, `tic-8e74`, `tic-0636`, and
+diagnostics and guards delivered by `tic-af29`, `tic-8e74`, `tic-ed12`, and
 `tic-d7c2`.
 
 ## Non-goals
@@ -70,31 +72,35 @@ additional workload family or post-hoc acceptance rule may be added.
 
 Use the exact P0 correctness, failure-mode displacement, correlation, cleanup, and performance-regression criteria in docs/perf_review.md. Preserve every anomalous sample.
 
-The accepted `tic-0636` baseline uses the following cooperative host boundary.
-`tic-d7c2` must replace its periodic observation behavior before this matrix
-resumes; the remaining provenance and terminal-receipt requirements still apply.
-The shared River performance lease proves full-interval exclusion among
-lease-participating River workflows. Bounded periodic process observations
-reject nonparticipants that are observed, but cannot prove absence between
-samples. Each promoted interval therefore requires the cooperative lease and
-bounded host observations. Idle Gradle daemons are allowed.
+The accepted historical `tic-0636` implementation was superseded by later
+commits. The current prerequisite owners are `tic-ed12` (separately built
+artifact provenance and canonical receipt validation) and `tic-d7c2` (real
+cooperative host ownership and bounded lifecycle-boundary observation). The
+accepted contract reconciliation is `tic-1fe7`; historical closure is not a
+substitute for these current capabilities.
 
-For every matrix cell, the lease and bounded observations must begin before
-source capture. Background observations continue through provisional metadata;
-a final synchronous observation seals the ledger immediately before its
-immutable publication under the still-held lease. The lease remains valid
-through all evidence publication. Base run metadata is provisional, not a completion result. The
-only consumable success is a canonical no-replace terminal receipt, published
-after verified lease release, that binds the run/artifact identity, exact
-metadata bytes, lease owner commitment, final host/checkpoint ledgers, and
-release outcome. The receipt step is outside the exclusion interval. Missing,
-failure, malformed, mutated, or colliding receipts invalidate the cell. All
-River-owned consumers, including `tools/tps-p4.sh`, require v2 evidence and the
-shared receipt validator; v1 evidence has no compatibility path.
+For each matrix cell, build and measurement are separate invocations. Each
+uses the same cooperative exclusion domain for its own complete interval; no
+lease spans or transfers across the idle gap. The validated build record and
+matching source/runtime bytes bind the artifact used by the measurement.
+Measurement ownership begins before preflight/source capture and lasts
+through server/client cleanup and immutable evidence publication. Release
+verifies actual ownership before the canonical no-replace terminal receipt
+is published. Missing, failed, mutated, colliding, superseded-schema or
+insufficient-guarantee evidence invalidates the cell. The shared validator
+requires both current provenance and host guarantees for promotion; a
+workload-success diagnostic without them is not an eligible input.
+
+Bounded process observations run at lifecycle boundaries, with no periodic
+measured-phase polling. They reject observed unowned River builds, workloads
+and profiles, while allowing verified idle Gradle daemons. The cooperative
+lease proves exclusion only among participating workflows; observations do
+not prove that a nonparticipant was absent between endpoints. Unrelated user
+load is outside the exclusion claim and remains part of host conditions.
 
 ## Acceptance Criteria
 
-Every run has matching effective isolation, zero unexplained outcomes and cleanup residue, passing invariants, reconciled victim/retry accounting, and a statistically stated scaling conclusion; evidence references, source tag, cooperative lease record, bounded host observations, and a shared-validator-accepted v2 success receipt are recorded. Every raw collector and retained ledger remains within its declared time/byte budget. Evidence does not claim that periodic observation proves unconditional host-wide absence between samples.
+Every run has matching effective isolation, zero unexplained outcomes and cleanup residue, passing invariants, reconciled victim/retry accounting, and a statistically stated scaling conclusion; evidence references, source tag, cooperative lease record, bounded host observations, and a shared-validator-accepted current success receipt are recorded. Every raw collector and retained ledger remains within its declared time/byte budget. Evidence does not claim that boundary observations prove unconditional host-wide absence between observations.
 
 ## Notes
 
@@ -117,3 +123,10 @@ contains cooperative host observations; preserve that historical evidence and
 reuse its canonical lease and terminal receipts under `tic-d7c2`. This ticket
 consumes all four and remains prohibited from implementing or repairing any
 of them.
+
+### 2026-09-07 current-prerequisite replacement
+
+`tic-ed12` replaces historical `tic-0636` as the active artifact-provenance
+dependency, while the old delivery stays linked and closed. `tic-d7c2` consumes
+that delivery and supplies real host ownership. This investigation's workload,
+statistical rules and other P0 stop conditions are unchanged; no gate is waived.

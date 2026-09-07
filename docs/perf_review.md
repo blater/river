@@ -1973,8 +1973,13 @@ ten-sample confidence gate.
 matrix. Its v2 calculator accepts only provisional metadata paired with the
 canonical, no-replace success receipt validated by the shared TPS provenance
 owner; v1, missing, failure, mutated, or noncanonical terminal evidence is
-rejected. That verifies the inputs to a ten-sample calculation for one River
-configuration, but the output remains explicitly
+rejected. The historical accepted `tic-0636` implementation enforced stronger
+provenance than the current wiring: later `866f1f4` and `8609d49` removed the
+build/classpath/host gates. Current receipt success therefore does not prove
+promotion eligibility. `tic-1fe7` reconciles the separate build workflow;
+`tic-ed12` must deliver current prebuilt artifact binding and truthful shared
+receipt validation, and `tic-d7c2` must supply actual invocation ownership
+before these inputs can qualify. The calculator output remains explicitly
 `partial-river-point-calculator` evidence. It cannot emit a passing Alpha3
 result without the warmup, scaling, cross-engine, absolute, relative, latency,
 failure, retry, invariant, and provenance checks above.
