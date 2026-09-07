@@ -1,12 +1,13 @@
 ---
 id: tic-1f42
-status: in_progress
+status: closed
 type: task
 priority: 2
 assignee: blater
 delivery: code
 base-commit: 5627543e624ac5a22d35e940e1f8bf6cf506b325
 branch: ticket/tic-1f42-test-cleanup
+delivered-commit: eb92bc9cfaf33145370e4006c2a29d46d683e574
 tags:
     - testing
     - maintenance
@@ -44,3 +45,5 @@ material and dependency placement. Validation passed in 45s:
 306 tests, zero failures/errors, two existing benchmark skips. Log:
 `/private/tmp/river-test-streamline-evidence-20260907/cleanup.log`.
 No production behavior changed; no TPS improvement is claimed.
+
+Combined clean validation and integration evidence: [test streamlining delivery](../delivery/evidence/2026-09-07-test-streamlining.md).
