@@ -42,6 +42,70 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-07 canonical retained-snapshot gauge (`tic-8e74`)
+
+**Accepted cold observability; no repeated regression identified in the short
+diagnostic samples.** Candidate `79f4577` exposes the transaction manager's existing snapshot registry count through the
+cold managed-server diagnostics path. The registry remains the sole owner;
+there are no new counters, lifecycle mutations, or hot-path operations.
+`server_retained_snapshots_at_capture` is independent of lock classification
+and performance capture enablement. It reports the capture instant before
+server/database close; diagnostics do not clean up snapshots to satisfy it.
+Unsupported providers retain the existing unavailable convention (`-1`).
+
+Baseline: `fa77adceeae9e1a0702971d122617b925a53701f`, production-identical to
+`perf-checkpoint-20260907-lock-block-causality`. Existing lifecycle tests now
+check successful begin/commit/abort, failed source and capacity admission,
+prepared abort, public-session cleanup, and deliberately retained snapshots.
+The group-fault test proves published-pending transactions are distinct:
+active transactions 2 versus retained snapshots 0, then 4 versus 2 after
+successor/reader admission, and both zero after complete cleanup.
+Independent review approved the code and coverage.
+
+Clean `GRADLE_USER_HOME=/private/tmp/river-gradle-tic-f8dd ./gradlew clean
+test --no-fail-fast verifyHotPathBytecodeFixtures` passed in 7m47s: 1,805 tests,
+zero failures/errors, two existing skips. Source/bytecode policy checks retain
+exactly 259 existing violations with no additions/removals; the indexed-table
+class-reference check passes. The repository policy gate is not fully green.
+
+Touched slopmark: TransactionManager 160.306 → 160.555;
+EmbeddedDatabase 164.388 → 164.185; TpccServerMain 75.118,
+EmbeddedRiver 66.1254, RelationalDatabase 13.2193 and RiverDatabase 0 unchanged.
+The small change extends existing diagnostic delegation without adding a
+technical responsibility. Getter bytecode is only a registry read and return;
+no allocation, clock call, or field update is added.
+
+Identical diagnostic command, after separate `./make.sh` builds:
+
+```sh
+RIVER_JAVA=/opt/homebrew/Cellar/openjdk/26.0.2.1/libexec/openjdk.jdk/Contents/Home/bin/java \
+  tools/tps-test.sh --seed=42 --warmup-seconds=1 --measured-seconds=10 \
+  --output-dir=/private/tmp/river-tic-8e74-evidence-20260907/<sample>
+```
+
+Fixed tiny standard mix, serializable, no-wait-stress, ten terminals, one
+warehouse, 32 attempts, synchronous WAL, unchanged resource budgets, JDK
+26.0.2.1. Baselines before edits: **161.400, 157.300 TPS**, zero retries/errors.
+Candidates: **161.900, 160.500 TPS**, also zero retries/errors. All four passed
+pre/post invariants, phase/capture and deadlock reconciliation with matching
+configuration fingerprints and clean stable source. Both candidate server logs
+contain exactly `server_retained_snapshots_at_capture=0`.
+
+One candidate Delivery maximum was 351.584ms versus controls 248.019/242.288ms;
+the other candidate was 248.213ms. Order Status maxima were 16.134/25.192ms
+versus controls 15.936/12.741ms. These single larger tails are retained; no
+repeated directional shift outside adjacent variation was identified. The
+samples do not prove throughput equivalence or a speedup.
+
+Current tool receipts do not establish launched-class provenance or complete
+host exclusion; these remain separately scoped prerequisites. Workloads/builds
+were manually serialized, and the user's unrelated host load remains present.
+These are River-specific diagnostic checks, not P0 certification, a TPC-C
+claim, or a comparison with external harness artifacts.
+
+Evidence root: `/private/tmp/river-tic-8e74-evidence-20260907`.
+
+
 
 ### 2026-09-07 causal lock-block aggregates (`tic-af29`)
 

@@ -70,3 +70,17 @@ is zero after complete cleanup and detects a deliberately retained active
 snapshot. Disabled workload diagnostics gain no hot-path allocation, clock
 read, counter update, or control-flow change. `tic-1dda` can retain the terminal
 value without parsing lock-classification state.
+
+## Delivery evidence
+
+Candidate `79f4577` exposes only the canonical cold registry gauge. Independent
+review approved the implementation and lifecycle coverage. Clean full tests:
+1,805 tests, zero failures/errors, two existing skips. Source/bytecode policy
+retains 259 pre-existing violations with no delta.
+
+Matched short TPS: before 161.400/157.300, after 161.900/160.500. All runs passed
+invariants with zero errors/retries; both candidate terminal counts are zero.
+No repeated regression identified; no speedup or equivalence claim. Current
+provenance/host gaps remain separate P0 prerequisites. Full details and tail
+latency caveats are in `docs/performance-checkpoints.md`; raw evidence is at
+`/private/tmp/river-tic-8e74-evidence-20260907`.
