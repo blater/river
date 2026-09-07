@@ -42,6 +42,38 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-07 serial WAL force-target ownership (`tic-7352`)
+
+Architecture checkpoint, with no speedup claim. Implementation/measured candidate
+`91b00ea` replaces mutable-tail completion and global forced-batch release/cursors
+with captured coverage and exact target/token ownership in the existing serial
+path. Group/direct/vacuum callers validate retained coverage; local force and
+configured durability success remain distinct. Annotated checkpoint tag
+`perf-checkpoint-20260907-force-target-ownership` is assigned at promotion.
+
+Fresh pinned OpenJDK 26.0.2.1, tiny/standard serializable synchronous-WAL,
+10-terminal seed 42 controls: **155.500/157.200 TPS**; candidates:
+**167.400/163.800 TPS** (1s warmup/10s measurement). The upward shift triggered
+5s/30s interleaving: **control 167.300 → candidate 171.367 → control 180.833 →
+candidate 166.033 TPS**. Pair directions reverse (+2.4%, −8.2%); measured writer
+stages and latency buckets show no repeated worsening. Independent review accepts
+**no repeated regression identified in these diagnostics**, without proving
+equivalence or attributing the shift to noise. All eight runs have zero retries
+and errors, passing invariants/capture/reconciliation and successful receipts.
+Background load and current host/launched-byte provenance limits remain explicit.
+
+Clean full tests and bytecode fixtures pass in 7m42s: **1,796 tests, 0 failures,
+2 existing skips**; affected engine 1,008/WAL 33 pass. Policy delta 261→259,
+zero added, two stale affected WAL selectors corrected, with unchanged allowances.
+Slopmark vacuum 28.4502→31.1973 after a 47.0012 draft triggered shared coverage
+comparison; LocalWal 145.405→147.523; group 70.7069→71.4171; coordinator 5→14.1504
+for required exceptional-unwind cleanup. Independent recovery review accepted
+ownership/failure/cleanup and final performance evidence.
+
+Commands, exact samples, limitations and evidence are in
+[`tic-7352`](tickets/tic-7352.md) and
+`/private/tmp/river-tic-7352-evidence-20260907` (`SHA256SUMS`).
+
 ### 2026-09-07 resource-accounted SQL savepoints (`tic-5cc0`)
 
 Correctness/resource ownership checkpoint; no independent speedup claim.
