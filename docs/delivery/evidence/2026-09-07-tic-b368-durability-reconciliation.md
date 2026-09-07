@@ -163,8 +163,14 @@ variation; if absent, reject the optimization or open the precisely observed blo
 - b368's previous P0 dependency was a scheduling gate on evidence-only design;
   mapping replaced it with accepted source/probe/correctness evidence and kept
   its P0 link. This does not assert that the P0 matrix passed.
-- 7352 is ready for code only after b368 acceptance and 1dda completion. Its serial
-  identity replacement does not depend on changing cohort admission/chunking.
+- 7352 requires b368 acceptance and its own exact force/lineage/cleanup/fault,
+  review, allocation/slopmark, matched TPS and clean-full gates. Independent
+  review after mapping confirmed 1dda is historical P1 promotion ordering for
+  this narrowly serial change: causal lock aggregates, snapshot export and the
+  full scaling campaign establish no missing force-target invariant. 7352 now
+  links 1dda; the hard edge is removed explicitly, not bypassed. Any expansion
+  to concurrent retention, scheduling, lock or admission changes invalidates
+  this disposition. This neither certifies P0 nor removes f1bb's existing gates.
 - f1bb retains 7352, 1dda and 6f81 (transitively ca05/5b3e), plus acceptance of the
   force-I/O execution/provider decision owned by `tic-92e3`. Do not start it with any unresolved
   lifetime, resource or provider contract.
