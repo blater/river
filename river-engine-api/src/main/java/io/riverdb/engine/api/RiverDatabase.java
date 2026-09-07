@@ -10,6 +10,9 @@ public interface RiverDatabase {
   /** Lock-wait counters are available for an embedded managed-server diagnostic. */
   default int activeTransactionCount() { return -1; }
 
+  /** Cold retained-snapshot count at capture; -1 means unavailable. */
+  default int retainedSnapshotCount() { return -1; }
+
   default long activeLockCount() { return -1; }
 
   default long waitingLockCount() { return -1; }

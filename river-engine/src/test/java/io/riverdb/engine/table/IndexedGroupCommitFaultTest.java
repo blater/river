@@ -58,6 +58,7 @@ final class IndexedGroupCommitFaultTest {
     assertEquals(durableEnd, fixture.wal.durableEnd());
     assertEquals(0, fixture.manager.activeLockCount());
     assertEquals(2, fixture.manager.activeTransactionCount());
+    assertEquals(0, fixture.manager.retainedSnapshotCount());
     assertEquals(TransactionState.COMMITTING, fixture.first.transaction().state());
     assertFalse(fixture.firstRequest.outcome.isAvailable());
 
@@ -76,6 +77,7 @@ final class IndexedGroupCommitFaultTest {
     IndexedTransactionSession excess = fixture.newSession();
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, excess.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(4, fixture.manager.activeTransactionCount());
+    assertEquals(2, fixture.manager.retainedSnapshotCount());
     assertEquals(StatusCode.OK, reader.beginStatement());
     assertEquals(StatusCode.OK, reader.fetchByKey(0, 41, new HeapRowResult()));
     assertEquals(StatusCode.OK, reader.completeStatement(false));
@@ -102,6 +104,7 @@ final class IndexedGroupCommitFaultTest {
     assertEquals(StatusCode.OK, reader.close());
     assertEquals(StatusCode.OK, excess.close());
     assertEquals(0, fixture.manager.activeTransactionCount());
+    assertEquals(0, fixture.manager.retainedSnapshotCount());
     assertEquals(0, fixture.manager.activeLockCount());
   }
 

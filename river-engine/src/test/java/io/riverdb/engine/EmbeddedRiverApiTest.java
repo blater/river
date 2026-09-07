@@ -47,12 +47,15 @@ final class EmbeddedRiverApiTest {
                 + "(1, 100, 7), (2, 200, 7), (3, 300, 8)",
             command));
     assertEquals(3, command.affectedRows());
+    assertEquals(0, database.retainedSnapshotCount());
     assertEquals(StatusCode.OK, session.execute("BEGIN SERIALIZABLE", command));
+    assertEquals(1, database.retainedSnapshotCount());
     assertEquals(true, command.transactionActive());
     assertEquals(
         StatusCode.OK,
         session.execute("UPDATE accounts SET balance=250 WHERE id=2", command));
     assertEquals(StatusCode.OK, session.execute("COMMIT", command));
+    assertEquals(0, database.retainedSnapshotCount());
     assertEquals(false, command.transactionActive());
 
     QueryOpenResult queryResult = new QueryOpenResult();
@@ -128,10 +131,12 @@ final class EmbeddedRiverApiTest {
     CommandResult command = new CommandResult();
     assertEquals(StatusCode.OK, session.execute("CREATE TABLE ledger", command));
     assertEquals(StatusCode.OK, session.execute("BEGIN", command));
+    assertEquals(1, database.retainedSnapshotCount());
     assertEquals(
         StatusCode.OK,
         session.execute("INSERT INTO ledger VALUES (9, 900)", command));
     assertEquals(StatusCode.OK, session.close());
+    assertEquals(0, database.retainedSnapshotCount());
     assertEquals(StatusCode.CLOSED, session.execute("COMMIT", command));
 
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -148,6 +153,7 @@ final class EmbeddedRiverApiTest {
         session.beginQuery("SELECT key, value FROM ledger", queryResult));
     RiverQuery query = queryResult.query();
     assertEquals(StatusCode.OK, session.close());
+    assertEquals(0, database.retainedSnapshotCount());
     assertEquals(false, query.isActive());
     assertEquals(StatusCode.CLOSED, query.next(new RowResult()));
     assertEquals(StatusCode.OK, database.close());

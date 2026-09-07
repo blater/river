@@ -1,6 +1,8 @@
 ---
 id: tic-8e74
-status: open
+status: in_progress
+base-commit: fa77adceeae9e1a0702971d122617b925a53701f
+branch: ticket/tic-8e74-terminal-snapshot-gauge
 type: story
 assignee: blater
 parent: tic-5db4
