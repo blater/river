@@ -62,12 +62,13 @@ tasks.register("writeRiverTpsRuntimeClasspath") {
                   "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"))
         }
     val fields = buildList {
-      add("schema=river-tps-runtime-v2")
+      add("schema=river-tps-runtime-v3")
       add("build.id=$buildId")
       add("build.inputs=${if (externalConfiguration) "unsupported" else "workspace_declared"}")
       add("build.cache_trust=gradle_declared_inputs")
       add("gradle.version=${gradle.gradleVersion}")
       add("gradle.home=${gradle.gradleHomeDir?.absolutePath ?: "unavailable"}")
+      add("gradle.user.home=${gradle.gradleUserHomeDir.absolutePath}")
       add("gradle.process.pid=${ProcessHandle.current().pid()}")
       add("java.home=${System.getProperty("java.home")}")
       add("java.version=${System.getProperty("java.version")}")

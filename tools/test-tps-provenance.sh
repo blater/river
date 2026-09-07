@@ -9,6 +9,8 @@ source "$script_dir/tps-provenance.sh"
 
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/river-tps-provenance-test.XXXXXX")
 test_make_pid=
+race_a_pid=
+race_b_pid=
 finish_test() {
   local status=$?
   trap - EXIT
@@ -17,6 +19,11 @@ finish_test() {
     kill -TERM "$test_make_pid" 2>/dev/null
     wait "$test_make_pid" 2>/dev/null
   fi
+  for race_pid in "$race_a_pid" "$race_b_pid"; do
+    [[ -n $race_pid ]] || continue
+    kill -TERM "$race_pid" 2>/dev/null
+    wait "$race_pid" 2>/dev/null
+  done
   if ((status == 0)); then
     rm -rf -- "$test_root" || status=1
   else
@@ -61,7 +68,7 @@ printf 'resource\n' >"$classpath_root/resources/example.txt"
 printf 'jar\n' >"$classpath_root/dependency.jar"
 descriptor="$test_root/runtime.properties"
 {
-  printf 'schema=river-tps-runtime-v2\n'
+  printf 'schema=river-tps-runtime-v3\n'
   printf 'classpath=%s\n' "$classpath_root/classes"
   printf 'classpath=%s\n' "$classpath_root/resources"
   printf 'classpath=%s\n' "$classpath_root/dependency.jar"
@@ -110,14 +117,15 @@ pass
 
 snapshot="$test_root/processes.txt"
 cat >"$snapshot" <<'EOF'
- 100   90 Fri Sep  4 12:00:00 2026 bash tools/tps-test.sh
- 101  100 Fri Sep  4 12:00:01 2026 java GradleWrapperMain test
- 200    1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0
- 300    1 Fri Sep  4 12:00:02 2026 java GradleWrapperMain test
- 400    1 Fri Sep  4 12:00:03 2026 /work/river-harness/benchmark run river
- 500    1 Fri Sep  4 12:00:04 2026 async-profiler start
- 600    1 Fri Sep  4 12:00:05 2026 pgbench -c 8
- 700    1 Fri Sep  4 12:00:06 2026 unrelated --password=do-not-retain
+  100   90 Fri Sep  4 12:00:00 2026 bash tools/tps-test.sh
+  101  100 Fri Sep  4 12:00:01 2026 java GradleWrapperMain test
+  200    1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0
+  300    1 Fri Sep  4 12:00:02 2026 java GradleWrapperMain test
+  400    1 Fri Sep  4 12:00:03 2026 /work/river-harness/benchmark run river
+  500    1 Fri Sep  4 12:00:04 2026 async-profiler start
+  600    1 Fri Sep  4 12:00:05 2026 pgbench -c 8
+  700    1 Fri Sep  4 12:00:06 2026 unrelated --password=do-not-retain
+  800    1 Fri Sep  4 12:00:07 2026 /usr/bin/rg GradleWrapperMain tools
 EOF
 provenance_normalize_snapshot "$snapshot" "$test_root/processes.tsv"
 provenance_classify_snapshot "$test_root/processes.tsv" 100 >"$test_root/classification.tsv"
@@ -128,6 +136,9 @@ assert_contains "$test_root/classification.tsv" $'violation\tprofile\t500'
 assert_contains "$test_root/classification.tsv" $'violation\tdatabase_workload\t600'
 if grep -F $'\t101' "$test_root/classification.tsv" >/dev/null; then
   fail "owned child process was classified as overlap"
+fi
+if grep -F $'\t800' "$test_root/classification.tsv" >/dev/null; then
+  fail "source inspection command was classified as Gradle activity"
 fi
 if grep -F 'do-not-retain' "$test_root/processes.tsv" >/dev/null; then
   fail "secret process argument entered retained observations"
@@ -140,54 +151,101 @@ cmp -s "$test_root/processes.tsv" "$test_root/processes-secret-changed.tsv" ||
   fail "unrelated secret influenced retained process evidence"
 pass
 
-own_monitor="$test_root/own-monitor"
-mkdir "$own_monitor"
-: >"$own_monitor/host-observations.tsv"
-: >"$own_monitor/host-violations.tsv"
-: >"$own_monitor/owned-build"
-: >"$own_monitor/provisional.tsv"
-printf 'build\n' >"$own_monitor/phase"
-provenance_capture_processes() { printf '%s\n' ' 200    1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'; }
-provenance_gradle_daemon_state() { printf 'busy\n'; }
-provenance_gradle_daemon_home() { printf '/owned/home\n'; }
+inventory="$test_root/inventory"
+mkdir "$inventory"
+fake_gradle_status="$test_root/fake-gradle-status"
+cat >"$fake_gradle_status" <<'EOF'
+#!/usr/bin/env bash
+cat <<'STATUS'
+    PID STATUS   INFO
+  200 IDLE     9.7.0
+
+Only Daemons for the current Gradle version are displayed. For more on this, please refer to https://docs.gradle.org/9.7.0/userguide/gradle_daemon.html#sec:status in the Gradle documentation.
+STATUS
+EOF
+chmod +x "$fake_gradle_status"
+provenance_capture_processes() {
+  printf '%s\n' ' 200    1 Fri Sep  4 11:00:00 2026 /usr/bin/java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'
+}
 provenance_process_start() { printf 'Fri Sep 4 11:00:00 2026\n'; }
-sleep() { : >"$own_monitor/stop"; }
-provenance_monitor_host "$own_monitor" 100 "$own_monitor/stop" 0 \
-  /owned/home "$own_monitor/owned-build" "$own_monitor/phase" 65536 1 \
-  "$own_monitor/provisional.tsv"
-[[ ! -s $own_monitor/host-violations.tsv ]] || fail "owned busy Gradle daemon was rejected"
-assert_contains "$own_monitor/host-classifications.tsv" $'provisional_owned_gradle_daemon\t200'
-printf 'gradle.process.pid=200\n' >"$own_monitor/descriptor"
-provenance_validate_gradle_daemons "$own_monitor/descriptor" \
-  "$own_monitor/provisional.tsv" || fail "exact owned Gradle daemon was rejected"
-printf 'gradle.process.pid=201\n' >"$own_monitor/foreign-descriptor"
-if provenance_validate_gradle_daemons "$own_monitor/foreign-descriptor" \
-    "$own_monitor/provisional.tsv"; then
-  fail "different Gradle daemon was accepted by home and marker alone"
+provenance_inventory_boundary "$inventory" 100 pre-source "$fake_gradle_status" \
+  /owned/home 65536 2 false || fail "idle Gradle status inventory failed"
+assert_contains "$inventory/host-classifications.tsv" $'allowed_idle_gradle_daemon\t200'
+if provenance_gradle_status "$test_root/missing-status" /owned/home 1 1024; then
+  fail "missing Gradle status query was accepted"
 fi
-printf 'gradle.process.pid=200\ngradle.process.pid=201\n' >"$own_monitor/duplicate-descriptor"
-if provenance_validate_gradle_daemons "$own_monitor/duplicate-descriptor" \
-    "$own_monitor/provisional.tsv"; then
-  fail "duplicate Gradle-owned daemon identity was accepted"
-fi
-[[ -z $(find "$own_monitor" \( -name 'host-processes.0*' -o \
-  -name 'host-classification.0*' \) -print -quit) ]] ||
-  fail "per-sample host evidence was retained without a bound"
 pass
 
-foreign_monitor="$test_root/foreign-monitor"
-mkdir "$foreign_monitor"
-: >"$foreign_monitor/host-observations.tsv"
-: >"$foreign_monitor/host-violations.tsv"
-: >"$foreign_monitor/owned-build"
-: >"$foreign_monitor/provisional.tsv"
-printf 'build\n' >"$foreign_monitor/phase"
-provenance_gradle_daemon_home() { printf '/foreign/home\n'; }
-sleep() { : >"$foreign_monitor/stop"; }
-provenance_monitor_host "$foreign_monitor" 100 "$foreign_monitor/stop" 0 \
-  /owned/home "$foreign_monitor/owned-build" "$foreign_monitor/phase" 65536 1 \
-  "$foreign_monitor/provisional.tsv"
-assert_contains "$foreign_monitor/host-violations.tsv" $'violation\tbusy_gradle_daemon\t200'
+cold_gradle_status="$test_root/cold-gradle-status"
+cat >"$cold_gradle_status" <<'EOF'
+#!/usr/bin/env bash
+cat <<'STATUS'
+    PID STATUS   INFO
+No Gradle daemons are running.
+
+Only Daemons for the current Gradle version are displayed. For more on this, please refer to https://docs.gradle.org/9.7.0/userguide/gradle_daemon.html#sec:status in the Gradle documentation.
+STATUS
+EOF
+chmod +x "$cold_gradle_status"
+provenance_capture_processes() {
+  printf '%s\n' ' 1    0 Mon Sep  7 00:00:00 2026 launchd'
+}
+cold_inventory="$test_root/cold-inventory"
+mkdir "$cold_inventory"
+if ! provenance_inventory_boundary "$cold_inventory" 100 pre-source \
+    "$cold_gradle_status" /owned/home 65536 2 false; then
+  fail "cold no-daemon status was rejected"
+fi
+assert_contains "$cold_inventory/host-classifications.tsv" $'clean\t-'
+
+stopped_gradle_status="$test_root/stopped-gradle-status"
+cat >"$stopped_gradle_status" <<'EOF'
+#!/usr/bin/env bash
+cat <<'STATUS'
+    PID STATUS   INFO
+  200 STOPPED  (by user or OS)
+
+Only Daemons for the current Gradle version are displayed. For more on this, please refer to https://docs.gradle.org/9.7.0/userguide/gradle_daemon.html#sec:status in the Gradle documentation.
+STATUS
+EOF
+chmod +x "$stopped_gradle_status"
+provenance_capture_processes() {
+  printf '%s\n' \
+    ' 200    1 Mon Sep  7 00:00:00 2026 /usr/bin/java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.7'
+}
+provenance_process_start() { printf 'Mon Sep 7 00:00:00 2026\n'; }
+stopped_inventory="$test_root/stopped-inventory"
+mkdir "$stopped_inventory"
+if provenance_inventory_boundary "$stopped_inventory" 100 pre-source \
+    "$stopped_gradle_status" /owned/home 65536 2 false; then
+  fail "observed daemon with stopped history was accepted"
+fi
+assert_contains "$stopped_inventory/host-violations.tsv" \
+  uninspectable_gradle_daemon
+
+empty_process_inventory="$test_root/empty-process-inventory"
+mkdir "$empty_process_inventory"
+provenance_capture_processes() { :; }
+if provenance_inventory_boundary "$empty_process_inventory" 100 pre-source \
+    "$fake_gradle_status" /owned/home 65536 2 false; then
+  fail "empty process capture was accepted"
+fi
+assert_contains "$empty_process_inventory/host-violations.tsv" \
+  process_inventory_unavailable
+
+malformed_process_inventory="$test_root/malformed-process-inventory"
+mkdir "$malformed_process_inventory"
+provenance_capture_processes() { printf '%s\n' 'malformed process row'; }
+if provenance_inventory_boundary "$malformed_process_inventory" 100 pre-source \
+    "$fake_gradle_status" /owned/home 65536 2 false; then
+  fail "malformed process capture was accepted"
+fi
+assert_contains "$malformed_process_inventory/host-violations.tsv" \
+  process_inventory_unavailable
+provenance_capture_processes() {
+  printf '%s\n' \
+    ' 200    1 Fri Sep  4 11:00:00 2026 /usr/bin/java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'
+}
 pass
 
 provenance_process_start() {
@@ -384,6 +442,167 @@ assert_equal "$(awk '$1 == "success" {count++} END {print count+0}' "$race_resul
 wait
 pass
 
+replacement_race_lease="$test_root/replacement-race-lease"
+replacement_race_gate="$test_root/replacement-race-gate"
+replacement_race_results="$test_root/replacement-race-results"
+replacement_race_a_run=$(printf '%064d' 31)
+replacement_race_b_run=$(printf '%064d' 32)
+mkdir "$replacement_race_gate"
+: >"$replacement_race_results"
+bash -c '
+  set -euo pipefail
+  source "$1"
+  lease=$2
+  gate=$3
+  run_id=$4
+  nonce=$5
+  provenance_process_start() { printf "A-start\n"; }
+  rm() {
+    local owner_unlink=false argument
+    for argument in "$@"; do
+      [[ $argument == ./owner || $argument == "$lease/owner" ]] && owner_unlink=true
+    done
+    if [[ $owner_unlink == true && ! -e $gate/a-unlink-entered ]]; then
+      : >"$gate/a-unlink-entered"
+      while [[ ! -e $gate/a-unlink-release ]]; do /bin/sleep 0.01; done
+    fi
+    command rm "$@"
+  }
+  printf "%s\n" "${BASHPID:-$$}" >"$gate/a-pid"
+  provenance_acquire_lease "$lease" "$run_id" "$nonce"
+  if provenance_release_lease "$lease"; then
+    printf "a-success\n" >>"$6"
+  else
+    printf "a-failed\n" >>"$6"
+  fi
+' bash "$script_dir/tps-provenance.sh" "$replacement_race_lease" \
+  "$replacement_race_gate" "$replacement_race_a_run" "$lease_nonce" \
+  "$replacement_race_results" &
+race_a_pid=$!
+for _ in {1..200}; do
+  [[ -s $replacement_race_gate/a-pid && -e $replacement_race_gate/a-unlink-entered ]] && break
+  /bin/sleep 0.01
+done
+[[ -e $replacement_race_gate/a-unlink-entered ]] || fail "candidate A did not pause before owner unlink"
+a_pid=$(cat "$replacement_race_gate/a-pid")
+bash -c '
+  set -euo pipefail
+  source "$1"
+  lease=$2
+  gate=$3
+  run_id=$4
+  nonce=$5
+  old_pid=$6
+  provenance_process_start() {
+    if [[ $1 == "$old_pid" ]]; then return 1; fi
+    printf "B-start\n"
+  }
+  kill() {
+    if [[ ${1:-} == -0 && ${2:-} == "$old_pid" ]]; then return 1; fi
+    command kill "$@"
+  }
+  provenance_acquire_lease "$lease" "$run_id" "$nonce"
+  printf "%s\n" "${BASHPID:-$$}" >"$gate/b-pid"
+  : >"$gate/b-acquired"
+  while [[ ! -e $gate/b-release ]]; do /bin/sleep 0.01; done
+  provenance_release_lease "$lease"
+' bash "$script_dir/tps-provenance.sh" "$replacement_race_lease" \
+  "$replacement_race_gate" "$replacement_race_b_run" "$lease_nonce" \
+  "$a_pid" &
+race_b_pid=$!
+for _ in {1..200}; do
+  [[ -e $replacement_race_gate/b-acquired ]] && break
+  /bin/sleep 0.01
+done
+[[ -e $replacement_race_gate/b-acquired ]] || fail "proper contender B did not publish replacement"
+: >"$replacement_race_gate/a-unlink-release"
+for _ in {1..200}; do
+  grep -F a-failed "$replacement_race_results" >/dev/null && break
+  /bin/sleep 0.01
+done
+grep -F a-failed "$replacement_race_results" >/dev/null ||
+  fail "candidate A did not fail after replacement"
+[[ -f $replacement_race_lease/owner && -d $replacement_race_lease ]] ||
+  fail "candidate A removed replacement lease directory"
+assert_contains "$replacement_race_lease/owner" "evidence_run_id=$replacement_race_b_run"
+: >"$replacement_race_gate/b-release"
+wait "$race_a_pid"
+wait "$race_b_pid"
+race_a_pid=
+race_b_pid=
+pass
+
+non_owner_lease="$test_root/non-owner-lease"
+non_owner_run=$(printf '%064d' 41)
+non_owner_nonce=$(printf '%064d' 42)
+provenance_acquire_lease "$non_owner_lease" "$non_owner_run" "$non_owner_nonce" ||
+  fail "non-owner release fixture could not acquire"
+saved_owner_identity=$PROVENANCE_LEASE_OWNER_IDENTITY_SHA256
+PROVENANCE_LEASE_OWNER_IDENTITY_SHA256=$(printf '%064d' 0)
+if provenance_release_lease "$non_owner_lease"; then
+  fail "non-owner release was accepted"
+fi
+[[ -f $non_owner_lease/owner && -d $non_owner_lease ]] ||
+  fail "non-owner release modified the lease"
+PROVENANCE_LEASE_OWNER_IDENTITY_SHA256=$saved_owner_identity
+provenance_release_lease "$non_owner_lease" || fail "owned release after refusal failed"
+pass
+
+inherited_live_owner_lease="$test_root/inherited-live-owner-lease"
+inherited_live_owner_run=$(printf '%064d' 51)
+inherited_live_owner_nonce=$(printf '%064d' 52)
+provenance_acquire_lease "$inherited_live_owner_lease" \
+  "$inherited_live_owner_run" "$inherited_live_owner_nonce" ||
+  fail "inherited live-owner fixture could not acquire"
+if bash -c '
+  set -euo pipefail
+  source "$1"
+  unset PROVENANCE_LEASE_RUN_ID PROVENANCE_LEASE_NONCE \
+    PROVENANCE_LEASE_OWNER_PID PROVENANCE_LEASE_OWNER_START \
+    PROVENANCE_LEASE_OWNER_IDENTITY_SHA256 PROVENANCE_TERMINAL_COMMITMENT_SHA256
+  provenance_release_lease "$2"
+' bash "$script_dir/tps-provenance.sh" "$inherited_live_owner_lease"; then
+  fail "inherited live-owner release without binding was accepted"
+fi
+[[ -f $inherited_live_owner_lease/owner && -d $inherited_live_owner_lease ]] ||
+  fail "inherited live-owner release modified the lease"
+provenance_release_lease "$inherited_live_owner_lease" ||
+  fail "owned release after inherited refusal failed"
+pass
+
+incomplete_inventory="$test_root/incomplete-inventory.tsv"
+printf '1\tbuild-pre\n' >"$incomplete_inventory"
+if provenance_validate_inventory_sequence "$incomplete_inventory" build; then
+  fail "incomplete ordered inventory evidence was accepted"
+fi
+extra_inventory="$test_root/extra-inventory.tsv"
+printf '1\tbuild-pre\n2\tbuild-post\n3\tbuild-post\n' >"$extra_inventory"
+if provenance_validate_inventory_sequence "$extra_inventory" build; then
+  fail "extra ordered inventory evidence was accepted"
+fi
+incomplete_checkpoints="$test_root/incomplete-checkpoints.tsv"
+printf 'startup\t1\t%s\t%s\t%s\t%s\n' \
+  "$(printf '%064d' 1)" "$(printf '%064d' 2)" \
+  "$(printf '%064d' 3)" "$(printf '%064d' 4)" >"$incomplete_checkpoints"
+if provenance_validate_checkpoint_sequence "$incomplete_checkpoints" true; then
+  fail "incomplete ordered checkpoint evidence was accepted"
+fi
+incomplete_ledgers="$test_root/incomplete-host-ledgers"
+mkdir "$incomplete_ledgers"
+printf '1\tbuild-pre\n2\tbuild-post\n' >"$incomplete_ledgers/host-observations.tsv"
+{
+  printf '1\t4242\t1\tFri Sep 4 11:00:00 2026\tgradle_daemon\n'
+  printf '2\t4242\t1\tFri Sep 4 11:00:00 2026\tnone\n'
+} >"$incomplete_ledgers/host-processes.tsv"
+{
+  printf '1\tbuild-pre\tallowed_idle_gradle_daemon\t9999\n'
+  printf '2\tbuild-post\tclean\t-\n'
+} >"$incomplete_ledgers/host-classifications.tsv"
+if provenance_validate_host_ledgers "$incomplete_ledgers"; then
+  fail "host ledger with an absent PID reference was accepted"
+fi
+pass
+
 printf 'first\n' >"$test_root/publication-source"
 provenance_publish_file "$test_root/publication-source" "$test_root/published"
 printf 'second\n' >"$test_root/publication-source"
@@ -405,96 +624,38 @@ assert_contains "$test_root/failure.log" complete-log
   fail "failed build provenance is incomplete"
 pass
 
-race_monitor="$test_root/race-monitor"
-mkdir "$race_monitor"
-: >"$race_monitor/host-observations.tsv"
-: >"$race_monitor/host-violations.tsv"
-: >"$race_monitor/start-calls"
-: >"$race_monitor/provisional.tsv"
-printf 'prebuild\n' >"$race_monitor/phase"
-provenance_capture_processes() { printf '%s\n' ' 200    1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'; }
-provenance_gradle_daemon_state() { printf 'busy\n'; }
+race_inventory="$test_root/race-inventory"
+mkdir "$race_inventory"
+provenance_capture_processes() {
+  printf '%s\n' ' 200 1 Fri Sep 4 11:00:00 2026 /usr/bin/java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'
+}
 provenance_process_start() {
-  printf x >>"$race_monitor/start-calls"
-  if [[ $(wc -c <"$race_monitor/start-calls") -eq 1 ]]; then
-    printf 'Fri Sep 4 11:00:00 2026\n'
-  else
+  if [[ -e $race_inventory/changed ]]; then
     printf 'Fri Sep 4 11:00:01 2026\n'
+  else
+    : >"$race_inventory/changed"
+    printf 'Fri Sep 4 11:00:00 2026\n'
   fi
 }
-sleep() { : >"$race_monitor/stop"; }
-provenance_monitor_host "$race_monitor" 100 "$race_monitor/stop" 0 '' '' \
-  "$race_monitor/phase" 65536 1 "$race_monitor/provisional.tsv"
-assert_contains "$race_monitor/host-violations.tsv" $'violation\tprocess_identity_race\t200'
-pass
-
-monitor_dir="$test_root/monitor"
-mkdir "$monitor_dir"
-: >"$monitor_dir/host-observations.tsv"
-: >"$monitor_dir/host-violations.tsv"
-printf 'prebuild\n' >"$monitor_dir/phase"
-provenance_capture_processes() { return 1; }
-if provenance_monitor_host "$monitor_dir" "$$" "$monitor_dir/stop" 0 '' '' \
-    "$monitor_dir/phase" 65536 1 "$monitor_dir/provisional.tsv"; then
-  fail "process observation race/failure was accepted"
+provenance_gradle_status() { printf '200\tidle\n'; }
+if provenance_inventory_boundary "$race_inventory" 100 pre-source \
+    "$test_root/fake-gradle-status" /owned/home 512 2 false; then
+  fail "process identity race was accepted"
 fi
-assert_contains "$monitor_dir/host-violations.tsv" process_snapshot_failed
+assert_contains "$race_inventory/host-violations.tsv" process_identity_race
 pass
 
-workload_monitor="$test_root/workload-monitor"
-mkdir "$workload_monitor"
-: >"$workload_monitor/host-observations.tsv"
-: >"$workload_monitor/host-violations.tsv"
-: >"$workload_monitor/provisional.tsv"
-: >"$workload_monitor/jcmd-calls"
-printf 'workload\n' >"$workload_monitor/phase"
-provenance_capture_processes() { printf '%s\n' ' 200    1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'; }
-provenance_process_start() { printf 'Fri Sep 4 11:00:00 2026\n'; }
-provenance_gradle_daemon_state() { printf x >>"$workload_monitor/jcmd-calls"; printf 'idle\n'; }
-sleep() { : >"$workload_monitor/stop"; }
-provenance_monitor_host "$workload_monitor" 100 "$workload_monitor/stop" 0 '' '' \
-  "$workload_monitor/phase" 65536 1 "$workload_monitor/provisional.tsv"
-[[ -s $workload_monitor/jcmd-calls ]] || fail "daemon inspection was skipped during workload phase"
-assert_contains "$workload_monitor/host-classifications.tsv" 'state=idle'
-if grep -F 'state=not_inspected' "$workload_monitor/host-classifications.tsv" >/dev/null; then
-  fail "workload daemon received blanket acceptance without inspection"
-fi
-assert_contains "$workload_monitor/host-observations.tsv" $'workload\t'
-awk -F '\t' 'NF == 6 && $4 ~ /^[0-9]+$/ {valid=1} END {exit !valid}' \
-  "$workload_monitor/host-observations.tsv" ||
-  fail "host observation did not retain phase and inspection cost"
-pass
-
-busy_workload_monitor="$test_root/busy-workload-monitor"
-mkdir "$busy_workload_monitor"
-: >"$busy_workload_monitor/host-observations.tsv"
-: >"$busy_workload_monitor/host-violations.tsv"
-: >"$busy_workload_monitor/provisional.tsv"
-printf 'workload\n' >"$busy_workload_monitor/phase"
-provenance_gradle_daemon_state() { printf 'busy\n'; }
-sleep() { : >"$busy_workload_monitor/stop"; }
-provenance_monitor_host "$busy_workload_monitor" 100 "$busy_workload_monitor/stop" 0 '' '' \
-  "$busy_workload_monitor/phase" 65536 1 "$busy_workload_monitor/provisional.tsv"
-assert_contains "$busy_workload_monitor/host-violations.tsv" $'violation\tbusy_gradle_daemon\t200'
-pass
-
-budget_monitor="$test_root/budget-monitor"
-mkdir "$budget_monitor"
-: >"$budget_monitor/host-observations.tsv"
-: >"$budget_monitor/host-violations.tsv"
-: >"$budget_monitor/provisional.tsv"
-printf 'workload\n' >"$budget_monitor/phase"
-provenance_capture_processes() { printf '%s\n' ' 1 0 Fri Sep  4 00:00:00 2026 launchd'; }
-if provenance_monitor_host "$budget_monitor" 100 "$budget_monitor/stop" 0 '' '' \
-    "$budget_monitor/phase" 512 1 "$budget_monitor/provisional.tsv"; then
+budget_inventory="$test_root/budget-inventory"
+mkdir "$budget_inventory"
+provenance_capture_processes() { printf '%s\n' ' 1 0 Fri Sep 4 00:00:00 2026 launchd'; }
+if provenance_inventory_boundary "$budget_inventory" 100 pre-source \
+    "$test_root/fake-gradle-status" /owned/home 32 2 false; then
   fail "host evidence byte budget was not enforced"
 fi
-assert_contains "$budget_monitor/host-violations.tsv" host_evidence_budget_exhausted
 budget_bytes=$(provenance_evidence_bytes \
-  "$budget_monitor/host-observations.tsv" "$budget_monitor/host-processes.tsv" \
-  "$budget_monitor/host-classifications.tsv" "$budget_monitor/host-violations.tsv" \
-  "$budget_monitor/provisional.tsv")
-((budget_bytes <= 512)) || fail "retained host evidence exceeded configured byte budget"
+  "$budget_inventory/host-observations.tsv" "$budget_inventory/host-processes.tsv" \
+  "$budget_inventory/host-classifications.tsv" "$budget_inventory/host-violations.tsv")
+((budget_bytes <= 32)) || fail "retained host evidence exceeded configured byte budget"
 pass
 
 source "$script_dir/tps-provenance.sh"
@@ -540,18 +701,19 @@ cat >"$collector_bin/ps" <<'EOF'
 if [[ ${FAKE_COLLECTOR_MODE:-} == slow ]]; then exec /bin/sleep 5; fi
 awk 'BEGIN { for (i=0; i<100; i++) printf "0123456789" }'
 EOF
-cat >"$collector_bin/jcmd" <<'EOF'
+cat >"$collector_bin/gradle" <<'EOF'
 #!/usr/bin/env bash
 case ${FAKE_COLLECTOR_MODE:-selected} in
   slow) exec /bin/sleep 5 ;;
-  large) awk 'BEGIN { for (i=0; i<100; i++) print "unrelated.secret=low-entropy" }' ;;
+  large) awk 'BEGIN { for (i=0; i<100; i++) print "200 IDLE 9.7 extra-output" }' ;;
   selected)
-    printf 'unrelated.secret=do-not-retain\n'
-    printf 'gradle.user.home=/owned/home\n'
+    printf '   PID STATUS   INFO\n'
+    printf '  200 IDLE     9.7.0\n\n'
+    printf '%s\n' 'Only Daemons for the current Gradle version are displayed. For more on this, please refer to https://docs.gradle.org/9.7.0/userguide/gradle_daemon.html#sec:status in the Gradle documentation.'
     ;;
 esac
 EOF
-chmod +x "$collector_bin/ps" "$collector_bin/jcmd"
+chmod +x "$collector_bin/ps" "$collector_bin/gradle"
 if PATH="$collector_bin:$PATH" FAKE_COLLECTOR_MODE=large \
     provenance_capture_processes 2 64 >"$test_root/raw-ps-overflow"; then
   fail "oversized raw ps snapshot was accepted"
@@ -563,40 +725,23 @@ if PATH="$collector_bin:$PATH" FAKE_COLLECTOR_MODE=slow \
   fail "raw ps snapshot escaped its time bound"
 fi
 ((SECONDS - collector_started < 4)) || fail "raw ps timeout exceeded its bound"
-if PATH="$collector_bin:$PATH" FAKE_COLLECTOR_MODE=large \
-    provenance_gradle_daemon_home 200 2 64 >"$test_root/raw-jcmd-overflow"; then
-  fail "oversized raw jcmd output was accepted"
+if FAKE_COLLECTOR_MODE=large provenance_gradle_status \
+    "$collector_bin/gradle" /owned/home 2 64 >"$test_root/raw-gradle-status-overflow"; then
+  fail "oversized Gradle status output was accepted"
 fi
-[[ ! -s $test_root/raw-jcmd-overflow ]] || fail "oversized raw jcmd bytes were retained"
-PATH="$collector_bin:$PATH" FAKE_COLLECTOR_MODE=selected \
-  provenance_gradle_daemon_home 200 2 1024 >"$test_root/selected-daemon-home"
-assert_equal "$(cat "$test_root/selected-daemon-home")" /owned/home
-if grep -F 'do-not-retain' "$test_root/selected-daemon-home" >/dev/null; then
-  fail "unrelated jcmd system property was retained"
-fi
-pass
-
-timeout_monitor="$test_root/timeout-monitor"
-mkdir "$timeout_monitor"
-: >"$timeout_monitor/host-observations.tsv"
-: >"$timeout_monitor/host-violations.tsv"
-: >"$timeout_monitor/provisional.tsv"
-printf 'workload\n' >"$timeout_monitor/phase"
-provenance_capture_processes() { printf '%s\n' ' 200 1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'; }
-provenance_process_start() { printf 'Fri Sep 4 11:00:00 2026\n'; }
-provenance_gradle_daemon_state() { /bin/sleep 2; printf 'idle\n'; }
-if provenance_monitor_host "$timeout_monitor" 100 "$timeout_monitor/stop" 0 '' '' \
-    "$timeout_monitor/phase" 65536 2 "$timeout_monitor/provisional.tsv" '' 1 \
-    1024 1024 1; then
-  :
-fi
-assert_contains "$timeout_monitor/host-violations.tsv" host_observation_timeout
+[[ ! -s $test_root/raw-gradle-status-overflow ]] || fail "oversized Gradle status bytes were retained"
+FAKE_COLLECTOR_MODE=selected provenance_gradle_status \
+  "$collector_bin/gradle" /owned/home 2 1024 >"$test_root/selected-gradle-status"
+assert_contains "$test_root/selected-gradle-status" $'200\tidle'
 pass
 
 fixture="$test_root/full-run-fixture"
+fixture_lease_dir="$test_root/owned-host-lease"
 mkdir -p "$fixture/tools" "$fixture/fake-bin" "$fixture/river-bench/build/classes" \
   "$fixture/river-bench/build"
 cp "$script_dir/tps-test.sh" "$script_dir/tps-provenance.sh" "$fixture/tools/"
+printf 'PROVENANCE_CANONICAL_LEASE_DIR=%q\n' "$fixture_lease_dir" \
+  >>"$fixture/tools/tps-provenance.sh"
 printf 'build/\n' >"$fixture/.gitignore"
 printf 'original-source\n' >"$fixture/mutable-source.txt"
 cp "$script_dir/../make.sh" "$fixture/make.sh"
@@ -604,6 +749,12 @@ cat >"$fixture/gradlew" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(cd -- "$(dirname -- "$0")" && pwd)
+if [[ ${1:-} == --status ]]; then
+  printf '   PID STATUS   INFO\n'
+  printf '  200 IDLE     9.7.0\n\n'
+  printf '%s\n' 'Only Daemons for the current Gradle version are displayed. For more on this, please refer to https://docs.gradle.org/9.7.0/userguide/gradle_daemon.html#sec:status in the Gradle documentation.'
+  exit 0
+fi
 [[ ${FAKE_BUILD_FAIL:-false} != true ]] || exit 17
 descriptor= id=
 for argument in "$@"; do
@@ -621,9 +772,9 @@ mkdir -p "$root/river-bench/build/classes" "$root/river-bench/build/resources"
 printf 'resource\n' >"$root/river-bench/build/resources/resource.txt"
 printf 'compiled-by-fixture\n' >"$root/river-bench/build/classes/Main.class"
 {
-  printf 'schema=river-tps-runtime-v2\nbuild.id=%s\n' "$id"
+  printf 'schema=river-tps-runtime-v3\nbuild.id=%s\n' "$id"
   printf 'build.inputs=%s\nbuild.cache_trust=gradle_declared_inputs\n' "${FAKE_BUILD_INPUTS:-workspace_declared}"
-  printf 'gradle.version=fixture\ngradle.home=/fake/gradle\ngradle.process.pid=%s\n' "$$"
+  printf 'gradle.version=fixture\ngradle.home=/fake/gradle\ngradle.user.home=/fake/gradle-user-home\ngradle.process.pid=%s\n' "$$"
   printf 'java.home=/fake/java\njava.version=fake-25\n'
   printf 'compiler.fixture.home=/fake/java\ncompiler.fixture.version=fake-25\n'
   printf 'compiler.fixture.executable=%s\n' "$root/fake-java"
@@ -757,6 +908,11 @@ if [[ -n ${FAKE_MUTATE_LEASE_COMMITMENT:-} ]]; then
     "$FAKE_MUTATE_LEASE_COMMITMENT/owner"
 fi
 if [[ -n ${FAKE_CLIENT_STARTED:-} ]]; then : >"$FAKE_CLIENT_STARTED"; fi
+if [[ -n ${FAKE_CLIENT_PID_FILE:-} ]]; then printf '%s\n' "$$" >"$FAKE_CLIENT_PID_FILE"; fi
+if [[ ${FAKE_CLIENT_IGNORE_TERM:-false} == true ]]; then
+  trap '' TERM
+  while :; do :; done
+fi
 if [[ -n ${FAKE_CLIENT_DELAY:-} ]]; then /bin/sleep "$FAKE_CLIENT_DELAY"; fi
 if [[ -n ${FAKE_MUTATE_SOURCE:-} ]]; then
   printf 'mutated-source\n' >"$FAKE_MUTATE_SOURCE"
@@ -783,40 +939,31 @@ git -C "$fixture" config user.name test
 git -C "$fixture" config user.email test@example.invalid
 git -C "$fixture" add .
 git -C "$fixture" commit -qm fixture
-TMPDIR="$test_root" "$fixture/make.sh" >"$test_root/make-success.log"
+PATH="$fixture/fake-bin:$PATH" TMPDIR="$test_root" \
+  "$fixture/make.sh" >"$test_root/make-success.log"
 
 
 full_output="$test_root/full-output"
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/full-lease" \
-  RIVER_TPS_GRADLE_USER_HOME="$test_root/full-gradle-home" \
-  RIVER_TPS_PROJECT_CACHE_DIR="$test_root/full-project-cache" \
+  RIVER_JAVA="$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" --output-dir="$full_output" \
   --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null
 assert_contains "$full_output/run-metadata.properties" 'run.result=provisional'
 assert_contains "$full_output/run-metadata.properties" 'run.status=TERMINAL_RECEIPT_REQUIRED'
 assert_contains "$full_output/run-metadata.properties.terminal-receipt" 'terminal.result=success'
-provisional_hash=$(sed -n 's/^host.provisional_daemons_sha256=//p' \
-  "$full_output/run-metadata.properties.terminal-receipt")
-assert_equal "$(provenance_sha256_file "$full_output/host-provisional-daemons.tsv")" \
-  "$provisional_hash"
 assert_contains "$full_output/run-metadata.properties" 'provenance.source_stable=true'
-assert_contains "$full_output/run-metadata.properties" 'provenance.host_exclusion_valid=false'
-assert_contains "$full_output/run-metadata.properties" \
-  'provenance.host_provisional_daemons_sha256='
+assert_contains "$full_output/run-metadata.properties" 'provenance.host_exclusion_valid=true'
+assert_contains "$full_output/run-metadata.properties" 'host.guarantee=qualified'
 assert_contains "$full_output/run-metadata.properties" 'provenance.publication_valid=true'
 provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
   "$full_output/tpcc-acceptance.properties" \
   "$full_output/run-metadata.properties.terminal-receipt" "$full_output" success ||
   fail "shared validator rejected a complete terminal success receipt"
-if provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
-    "$full_output/tpcc-acceptance.properties" \
-    "$full_output/run-metadata.properties.terminal-receipt" "$full_output" success promotion; then
-  fail "unsupported host ownership became promotion evidence"
-fi
-assert_contains "$full_output/run-metadata.properties" 'host.guarantee=unsupported'
-assert_contains "$full_output/run-metadata.properties.terminal-receipt" 'host.release_outcome=not_acquired'
+provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
+  "$full_output/tpcc-acceptance.properties" \
+  "$full_output/run-metadata.properties.terminal-receipt" "$full_output" success promotion ||
+  fail "qualified host ownership was not accepted as promotion evidence"
+assert_contains "$full_output/run-metadata.properties.terminal-receipt" 'host.release_outcome=released'
 cp "$full_output/run-metadata.properties" "$test_root/binding-metadata.saved"
 cp "$full_output/run-metadata.properties.terminal-receipt" "$test_root/binding-terminal.saved"
 replace_property "$full_output/run-metadata.properties" provenance.classpath_sha256 "$(printf '%064d' 0)"
@@ -829,7 +976,14 @@ provenance_write_terminal_receipt "$full_output/run-metadata.properties.terminal
   "$(provenance_property_once publisher.identity_sha256 "$test_root/binding-terminal.saved")" \
   "$(provenance_property_once terminal.nonce "$test_root/binding-terminal.saved")" \
   "$(provenance_property_once terminal.commitment_sha256 "$test_root/binding-terminal.saved")" \
-  "$full_output" not_acquired 0
+  "$full_output" \
+  "$(provenance_property_once host.release_outcome "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once lease.evidence_run_id "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once lease.owner_pid "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once lease.owner_start "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once lease.owner_identity_sha256 "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once lease.terminal_commitment_sha256 "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once host.guarantee "$test_root/binding-terminal.saved")"
 if provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
     "$full_output/tpcc-acceptance.properties" "$full_output/run-metadata.properties.terminal-receipt" \
     "$full_output" success; then
@@ -872,7 +1026,7 @@ metadata_status_hash=$(sed -n 's/^git.status_sha256=//p' "$full_output/run-metad
 assert_equal "$(provenance_sha256_file "$full_output/checkpoints/git-status.metadata.txt")" "$metadata_status_hash"
 publication_hash_before=$(provenance_sha256_file "$full_output/run-metadata.properties")
 if PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
-    RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+    RIVER_JAVA="$fixture/fake-java" \
     "$fixture/tools/tps-test.sh" --output-dir="$full_output" >/dev/null 2>&1; then
   fail "full-run evidence directory was overwritten"
 fi
@@ -882,8 +1036,7 @@ pass
 explicit_output="$test_root/explicit-output"
 explicit_metadata="$test_root/explicit-metadata.properties"
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/explicit-lease" \
+  RIVER_JAVA="$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" --output-dir="$explicit_output" \
   --metadata="$explicit_metadata" --warmup-seconds=1 --measured-seconds=1 \
   --terminals=1 >/dev/null
@@ -898,8 +1051,7 @@ source_mutation_output="$test_root/source-mutation-output"
 set +e
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   FAKE_MUTATE_SOURCE="$fixture/mutable-source.txt" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/source-mutation-lease" \
+  RIVER_JAVA="$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" --output-dir="$source_mutation_output" \
   --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null 2>&1
 source_mutation_status=$?
@@ -920,8 +1072,7 @@ interrupted_output="$test_root/interrupted-output"
 client_started="$test_root/client-started"
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   FAKE_CLIENT_STARTED="$client_started" FAKE_CLIENT_DELAY=30 \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/interrupted-lease" \
+  RIVER_JAVA="$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" --output-dir="$interrupted_output" \
   --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null 2>&1 &
 interrupted_pid=$!
@@ -947,14 +1098,64 @@ provenance_validate_terminal_receipt "$interrupted_output/run-metadata.propertie
   fail "interrupted evidence was not preserved"
 pass
 
+term_ignoring_output="$test_root/term-ignoring-output"
+term_ignoring_started="$test_root/term-ignoring-started"
+term_ignoring_pid_file="$test_root/term-ignoring-pid"
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_CLIENT_STARTED="$term_ignoring_started" \
+  FAKE_CLIENT_PID_FILE="$term_ignoring_pid_file" FAKE_CLIENT_IGNORE_TERM=true \
+  RIVER_JAVA="$fixture/fake-java" \
+  "$fixture/tools/tps-test.sh" --output-dir="$term_ignoring_output" \
+  --server-stop-timeout-seconds=1 --warmup-seconds=1 --measured-seconds=1 \
+  --terminals=1 >/dev/null 2>&1 &
+term_ignoring_tps_pid=$!
+for _ in {1..100}; do
+  [[ -e $term_ignoring_started && -s $term_ignoring_pid_file ]] && break
+  /bin/sleep 0.05
+done
+[[ -e $term_ignoring_started && -s $term_ignoring_pid_file ]] ||
+  fail "TERM-ignoring cleanup fixture did not reach the client"
+term_ignoring_client_pid=$(cat "$term_ignoring_pid_file")
+kill -TERM "$term_ignoring_tps_pid"
+set +e
+wait "$term_ignoring_tps_pid"
+term_ignoring_status=$?
+set -e
+assert_equal "$term_ignoring_status" 143
+assert_contains "$term_ignoring_output/run-metadata.properties" \
+  'run.provisional_status=OWNED_PROCESS_LEAK'
+if kill -0 "$term_ignoring_client_pid" 2>/dev/null; then
+  fail "TERM-ignoring owned client survived bounded KILL cleanup"
+fi
+pass
+
+runner_timeout_output="$test_root/runner-timeout-output"
+runner_timeout_pid_file="$test_root/runner-timeout-pid"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_CLIENT_PID_FILE="$runner_timeout_pid_file" FAKE_CLIENT_IGNORE_TERM=true \
+  RIVER_JAVA="$fixture/fake-java" \
+  "$fixture/tools/tps-test.sh" --output-dir="$runner_timeout_output" \
+  --runner-timeout-seconds=1 --server-stop-timeout-seconds=1 \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null 2>&1
+runner_timeout_status=$?
+set -e
+assert_equal "$runner_timeout_status" 124
+assert_contains "$runner_timeout_output/run-metadata.properties" \
+  'run.provisional_status=OWNED_PROCESS_LEAK'
+runner_timeout_client_pid=$(cat "$runner_timeout_pid_file")
+if kill -0 "$runner_timeout_client_pid" 2>/dev/null; then
+  fail "runner-timeout TERM-ignoring client survived bounded KILL cleanup"
+fi
+pass
+
 terminal_collision_output="$test_root/terminal-collision-output"
 terminal_collision_path="$terminal_collision_output/run-metadata.properties.terminal-receipt"
 mkdir "$terminal_collision_output"
 set +e
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   FAKE_TERMINAL_COLLISION_PATH="$terminal_collision_path" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/terminal-collision-lease" \
+  RIVER_JAVA="$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" --output-dir="$terminal_collision_output" \
   --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
   >"$test_root/terminal-collision.stdout" 2>"$test_root/terminal-collision.stderr"
@@ -979,8 +1180,7 @@ mkdir "$artifact_collision_output"
 set +e
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   FAKE_ARTIFACT_COLLISION_PATH="$artifact_collision_output/tpcc-acceptance.properties" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/artifact-collision-lease" \
+  RIVER_JAVA="$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" --output-dir="$artifact_collision_output" \
   --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
   >"$test_root/artifact-collision.stdout" 2>"$test_root/artifact-collision.stderr"
@@ -1002,8 +1202,7 @@ mkdir "$checkpoint_collision_output"
 set +e
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   FAKE_CHECKPOINT_COLLISION_DIR="$checkpoint_collision_output" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/checkpoint-collision-lease" \
+  RIVER_JAVA="$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" --output-dir="$checkpoint_collision_output" \
   --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null 2>&1
 checkpoint_collision_status=$?
@@ -1021,8 +1220,7 @@ mkdir "$metadata_collision_output"
 set +e
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   FAKE_METADATA_COLLISION_PATH="$metadata_collision_output/run-metadata.properties" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/metadata-collision-lease" \
+  RIVER_JAVA="$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" --output-dir="$metadata_collision_output" \
   --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
   >"$test_root/metadata-collision.stdout" 2>"$test_root/metadata-collision.stderr"
@@ -1099,6 +1297,25 @@ if provenance_validate_build_record "$invalid_cache_record" \
 fi
 pass
 
+empty_host_record="$test_root/empty-host-observations-record"
+cp -R "$record" "$empty_host_record"
+: >"$empty_host_record/host-observations.tsv"
+empty_host_hash=$(provenance_sha256_file "$empty_host_record/host-observations.tsv")
+replace_property "$empty_host_record/completion.properties" \
+  build.host-observations_sha256 "$empty_host_hash"
+awk -F '\t' -v replacement="$empty_host_hash" 'BEGIN { OFS="\t" }
+  $2 == "host-observations.tsv" { $1 = replacement }
+  { print }
+' "$empty_host_record/files.tsv" >"$empty_host_record/files.tsv.replaced"
+mv -- "$empty_host_record/files.tsv.replaced" "$empty_host_record/files.tsv"
+empty_host_files_hash=$(provenance_sha256_file "$empty_host_record/files.tsv")
+replace_property "$empty_host_record/completion.properties" files.sha256 "$empty_host_files_hash"
+if provenance_validate_build_record "$empty_host_record" \
+    "$(provenance_property_once build.id "$runtime")"; then
+  fail "empty host observations were accepted after coherent rehashing"
+fi
+pass
+
 late_output="$test_root/late-runtime-mutation"
 if PATH="$fixture/fake-bin:$PATH" RIVER_JAVA="$fixture/fake-java" \
     FAKE_METADATA_MUTATION_TRIGGER="$late_output/run-metadata.properties" \
@@ -1114,30 +1331,37 @@ provenance_validate_terminal_receipt "$late_output/run-metadata.properties" \
 cp "$test_root/compiled.saved" "$class_file"
 pass
 
-if TMPDIR="$test_root" FAKE_BUILD_FAIL=true "$fixture/make.sh" >"$test_root/failed-make.log" 2>&1; then
+if PATH="$fixture/fake-bin:$PATH" TMPDIR="$test_root" FAKE_BUILD_FAIL=true \
+    "$fixture/make.sh" >"$test_root/failed-make.log" 2>&1; then
   fail "failed make succeeded"
 fi
 assert_contains "$test_root/failed-make.log" 'exit_status=17'
 expect_prelaunch_failure failed-make
-TMPDIR="$test_root" "$fixture/make.sh" >"$test_root/remake.log"
+PATH="$fixture/fake-bin:$PATH" TMPDIR="$test_root" \
+  "$fixture/make.sh" >"$test_root/remake.log"
 
-if TMPDIR="$test_root" FAKE_BUILD_INPUTS=unsupported "$fixture/make.sh" >"$test_root/unsupported-make.log" 2>&1; then
+if PATH="$fixture/fake-bin:$PATH" TMPDIR="$test_root" FAKE_BUILD_INPUTS=unsupported \
+    "$fixture/make.sh" >"$test_root/unsupported-make.log" 2>&1; then
   fail "unsupported build inputs were sealed"
 fi
 expect_prelaunch_failure unsupported-make
-TMPDIR="$test_root" "$fixture/make.sh" >"$test_root/remake.log"
+PATH="$fixture/fake-bin:$PATH" TMPDIR="$test_root" \
+  "$fixture/make.sh" >"$test_root/remake.log"
 
-if TMPDIR="$test_root" FAKE_BUILD_MUTATE_SOURCE="$fixture/mutable-source.txt" \
+if PATH="$fixture/fake-bin:$PATH" TMPDIR="$test_root" \
+    FAKE_BUILD_MUTATE_SOURCE="$fixture/mutable-source.txt" \
     "$fixture/make.sh" >"$test_root/mutating-make.log" 2>&1; then
   fail "source mutation during make was sealed"
 fi
 expect_prelaunch_failure mutating-make
 printf 'original-source\n' >"$fixture/mutable-source.txt"
-TMPDIR="$test_root" "$fixture/make.sh" >"$test_root/remake.log"
+PATH="$fixture/fake-bin:$PATH" TMPDIR="$test_root" \
+  "$fixture/make.sh" >"$test_root/remake.log"
 
 build_gate="$test_root/build-gate"
 mkdir "$build_gate"
-TMPDIR="$test_root" RIVER_TPS_BUILD_STOP_TIMEOUT_SECONDS=2 FAKE_BUILD_GATE="$build_gate" \
+PATH="$fixture/fake-bin:$PATH" TMPDIR="$test_root" \
+  RIVER_TPS_BUILD_STOP_TIMEOUT_SECONDS=2 FAKE_BUILD_GATE="$build_gate" \
   "$fixture/make.sh" >"$test_root/interrupted-make.log" 2>&1 &
 test_make_pid=$!
 for ((attempt=0; attempt<500; attempt++)); do
@@ -1155,7 +1379,7 @@ if kill -0 "$build_pid" 2>/dev/null; then fail "interrupted make retained its ow
 assert_contains "$test_root/interrupted-make.log" 'phase=interrupted exit_status=143'
 expect_prelaunch_failure interrupted-make
 
-if grep -Eq 'gradlew|writeRiverTpsRuntimeClasspath|provenance_run_logged_marked' \
+if grep -Eq 'writeRiverTpsRuntimeClasspath|provenance_run_logged_marked|build launcher' \
     "$script_dir/tps-test.sh"; then
   fail "build invocation remains in tps-test.sh"
 fi

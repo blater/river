@@ -8,7 +8,18 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/tps-provenance.sh"
 
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/river-tps-p4-test.XXXXXX")
-trap 'rm -rf -- "$test_root"' EXIT
+finish_test() {
+  local status=$?
+  trap - EXIT
+  if ((status == 0)); then
+    rm -rf -- "$test_root" || status=1
+  else
+    printf 'failed_fixture=%s\n' "$test_root" >&2
+    printf 'validator_stderr=%s/valid.err\n' "$test_root" >&2
+  fi
+  exit "$status"
+}
+trap finish_test EXIT
 tests=0
 
 pass() {
@@ -93,7 +104,7 @@ write_metadata() {
   commitment=$(provenance_terminal_commitment_hash \
     "$evidence_run_id" "$owner_identity" "$(printf '%064d' 8)")
   cat >"$metadata" <<EOF
-tool.schema=river-tps-tool-v3
+tool.schema=river-tps-tool-v4
 run.result=provisional
 run.phase=terminal_pending
 run.status=TERMINAL_RECEIPT_REQUIRED
@@ -115,8 +126,15 @@ git.dirty_state=clean
 git.status_sha256=$(printf '%064d' 1)
 environment.java_version=25
 environment.java_launcher_sha256=$(printf '%064d' 5)
-host.guarantee=unsupported
-provenance.host_exclusion_valid=false
+host.guarantee=qualified
+host.release_outcome=pending
+host.lease.evidence_run_id=$evidence_run_id
+host.lease.owner_pid=$owner_pid
+host.lease.owner_start=$owner_start
+host.lease.owner_identity_sha256=$owner_identity
+host.lease.nonce=$(printf '%064d' 8)
+host.lease.terminal_commitment_sha256=$commitment
+provenance.host_exclusion_valid=true
 provenance.build_valid=true
 provenance.build_id=$(printf '%064d' 5)
 provenance.source_manifest_sha256=$(provenance_sha256_file "$build_fixture/source.before.tsv")
@@ -154,26 +172,51 @@ EOF
 build_fixture="$test_root/build-record"
 mkdir "$build_fixture"
 for file in "${PROVENANCE_BUILD_PAYLOAD_FILES[@]}"; do
-  printf 'fixture\n' >"$build_fixture/$file"
+  case $file in
+    host-observations.tsv) {
+      printf '1\tbuild-pre\n'
+      printf '2\tbuild-post\n'
+    } >"$build_fixture/$file" ;;
+    host-processes.tsv) {
+      printf '1\t4242\t1\tFri Sep 4 11:00:00 2026\tnone\n'
+      printf '2\t4242\t1\tFri Sep 4 11:00:00 2026\tnone\n'
+    } >"$build_fixture/$file" ;;
+    host-classifications.tsv) {
+      printf '1\tbuild-pre\tclean\t-\n'
+      printf '2\tbuild-post\tclean\t-\n'
+    } >"$build_fixture/$file" ;;
+    host-violations.tsv) : >"$build_fixture/$file" ;;
+    *) printf 'fixture\n' >"$build_fixture/$file" ;;
+  esac
 done
 {
-  printf 'schema=river-tps-runtime-v2\nbuild.id=%064d\n' 5
+  printf 'schema=river-tps-runtime-v3\nbuild.id=%064d\n' 5
   printf 'build.inputs=workspace_declared\nbuild.cache_trust=gradle_declared_inputs\n'
+  printf 'gradle.user.home=/fake/gradle-user-home\n'
   printf 'compiler.fixture.home=/fake/java\ncompiler.fixture.version=25\n'
   printf 'compiler.fixture.executable=/fake/java/bin/javac\n'
   printf 'compiler.fixture.launcher_sha256=%064d\n' 1
   printf 'compiler.fixture.selected_options_sha256=%064d\n' 2
 } >"$build_fixture/runtime.properties"
+build_lease_run_id=$(printf '%064d' 4)
+build_lease_start='Fri Sep 4 11:00:00 2026'
+build_lease_identity=$(provenance_owner_identity_hash "$build_lease_run_id" 4242 "$build_lease_start")
+build_lease_nonce=$(printf '%064d' 6)
+build_lease_commitment=$(provenance_terminal_commitment_hash "$build_lease_run_id" "$build_lease_identity" "$build_lease_nonce")
 provenance_seal_build_record "$build_fixture" "$(printf '%064d' 5)"
+provenance_complete_build_record "$build_fixture" "$(printf '%064d' 5)" \
+  "$build_lease_run_id" 4242 "$build_lease_start" "$build_lease_identity" \
+  "$build_lease_nonce" "$build_lease_commitment"
 
 make_fixture() {
   local root=$1
   local terminal_result=${2:-success}
   local terminal_status=OK
-  local release_outcome=not_acquired
+  local release_outcome=released
   mkdir -p "$root"
   for index in $(seq 1 10); do
     local label sample artifact metadata terminal run_id evidence_run_id owner_identity
+    local owner_pid=4242 owner_start='Fri Sep 4 12:00:00 2026'
     label=$(printf '%02d' "$index")
     sample="$root/sample-$label"
     artifact="$sample/tpcc-acceptance.properties"
@@ -183,12 +226,32 @@ make_fixture() {
     evidence_run_id=$(printf '%064d' "$((200 + index))")
     mkdir -p "$sample"
     cp -R "$build_fixture" "$sample/build-record"
-    : >"$sample/host-observations.tsv"
-    : >"$sample/host-processes.tsv"
-    : >"$sample/host-classifications.tsv"
+    {
+      printf '1\tpre-source\n'
+      printf '2\tpre-client\n'
+      printf '3\tpost-cleanup\n'
+      printf '4\tpre-publication\n'
+    } >"$sample/host-observations.tsv"
+    {
+      printf '1\t4242\t1\tFri Sep 4 12:00:00 2026\tnone\n'
+      printf '2\t4242\t1\tFri Sep 4 12:00:00 2026\tnone\n'
+      printf '3\t4242\t1\tFri Sep 4 12:00:00 2026\tnone\n'
+      printf '4\t4242\t1\tFri Sep 4 12:00:00 2026\tnone\n'
+    } >"$sample/host-processes.tsv"
+    {
+      printf '1\tpre-source\tclean\t-\n'
+      printf '2\tpre-client\tclean\t-\n'
+      printf '3\tpost-cleanup\tclean\t-\n'
+      printf '4\tpre-publication\tclean\t-\n'
+    } >"$sample/host-classifications.tsv"
     : >"$sample/host-violations.tsv"
-    : >"$sample/host-provisional-daemons.tsv"
     : >"$sample/provenance-checkpoints.tsv"
+    for checkpoint in startup server client_start client_finish result publication metadata terminal; do
+      printf '%s\t1\t%s\t%s\t%s\t%s\n' "$checkpoint" \
+        "$(printf '%064d' 1)" "$(printf '%064d' 2)" \
+        "$(printf '%064d' 3)" "$(printf '%064d' 4)" \
+        >>"$sample/provenance-checkpoints.tsv"
+    done
     write_artifact "$artifact" "$run_id"
     write_metadata "$metadata" "$artifact" "$label" "$evidence_run_id" "$terminal"
     owner_identity=$(provenance_property_once publisher.identity_sha256 "$metadata")
@@ -199,25 +262,26 @@ make_fixture() {
       "$evidence_run_id" "$run_id" "$(provenance_sha256_file "$metadata")" \
       4242 'Fri Sep 4 12:00:00 2026' "$owner_identity" "$(printf '%064d' 8)" \
       "$(provenance_property_once terminal.commitment_sha256 "$metadata")" "$sample" \
-      "$release_outcome" 0
+      "$release_outcome" "$evidence_run_id" "$owner_pid" "$owner_start" \
+      "$owner_identity" "$(provenance_property_once terminal.commitment_sha256 "$metadata")" qualified
   done
 }
 
 valid="$test_root/valid"
 make_fixture "$valid"
-if "$script_dir/tps-p4.sh" --calculate="$valid" >"$test_root/valid.out" 2>"$test_root/valid.err"; then
-  fail "unsupported host ownership was promoted"
+if ! "$script_dir/tps-p4.sh" --calculate="$valid" >"$test_root/valid.out" 2>"$test_root/valid.err"; then
+  fail "qualified host ownership was not promoted"
 fi
-grep -F 'lacks required provenance or host guarantees' "$test_root/valid.err" >/dev/null ||
-  fail "complete diagnostic receipts failed before the promotion guarantee check"
-[[ ! -e $valid/p4-result.properties ]] || fail "unsupported diagnostics published a P4 result"
+[[ -f $valid/p4-result.properties ]] || fail "qualified diagnostics did not publish a P4 result"
+grep -F 'p4_point=passed' "$test_root/valid.out" >/dev/null ||
+  fail "qualified diagnostics did not pass the P4 point"
 pass
 
 # Rejection must preserve an existing result, even when it cannot consume the new inputs.
 printf 'existing-result\n' >"$valid/p4-result.properties"
 valid_hash=$(provenance_sha256_file "$valid/p4-result.properties")
 if "$script_dir/tps-p4.sh" --calculate="$valid" >/dev/null 2>&1; then
-  fail "unsupported input replaced an existing result"
+  fail "existing result was overwritten"
 fi
 [[ $(provenance_sha256_file "$valid/p4-result.properties") == "$valid_hash" ]] ||
   fail "existing result bytes changed"

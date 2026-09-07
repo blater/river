@@ -25,12 +25,12 @@ Run options:
   --maximum-attempts=N           Default: 4
   --seed=N                       Default: 123456789
   --isolation=serializable|repeatable-read
-                                 Common isolation contract (default: serializable)
+                                  Common isolation contract (default: serializable)
   --runner-timeout-seconds=N     Default: warmup + measured + 300
   --server-start-timeout-seconds=N
-                                 Default: 30
+                                  Default: 30
   --server-stop-timeout-seconds=N
-                                 Default: 20
+                                  Default: 20
   --client-java-option=OPTION    Repeatable
   --server-java-option=OPTION    Repeatable
   --samples=10                   Any value other than 10 is rejected
@@ -196,6 +196,9 @@ metadata_keys=(
   artifact.run_id artifact.database_digest_sha256 artifact.sha256
   output.stdout_sha256 output.stderr_sha256 output.combined_sha256
   output.server_log_sha256 output.server_metrics_sha256
+  host.guarantee host.release_outcome host.lease.evidence_run_id
+  host.lease.owner_pid host.lease.owner_start host.lease.owner_identity_sha256
+  host.lease.nonce host.lease.terminal_commitment_sha256
 )
 common_metadata_keys=(
   tool.schema run.result run.phase run.status run.exit_status
@@ -208,7 +211,8 @@ common_metadata_keys=(
   configuration.warehouses configuration.terminals configuration.batch_rows
   configuration.maximum_attempts configuration.warmup_seconds configuration.measured_seconds
   configuration.runner_timeout_seconds configuration.server_start_timeout_seconds
-  configuration.server_stop_timeout_seconds configuration.seed
+  configuration.server_stop_timeout_seconds configuration.seed host.guarantee
+  host.release_outcome
 )
 artifact_keys=(
   artifact.schema run.id database.digest.sha256 config.seed config.warehouses
@@ -257,7 +261,7 @@ for index in $(seq 1 10); do
   if [[ -z $first_metadata ]]; then first_metadata=$metadata; first_artifact=$artifact; fi
 
   for key in "${metadata_keys[@]}"; do require_value "$key" "$metadata" >/dev/null; done
-  [[ $(property tool.schema "$metadata") == river-tps-tool-v3 ]] || fail "$metadata has wrong tool schema"
+  [[ $(property tool.schema "$metadata") == river-tps-tool-v4 ]] || fail "$metadata has wrong tool schema"
   [[ $(property run.result "$metadata") == provisional ]] || fail "$metadata is not provisional"
   [[ $(property run.status "$metadata") == TERMINAL_RECEIPT_REQUIRED ]] ||
     fail "$metadata does not require terminal validation"
@@ -365,7 +369,7 @@ result_file="$calculate_dir/p4-result.properties"
 staged=$(mktemp "$calculate_dir/.river-tps-p4.XXXXXX") ||
   fail "unable to stage the partial point result"
 {
-  printf 'tool.schema=river-tps-p4-v3\n'
+  printf 'tool.schema=river-tps-p4-v4\n'
   printf 'p4.scope=partial-river-point-calculator\n'
   printf 'p4.result=%s\n' "$p4_result"
   printf 'p4.samples_expected=10\n'
