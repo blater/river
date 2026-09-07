@@ -77,7 +77,11 @@ riverd help credentials
 riverd help credentials renew
 ```
 
-No arguments is exactly `riverd ps`. `start` is a foreground command.
+With no arguments, `riverd` prints a brief, useful usage summary and exits zero.
+It includes short command descriptions, a start example, the default data
+location and port, and a pointer to `riverd help` for the full reference. It does
+not list instances or read the registry. `riverd ps` lists instances.
+`start` is a foreground command.
 Unix signals, Windows console shutdown, and the cooperative `stop` command
 enter the same ordered shutdown owner. Forced process termination is a crash
 and follows recovery rules; Windows is not required to emulate POSIX signals. The
@@ -97,8 +101,9 @@ signs, whitespace, missing units, zero, and overflow are invalid.
 Parsing, duplicate/conflicting option detection, path normalization, control
 character rejection, range validation, and the path-collision proof below
 complete before any filesystem or network mutation. Global or command/group
-`-h` and global `help` are brief; global or command/group `--help` and every
-listed `help ...` form are comprehensive for that exact scope. Any unlisted
+`-h` prints useful brief usage. `riverd help` is equivalent to `riverd --help`;
+both print the full global help. Command/group `--help` and every listed
+`help ...` form print full help for that exact scope. Any unlisted
 help placement, extra token, bare `audit`/`credentials`, abbreviation, or
 combined short option is invalid before mutation. Help and version are
 side-effect free.

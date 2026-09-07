@@ -23,7 +23,7 @@ Java main class, or importing River implementation packages.
 The installed command is `riverd`. `riverd start` runs in the foreground and
 prints its resolved paths and endpoint when ready. `riverd stop` addresses the
 same data directory and publishes an owner-nonce-bound cooperative request to
-the lock-owning server; the CLI never signals by PID. `riverd` and `riverd ps` list the live instances recorded by
+the lock-owning server; the CLI never signals by PID. `riverd ps` lists the live instances recorded by
 the current user's `riverd` processes.
 
 The first immediate consumer is `river-harness`. After `riverd` is accepted,
@@ -206,16 +206,17 @@ riverd help credentials renew
 `riverd start` and `riverd stop` are the lifecycle commands in the first
 delivery. `riverd ps` is read-only. `riverd audit archive` and `riverd
 credentials renew` are the two offline security recovery operations and
-require exclusive ownership of a stopped instance. Invoking `riverd` without arguments is
-equivalent to `riverd ps`. Do not add daemonisation, service installation,
+require exclusive ownership of a stopped instance. Invoking `riverd` without arguments prints useful brief usage and exits zero. Do not add daemonisation, service installation,
 remote administration, or database deletion.
 
 Help behaviour:
 
-- global and listed command/group `-h`, plus bare `riverd help`, print brief
-  usage and the defaults for that exact scope;
-- global and listed command/group `--help`, plus every explicitly listed
-  `riverd help ...` form, print the comprehensive reference for that scope;
+- bare `riverd` and global `-h` print a useful usage summary: short command
+  descriptions, a start example, default data location and port, and a pointer
+  to full help; command/group `-h` gives useful brief usage for that scope;
+- `riverd help` and `riverd --help` are equivalent and print full global help;
+  command/group `--help` and listed `riverd help ...` forms print the full
+  reference for that scope;
 - help and version do not create directories or otherwise mutate state;
 - any other help placement, extra token, bare group, abbreviation, combined
   short option, or syntax prints a short error plus brief usage and exits with
@@ -441,7 +442,7 @@ The record is published atomically after the listener is ready and before
 closes the listener and database. Orderly shutdown removes only the record
 whose full contents match the running instance.
 
-`riverd ps` and a no-argument `riverd` invocation:
+`riverd ps`:
 
 1. read only small regular files directly beneath the fixed registry directory;
 2. validate every bounded record;
@@ -775,7 +776,9 @@ not exempt the new module from existing build policy.
 - brief and comprehensive help are distinct, deterministic, and side-effect
   free for every explicitly accepted global, command, group, nested-command,
   and `help ...` form; every unlisted placement/extra token is rejected;
-- no arguments and `ps` produce the same deterministic listing;
+- no arguments produce useful brief usage without registry access;
+- `riverd help` and `riverd --help` produce the same full help;
+- `ps` produces the deterministic instance listing;
 - defaults resolve exactly as documented;
 - `-D`/`--datadir`, `--port`/`--ip`, loopback IPv4/IPv6, explicit ports, and
   port zero parse;
@@ -971,7 +974,7 @@ The launcher slice is complete when:
 - `riverd stop` stops only the server that consumes the verified owner-bound
   request, never signals by PID, and returns a clear nonzero result for stale
   or mismatched state;
-- `riverd` and `riverd ps` list all verified instances registered by the
+- `riverd ps` lists all verified instances registered by the
   current user, and the empty listing suggests `riverd start`;
 - a failure known before readiness commit exits nonzero without successful
   readiness; a prior irrevocable readiness observation may be followed only by
