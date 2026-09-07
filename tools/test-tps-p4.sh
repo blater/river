@@ -93,7 +93,7 @@ write_metadata() {
   commitment=$(provenance_terminal_commitment_hash \
     "$evidence_run_id" "$owner_identity" "$(printf '%064d' 8)")
   cat >"$metadata" <<EOF
-tool.schema=river-tps-tool-v2
+tool.schema=river-tps-tool-v3
 run.result=provisional
 run.phase=terminal_pending
 run.status=TERMINAL_RECEIPT_REQUIRED
@@ -107,13 +107,20 @@ evidence.run_id=$evidence_run_id
 terminal.required=true
 terminal.path=$terminal
 terminal.commitment_sha256=$commitment
-lease.owner_pid=$owner_pid
-lease.owner_start=$owner_start
-lease.owner_identity_sha256=$owner_identity
+publisher.pid=$owner_pid
+publisher.start=$owner_start
+publisher.identity_sha256=$owner_identity
 git.commit_sha=$(printf '%064d' 9)
 git.dirty_state=clean
 git.status_sha256=$(printf '%064d' 1)
 environment.java_version=25
+environment.java_launcher_sha256=$(printf '%064d' 5)
+host.guarantee=unsupported
+provenance.host_exclusion_valid=false
+provenance.build_valid=true
+provenance.build_id=$(printf '%064d' 5)
+provenance.source_manifest_sha256=$(provenance_sha256_file "$build_fixture/source.before.tsv")
+provenance.classpath_sha256=$(provenance_sha256_file "$build_fixture/classpath.tsv")
 environment.host=fixture
 configuration.fingerprint=$(printf '%064d' 2)
 configuration.backend=river
@@ -144,11 +151,26 @@ output.server_metrics_sha256=$(printf '%064d' 7)
 EOF
 }
 
+build_fixture="$test_root/build-record"
+mkdir "$build_fixture"
+for file in "${PROVENANCE_BUILD_PAYLOAD_FILES[@]}"; do
+  printf 'fixture\n' >"$build_fixture/$file"
+done
+{
+  printf 'schema=river-tps-runtime-v2\nbuild.id=%064d\n' 5
+  printf 'build.inputs=workspace_declared\nbuild.cache_trust=gradle_declared_inputs\n'
+  printf 'compiler.fixture.home=/fake/java\ncompiler.fixture.version=25\n'
+  printf 'compiler.fixture.executable=/fake/java/bin/javac\n'
+  printf 'compiler.fixture.launcher_sha256=%064d\n' 1
+  printf 'compiler.fixture.selected_options_sha256=%064d\n' 2
+} >"$build_fixture/runtime.properties"
+provenance_seal_build_record "$build_fixture" "$(printf '%064d' 5)"
+
 make_fixture() {
   local root=$1
   local terminal_result=${2:-success}
   local terminal_status=OK
-  local release_outcome=released
+  local release_outcome=not_acquired
   mkdir -p "$root"
   for index in $(seq 1 10); do
     local label sample artifact metadata terminal run_id evidence_run_id owner_identity
@@ -160,6 +182,7 @@ make_fixture() {
     run_id=$(printf '%064d' "$((100 + index))")
     evidence_run_id=$(printf '%064d' "$((200 + index))")
     mkdir -p "$sample"
+    cp -R "$build_fixture" "$sample/build-record"
     : >"$sample/host-observations.tsv"
     : >"$sample/host-processes.tsv"
     : >"$sample/host-classifications.tsv"
@@ -168,7 +191,7 @@ make_fixture() {
     : >"$sample/provenance-checkpoints.tsv"
     write_artifact "$artifact" "$run_id"
     write_metadata "$metadata" "$artifact" "$label" "$evidence_run_id" "$terminal"
-    owner_identity=$(provenance_property_once lease.owner_identity_sha256 "$metadata")
+    owner_identity=$(provenance_property_once publisher.identity_sha256 "$metadata")
     if [[ $terminal_result != success ]]; then
       terminal_status=FIXTURE_INVALID
     fi
@@ -176,26 +199,25 @@ make_fixture() {
       "$evidence_run_id" "$run_id" "$(provenance_sha256_file "$metadata")" \
       4242 'Fri Sep 4 12:00:00 2026' "$owner_identity" "$(printf '%064d' 8)" \
       "$(provenance_property_once terminal.commitment_sha256 "$metadata")" "$sample" \
-      "$release_outcome" 1777777777
+      "$release_outcome" 0
   done
 }
 
 valid="$test_root/valid"
 make_fixture "$valid"
-"$script_dir/tps-p4.sh" --calculate="$valid" >"$test_root/valid.out" 2>"$test_root/valid.err"
-grep -Fx 'p4_point=passed' "$test_root/valid.out" >/dev/null ||
-  fail "valid v2 terminal evidence did not pass"
-grep -Fx 'tool.schema=river-tps-p4-v2' "$valid/p4-result.properties" >/dev/null ||
-  fail "v2 result schema was not written"
-grep -Fx 'p4.scope=partial-river-point-calculator' "$valid/p4-result.properties" >/dev/null ||
-  fail "partial scope was not declared"
-grep -Fx 'p4.result=partial_point_passed' "$valid/p4-result.properties" >/dev/null ||
-  fail "partial point result was not recorded"
+if "$script_dir/tps-p4.sh" --calculate="$valid" >"$test_root/valid.out" 2>"$test_root/valid.err"; then
+  fail "unsupported host ownership was promoted"
+fi
+grep -F 'lacks required provenance or host guarantees' "$test_root/valid.err" >/dev/null ||
+  fail "complete diagnostic receipts failed before the promotion guarantee check"
+[[ ! -e $valid/p4-result.properties ]] || fail "unsupported diagnostics published a P4 result"
 pass
 
+# Rejection must preserve an existing result, even when it cannot consume the new inputs.
+printf 'existing-result\n' >"$valid/p4-result.properties"
 valid_hash=$(provenance_sha256_file "$valid/p4-result.properties")
 if "$script_dir/tps-p4.sh" --calculate="$valid" >/dev/null 2>&1; then
-  fail "existing result was overwritten"
+  fail "unsupported input replaced an existing result"
 fi
 [[ $(provenance_sha256_file "$valid/p4-result.properties") == "$valid_hash" ]] ||
   fail "existing result bytes changed"
@@ -240,4 +262,4 @@ if "$script_dir/tps-p4.sh" --calculate="$noncanonical" >/dev/null 2>&1; then
 fi
 pass
 
-echo "PASS: $tests P4 v2 boundary tests"
+echo "PASS: $tests P4 current-evidence boundary tests"

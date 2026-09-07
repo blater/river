@@ -31,37 +31,22 @@ provenance_publish_file() {
 }
 
 provenance_run_logged() {
-  local log=$1
-  local argv_file=$2
-  local command_file=$3
+  local log=$1 argv_file=$2 command_file=$3 status=0
   shift 3
+  PROVENANCE_LOGGED_PID=
   printf '%s\0' "$@" >"$argv_file" || return 125
   printf '%q ' "$@" >"$command_file" || return 125
   printf '\n' >>"$command_file" || return 125
-  "$@" >"$log" 2>&1
-}
-
-provenance_run_logged_marked() {
-  local log=$1
-  local argv_file=$2
-  local command_file=$3
-  local marker=$4
-  local phase_file=$5
-  shift 5
-  PROVENANCE_LOGGED_COMMAND_STATUS=125
-  PROVENANCE_LOGGED_WRAPPER_VALID=false
-  printf '%s\0' "$@" >"$argv_file" || return 125
-  printf '%q ' "$@" >"$command_file" || return 125
-  printf '\n' >>"$command_file" || return 125
-  : >"$marker" || return 125
-  local status=0
-  "$@" >"$log" 2>&1 || status=$?
-  PROVENANCE_LOGGED_COMMAND_STATUS=$status
-  local cleanup_valid=true
-  printf 'workload\n' >"$phase_file" || cleanup_valid=false
-  rm -f -- "$marker" || cleanup_valid=false
-  [[ $cleanup_valid == true ]] || return 125
-  PROVENANCE_LOGGED_WRAPPER_VALID=true
+  # A distinct process group lets the caller clean up only its own invocation.
+  perl -MPOSIX -e '
+    POSIX::setpgid(0, 0) == 0 or exit 126;
+    $SIG{INT} = "DEFAULT"; $SIG{TERM} = "DEFAULT";
+    exec @ARGV;
+    exit 126;
+  ' -- "$@" >"$log" 2>&1 &
+  PROVENANCE_LOGGED_PID=$!
+  wait "$PROVENANCE_LOGGED_PID" || status=$?
+  PROVENANCE_LOGGED_PID=
   return "$status"
 }
 
@@ -235,6 +220,102 @@ provenance_classpath_value() {
   ((${#entries[@]} > 0)) || return 1
   local IFS=:
   printf '%s\n' "${entries[*]}"
+}
+
+PROVENANCE_BUILD_PAYLOAD_FILES=(build.command build.argv build.log source.before.tsv
+  source.after.tsv git-status.before.txt git-status.after.txt runtime.properties classpath.tsv)
+
+# Build records are immutable and addressed by the descriptor's invocation ID.
+# Runtime descriptors and compiler facts are supplied by Gradle, never resolved here.
+provenance_validate_compiler_facts() {
+  awk -F= '
+    /^compiler\./ {
+      n=split($1, name, "."); if (n != 3 || seen[$1]++) exit 1;
+      value=substr($0, length($1) + 2);
+      if (value == "" || value ~ /[\t\r]/) exit 1;
+      if (name[3] == "launcher_sha256" || name[3] == "selected_options_sha256") {
+        if (length(value) != 64 || value !~ /^[0-9a-f]+$/) exit 1;
+      } else if (name[3] != "home" && name[3] != "version" && name[3] != "executable") exit 1;
+      modules[name[2]]++; count++;
+    }
+    END {
+      if (count == 0) exit 1;
+      for (module in modules) if (modules[module] != 5) exit 1;
+    }
+  ' "$1"
+}
+
+provenance_seal_build_record() {
+  local record=$1 id=$2
+  local files=("${PROVENANCE_BUILD_PAYLOAD_FILES[@]}")
+  local file digest
+  [[ $id =~ ^[0-9a-f]{64}$ && -d $record && ! -L $record &&
+      ! -e $record/completion.properties && ! -L $record/completion.properties ]] || return 1
+  [[ $(provenance_property_once build.id "$record/runtime.properties") == "$id" &&
+      $(provenance_property_once schema "$record/runtime.properties") == river-tps-runtime-v2 &&
+      $(provenance_property_once build.inputs "$record/runtime.properties") == workspace_declared &&
+      $(provenance_property_once build.cache_trust "$record/runtime.properties") == gradle_declared_inputs ]] || return 1
+  provenance_validate_compiler_facts "$record/runtime.properties" || return 1
+  cmp -s "$record/source.before.tsv" "$record/source.after.tsv" || return 1
+  cmp -s "$record/git-status.before.txt" "$record/git-status.after.txt" || return 1
+  # Unknown symlink target inputs are outside this initial admitted build contract.
+  if LC_ALL=C grep -q $'^working\tsymlink\t' "$record/source.before.tsv"; then return 1; fi
+  : >"$record/files.tsv" || return 1
+  for file in "${files[@]}"; do
+    [[ -f $record/$file && ! -L $record/$file ]] || return 1
+    digest=$(provenance_observe_file "$record/$file") || return 1
+    printf '%s\t%s\n' "$digest" "$file" >>"$record/files.tsv" || return 1
+  done
+  digest=$(provenance_observe_file "$record/files.tsv") || return 1
+  {
+    printf 'schema=river-tps-build-v1\n'
+    printf 'build.id=%s\n' "$id"
+    printf 'build.exit_status=0\n'
+    printf 'build.cache_trust=gradle_declared_inputs\n'
+    printf 'files.sha256=%s\n' "$digest"
+  } >"$record/completion.staged" || return 1
+  provenance_publish_file "$record/completion.staged" "$record/completion.properties" || return 1
+  rm -- "$record/completion.staged"
+}
+
+provenance_validate_build_record() {
+  local record=$1 id=$2
+  local completion="$record/completion.properties" file expected actual index=0
+  local files=("${PROVENANCE_BUILD_PAYLOAD_FILES[@]}")
+  [[ $id =~ ^[0-9a-f]{64}$ && -d $record && ! -L $record &&
+      -f $record/files.tsv && ! -L $record/files.tsv && -f $completion && ! -L $completion &&
+      $(provenance_property_once schema "$completion") == river-tps-build-v1 &&
+      $(provenance_property_once build.id "$completion") == "$id" &&
+      $(provenance_property_once build.exit_status "$completion") == 0 &&
+      $(provenance_property_once build.cache_trust "$completion") == gradle_declared_inputs &&
+      $(provenance_property_once files.sha256 "$completion") == "$(provenance_observe_file "$record/files.tsv")" ]] || return 1
+  while IFS=$'\t' read -r expected file; do
+    ((index < ${#files[@]})) || return 1
+    [[ $file == "${files[$index]}" && $expected =~ ^[0-9a-f]{64}$ &&
+        -f $record/$file && ! -L $record/$file ]] || return 1
+    actual=$(provenance_observe_file "$record/$file") || return 1
+    [[ $actual == "$expected" ]] || return 1
+    index=$((index + 1))
+  done <"$record/files.tsv"
+  ((index == ${#files[@]})) || return 1
+  [[ $(provenance_property_once build.id "$record/runtime.properties") == "$id" &&
+      $(provenance_property_once schema "$record/runtime.properties") == river-tps-runtime-v2 &&
+      $(provenance_property_once build.inputs "$record/runtime.properties") == workspace_declared &&
+      $(provenance_property_once build.cache_trust "$record/runtime.properties") == gradle_declared_inputs ]] || return 1
+  provenance_validate_compiler_facts "$record/runtime.properties" || return 1
+  cmp -s "$record/source.before.tsv" "$record/source.after.tsv" || return 1
+  cmp -s "$record/git-status.before.txt" "$record/git-status.after.txt" || return 1
+  ! LC_ALL=C grep -q $'^working\tsymlink\t' "$record/source.before.tsv"
+}
+
+provenance_copy_build_record() {
+  local source=$1 destination=$2 id=$3 file
+  provenance_validate_build_record "$source" "$id" || return 1
+  mkdir -- "$destination" || return 1
+  for file in "${PROVENANCE_BUILD_PAYLOAD_FILES[@]}" files.tsv completion.properties; do
+    provenance_publish_file "$source/$file" "$destination/$file" || return 1
+  done
+  provenance_validate_build_record "$destination" "$id"
 }
 
 provenance_canonical_hash() {
@@ -521,15 +602,15 @@ provenance_write_terminal_receipt() {
   local release_outcome=${13}
   local released_epoch=${14}
   {
-    printf 'schema=river-tps-terminal-v1\n'
+    printf 'schema=river-tps-terminal-v2\n'
     printf 'terminal.result=%s\n' "$result"
     printf 'terminal.status=%s\n' "$status"
     printf 'evidence.run_id=%s\n' "$evidence_run_id"
     printf 'artifact.run_id=%s\n' "$artifact_run_id"
     printf 'metadata.sha256=%s\n' "$metadata_sha256"
-    printf 'lease.owner_pid=%s\n' "$owner_pid"
-    printf 'lease.owner_start=%s\n' "$owner_start"
-    printf 'lease.owner_identity_sha256=%s\n' "$owner_identity"
+    printf 'publisher.pid=%s\n' "$owner_pid"
+    printf 'publisher.start=%s\n' "$owner_start"
+    printf 'publisher.identity_sha256=%s\n' "$owner_identity"
     printf 'terminal.nonce=%s\n' "$nonce"
     printf 'terminal.commitment_sha256=%s\n' "$commitment"
     printf 'host.observations_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/host-observations.tsv")"
@@ -538,8 +619,10 @@ provenance_write_terminal_receipt() {
     printf 'host.violations_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/host-violations.tsv")"
     printf 'host.provisional_daemons_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/host-provisional-daemons.tsv")"
     printf 'provenance.checkpoints_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/provenance-checkpoints.tsv")"
-    printf 'lease.release_outcome=%s\n' "$release_outcome"
-    printf 'lease.released_epoch=%s\n' "$released_epoch"
+    printf 'host.release_outcome=%s\n' "$release_outcome"
+    printf 'host.released_epoch=%s\n' "$released_epoch"
+    printf 'host.guarantee=unsupported\n'
+    printf 'build.record_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/build-record/completion.properties" 2>/dev/null || printf unavailable)"
   } >"$destination"
 }
 
@@ -548,22 +631,23 @@ provenance_validate_terminal_receipt() {
   local artifact=$2
   local receipt=$3
   local evidence_dir=$4
-  local expected_result=${5:-success}
+  local expected_result=${5:-success} required_guarantee=${6:-diagnostic}
   local values schema result status run_id artifact_run_id metadata_hash owner_pid owner_start
   local owner_identity nonce commitment observations_hash processes_hash classifications_hash
-  local violations_hash provisional_hash checkpoints_hash release_outcome released_epoch metadata_artifact
+  local violations_hash provisional_hash checkpoints_hash release_outcome released_epoch metadata_artifact host_guarantee build_hash build_id
   [[ -f $metadata && -f $receipt && -d $evidence_dir ]] || return 1
   values=$(awk '
     BEGIN {
       keys[1]="schema"; keys[2]="terminal.result"; keys[3]="terminal.status";
       keys[4]="evidence.run_id"; keys[5]="artifact.run_id"; keys[6]="metadata.sha256";
-      keys[7]="lease.owner_pid"; keys[8]="lease.owner_start";
-      keys[9]="lease.owner_identity_sha256"; keys[10]="terminal.nonce";
+      keys[7]="publisher.pid"; keys[8]="publisher.start";
+      keys[9]="publisher.identity_sha256"; keys[10]="terminal.nonce";
       keys[11]="terminal.commitment_sha256"; keys[12]="host.observations_sha256";
       keys[13]="host.processes_sha256"; keys[14]="host.classifications_sha256";
       keys[15]="host.violations_sha256"; keys[16]="host.provisional_daemons_sha256";
-      keys[17]="provenance.checkpoints_sha256"; keys[18]="lease.release_outcome";
-      keys[19]="lease.released_epoch";
+      keys[17]="provenance.checkpoints_sha256"; keys[18]="host.release_outcome";
+      keys[19]="host.released_epoch"; keys[20]="host.guarantee";
+      keys[21]="build.record_sha256";
     }
     {
       separator=index($0, "=");
@@ -573,28 +657,33 @@ provenance_validate_terminal_receipt() {
       values[NR]=value;
     }
     END {
-      if (NR != 19) exit 1;
-      for (i=1; i<=19; i++) printf "%s%s", values[i], (i == 19 ? "\n" : "\t");
+      if (NR != 21) exit 1;
+      for (i=1; i<=21; i++) printf "%s%s", values[i], (i == 21 ? "\n" : "\t");
     }
   ' "$receipt") || return 1
   IFS=$'\t' read -r schema result status run_id artifact_run_id metadata_hash owner_pid \
     owner_start owner_identity nonce commitment observations_hash processes_hash \
     classifications_hash violations_hash provisional_hash checkpoints_hash release_outcome released_epoch \
+    host_guarantee build_hash \
     <<<"$values"
-  [[ $schema == river-tps-terminal-v1 && $result == "$expected_result" &&
+  [[ $required_guarantee == diagnostic || $required_guarantee == promotion ]] || return 1
+  [[ $host_guarantee == unsupported && $release_outcome == not_acquired ]] || return 1
+  [[ $schema == river-tps-terminal-v2 && $result == "$expected_result" &&
       $run_id =~ ^[0-9a-f]{64}$ && $metadata_hash =~ ^[0-9a-f]{64}$ &&
       $owner_pid =~ ^[0-9]+$ && $owner_identity =~ ^[0-9a-f]{64}$ &&
       $nonce =~ ^[0-9a-f]{64}$ && $commitment =~ ^[0-9a-f]{64}$ &&
       $released_epoch =~ ^[0-9]+$ ]] || return 1
-  [[ $(provenance_property_once tool.schema "$metadata") == river-tps-tool-v2 &&
+  [[ $(provenance_property_once tool.schema "$metadata") == river-tps-tool-v3 &&
       $(provenance_property_once run.result "$metadata") == provisional &&
       $(provenance_property_once run.status "$metadata") == TERMINAL_RECEIPT_REQUIRED &&
       $(provenance_property_once terminal.required "$metadata") == true &&
       $(provenance_property_once terminal.path "$metadata") == "$receipt" &&
       $(provenance_property_once evidence.run_id "$metadata") == "$run_id" &&
-      $(provenance_property_once lease.owner_pid "$metadata") == "$owner_pid" &&
-      $(provenance_property_once lease.owner_start "$metadata") == "$owner_start" &&
-      $(provenance_property_once lease.owner_identity_sha256 "$metadata") == "$owner_identity" &&
+      $(provenance_property_once host.guarantee "$metadata") == "$host_guarantee" &&
+      $(provenance_property_once provenance.host_exclusion_valid "$metadata") == false &&
+      $(provenance_property_once publisher.pid "$metadata") == "$owner_pid" &&
+      $(provenance_property_once publisher.start "$metadata") == "$owner_start" &&
+      $(provenance_property_once publisher.identity_sha256 "$metadata") == "$owner_identity" &&
       $(provenance_property_once terminal.commitment_sha256 "$metadata") == "$commitment" &&
       $(provenance_sha256_file "$metadata") == "$metadata_hash" &&
       $(provenance_owner_identity_hash "$run_id" "$owner_pid" "$owner_start") == "$owner_identity" &&
@@ -608,15 +697,23 @@ provenance_validate_terminal_receipt() {
   metadata_artifact=$(provenance_property_once artifact.run_id "$metadata") || return 1
   [[ $metadata_artifact == "$artifact_run_id" ]] || return 1
   if [[ $result == success ]]; then
-    [[ $status == OK && $release_outcome == released && -f $artifact &&
+    build_id=$(provenance_property_once provenance.build_id "$metadata") || return 1
+    provenance_validate_build_record "$evidence_dir/build-record" "$build_id" || return 1
+    [[ $build_hash == "$(provenance_sha256_file "$evidence_dir/build-record/completion.properties")" &&
+        $(provenance_property_once provenance.build_valid "$metadata") == true &&
+        $(provenance_property_once provenance.classpath_sha256 "$metadata") == "$(provenance_sha256_file "$evidence_dir/build-record/classpath.tsv")" &&
+        $(provenance_property_once provenance.source_manifest_sha256 "$metadata") == "$(provenance_sha256_file "$evidence_dir/build-record/source.before.tsv")" ]] || return 1
+    [[ $status == OK && -f $artifact &&
         $artifact_run_id != unavailable &&
         $(provenance_property_once run.id "$artifact") == "$artifact_run_id" &&
         $(provenance_property_once artifact.sha256 "$metadata") == "$(provenance_sha256_file "$artifact")" &&
         ! -s $evidence_dir/host-violations.tsv ]] || return 1
   else
     [[ $status != OK ]] || return 1
-    [[ $release_outcome == released || $release_outcome == failed ]] || return 1
+    [[ $release_outcome == not_acquired ]] || return 1
   fi
+  # tic-d7c2 supplies actual host proof; unsupported diagnostics never promote.
+  [[ $required_guarantee == diagnostic ]]
 }
 
 provenance_capture_processes() {

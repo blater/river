@@ -311,7 +311,10 @@ run_status=NOT_STARTED
 run_exit_status=1
 started_epoch=$(date +%s)
 source_stable=true
-host_exclusion_valid=true
+host_exclusion_valid=false
+build_valid=false
+build_id=unavailable
+build_record=
 publication_valid=true
 persistence_valid=true
 artifact_published=false
@@ -366,6 +369,7 @@ git_commit_start="$temp_dir/git-commit.txt"
 host_evidence_dir="$temp_dir/host-exclusion"
 provisional_daemons="$host_evidence_dir/host-provisional-daemons.tsv"
 provenance_checkpoints="$host_evidence_dir/provenance-checkpoints.tsv"
+build_capture="$host_evidence_dir/build-record"
 mkdir -p "$host_evidence_dir"
 : >"$provenance_checkpoints"
 
@@ -425,7 +429,8 @@ persist_checkpoint_files() {
   }
   mkdir "$destination" || { publication_valid=false; persistence_valid=false; return 1; }
   if ! find "$temp_dir" -maxdepth 1 -type f \
-      \( -name 'source-manifest.*.tsv' -o -name 'git-status.*.txt' \) -print | LC_ALL=C sort \
+      \( -name 'source-manifest.*.tsv' -o -name 'git-status.*.txt' \
+        -o -name 'classpath.*.tsv' -o -name 'runtime.*.properties' \) -print | LC_ALL=C sort \
       >"$checkpoint_list"; then
     publication_valid=false
     persistence_valid=false
@@ -444,6 +449,9 @@ verify_provenance_checkpoint() {
   local source_check="$temp_dir/source-manifest.$stage.tsv"
   local status_check="$temp_dir/git-status.$stage.txt"
   local checkpoint_valid=true source_hash=unavailable status_hash=unavailable
+  local classpath_check="$temp_dir/classpath.$stage.tsv"
+  local descriptor_check="$temp_dir/runtime.$stage.properties"
+  local classpath_hash=unavailable descriptor_hash=unavailable
   if ! provenance_write_source_manifest "$river_root" "$source_check" ||
       ! provenance_write_git_status "$river_root" "$status_check"; then
     source_stable=false
@@ -459,8 +467,23 @@ verify_provenance_checkpoint() {
     source_stable=false
     checkpoint_valid=false
   fi
+  if [[ $build_valid != true ]] ||
+      ! provenance_validate_build_record "$build_record" "$build_id" ||
+      ! cmp -s "$build_record/completion.properties" "$build_capture/completion.properties" ||
+      ! cp -- "$runtime_descriptor" "$descriptor_check" ||
+      ! cmp -s "$descriptor_check" "$build_capture/runtime.properties" ||
+      ! provenance_write_classpath_manifest "$descriptor_check" "$classpath_check" ||
+      ! cmp -s "$classpath_check" "$build_capture/classpath.tsv" ||
+      ! cmp -s "$source_check" "$build_capture/source.before.tsv" ||
+      ! cmp -s "$status_check" "$build_capture/git-status.before.txt"; then
+    build_valid=false
+    checkpoint_valid=false
+  else
+    classpath_hash=$(hash_file "$classpath_check")
+    descriptor_hash=$(hash_file "$descriptor_check")
+  fi
   if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$stage" "$(date +%s)" \
-      "$source_hash" "$status_hash" unavailable unavailable \
+      "$source_hash" "$status_hash" "$classpath_hash" "$descriptor_hash" \
       >>"$provenance_checkpoints"; then
     publication_valid=false
     persistence_valid=false
@@ -499,7 +522,7 @@ write_metadata() {
   local command_line
   command_line=$(redacted_command_line)
   {
-    printf 'tool.schema=river-tps-tool-v2\n'
+    printf 'tool.schema=river-tps-tool-v3\n'
     printf 'run.result=provisional\n'
     printf 'run.phase=terminal_pending\n'
     printf 'run.status=TERMINAL_RECEIPT_REQUIRED\n'
@@ -578,6 +601,10 @@ write_metadata() {
     printf 'provenance.source_manifest_sha256=%s\n' "$workspace_start_sha256"
     printf 'provenance.source_stable=%s\n' "$source_stable"
     printf 'provenance.host_exclusion_valid=%s\n' "$host_exclusion_valid"
+    printf 'host.guarantee=unsupported\n'
+    printf 'provenance.build_id=%s\n' "$build_id"
+    printf 'provenance.build_valid=%s\n' "$build_valid"
+    printf 'provenance.classpath_sha256=%s\n' "$(hash_file "$build_capture/classpath.tsv")"
     printf 'provenance.host_observations_sha256=pending_terminal_receipt\n'
     printf 'provenance.host_processes_sha256=pending_terminal_receipt\n'
     printf 'provenance.host_classifications_sha256=pending_terminal_receipt\n'
@@ -588,9 +615,9 @@ write_metadata() {
     printf 'provenance.publication_valid=%s\n' "$publication_valid"
     printf 'provenance.persistence_valid=%s\n' "$persistence_valid"
     printf 'evidence.run_id=%s\n' "$evidence_run_id"
-    printf 'lease.owner_pid=%s\n' "${PROVENANCE_LEASE_OWNER_PID:-unavailable}"
-    printf 'lease.owner_start=%s\n' "${PROVENANCE_LEASE_OWNER_START:-unavailable}"
-    printf 'lease.owner_identity_sha256=%s\n' "${PROVENANCE_LEASE_OWNER_IDENTITY_SHA256:-unavailable}"
+    printf 'publisher.pid=%s\n' "${PROVENANCE_PUBLISHER_PID:-unavailable}"
+    printf 'publisher.start=%s\n' "${PROVENANCE_PUBLISHER_START:-unavailable}"
+    printf 'publisher.identity_sha256=%s\n' "${PROVENANCE_PUBLISHER_IDENTITY_SHA256:-unavailable}"
     printf 'terminal.required=true\n'
     printf 'terminal.path=%s\n' "$terminal_receipt_destination"
     printf 'terminal.commitment_sha256=%s\n' "${PROVENANCE_TERMINAL_COMMITMENT_SHA256:-unavailable}"
@@ -642,11 +669,11 @@ cleanup() {
   stop_runner
   stop_server
   verify_provenance_checkpoint publication || true
-  if [[ $source_stable != true || $publication_valid != true ]]; then
+  if [[ $source_stable != true || $build_valid != true || $publication_valid != true ]]; then
     if [[ $run_result != evidence_invalid ]]; then
       run_result=evidence_invalid
       run_phase=provenance
-      run_status=PROVENANCE_CHANGED_OR_HOST_BUSY
+      run_status=PROVENANCE_CHANGED
       run_exit_status=1
     fi
   fi
@@ -686,11 +713,11 @@ cleanup() {
   [[ -f $metadata ]] && metadata_hash=$(hash_file "$metadata")
 
   verify_provenance_checkpoint terminal || true
-  if [[ $source_stable != true || $publication_valid != true ]]; then
+  if [[ $source_stable != true || $build_valid != true || $publication_valid != true ]]; then
     if [[ $run_result != evidence_invalid ]]; then
       run_result=evidence_invalid
       run_phase=provenance
-      run_status=PROVENANCE_CHANGED_OR_HOST_BUSY
+      run_status=PROVENANCE_CHANGED
       run_exit_status=1
     fi
   fi
@@ -702,6 +729,12 @@ cleanup() {
     persist_if_present "$provisional_daemons" "$output_dir/host-provisional-daemons.tsv"
     persist_file "$provenance_checkpoints" "$output_dir/provenance-checkpoints.tsv"
     persist_checkpoint_files "$output_dir/checkpoints"
+    if [[ -d $build_capture ]]; then
+      provenance_copy_build_record "$build_capture" "$output_dir/build-record" "$build_id" || {
+        publication_valid=false
+        persistence_valid=false
+      }
+    fi
     receipt_evidence_dir=$output_dir
   fi
   if [[ $publication_valid != true ]]; then
@@ -734,15 +767,15 @@ cleanup() {
       run_exit_status=1
     fi
   fi
-  release_outcome=released
-  released_epoch=$(date +%s)
+  release_outcome=not_acquired
+  released_epoch=0
   [[ -f $artifact_destination ]] && artifact_run_id=$(property run.id "$artifact_destination")
   [[ -n $artifact_run_id ]] || artifact_run_id=unavailable
   receipt_status=$run_status
   if [[ $requested_status -eq 0 && $run_result == completed &&
       $source_stable == true &&
       $publication_valid == true && $persistence_valid == true &&
-      $temp_cleanup_valid == true && $release_outcome == released ]]; then
+      $temp_cleanup_valid == true && $build_valid == true && $release_outcome == not_acquired ]]; then
     receipt_result=success
     receipt_status=OK
   fi
@@ -752,9 +785,9 @@ cleanup() {
     receipt_staged=$(mktemp "$receipt_parent/.river-tps-terminal.XXXXXX" 2>/dev/null)
     if [[ -n $receipt_staged ]] && provenance_write_terminal_receipt "$receipt_staged" \
         "$receipt_result" "$receipt_status" "$evidence_run_id" "$artifact_run_id" \
-        "$metadata_hash" "${PROVENANCE_LEASE_OWNER_PID:-unavailable}" \
-        "${PROVENANCE_LEASE_OWNER_START:-unavailable}" \
-        "${PROVENANCE_LEASE_OWNER_IDENTITY_SHA256:-unavailable}" "$terminal_nonce" \
+        "$metadata_hash" "${PROVENANCE_PUBLISHER_PID:-unavailable}" \
+        "${PROVENANCE_PUBLISHER_START:-unavailable}" \
+        "${PROVENANCE_PUBLISHER_IDENTITY_SHA256:-unavailable}" "$terminal_nonce" \
         "${PROVENANCE_TERMINAL_COMMITMENT_SHA256:-unavailable}" "$receipt_evidence_dir" \
         "$release_outcome" "$released_epoch" &&
         provenance_publish_file "$receipt_staged" "$terminal_receipt_destination"; then
@@ -797,7 +830,7 @@ cleanup() {
     fi
   fi
   if [[ $receipt_result != success || $terminal_publication_valid != true ||
-      $source_stable != true ||
+      $source_stable != true || $build_valid != true ||
       $publication_valid != true || $temp_cleanup_valid != true ]]; then
     trap - EXIT
     ((requested_status != 0)) && exit "$requested_status"
@@ -814,12 +847,12 @@ trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run
 : >"$host_evidence_dir/host-classifications.tsv"
 : >"$host_evidence_dir/host-violations.tsv"
 : >"$provisional_daemons"
-PROVENANCE_LEASE_OWNER_PID=$$
-PROVENANCE_LEASE_OWNER_START=$started_epoch
-PROVENANCE_LEASE_OWNER_IDENTITY_SHA256=$(provenance_owner_identity_hash \
-  "$evidence_run_id" "$PROVENANCE_LEASE_OWNER_PID" "$PROVENANCE_LEASE_OWNER_START")
+PROVENANCE_PUBLISHER_PID=$$
+PROVENANCE_PUBLISHER_START=$(provenance_process_start "$$")
+PROVENANCE_PUBLISHER_IDENTITY_SHA256=$(provenance_owner_identity_hash \
+  "$evidence_run_id" "$PROVENANCE_PUBLISHER_PID" "$PROVENANCE_PUBLISHER_START")
 PROVENANCE_TERMINAL_COMMITMENT_SHA256=$(provenance_terminal_commitment_hash \
-  "$evidence_run_id" "$PROVENANCE_LEASE_OWNER_IDENTITY_SHA256" "$terminal_nonce")
+  "$evidence_run_id" "$PROVENANCE_PUBLISHER_IDENTITY_SHA256" "$terminal_nonce")
 provenance_write_source_manifest "$river_root" "$source_manifest_start" ||
   die "unable to capture source manifest"
 provenance_write_git_status "$river_root" "$git_status_start" ||
@@ -829,11 +862,18 @@ git -C "$river_root" rev-parse HEAD >"$git_commit_start" ||
 workspace_start_sha256=$(hash_file "$source_manifest_start")
 
 [[ -f $runtime_descriptor ]] || die "runtime classpath is missing; run ./make.sh first"
-[[ $(property schema "$runtime_descriptor") == river-tps-runtime-v1 ]] ||
-  die "runtime classpath descriptor has an unsupported schema"
-classpath=$(provenance_classpath_value "$runtime_descriptor") ||
+[[ $(property schema "$runtime_descriptor") == river-tps-runtime-v2 ]] ||
+  die "runtime classpath descriptor has an unsupported schema; run ./make.sh"
+build_id=$(provenance_property_once build.id "$runtime_descriptor") ||
+  die "runtime classpath has no unique build identity"
+[[ $build_id =~ ^[0-9a-f]{64}$ ]] || die "runtime build identity is invalid"
+build_record="$river_root/river-bench/build/tps-build/$build_id"
+provenance_copy_build_record "$build_record" "$build_capture" "$build_id" ||
+  die "prebuilt runtime evidence is incomplete or invalid; run ./make.sh"
+build_valid=true
+classpath=$(provenance_classpath_value "$build_capture/runtime.properties") ||
   die "runtime classpath descriptor has no entries"
-verify_provenance_checkpoint startup || die "source changed before the workload"
+verify_provenance_checkpoint startup || die "prebuilt runtime or source changed before the workload"
 
 ((terminals <= 2147483643)) || die "terminals leave no addressable server control slots"
 server_connections=$((terminals + 4))
@@ -892,7 +932,7 @@ url="jdbc:river://localhost:$managed_port"
 echo "managed_server=started port=$managed_port"
 verify_provenance_checkpoint server || {
   run_result=evidence_invalid; run_phase=server
-  run_status=PROVENANCE_CHANGED_OR_HOST_BUSY; run_exit_status=1
+  run_status=PROVENANCE_CHANGED; run_exit_status=1
   exit 1
 }
 echo "managed_server_resources=explicit maximum_bytes=$resource_maximum_bytes delivery_bytes=$resource_delivery_bytes lock_provider_bytes=$resource_lock_provider_bytes version_workspace_bytes=$resource_version_workspace_bytes page_cache_bytes=$resource_page_cache_bytes staging_frame_bytes=$resource_staging_frame_bytes staged_page_capacity=$resource_staged_page_capacity"
@@ -921,7 +961,7 @@ echo "profile=$profile mix=$mix warmup_seconds=$warmup_seconds measured_seconds=
 
 verify_provenance_checkpoint client_start || {
   run_result=evidence_invalid; run_phase=client
-  run_status=PROVENANCE_CHANGED_OR_HOST_BUSY; run_exit_status=1
+  run_status=PROVENANCE_CHANGED; run_exit_status=1
   exit 1
 }
 
@@ -1089,7 +1129,7 @@ fi
 if ! verify_provenance_checkpoint result; then
   run_result=evidence_invalid
   run_phase=provenance
-  run_status=PROVENANCE_CHANGED_OR_HOST_BUSY
+  run_status=PROVENANCE_CHANGED
   run_exit_status=1
 fi
 
