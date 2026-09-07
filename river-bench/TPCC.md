@@ -45,11 +45,13 @@ and the 45/43/4/4/4 selection mix:
 ./gradlew :river-bench:tpccAcceptance --args='--url=jdbc:river://localhost:54321 --phase=load-run-checkpoint --artifact=/absolute/path/tiny.properties --tiny --scheduling=no-wait-stress --warmup-seconds=2 --measured-seconds=5'
 ```
 
-For the fixed ten-second no-wait smoke, `tools/tps-test.sh` builds the bench
-classes, creates a temporary database, starts a loopback server, and launches
-the JDBC workload. The temporary database is removed after the run:
+For the fixed ten-second no-wait smoke, build the prebuilt runtime and its
+provenance record first. Then `tools/tps-test.sh` consumes that runtime,
+creates a temporary database, starts a loopback server, and launches the JDBC
+workload. The temporary database is removed after the run:
 
 ```sh
+./make.sh
 tools/tps-test.sh
 ```
 

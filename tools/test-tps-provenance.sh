@@ -8,7 +8,23 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/tps-provenance.sh"
 
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/river-tps-provenance-test.XXXXXX")
-trap 'rm -rf -- "$test_root"' EXIT
+test_make_pid=
+finish_test() {
+  local status=$?
+  trap - EXIT
+  set +e
+  if [[ -n $test_make_pid ]]; then
+    kill -TERM "$test_make_pid" 2>/dev/null
+    wait "$test_make_pid" 2>/dev/null
+  fi
+  if ((status == 0)); then
+    rm -rf -- "$test_root" || status=1
+  else
+    echo "failed_fixture=$test_root" >&2
+  fi
+  exit "$status"
+}
+trap finish_test EXIT
 tests=0
 
 pass() {
@@ -45,7 +61,7 @@ printf 'resource\n' >"$classpath_root/resources/example.txt"
 printf 'jar\n' >"$classpath_root/dependency.jar"
 descriptor="$test_root/runtime.properties"
 {
-  printf 'schema=river-tps-runtime-v1\n'
+  printf 'schema=river-tps-runtime-v2\n'
   printf 'classpath=%s\n' "$classpath_root/classes"
   printf 'classpath=%s\n' "$classpath_root/resources"
   printf 'classpath=%s\n' "$classpath_root/dependency.jar"
@@ -578,18 +594,46 @@ assert_contains "$timeout_monitor/host-violations.tsv" host_observation_timeout
 pass
 
 fixture="$test_root/full-run-fixture"
-mkdir -p "$fixture/tools" "$fixture/fake-bin" "$fixture/classes" \
+mkdir -p "$fixture/tools" "$fixture/fake-bin" "$fixture/river-bench/build/classes" \
   "$fixture/river-bench/build"
 cp "$script_dir/tps-test.sh" "$script_dir/tps-provenance.sh" "$fixture/tools/"
 printf 'build/\n' >"$fixture/.gitignore"
 printf 'original-source\n' >"$fixture/mutable-source.txt"
+cp "$script_dir/../make.sh" "$fixture/make.sh"
+cat >"$fixture/gradlew" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(cd -- "$(dirname -- "$0")" && pwd)
+[[ ${FAKE_BUILD_FAIL:-false} != true ]] || exit 17
+descriptor= id=
+for argument in "$@"; do
+  case $argument in
+    -PriverTpsClasspathOutput=*) descriptor=${argument#*=} ;;
+    -PriverTpsBuildId=*) id=${argument#*=} ;;
+  esac
+done
+if [[ -n ${FAKE_BUILD_GATE:-} ]]; then
+  printf '%s\n' "$$" >"$FAKE_BUILD_GATE/pid"
+  : >"$FAKE_BUILD_GATE/started"
+  while [[ ! -e $FAKE_BUILD_GATE/release ]]; do /bin/sleep 0.02; done
+fi
+mkdir -p "$root/river-bench/build/classes" "$root/river-bench/build/resources"
+printf 'resource\n' >"$root/river-bench/build/resources/resource.txt"
+printf 'compiled-by-fixture\n' >"$root/river-bench/build/classes/Main.class"
 {
-  printf 'schema=river-tps-runtime-v1\n'
-  printf 'java.home=/fake/java\n'
-  printf 'java.version=fake-25\n'
-  printf 'classpath=%s\n' "$fixture/classes"
-} >"$fixture/river-bench/build/tps-runtime-classpath.properties"
-printf 'stale-class-bytes\n' >"$fixture/classes/Main.class"
+  printf 'schema=river-tps-runtime-v2\nbuild.id=%s\n' "$id"
+  printf 'build.inputs=%s\nbuild.cache_trust=gradle_declared_inputs\n' "${FAKE_BUILD_INPUTS:-workspace_declared}"
+  printf 'gradle.version=fixture\ngradle.home=/fake/gradle\ngradle.process.pid=%s\n' "$$"
+  printf 'java.home=/fake/java\njava.version=fake-25\n'
+  printf 'compiler.fixture.home=/fake/java\ncompiler.fixture.version=fake-25\n'
+  printf 'compiler.fixture.executable=%s\n' "$root/fake-java"
+  printf 'compiler.fixture.launcher_sha256=%s\n' "$(shasum -a 256 "$root/fake-java" | awk '{print $1}')"
+  printf 'compiler.fixture.selected_options_sha256=%064d\n' 0
+  printf 'classpath=%s\n' "$root/river-bench/build/classes" "$root/river-bench/build/resources"
+} >"$descriptor"
+[[ -z ${FAKE_BUILD_MUTATE_SOURCE:-} ]] || printf 'build-mutation\n' >>"$FAKE_BUILD_MUTATE_SOURCE"
+echo 'BUILD SUCCESSFUL (fixture)'
+EOF
 cat >"$fixture/fake-bin/ps" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${1:-} == -p ]]; then
@@ -611,6 +655,11 @@ cat >"$fixture/fake-bin/sed" <<'EOF'
 set -euo pipefail
 /usr/bin/sed "$@"
 status=$?
+if [[ -n ${FAKE_METADATA_MUTATION_TARGET:-} && -f ${FAKE_METADATA_MUTATION_TRIGGER:-} &&
+    ! -e ${FAKE_METADATA_MUTATION_DONE:-} ]]; then
+  printf 'late-class-mutation\n' >"$FAKE_METADATA_MUTATION_TARGET"
+  : >"$FAKE_METADATA_MUTATION_DONE"
+fi
 if [[ $status -eq 0 && -n ${FAKE_RELEASE_OWNER_RACE:-} &&
     ${1:-} == -n && ${2:-} == 6p && ${3:-} == "$FAKE_RELEASE_OWNER_RACE/owner" &&
     ! -e ${FAKE_RELEASE_OWNER_RACE}.race-complete ]]; then
@@ -645,6 +694,7 @@ for argument in "$@"; do
     io.riverdb.bench.tpcc.TpccServerMain|io.riverdb.bench.tpcc.TpccAcceptanceMain) main=$argument ;;
   esac
 done
+[[ -z ${FAKE_WORKLOAD_STARTED:-} ]] || : >"$FAKE_WORKLOAD_STARTED"
 if [[ $main == io.riverdb.bench.tpcc.TpccServerMain ]]; then
   ready= stop= metrics=
   for argument in "$@"; do
@@ -725,7 +775,7 @@ printf 'completed_transactions=1\n'
 printf 'in_flight_at_cutoff=0\n'
 printf 'transaction=new-order committed=1 retry_exhausted=0 failed=0\n'
 EOF
-chmod +x "$fixture/fake-bin/ps" "$fixture/fake-bin/sed" \
+chmod +x "$fixture/make.sh" "$fixture/gradlew" "$fixture/fake-bin/ps" "$fixture/fake-bin/sed" \
   "$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" "$fixture/tools/tps-provenance.sh"
 git -C "$fixture" init -q
@@ -733,6 +783,8 @@ git -C "$fixture" config user.name test
 git -C "$fixture" config user.email test@example.invalid
 git -C "$fixture" add .
 git -C "$fixture" commit -qm fixture
+TMPDIR="$test_root" "$fixture/make.sh" >"$test_root/make-success.log"
+
 
 full_output="$test_root/full-output"
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
@@ -750,7 +802,7 @@ provisional_hash=$(sed -n 's/^host.provisional_daemons_sha256=//p' \
 assert_equal "$(provenance_sha256_file "$full_output/host-provisional-daemons.tsv")" \
   "$provisional_hash"
 assert_contains "$full_output/run-metadata.properties" 'provenance.source_stable=true'
-assert_contains "$full_output/run-metadata.properties" 'provenance.host_exclusion_valid=true'
+assert_contains "$full_output/run-metadata.properties" 'provenance.host_exclusion_valid=false'
 assert_contains "$full_output/run-metadata.properties" \
   'provenance.host_provisional_daemons_sha256='
 assert_contains "$full_output/run-metadata.properties" 'provenance.publication_valid=true'
@@ -758,6 +810,35 @@ provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
   "$full_output/tpcc-acceptance.properties" \
   "$full_output/run-metadata.properties.terminal-receipt" "$full_output" success ||
   fail "shared validator rejected a complete terminal success receipt"
+if provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
+    "$full_output/tpcc-acceptance.properties" \
+    "$full_output/run-metadata.properties.terminal-receipt" "$full_output" success promotion; then
+  fail "unsupported host ownership became promotion evidence"
+fi
+assert_contains "$full_output/run-metadata.properties" 'host.guarantee=unsupported'
+assert_contains "$full_output/run-metadata.properties.terminal-receipt" 'host.release_outcome=not_acquired'
+cp "$full_output/run-metadata.properties" "$test_root/binding-metadata.saved"
+cp "$full_output/run-metadata.properties.terminal-receipt" "$test_root/binding-terminal.saved"
+replace_property "$full_output/run-metadata.properties" provenance.classpath_sha256 "$(printf '%064d' 0)"
+provenance_write_terminal_receipt "$full_output/run-metadata.properties.terminal-receipt" \
+  success OK "$(provenance_property_once evidence.run_id "$full_output/run-metadata.properties")" \
+  "$(provenance_property_once artifact.run_id "$full_output/run-metadata.properties")" \
+  "$(provenance_sha256_file "$full_output/run-metadata.properties")" \
+  "$(provenance_property_once publisher.pid "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once publisher.start "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once publisher.identity_sha256 "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once terminal.nonce "$test_root/binding-terminal.saved")" \
+  "$(provenance_property_once terminal.commitment_sha256 "$test_root/binding-terminal.saved")" \
+  "$full_output" not_acquired 0
+if provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
+    "$full_output/tpcc-acceptance.properties" "$full_output/run-metadata.properties.terminal-receipt" \
+    "$full_output" success; then
+  fail "receipt accepted a false classpath claim with otherwise coherent hashes"
+fi
+mv "$test_root/binding-metadata.saved" "$full_output/run-metadata.properties"
+mv "$test_root/binding-terminal.saved" "$full_output/run-metadata.properties.terminal-receipt"
+pass
+
 cp "$full_output/run-metadata.properties.terminal-receipt" "$test_root/terminal.saved"
 printf 'unexpected=duplicate\n' >>"$full_output/run-metadata.properties.terminal-receipt"
 if provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
@@ -784,8 +865,8 @@ mv -- "$test_root/terminal.saved" "$full_output/run-metadata.properties.terminal
 while IFS=$'\t' read -r stage _ source_hash status_hash classpath_hash descriptor_hash; do
   assert_equal "$(provenance_sha256_file "$full_output/checkpoints/source-manifest.$stage.tsv")" "$source_hash"
   assert_equal "$(provenance_sha256_file "$full_output/checkpoints/git-status.$stage.txt")" "$status_hash"
-  assert_equal unavailable "$classpath_hash"
-  assert_equal unavailable "$descriptor_hash"
+  assert_equal "$(provenance_sha256_file "$full_output/checkpoints/classpath.$stage.tsv")" "$classpath_hash"
+  assert_equal "$(provenance_sha256_file "$full_output/checkpoints/runtime.$stage.properties")" "$descriptor_hash"
 done <"$full_output/provenance-checkpoints.tsv"
 metadata_status_hash=$(sed -n 's/^git.status_sha256=//p' "$full_output/run-metadata.properties")
 assert_equal "$(provenance_sha256_file "$full_output/checkpoints/git-status.metadata.txt")" "$metadata_status_hash"
@@ -957,6 +1038,123 @@ assert_contains "$metadata_collision_output/evidence-invalid.status" \
 pass
 
 [[ -x "$script_dir/../make.sh" ]] || fail "standalone build script is missing"
+expect_prelaunch_failure() {
+  local label=$1 marker="$test_root/$1.workload-started"
+  if PATH="$fixture/fake-bin:$PATH" RIVER_JAVA="$fixture/fake-java" \
+      FAKE_WORKLOAD_STARTED="$marker" "$fixture/tools/tps-test.sh" \
+      --output-dir="$test_root/$label" --warmup-seconds=1 --measured-seconds=1 \
+      --terminals=1 >"$test_root/$label.log" 2>&1; then
+    fail "$label admitted invalid prebuilt evidence"
+  fi
+  [[ ! -e $marker ]] || fail "$label started a workload before validation"
+  assert_contains "$test_root/$label/run-metadata.properties.terminal-receipt" \
+    'terminal.result=evidence_invalid'
+  pass
+}
+
+class_file="$fixture/river-bench/build/classes/Main.class"
+cp "$class_file" "$test_root/compiled.saved"
+printf 'stale-or-mutated-class\n' >"$class_file"
+expect_prelaunch_failure stale-class
+cp "$test_root/compiled.saved" "$class_file"
+rm "$class_file"
+expect_prelaunch_failure missing-class
+cp "$test_root/compiled.saved" "$class_file"
+
+runtime="$fixture/river-bench/build/tps-runtime-classpath.properties"
+cp "$runtime" "$test_root/runtime.saved"
+awk '/^classpath=/ { entries[++count]=$0; next } { print }
+  END { for (i=count; i>0; i--) print entries[i] }' "$test_root/runtime.saved" >"$runtime"
+expect_prelaunch_failure reordered-classpath
+cp "$test_root/runtime.saved" "$runtime"
+record="$fixture/river-bench/build/tps-build/$(provenance_property_once build.id "$runtime")"
+mv "$record/completion.properties" "$record/completion.saved"
+expect_prelaunch_failure incomplete-build
+mv "$record/completion.saved" "$record/completion.properties"
+
+cp -R "$record" "$test_root/missing-compiler-record"
+rm "$test_root/missing-compiler-record/completion.properties"
+sed '/^compiler\./d' "$record/runtime.properties" >"$test_root/missing-compiler-record/runtime.properties"
+if provenance_seal_build_record "$test_root/missing-compiler-record" \
+    "$(provenance_property_once build.id "$runtime")"; then
+  fail "missing compiler identity was sealed"
+fi
+pass
+
+invalid_cache_record="$test_root/invalid-cache-trust-record"
+cp -R "$record" "$invalid_cache_record"
+replace_property "$invalid_cache_record/runtime.properties" \
+  build.cache_trust unsupported
+runtime_hash=$(provenance_sha256_file "$invalid_cache_record/runtime.properties")
+awk -F '\t' -v replacement="$runtime_hash" 'BEGIN { OFS="\t" }
+  $2 == "runtime.properties" { $1 = replacement }
+  { print }
+' "$invalid_cache_record/files.tsv" >"$invalid_cache_record/files.tsv.replaced"
+mv -- "$invalid_cache_record/files.tsv.replaced" "$invalid_cache_record/files.tsv"
+files_hash=$(provenance_sha256_file "$invalid_cache_record/files.tsv")
+replace_property "$invalid_cache_record/completion.properties" files.sha256 "$files_hash"
+if provenance_validate_build_record "$invalid_cache_record" \
+    "$(provenance_property_once build.id "$runtime")"; then
+  fail "unsupported runtime cache trust was accepted"
+fi
+pass
+
+late_output="$test_root/late-runtime-mutation"
+if PATH="$fixture/fake-bin:$PATH" RIVER_JAVA="$fixture/fake-java" \
+    FAKE_METADATA_MUTATION_TRIGGER="$late_output/run-metadata.properties" \
+    FAKE_METADATA_MUTATION_TARGET="$class_file" FAKE_METADATA_MUTATION_DONE="$test_root/late.done" \
+    "$fixture/tools/tps-test.sh" --output-dir="$late_output" --warmup-seconds=1 \
+    --measured-seconds=1 --terminals=1 >"$test_root/late.log" 2>&1; then
+  fail "late runtime-only mutation was accepted"
+fi
+assert_contains "$late_output/run-metadata.properties.terminal-receipt" 'terminal.status=PROVENANCE_CHANGED'
+provenance_validate_terminal_receipt "$late_output/run-metadata.properties" \
+  "$late_output/tpcc-acceptance.properties" "$late_output/run-metadata.properties.terminal-receipt" \
+  "$late_output" evidence_invalid || fail "late drift did not retain a valid failure receipt"
+cp "$test_root/compiled.saved" "$class_file"
+pass
+
+if TMPDIR="$test_root" FAKE_BUILD_FAIL=true "$fixture/make.sh" >"$test_root/failed-make.log" 2>&1; then
+  fail "failed make succeeded"
+fi
+assert_contains "$test_root/failed-make.log" 'exit_status=17'
+expect_prelaunch_failure failed-make
+TMPDIR="$test_root" "$fixture/make.sh" >"$test_root/remake.log"
+
+if TMPDIR="$test_root" FAKE_BUILD_INPUTS=unsupported "$fixture/make.sh" >"$test_root/unsupported-make.log" 2>&1; then
+  fail "unsupported build inputs were sealed"
+fi
+expect_prelaunch_failure unsupported-make
+TMPDIR="$test_root" "$fixture/make.sh" >"$test_root/remake.log"
+
+if TMPDIR="$test_root" FAKE_BUILD_MUTATE_SOURCE="$fixture/mutable-source.txt" \
+    "$fixture/make.sh" >"$test_root/mutating-make.log" 2>&1; then
+  fail "source mutation during make was sealed"
+fi
+expect_prelaunch_failure mutating-make
+printf 'original-source\n' >"$fixture/mutable-source.txt"
+TMPDIR="$test_root" "$fixture/make.sh" >"$test_root/remake.log"
+
+build_gate="$test_root/build-gate"
+mkdir "$build_gate"
+TMPDIR="$test_root" RIVER_TPS_BUILD_STOP_TIMEOUT_SECONDS=2 FAKE_BUILD_GATE="$build_gate" \
+  "$fixture/make.sh" >"$test_root/interrupted-make.log" 2>&1 &
+test_make_pid=$!
+for ((attempt=0; attempt<500; attempt++)); do
+  [[ -f $build_gate/started ]] && break
+  /bin/sleep 0.02
+done
+[[ -f $build_gate/started ]] || fail "make interruption fixture did not start"
+build_pid=$(cat "$build_gate/pid")
+kill -TERM "$test_make_pid"
+make_status=0
+wait "$test_make_pid" || make_status=$?
+test_make_pid=
+assert_equal 143 "$make_status"
+if kill -0 "$build_pid" 2>/dev/null; then fail "interrupted make retained its owned Gradle process"; fi
+assert_contains "$test_root/interrupted-make.log" 'phase=interrupted exit_status=143'
+expect_prelaunch_failure interrupted-make
+
 if grep -Eq 'gradlew|writeRiverTpsRuntimeClasspath|provenance_run_logged_marked' \
     "$script_dir/tps-test.sh"; then
   fail "build invocation remains in tps-test.sh"

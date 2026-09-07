@@ -1,6 +1,8 @@
 ---
 id: tic-ed12
-status: open
+status: in_progress
+base-commit: 04d4c09c67f30c1330da1c0833e53618b9866a07
+branch: ticket/tic-ed12-prebuilt-tps-provenance
 type: story
 priority: 2
 assignee: blater
@@ -79,3 +81,61 @@ host capability. A real serialized smoke reproduces the retained build/source/
 runtime hashes. Capture slopmark before/after over touched tooling, independently
 review operations/evidence integrity, and complete relevant build-policy checks.
 No TPS improvement is expected or claimed from artifact verification.
+
+## Pre-implementation proof boundary
+
+The handoff uses a required, fresh make invocation ID as a declared descriptor
+task input. A completion record belongs to that ID and is published last.
+The descriptor and its ID, source record, exact ordered runtime manifest and
+sealed completion record must still match at every required TPS boundary.
+
+Record actual selected JavaCompile toolchain identities separately from the
+Gradle daemon JVM. The executable hash identifies the javac launcher, and the
+selected-options summary covers release, encoding and allCompilerArgs. These
+are observed facts, not a digest of the entire JDK, full compiler invocation or
+every compile-only/annotation-processor dependency. Keep normal Gradle incremental
+and build-cache behavior: provenance explicitly trusts Gradle's declared-input
+and cache correctness, retains task outcomes/logs, and binds the actual output
+bytes. It does not claim clean compilation or hermetic reproducibility.
+
+The initial supported input contract is the repository's declared build, its
+verified resolved dependencies, selected compiler toolchains, and the fixed
+make invocation. External user/distribution init scripts or user Gradle
+properties and nonempty Gradle/JVM/project-property injection are unsupported
+until explicitly admitted. Source symlinks must not silently contribute only
+link-text identity where target bytes are compilation inputs. Unknown input
+authority must make provenance unsupported, never silently valid. Any retained
+environment/configuration fact uses safe identity or hashes, not secret values.
+
+The implementation must resolve this input check through the existing build
+authority without copying Gradle's init-script or classpath discovery rules
+into shell. Failure to expose the admitted input/toolchain facts through that
+authority is a stop condition for a named design decision, not permission to
+weaken the provenance claim.
+
+## Implementation and review
+
+The existing Gradle descriptor now reports a fresh build invocation, selected
+compiler facts, and the admitted input/cache contract. `make.sh` retains its
+command, result, source boundaries, and ordered runtime bytes, publishes
+completion last, and cleans up only its own build process group on interruption.
+TPS consumes this record without building and rechecks it at lifecycle boundaries.
+The canonical receipt validator and P4 consumer migrate together; current
+host ownership remains explicitly unsupported.
+
+Independent reviews identified and resolved owned-child cleanup, classpath
+metadata binding, late-mutation failure reporting, symmetric cache-trust
+validation, and Gradle system-property input classification. The lead's systems
+review rejected a proposed common build-ID requirement: invocation identity is
+unique by design, while comparison checks source bytes, ordered launched bytes,
+and runtime launcher identity. Separate builds with equivalent runtime inputs
+must not be rejected solely because their evidence identities differ.
+
+Validation evidence is retained at
+`/private/tmp/river-tic-ed12-evidence-20260907`. Java test outcomes restored by
+the clean check are explicitly labelled as cached; shell boundary suites execute
+fresh. Existing source/bytecode, SQL-shape and dependency-ledger policy failures
+are compared with unchanged `04d4c09`, not waived or represented as passing.
+The installed slopmark does not support shell/Kotlin, so architecture review
+supplies the review signal without a fabricated score. This remains required
+evidence correctness work; no database behavior or TPS improvement is claimed.

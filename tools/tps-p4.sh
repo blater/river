@@ -38,7 +38,7 @@ Run options:
   --run                          Run samples (default)
   -h, --help                     Show this help
 
-The partial point requires exactly ten authoritative v2 terminal receipts,
+The partial point requires exactly ten current provenance and host-qualified terminal receipts,
 >=100000 completed transactions in each sample, no failed or retry-exhausted
 family outcome, identical persisted configuration/provenance, and a one-sided
 95% lower confidence bound for committed TPS of at least 1000. The calculator
@@ -184,7 +184,8 @@ metadata_keys=(
   tool.schema run.result run.phase run.status run.exit_status
   run.provisional_result run.provisional_phase run.provisional_status
   run.provisional_exit_status run.sample_id evidence.run_id terminal.required terminal.path
-  terminal.commitment_sha256 lease.owner_pid lease.owner_start lease.owner_identity_sha256
+  terminal.commitment_sha256 publisher.pid publisher.start publisher.identity_sha256
+  provenance.source_manifest_sha256 provenance.classpath_sha256 environment.java_launcher_sha256
   git.commit_sha git.dirty_state git.status_sha256 environment.java_version
   environment.host configuration.fingerprint configuration.backend configuration.profile
   configuration.mix configuration.isolation configuration.scheduling configuration.evidence configuration.fresh_load
@@ -199,6 +200,7 @@ metadata_keys=(
 common_metadata_keys=(
   tool.schema run.result run.phase run.status run.exit_status
   run.provisional_result run.provisional_phase run.provisional_status run.provisional_exit_status
+  provenance.source_manifest_sha256 provenance.classpath_sha256 environment.java_launcher_sha256
   git.commit_sha git.dirty_state git.status_sha256 environment.java_version
   environment.host configuration.fingerprint configuration.backend configuration.profile
   configuration.mix configuration.scheduling configuration.evidence configuration.fresh_load
@@ -255,7 +257,7 @@ for index in $(seq 1 10); do
   if [[ -z $first_metadata ]]; then first_metadata=$metadata; first_artifact=$artifact; fi
 
   for key in "${metadata_keys[@]}"; do require_value "$key" "$metadata" >/dev/null; done
-  [[ $(property tool.schema "$metadata") == river-tps-tool-v2 ]] || fail "$metadata has wrong tool schema"
+  [[ $(property tool.schema "$metadata") == river-tps-tool-v3 ]] || fail "$metadata has wrong tool schema"
   [[ $(property run.result "$metadata") == provisional ]] || fail "$metadata is not provisional"
   [[ $(property run.status "$metadata") == TERMINAL_RECEIPT_REQUIRED ]] ||
     fail "$metadata does not require terminal validation"
@@ -337,6 +339,13 @@ stats=$(awk '
   }
 ' "$sample_tsv") || fail "unable to calculate ten-sample confidence interval"
 read -r mean standard_deviation lower_bound <<<"$stats"
+for index in $(seq 1 10); do
+  sample_dir="$calculate_dir/sample-$(printf '%02d' "$index")"
+  metadata="$sample_dir/run-metadata.properties"
+  provenance_validate_terminal_receipt "$metadata" "$sample_dir/tpcc-acceptance.properties" \
+    "$metadata.terminal-receipt" "$sample_dir" success promotion ||
+    fail "$metadata lacks required provenance or host guarantees"
+done
 echo "p4_samples_observed=10"
 echo "p4_completed_minimum=100000"
 echo "p4_mean_committed_tps=$mean"
@@ -356,7 +365,7 @@ result_file="$calculate_dir/p4-result.properties"
 staged=$(mktemp "$calculate_dir/.river-tps-p4.XXXXXX") ||
   fail "unable to stage the partial point result"
 {
-  printf 'tool.schema=river-tps-p4-v2\n'
+  printf 'tool.schema=river-tps-p4-v3\n'
   printf 'p4.scope=partial-river-point-calculator\n'
   printf 'p4.result=%s\n' "$p4_result"
   printf 'p4.samples_expected=10\n'
