@@ -167,7 +167,7 @@ processes and never terminates or otherwise signals a PID.
 
 ```text
 riverd
-riverd start [-D PATH|--datadir=PATH] [-L HOST:PORT|--listen=HOST:PORT]
+riverd start [-D PATH|--datadir=PATH] [--port=PORT] [--ip=ADDRESS]
              [--maximum-connections=N] [--ready-file=PATH]
 riverd stop [-D PATH|--datadir=PATH] [--timeout=DURATION]
 riverd ps
@@ -233,8 +233,8 @@ irrevocable readiness observation may be followed by the specified terminal
 
 ```text
 -D PATH, --datadir=PATH     default: $HOME/.river/default
--L HOST:PORT, --listen=HOST:PORT
-                            default: 127.0.0.1:9191
+--port=PORT                default: 9191; zero selects an available port
+--ip=ADDRESS               optional; default: 127.0.0.1
 --maximum-connections=N     default: 16
 --ready-file=PATH           optional; no default file
 ```
@@ -274,11 +274,11 @@ DATADIR/
 root. Relative paths are resolved against the launcher's initial working
 directory and printed as normalized absolute paths before readiness.
 
-The first server supports authenticated TLS loopback only. `-L` accepts `localhost:PORT`,
-`127.0.0.1:PORT`, and `[::1]:PORT`; reject wildcard, non-loopback, ambiguous,
-malformed, and multi-address inputs before creating or opening anything. Port
-zero requests an ephemeral port and the selected port is reported after
-binding.
+The first server supports authenticated TLS loopback only. `--port` accepts
+decimal `0..65535`. Optional `--ip` accepts `127.0.0.1` or `::1`, without IPv6
+brackets. Reject wildcard, non-loopback, hostname, malformed and out-of-range
+inputs before creating or opening anything. Port zero selects an available
+port, which is reported after binding. Ordinary use needs only `--port`.
 
 The server never requests elevated permissions, invokes a service manager, or
 writes outside the resolved data directory except the fixed per-user runtime
@@ -409,8 +409,8 @@ servers run independently by using different data directories and either
 distinct ports or port zero:
 
 ```sh
-riverd start -D "$HOME/.river/benchmark-a" -L 127.0.0.1:0
-riverd start -D "$HOME/.river/benchmark-b" -L 127.0.0.1:0
+riverd start -D "$HOME/.river/benchmark-a" --port=0
+riverd start -D "$HOME/.river/benchmark-b" --port=0
 
 riverd stop -D "$HOME/.river/benchmark-a"
 riverd stop -D "$HOME/.river/benchmark-b"
@@ -470,7 +470,7 @@ When there are no verified live records, exit successfully and print:
 ```text
 No River instances are running.
 Start one with:
-  riverd start [-D PATH] [-L HOST:PORT]
+  riverd start [-D PATH] [--port=PORT] [--ip=ADDRESS]
 ```
 
 ### 4.6 Startup output
@@ -777,7 +777,7 @@ not exempt the new module from existing build policy.
   and `help ...` form; every unlisted placement/extra token is rejected;
 - no arguments and `ps` produce the same deterministic listing;
 - defaults resolve exactly as documented;
-- `-D`/`--datadir`, `-L`/`--listen`, loopback IPv4/IPv6, explicit ports, and
+- `-D`/`--datadir`, `--port`/`--ip`, loopback IPv4/IPv6, explicit ports, and
   port zero parse;
 - stop resolves the same default and overridden data directories as start;
 - two different data directories can run concurrently on automatically
@@ -933,7 +933,7 @@ After the installed command passes its real lifecycle test:
 
 1. Add a harness option for the `riverd` executable, defaulting to the adjacent
    River installation path when present and accepting an explicit override.
-2. Start `riverd start -D <harness-owned-run-directory> -L 127.0.0.1:0` as a
+2. Start `riverd start -D <harness-owned-run-directory> --port=0` as a
    foreground child and parse the documented readiness contract.
 3. Load the pinned certificate and token paths from that contract, establish
    TLS 1.3, export `EXPORTER-River-Authentication`, and complete protocol-v4
