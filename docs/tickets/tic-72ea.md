@@ -57,3 +57,23 @@ Slopmark: existing audit owner 78.5429; new runner 361.088, TLS helper 10.3519,
 snapshot 0. The runner has no promotion/comparison policy; its size is a review
 signal and no additional runner responsibilities are planned. Timed matched
 measurements remain outstanding; this is not acceptance of the candidate.
+
+Control source `f345199` was pushed before the candidate changed. Two matched
+30-second samples after 5 seconds warmup were captured at each initial client
+count (seed 410221, GraalVM/JDK 25, AC power):
+
+| Clients | Sample | Requests/s | Decisions | Forces | p99.9 ms |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 1 | 185.000 | 7069 | 7069 | 16.146 |
+| 1 | 2 | 190.333 | 7272 | 7272 | 14.492 |
+| 4 | 1 | 216.633 | 8307 | 8307 | 42.107 |
+| 4 | 2 | 222.667 | 8532 | 8532 | 41.845 |
+
+Each artifact is under the evidence root as `control-c<clients>-s<sample>/`,
+with its digest and adjacent Gradle log. All decisions reconciled and denied
+writes had no effect. The original monitor-blocked metric is **invalid**: JVM
+thread management omits the server's virtual threads. Subsequent artifacts
+label it unavailable; CPU is process-wide and allocation uses the total JVM
+counter. Separate matched JFR recordings must supply monitor-wait evidence.
+No mechanism change was present during these samples. Wider interleaved
+acceptance measurements remain outstanding.

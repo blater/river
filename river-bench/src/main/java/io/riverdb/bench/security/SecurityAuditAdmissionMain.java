@@ -471,17 +471,20 @@ public final class SecurityAuditAdmissionMain {
       jvm.put("scope", "whole_jvm_process");
       jvm.put("available", false);
       jvm.put("unavailable_reason", "correctness mode has no timed JVM window");
+      jvm.put("monitor_blocked_available", false);
+      jvm.put("monitor_blocked_unavailable_reason",
+          "virtual_server_threads_not_exposed_by_threadmxbean");
     } else {
       jvm.put("scope", "whole_jvm_process");
       jvm.put("available", jvmBefore.available && jvmAfter.available);
       long processCpu = deltaOrUnavailable(jvmBefore.cpuNanos, jvmAfter.cpuNanos);
       jvm.put("cpu_nanos", processCpu);
       jvm.put("process_cpu_nanos", processCpu);
-      jvm.put("monitor_blocked_nanos",
-          sameThreadSet(jvmBefore, jvmAfter)
-              ? deltaOrUnavailable(jvmBefore.monitorBlockedNanos, jvmAfter.monitorBlockedNanos)
-              : -1);
-      jvm.put("monitor_thread_set_stable", sameThreadSet(jvmBefore, jvmAfter));
+      jvm.put("monitor_blocked_nanos", -1);
+      jvm.put("monitor_blocked_available", false);
+      jvm.put("monitor_thread_set_stable", false);
+      jvm.put("monitor_blocked_unavailable_reason",
+          "virtual_server_threads_not_exposed_by_threadmxbean");
       jvm.put("allocated_bytes",
           deltaOrUnavailable(jvmBefore.allocatedBytes, jvmAfter.allocatedBytes));
       jvm.put("gc_collections", deltaOrUnavailable(jvmBefore.gcCollections, jvmAfter.gcCollections));
@@ -643,7 +646,7 @@ public final class SecurityAuditAdmissionMain {
         if (collector.getCollectionTime() >= 0) millis += collector.getCollectionTime();
       }
       return new JvmMeasurement(
-          processCpu >= 0 && allocated >= 0 && blockedAvailable,
+          processCpu >= 0 && allocated >= 0,
           processCpu,
           blockedAvailable ? blockedMillis * 1_000_000L : -1,
           allocated,
