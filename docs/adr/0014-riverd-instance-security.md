@@ -26,6 +26,15 @@ launcher-owned identity, filesystem, command, discovery, and recovery
 contract. River is pre-V1: the authenticated lifecycle replaces all unreleased
 plain production paths; it does not wrap or preserve them.
 
+## 2026-09-07 platform requirement amendment
+
+The user requires macOS and Linux support, plus at least one modern Windows
+filesystem. This amendment selects APFS, ext4/XFS, and NTFS, replaces the
+Linux-only filesystem mechanism and per-JAR qualification contract, and keeps
+the security, durability, and recovery outcomes. Historical reviews below
+accepted the earlier design; they do not establish implementation or acceptance
+of this amendment. The required-platform matrix is part of standalone delivery.
+
 ## Public command grammar and mutation boundary
 
 The installed executable is `riverd`. Its complete first-version grammar is:
@@ -68,7 +77,10 @@ riverd help credentials
 riverd help credentials renew
 ```
 
-No arguments is exactly `riverd ps`. `start` is a foreground command. The
+No arguments is exactly `riverd ps`. `start` is a foreground command.
+Unix signals, Windows console shutdown, and the cooperative `stop` command
+enter the same ordered shutdown owner. Forced process termination is a crash
+and follows recovery rules; Windows is not required to emulate POSIX signals. The
 default data directory is `$HOME/.river/default`, the default listener is
 `127.0.0.1:9191`, the default maximum connection count is 16, and the default
 stop timeout is 30 seconds. `-L` accepts only `localhost`, `127.0.0.1`, or
@@ -197,195 +209,123 @@ target must be outside the data and registry trees. A missing leaf is compared a
 real parent plus one validated component; the comparison is repeated after
 creation and before publication.
 
-The data directory and every launcher-owned directory are real directories
-with POSIX mode `0700`; launcher-owned regular files use `0600`, including the
-public certificate. The owner is the effective launch user's resolved
-`UserPrincipal`. Same-account actors are trusted only after owner and mode are
-proved and the provider proves that no ACL or other access mechanism overrides
-those POSIX restrictions. An unenumerable access mechanism is
-`FEATURE_NOT_SUPPORTED`; any additional allow/grant is `ACCESS_DENIED`. No
-launcher-owned component may be a symbolic link or special file.
+### Required platforms and filesystem guarantees
 
-The first implementation has one `RiverDaemonFileSystem` adapter and supports
-only a qualified default Linux NIO provider on a local `ext4` or `xfs`
-`FileStore`. It requires POSIX access semantics in which group permission bits
-are the POSIX ACL mask; exact `0700`/`0600` therefore proves that no named-user
-or group ACL grant is effective. If an `AclFileAttributeView` or another
-provider access view is exposed, every entry is enumerated and no non-owner
-allow entry may be effective. macOS/APFS, NFS, SMB, FUSE, overlay, an
-unrecognized provider/store, or an access view whose effect cannot be
-enumerated or masked is `FEATURE_NOT_SUPPORTED`. Privileged host administrators
-remain outside the filesystem threat boundary.
+The first supported standalone `riverd` must run on macOS with local APFS,
+Linux with local ext4 and XFS, and Windows with local NTFS. NTFS is the initial
+required Windows filesystem; adding another does not remove that requirement.
+These are delivery requirements, not claims that the implementations or tests
+already exist. No required platform is an optional follow-up.
 
-Below the first verified real ancestor, the adapter permits exactly these
-path-based public-NIO calls and no others:
+River requires the same outcomes on each platform:
 
-| Path call | Sole purpose and required checks |
-| --- | --- |
-| `toRealPath(NOFOLLOW_LINKS)`, `Files.readAttributes(...,NOFOLLOW_LINKS)`, `Files.getFileStore`, and `Files.newDirectoryStream(realTrustRoot)` | Initial read-only selection of the nearest existing trust root, qualification tuple, and sole path-based opening of that real root. The returned stream must be an SDS; the adapter compares type/owner/mode/access views/file key and walks every existing descendant SDS-relative. |
-| `Files.createDirectory(parent.resolve(fixedComponent),0700)` | The only directory creation call. Immediately before and after it, re-read the path parent without following links and require its file key to equal the already open SDS parent. Then validate the child no-follow, acquire it through the SDS, and compare its file key. Failure removes only the exact new child through the SDS and forces that parent. |
-| `Files.createLink(target,forcedStage)` | Exclusive publication of one already forced, closed, immutable, canonical regular file staged in the target's same parent. That one parent file key is checked against its open SDS immediately before and after; cross-parent regular-file links are forbidden. |
-| `Files.move(source,target,ATOMIC_MOVE,REPLACE_EXISTING)` | Replacement of an already forced immutable regular file staged in the destination parent. The one parent file key is checked before and after; replacement is never cross-parent. |
-| `Files.move(source,target,ATOMIC_MOVE)` | Rename of a request/receipt in one parent, or publication of a fully forced fixed directory between two already open parents on the same qualified store. Absence is checked SDS-relative while the instance lock excludes River competitors; source and destination parent file keys are checked before and after. |
-| `FileChannel.open(directoryPath,READ).force(true)` | Directory force only. Immediately before opening and after force, the path's file key must equal the already open SDS directory. Regular files are opened/created/forced through SDS-relative byte channels. |
-| `FileChannel.open(realDistributionArtifact,READ,NOFOLLOW_LINKS)` | Read-only access to the already-real launcher JAR and its one fixed sibling qualification record. Type, real containment, and file key are checked before and after; the channel computes bytes/checksums and reads the launcher manifest, and never accesses writable instance state. |
+- One process owns a database instance for writing. Competing starts cannot
+  bypass the instance lock, including through an alias of the data directory.
+- Credentials and writable control files are accessible only to their owner,
+  apart from privileged system administrators outside this threat boundary.
+  Inherited permissions must not grant another unprivileged user access.
+- An open, publication, or cleanup acts on the verified object. Symlinks,
+  junctions, reparse points, hard links, case aliases, and namespace changes
+  must not redirect it to an unrelated object or expose credentials.
+- Exclusive publication never overwrites an existing target. Replacement is
+  atomic to readers. A crash leaves an old or new accepted authority, or a
+  recognized incomplete state which the owning recovery protocol can finish.
+- A successful durable publication survives the supported crash and power-loss
+  conditions. File content and every affected namespace change must be durable
+  before success. A failed or indeterminate durability operation retains its
+  error and recovery behavior; visibility alone is not durable success.
+- Shutdown, cancellation, and failure release owned resources and preserve
+  unrelated files and processes. Runtime probes and tests leave no secrets.
 
-All existing-entry opens, reads, and deletes in the writable instance,
-registry, and ready-parent trees use SDS-relative operations;
-`Files.delete`, path-based regular-file open/create, arbitrary path moves, and
-recursive path operations are forbidden. A prospective data-directory leaf
-uses the fixed-component create proof; caller-selected missing intermediate
-components are unsupported. A ready-file leaf requires an existing verified
-`0700` parent. The fixed `$HOME/.river/run/instances` chain may be created one
-fixed component at a time only when `$HOME` or the prior component is already
-verified `0700`; every new parent immediately passes the same proof.
+The planned `RiverDaemonFileSystem` boundary must implement these
+operations using the platform's permission, identity, locking, publication, and
+flush facilities. Reuse River's durable-I/O contracts where they already own
+an operation. Keep OS decisions inside platform adapters, not in transaction,
+WAL, credential, or lifecycle policy. Native calls are permitted behind that
+boundary when supported Java APIs cannot meet a required guarantee; native
+code must pass the same contract and failure tests.
 
-Every regular-file create/open in the writable instance, registry, and
-ready-parent trees, including `instance.lock`, uses
-`SecureDirectoryStream.newByteChannel`. The returned public
-`SeekableByteChannel` must also be a public `FileChannel`; the adapter closes a
-non-`FileChannel` result and returns `FEATURE_NOT_SUPPORTED`. Only after that
-check may it call `FileChannel.force(true)` or, for `instance.lock`,
-`tryLock()`. The scratch capability probe performs both a forced file write and
-an exclusive `tryLock` through SDS-returned `FileChannel` objects before any
-production-state mutation. Provider qualification records and tests cover this
-exact capability; a provider-specific channel cast or reflective force/lock
-substitute is forbidden. The launcher JAR and qualification record are read-only
-distribution artifacts and use only the enumerated path-based
-`FileChannel.open` exception above.
+POSIX modes `0700` for directories and `0600` for files are one implementation
+of owner-only access. They are not a Windows requirement and must not be used
+as proof that an overriding ACL is harmless. Windows uses an owner-restricted
+security descriptor with effective inherited access checked. Each platform
+must prove effective access according to its own permission model.
+`SecureDirectoryStream`, a particular Java channel class, hard-link publication,
+and `FileChannel.force` on a directory are implementation choices, not universal
+admission requirements. Their absence alone cannot justify rejecting a required
+platform. The implementation ticket must specify and test the concrete
+operations which provide each guarantee on that platform before accepting it.
 
-Exclusive file publication is exactly: create, force, and close the immutable stage in
-the destination directory; verify target absence; `createLink`; revalidate the
-parent and source/target identical file keys and checksums; open and force the
-target link; force the destination parent; delete the source name through SDS;
-and force that parent again. The target-link publication is the visibility
-commit. After a crash with both names, recovery accepts only identical file
-keys, canonical bytes, and expected checksum: it re-forces the target and
-same parent, removes the source name, and forces that parent. A
-different file key or byte identity is preserved as `CONFLICT`/`CORRUPTION`.
-The stage and target are always in one parent; cross-parent regular-file link
-and unlink publication is forbidden.
+An adapter must retain a stable object identity and prevent redirection across
+validation and use; a path check followed by an unchecked path operation is
+insufficient. The scope of trusted same-account actors and privileged
+administrators is unchanged. Missing intermediate path components may be
+created only through validated parent ownership and identity. Ready-file,
+registry, and data trees retain the containment and collision rules above.
 
-Atomic replacement similarly stages in the destination parent and forces the
-target and parent after the move. A matching source/target hard-link alias left
-by an interrupted prior exclusive publication follows the alias recovery above;
-any other simultaneous source and destination is preserved. A cross-parent
-fixed-directory move first forces the complete source tree and source parent,
-then performs the atomic move, revalidates both parent file keys and the moved
-directory file key, and forces the moved directory, source parent, and
-destination parent. Same-parent request/receipt rename forces its one parent.
-There is no cross-parent unlink operation: each SDS deletion changes one
-containing parent, which is forced before deletion is durable. No namespace
-change is durable until every affected source and destination parent force
-completes.
+The publication and recovery state machines below remain authoritative.
+Immutable stages belong beside their regular-file targets. Any platform
+implementation must preserve exclusive versus replacement behavior, authority
+ordering, bound stage identity, and safe recovery after interruption. Cross-
+parent directory moves must make changes to both parents durable. A platform
+without a suitable primitive must implement an equivalent recoverable protocol
+in this owner; it must not silently omit a flush, weaken atomicity, or introduce
+a second lifecycle path. References below to force, file keys, owner/mode checks,
+and no-follow operations name these guarantees through the adapter, rather than
+mandating a particular Java or POSIX API.
 
-The runtime scratch probe exercises these APIs, SDS-returned `FileChannel`
-force/lock, existing-target refusal, competing creators, alias recovery,
-replacement visibility, file-key checks, and file/directory forces on the
-selected store. That probe proves only current API behavior, not crash or
-power-loss durability.
+Exclusive-publication recovery accepts a target and leftover stage as aliases
+only when stable object identity, canonical contents, and expected checksum all
+match. Make the target and affected namespace durable before removing the exact
+owned stage, then make that removal durable. Preserve a mismatched or ambiguous
+pair. An implementation which publishes by rename instead must document its
+possible interrupted states and prove the same exclusive-publication outcome;
+it does not create fictitious hard-link states. Recovery never infers ownership
+from a filename alone.
 
-The executable filesystem profile is one immutable canonical record at
-`<distribution-home>/lib/riverd-filesystem-qualification-v1.properties`.
-`distribution-home` is the real parent of the `lib` directory containing the
-real regular launcher JAR identified by `RiverDaemonMain`'s protection-domain
-`file:` code-source URL; any other layout, URL scheme, symlinked record, missing
-record, duplicate record, or changed record is `FEATURE_NOT_SUPPORTED`. The
-record is generated before the launcher JAR, never rewritten in place, and has
-this exact ordered schema:
+### Validation and supported configurations
 
-```text
-format=riverd-filesystem-qualification-v1
-launcher-contract=riverd-v1
-river-version=<distribution-version>
-launcher-jar-name=<single-filename>
-launcher-source-revision=<40-lowercase-hex>
-api-evidence-ticket=tic-95e8
-api-evidence-path=docs/delivery/evidence/tic-95e8-riverd-filesystem-api.json
-power-loss-evidence-ticket=tic-9640
-power-loss-evidence-path=docs/delivery/evidence/tic-9640-riverd-filesystem-power-loss.json
-runtime-jdk-vendor=<canonical-nonempty-java.vendor>
-runtime-jdk-version=<canonical-nonempty-java.version>
-runtime-jdk-runtime-version=<canonical-nonempty-java.runtime.version>
-runtime-nio-provider-class=<canonical-binary-class-name>
-runtime-nio-provider-module=<canonical-module-name>
-runtime-os-name=Linux
-runtime-os-version=<canonical-nonempty-os.version>
-runtime-os-arch=<canonical-nonempty-os.arch>
-runtime-file-store-type=<ext4|xfs>
-runtime-posix-view=true
-runtime-acl-view-supported=<true|false>
-evidence-filesystem-mkfs=<canonical-nonempty-description>
-evidence-device-identity=<canonical-nonempty-description>
-evidence-mount-options=<canonical-nonempty-description>
-evidence-storage-force-barrier-policy=<canonical-nonempty-description>
-evidence-posix-acl-mask-semantics=<canonical-nonempty-description>
-evidence-fault-harness=<canonical-nonempty-name-and-version>
-record-sha256=<64-lowercase-hex>
-```
+`tic-485d` owns the shared operations and APFS implementation; `tic-867d`
+and `tic-b75d` provide the Linux and Windows adapters. `tic-615d` consumes them
+for instance credentials. `tic-95e8` exercises the
+installed distribution's API, permission, publication-race, and process-crash
+behavior on every required platform. `tic-9640` owns power-loss and operational
+qualification across the required filesystem matrix, including the database
+WAL and control-file path as well as launcher files. A working launcher alone
+cannot establish database durability.
 
-Each `canonical-nonempty-*` value is NFC UTF-8 of 1..256 bytes with no NUL,
-CR, LF, `=`, Unicode control, or leading/trailing whitespace; runtime property
-values are otherwise the exact returned strings and receive no case folding.
-`single-filename` is 1..128 ASCII letters, digits, dot, underscore, or hyphen,
-contains no slash or backslash, and is neither `.` nor `..`. Boolean and choice
-fields accept only their displayed lowercase literals. A
-`canonical-binary-class-name` is ASCII `[A-Za-z_$][A-Za-z0-9_$]*` segments
-separated by single dots. `canonical-module-name` is ASCII
-`[A-Za-z][A-Za-z0-9]*` segments separated by single dots. Empty segments and
-every other character are invalid.
+Evidence records the tested source, adapter implementation, JDK/native runtime,
+OS/filesystem, relevant mount and storage settings, and test method. Separate
+runtime-observable capabilities from externally established storage guarantees.
+Runtime checks reject a concrete missing required capability, insecure path, or
+unsupported storage configuration before dependent mutation; they do not infer
+power-loss durability from a successful scratch probe. Network and other
+unqualified filesystems are not implicitly supported by the desktop/server OS
+requirements.
 
-The universal checksum/framing rules below apply and the record is at most
-8192 bytes. The build embeds the record's exact final SHA-256 in the named
-launcher JAR manifest attribute
-`Riverd-Filesystem-Qualification-SHA256`, plus the record's version, contract,
-and source revision in `Implementation-Version`, `Riverd-Launcher-Contract`,
-and `Riverd-Source-Revision`; this one-way record-then-JAR construction has no
-self-referential digest. `tic-95e8` creates the record and JAR and its API
-evidence names the exact record checksum and complete launcher-JAR checksum.
-`tic-9640` runs ADR-0003 unclean-shutdown and power-loss recovery against that
-unchanged pair; its evidence names the same two checksums. Promotion accepts
-the profile only when both tickets are closed, both fixed-path evidence
-artifacts are immutable and accepted, their
-content binds those checksums and every field above, and both acceptance
-commits are ancestors of the promoted source revision. A rebuild with a
-different launcher-JAR byte, record byte, or tuple is a different profile and
-requires new evidence. Before that two-ticket acceptance, executions are
-qualification candidates and no ext4/xfs support is claimed.
+Qualification follows the operation and its relevant platform dependencies.
+Changes to permission, identity, publication, flush, recovery, or those platform
+dependencies require review and affected tests. An unrelated launcher change
+or different JAR checksum does not automatically require repeating the entire
+power-loss campaign. Record why existing evidence remains applicable and test
+the changed path. There is no per-launcher-JAR qualification record or mandatory
+runtime match to a single machine's JDK/kernel/device tuple.
 
-At runtime the launcher bounded-reads and checksum-validates the record through
-the enumerated read-only distribution channel, opens its own real code-source
-JAR through the same operation, requires `launcher-jar-name` to equal that
-code-source path's actual filename, and requires the four manifest attributes
-above to match the record and its checksum. It compares every `runtime-*` field
-using the named Java system property, `Path.getFileSystem().provider()`
-class/module, and public `FileStore` type/view queries. It independently applies
-that observable matcher and the scratch probe
-to the instance, registry, and ready-parent stores; no link/move crosses those
-trees. The `evidence-*` device, mkfs, mount, barrier, ACL-mask semantics, and
-fault-harness fields are evidence-only because public NIO cannot discover them
-and the runtime does not pretend to compare them. Deployment support remains
-conditional on their external exact match to the accepted evidence. A record,
-launcher-manifest binding, runtime-observable tuple, or probe mismatch is
-`FEATURE_NOT_SUPPORTED`; an
-evidence-only deployment mismatch is unsupported even if runtime observation
-passes. There is no best-effort permission, unqualified durability claim, or
-non-POSIX fallback.
+Insufficient capability returns `FEATURE_NOT_SUPPORTED`; insecure ownership,
+access, or path redirection returns `ACCESS_DENIED`. Unintended data/registry/
+ready-path collisions return `INVALID_EXTERNAL_INPUT`. Required platforms must
+have implementations which pass, rather than permanently returning unsupported.
+No weaker-durability or no-authentication mode is introduced.
 
-The runtime checks only the canonical record checksum, actual JAR filename,
-record-to-JAR manifest equality, runtime-observable tuple, and probe. It does
-not treat a self-computed full-JAR digest or a Git lookup as an expected-source
-oracle. The complete launcher-JAR SHA-256, expected source revision, evidence
-content checksums, ticket closure, and acceptance-commit ancestry are build and
-promotion evidence-only checks performed from the trusted repository artifacts
-named above; they are not fields a deployed JVM can independently authenticate.
-
-`--ready-file` uses the same secure-parent/no-follow rules, is created `0600`,
-and is never overwritten. The fixed per-user registry is
-`$HOME/.river/run/instances`, mode `0700`, with `0600` records. Apart from the
-instance tree, that registry, and an explicit ready file, `riverd` writes
-nothing. Paths containing NUL, CR, LF, `=`, or another Unicode control
-character are rejected; version 1 has no encoding alternative.
+`--ready-file` uses the same owner-only, verified-parent rules and is never
+overwritten. The per-user registry is `.river/run/instances` under the resolved
+user home, with owner-only directories and records. `$HOME` in this ADR denotes
+that platform's user home, not a required environment variable. Path parsing,
+normalization, containment, and identity checks must cover Windows drive paths,
+separators, case aliases, and reparse points as well as Unix paths. Apart from
+the instance tree, registry, and explicit ready file, `riverd` writes nothing.
+Paths containing NUL, CR, LF, `=`, or another Unicode control character are
+rejected; version 1 has no encoding alternative.
 
 Every launcher-owned persistent properties schema in this ADR is canonical UTF-8 in the
 declared order, with no BOM, CR, blank line, comment, duplicate or unknown key,
@@ -515,7 +455,7 @@ is permitted during recovery.
 | Bootstrap authoritative, namespace absent or empty | Recreate the one recorded namespace and resume step 3 with the recorded incarnation/nonce. |
 | A staged child is partial, no corresponding final child | Validate its bootstrap identity; remove/recreate only that child, force its parent, and resume. |
 | Exactly the ordered prefix of `database`, `security`, and `audit` is final | Validate the prefix and remaining staged identities, then perform only the next rename and force. |
-| Bound `.instance-<nonce>.stage` exists in `DATADIR` but is partial/noncanonical, instance target absent | Only when the canonical bootstrap binds that exact direct-child name and nonce and all three final children validate: require one owner/mode-correct regular file, no other direct child in that verified parent with its file key, and one unchanged non-null file key across no-follow lookup, SDS open/read, parent scan, and immediate pre-remove lookup. Remove only that exact name through the `DATADIR` SDS, force `DATADIR`, and recreate step 5. An unbound name, alias, symlink/special/wrong-type object, or missing/changed/null file key is preserved as `CONFLICT`/`CORRUPTION`. |
+| Bound `.instance-<nonce>.stage` exists in `DATADIR` but is partial/noncanonical, instance target absent | Only when the canonical bootstrap binds that exact direct-child name and nonce and all three final children validate: require one owner/mode-correct regular file, no other direct child in that verified parent with its file key, and one unchanged non-null file key across no-follow lookup, adapter open/read, parent scan, and immediate pre-remove lookup. Remove only that exact name through the verified `DATADIR` handle, force `DATADIR`, and recreate step 5. An unbound name, alias, symlink/special/wrong-type object, or missing/changed/null file key is preserved as `CONFLICT`/`CORRUPTION`. |
 | Bound `.instance-<nonce>.stage` is complete in `DATADIR`, instance target absent | Revalidate all three final children, then same-parent publish/force the recorded instance authority. |
 | Instance target is complete but its matching `.instance-<nonce>.stage` alias or last directory force remains | Apply same-parent alias recovery if needed, revalidate all final bytes and identities, and repeat the idempotent `DATADIR` force before treating authority as committed. |
 | Instance authority is committed and bootstrap/namespace remains | Validate authority and remove only matching bootstrap/stage residue, then force `DATADIR`. |
@@ -863,7 +803,7 @@ canonical checksums to a process proved absent; the ready file must
 be a canonical `riverd-ready-v1` record with the same incarnation, owner nonce,
 PID, runtime path, and client path; and any registry record must match that same
 owner. After revalidating the external ready parent and target file key, start
-deletes that exact ready file through its SDS and forces its parent, then removes
+deletes that exact ready file through its verified parent handle and forces its parent, then removes
 and forces only the matching registry/runtime records. It may then publish a
 new runtime/ready generation. A missing binding, live/unverifiable process,
 checksum mismatch, different file key, different target contents, or unrelated
@@ -879,14 +819,14 @@ record, ready file or stdout commitment. The
 shutdown hook is installed after database ownership. Startup failure and
 shutdown release in reverse order except that the listener always closes
 before the database. One idempotent lifecycle owner serves normal close,
-SIGINT, SIGTERM delivered directly to the foreground server process, and the
+Unix SIGINT/SIGTERM, Windows console shutdown, and the
 cooperative request below; it reports both close statuses, preserves the first
 fatal outcome, removes only matching readiness/runtime/registry/control
 records, and never deletes database/identity/security/audit data.
 
 `riverd stop` never signals a PID, calls `ProcessHandle.destroy`, acquires or
 steals the live lock, or selects a process by an identifier that can be reused.
-Before creating a stage it SDS-scans the direct instance-root control names:
+Before creating a stage it scans through the verified parent handle the direct instance-root control names:
 the fixed `stop.request`, every `.stop-request-<nonce>.stage`, and every
 `.stop-accepted-<nonce>`. One canonical accepted receipt bound to the instance
 and currently contended lock owner is joined immediately even if shutdown has
@@ -928,7 +868,7 @@ lifecycle-control thread checks this fixed file before readiness and at least
 every 100 milliseconds while serving. It validates checksum, incarnation,
 owner nonce, and runtime checksum, then atomically renames it without overwrite
 to `.stop-accepted-<request-nonce>`, forces `DATADIR`, and only then invokes the
-same idempotent listener-first lifecycle used by a direct SIGINT/SIGTERM.
+same idempotent listener-first lifecycle used by a direct platform shutdown (Unix SIGINT/SIGTERM or Windows console shutdown).
 
 Concurrent and repeated operations are deterministic. An exact retry joins its
 recorded nonce. If another CLI has already published a valid request for the
@@ -1093,7 +1033,7 @@ the archive. Renewal performs these exact durable steps:
    the target and `security/`, unlinks the stage, and forces `security/` again.
    This is the intent commit; no transaction namespace exists before it.
 2. It creates the exact namespace named by the intent, revalidates it through
-   SDS, and forces `security/`.
+   handle, and forces `security/`.
 3. It creates the archive staging directory, copies and validates the public
    certificate, derives the public manifest, forces both files and the staging
    directory, atomically renames it without overwrite to the final archive,
@@ -1137,7 +1077,7 @@ its selected endpoint.
 | Final public archive exists | Old authority; validate its name, manifest digest, certificate, and both directory forces, then resume new-generation construction. |
 | `new-generation` is incomplete in the transaction namespace | Old authority; remove/recreate only that matching staged generation and resume step 4. |
 | Final `generations/<new>` exists, old security authority remains | Old authority; validate the new generation and archive, then resume manifest staging; never authenticate with new yet. |
-| Intent-bound `.security-<nonce>.stage` exists beside the old authority but is partial/noncanonical | Only when the canonical intent binds that exact direct-child name/nonce, the old target still matches `old-security-record-sha256`, and the archive/new-generation prefix validates: require one owner/mode-correct regular file, no other direct child in that verified parent with its file key, and one unchanged non-null file key across no-follow lookup, SDS open/read, `security/` scan, and immediate pre-remove lookup. Remove only that exact name through the `security/` SDS, force `security/`, and recreate step 5. An unbound name, alias, symlink/special/wrong-type object, or missing/changed/null file key is preserved as `CONFLICT`/`CORRUPTION`. |
+| Intent-bound `.security-<nonce>.stage` exists beside the old authority but is partial/noncanonical | Only when the canonical intent binds that exact direct-child name/nonce, the old target still matches `old-security-record-sha256`, and the archive/new-generation prefix validates: require one owner/mode-correct regular file, no other direct child in that verified parent with its file key, and one unchanged non-null file key across no-follow lookup, adapter open/read, `security/` scan, and immediate pre-remove lookup. Remove only that exact name through the verified `security/` handle, force `security/`, and recreate step 5. An unbound name, alias, symlink/special/wrong-type object, or missing/changed/null file key is preserved as `CONFLICT`/`CORRUPTION`. |
 | Bound `.security-<nonce>.stage` is complete beside the old authority | Old authority; revalidate all inputs and perform only the same-parent replacement and directory force. |
 | New security target is visible but its directory force may have crashed | New authority after complete validation; repeat the idempotent `security/` force, then perform only old-secret deletion. |
 | New authority is durable, any old secret, namespace, or intent remains and no security stage exists | New authority; before listener bind, unlink only matching old files, force every affected directory, remove/force the exact namespace, then remove/force the intent last. Any security-stage name after authority replacement is impossible state and is preserved. |
@@ -1169,7 +1109,7 @@ interval and names this stopped-instance command.
 
 | Owner | Responsibility and delivery |
 | --- | --- |
-| `river-server-app` | Identity, credentials, filesystem proof, command/lifecycle composition, resource plan, readiness, runtime/registry, archive/renew operations. `tic-615d` creates this non-empty module with identity/security/config production code; `tic-ec50` adds the installed application and complete composition. |
+| `river-server-app` | Identity, credentials, filesystem-policy composition, command/lifecycle composition, resource plan, readiness, runtime/registry, archive/renew operations. `tic-615d` creates this non-empty module with identity/security/config production code; `tic-ec50` adds the installed application and complete composition. |
 | `river-server` | Authenticated TLS listener, canonical authentication/authorization/audit admission, connection and shutdown behavior; never concrete engine composition. `tic-72ea` replaces audit persistence. |
 | `river-client` | One bounded client-configuration parser and pinned authenticated connector. |
 | `river-jdbc` / `river-cli` | Public adapters over `river-client`; no duplicate trust/config parser and no optional plain path. |
@@ -1243,8 +1183,9 @@ included in those deferrals.
 
 ## Consequences
 
-The first riverd is intentionally strict: unsupported host filesystems do not
-receive weaker security, accepted corrupt state is preserved rather than
+The first riverd must support macOS/APFS, Linux/ext4/XFS, and Windows/NTFS
+with the same security and durability guarantees. Unsupported storage
+configurations do not receive weaker security, accepted corrupt state is preserved rather than
 repaired, credential expiry requires an explicit offline rotation, and audit
 exhaustion stops admission before effects. In return, a process/file consumer
 has one non-secret discovery contract and River owns one authenticated remote

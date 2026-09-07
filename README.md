@@ -78,7 +78,9 @@ The main sources for these limits are
 
 ## What remains unfinished
 
-River still needs a supported standalone `riverd` service. Applications must
+River still needs a supported standalone `riverd` service. Its required platforms
+are macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS. These are delivery
+requirements; the standalone server is not yet implemented. Applications must
 currently own database startup and shutdown. Backup and restore are offline;
 replication, failover, and online schema migration are not available.
 
