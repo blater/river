@@ -173,3 +173,9 @@ fixture rewrite separately; concurrency/retention rewrites separately. Each
 slice runs the affected tests, preserves its named survivor coverage, and
 records before/after timings only where runtime is the objective. No test-count
 reduction quota, new coverage framework, or broad test-suite rewrite is needed.
+
+## Implemented follow-ups
+
+The accepted cleanup, sort fixture, kernel tests and build-check slices are
+implemented. See the [delivery results](2026-09-07-test-streamlining.md) for
+preserved coverage, measured runtime and the combined validation outcome.

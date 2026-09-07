@@ -1,12 +1,13 @@
 ---
 id: tic-855a
-status: in_progress
+status: closed
 type: task
 priority: 2
 assignee: blater
 delivery: code
 base-commit: 5627543e624ac5a22d35e940e1f8bf6cf506b325
 branch: ticket/tic-855a-test-kernel
+delivered-commit: da09f0156173bf3c9e8a92f858aea003a729524a
 tags:
     - testing
     - maintenance
@@ -54,3 +55,5 @@ io.riverdb.engine.table.IndexedTableTest`. Corrected run: 32s, transaction tests
 reused their passing first-run result. Logs: `kernel.log` and
 `kernel-corrected.log` in `/private/tmp/river-test-streamline-evidence-20260907/`.
 No production code changed.
+
+Combined clean validation and integration evidence: [test streamlining delivery](../delivery/evidence/2026-09-07-test-streamlining.md).
