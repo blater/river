@@ -45,7 +45,11 @@ Decision and attribution:
 ### 2026-09-07 separate build and TPS host ownership (`tic-d7c2`)
 
 Accepted for diagnostic evidence correctness; no database or workload change
-and no throughput claim. Candidate: `bcc15a6db7baab4027654eb63bb26b4a9519bb9f`,
+and no throughput claim. Pushed integration `bb4d88a59cfa5004fbaa5c497f720e48e394e209`
+is tagged `perf-checkpoint-20260907-invocation-host-ownership`. The exact merged
+make and three-second smoke passed (139.667 TPS, zero retries/errors, passing
+invariants/cleanup and qualified receipt); this shorter smoke is not a matched
+performance comparison. Candidate: `bcc15a6db7baab4027654eb63bb26b4a9519bb9f`,
 from pushed `e470a5d` (the documentation closure of
 `perf-checkpoint-20260907-prebuilt-tps-provenance`). Separate make and TPS
 invocations acquire one canonical cooperative lease, retain bounded boundary

@@ -1,12 +1,16 @@
 ---
 id: tic-d7c2
-status: in_progress
-base-commit: e470a5d962bc5f0ad431be544661e3e46b97c871
-branch: ticket/tic-d7c2-invocation-host-ownership
+status: closed
 type: story
 assignee: blater
 parent: tic-5db4
 delivery: code
+base-commit: e470a5d962bc5f0ad431be544661e3e46b97c871
+branch: ticket/tic-d7c2-invocation-host-ownership
+delivered-commit: bb4d88a59cfa5004fbaa5c497f720e48e394e209
+checkpoint-tag: perf-checkpoint-20260907-invocation-host-ownership
+evidence:
+    - /private/tmp/river-tic-d7c2-evidence-20260907
 tags:
     - performance
     - tpcc
@@ -270,3 +274,11 @@ Accepted as required diagnostic correctness, with no observed repeated short-run
 regression and no speedup claim. Raw evidence is
 `/private/tmp/river-tic-d7c2-evidence-20260907`; failed development attempts are
 retained separately. Integration and push remain required before closure.
+
+## Promotion
+
+Merged and pushed as `bb4d88a59cfa5004fbaa5c497f720e48e394e209`, tagged
+`perf-checkpoint-20260907-invocation-host-ownership`. The exact merged build
+and three-second TPS smoke passed with zero retries/errors, successful
+invariants and cleanup, and a qualified/released canonical receipt. The smoke
+is a correctness check, not a matched performance sample.
