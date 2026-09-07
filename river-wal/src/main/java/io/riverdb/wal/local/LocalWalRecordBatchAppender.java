@@ -78,7 +78,7 @@ final class LocalWalRecordBatchAppender {
     if (stream == null ? wal.hasOpenLogicalStream() : !wal.ownsLogicalStream(stream)) {
       return StatusCode.CONFLICT;
     }
-    if (wal.hasActiveReservation() || wal.hasForcedBatch()) return StatusCode.CONFLICT;
+    if (wal.hasActiveReservation() || wal.hasRetainedForceTarget()) return StatusCode.CONFLICT;
     if (finalBatch && !wal.validDecisionForAppend(transactionId, commitSequence, 1)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

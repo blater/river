@@ -473,6 +473,23 @@ final class IndexedGroupCommitFaultTest {
   }
 
   @Test
+  void mismatchedForceRangeCannotAcknowledgeTheRetainedCohort() {
+    ForcedGroupFixture fixture = new ForcedGroupFixture();
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertTrue(fixture.batch.publishPrepared(2));
+    // Inject a broken writer-ownership boundary between cohort append and force.
+    var reservation = new io.riverdb.wal.local.LocalWalReservation();
+    assertEquals(StatusCode.OK, fixture.wal.reserve(0, reservation));
+    assertEquals(StatusCode.OK, fixture.wal.appendUnforced(
+        reservation, 0, 0, 0, 7, 1, new io.riverdb.wal.local.LocalWalAppendResult()));
+    assertFalse(fixture.firstRequest.outcome.isAvailable());
+    fixture.batch.completeDurability(2);
+    fixture.complete(StatusCode.INVARIANT_BROKEN);
+    fixture.assertTerminalFailure();
+    assertEquals(StatusCode.OK, fixture.wal.close());
+  }
+
+  @Test
   void forcedGroupPreparationFailureTerminalizesFencesAndRecoversExactlyOnce() {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
     assertTrue(fixture.batch.appendSharedGroup(2));

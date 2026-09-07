@@ -40,7 +40,7 @@ import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalAppendResult;
-import io.riverdb.wal.local.LocalWalForceResult;
+import io.riverdb.wal.local.LocalWalForceTarget;
 import io.riverdb.wal.local.LocalWalGroupAppendResult;
 import io.riverdb.wal.local.LocalWalLogicalStream;
 import io.riverdb.wal.local.LocalWalOpenResult;
@@ -569,8 +569,9 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(wal.appendLogicalStreamContinuation(
         stream, new PrefixBatch(interrupted, interrupted.recordCount() - 1), appended));
     long interruptedStart = appended.startOffset();
-    requireOk(wal.forceLogicalStreamBatch(stream, new LocalWalForceResult()));
-    requireOk(wal.releaseLogicalStreamBatch(stream));
+    LocalWalForceTarget target = new LocalWalForceTarget();
+    requireOk(wal.forceLogicalStreamBatch(stream, target));
+    requireOk(wal.releaseLogicalStreamBatch(stream, target, target.token()));
     crashWal(wal);
     requireOk(directory.close());
 
@@ -650,8 +651,9 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(primary.appendLogicalStreamContinuation(
         stream, new PrefixBatch(interrupted, interrupted.recordCount() - 1),
         new LocalWalGroupAppendResult()));
-    requireOk(primary.forceLogicalStreamBatch(stream, new LocalWalForceResult()));
-    requireOk(primary.releaseLogicalStreamBatch(stream));
+    LocalWalForceTarget target = new LocalWalForceTarget();
+    requireOk(primary.forceLogicalStreamBatch(stream, target));
+    requireOk(primary.releaseLogicalStreamBatch(stream, target, target.token()));
     crashWal(primary);
     crashWal(followerOne);
     crashWal(followerTwo);

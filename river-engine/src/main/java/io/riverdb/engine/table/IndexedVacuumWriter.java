@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalForceCause;
-import io.riverdb.wal.local.LocalWalForceResult;
+import io.riverdb.wal.local.LocalWalForceTarget;
 import io.riverdb.wal.local.LocalWalForcedCursor;
 import io.riverdb.wal.local.LocalWalGroupAppendResult;
 import io.riverdb.wal.local.LocalWalLogicalStream;
@@ -13,7 +13,7 @@ import io.riverdb.wal.local.LocalWalReadResult;
 /** Streams and applies one atomically decided indexed-vacuum WAL operation. */
 final class IndexedVacuumWriter {
   private final LocalWalGroupAppendResult appendResult = new LocalWalGroupAppendResult();
-  private final LocalWalForceResult forceResult = new LocalWalForceResult();
+  private final LocalWalForceTarget forceTarget = new LocalWalForceTarget();
   private final LocalWalLogicalStream stream = new LocalWalLogicalStream();
   private final LocalWalReadResult readResult = new LocalWalReadResult();
   private final LocalWalForcedCursor forcedCursor = new LocalWalForcedCursor();
@@ -111,14 +111,17 @@ final class IndexedVacuumWriter {
       if (!status.isOk()) return status;
       appended = true;
       status = wal.forceLogicalStreamBatch(
-          stream, forceResult, LocalWalForceCause.RECOVERY_MAINTENANCE);
-      if (status.isOk() && finalBatch) decisionDurable = true;
-      if (status.isOk()) {
-        status = applyForcedBatch(
-            appendResult.startOffset(), lastCommitSequence, generation);
-      }
+          stream, forceTarget, LocalWalForceCause.RECOVERY_MAINTENANCE);
       if (!status.isOk()) return status;
-      status = wal.releaseLogicalStreamBatch(stream);
+      if (!forceTarget.matchesAppend(appendResult)
+          || finalBatch && forceTarget.commitSequence() != commitSequence) {
+        return StatusCode.INVARIANT_BROKEN;
+      }
+      long forceToken = forceTarget.token();
+      if (finalBatch) decisionDurable = true;
+      status = applyForcedBatch(forceToken, lastCommitSequence, generation);
+      if (!status.isOk()) return status;
+      status = wal.releaseLogicalStreamBatch(stream, forceTarget, forceToken);
       if (!status.isOk()) return status;
       if (finalBatch) return StatusCode.OK;
       firstChunk++;
@@ -127,12 +130,12 @@ final class IndexedVacuumWriter {
   }
 
   private StatusCode applyForcedBatch(
-      long start,
+      long forceToken,
       long lastCommitSequence,
       WalGeneration generation) {
-    long recordStart = start;
-    StatusCode status = wal.openForcedCursor(forcedCursor);
-    for (long record = 0; status.isOk() && record < forceResult.recordCount(); record++) {
+    long recordStart = forceTarget.startOffset();
+    StatusCode status = wal.openForcedCursor(forceTarget, forceToken, forcedCursor);
+    for (long record = 0; status.isOk() && record < forceTarget.recordCount(); record++) {
       status = forcedCursor.next(readResult);
       if (status.isOk()) {
         status = recovery.applyOperation(

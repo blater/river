@@ -1,6 +1,7 @@
 package io.riverdb.wal.local;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
@@ -40,7 +41,7 @@ final class DurableWalQuorumTest {
 
     appendUnforced(primary.wal, 17, 1, 101);
     appendUnforced(primary.wal, 19, 2, 103);
-    LocalWalForceResult force = new LocalWalForceResult();
+    LocalWalForceTarget force = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, primary.wal.forcePending(force));
     assertEquals(2, force.recordCount());
     assertEquals(2, primary.wal.requiredDurableNodeCount());
@@ -52,7 +53,7 @@ final class DurableWalQuorumTest {
     assertEquals(followerTwoForces + 1, followerTwo.counters.forceCalls());
     assertEquals(primary.wal.durableEnd(), followerOne.wal.durableEnd());
     assertEquals(primary.wal.durableEnd(), followerTwo.wal.durableEnd());
-    assertEquals(StatusCode.OK, primary.wal.releaseForcedBatch());
+    assertEquals(StatusCode.OK, primary.wal.releaseForcedBatch(force, force.token()));
 
     long firstRecord = 64;
     close(primary);
@@ -86,19 +87,26 @@ final class DurableWalQuorumTest {
     assertEquals(StatusCode.CONFLICT,
         primary.wal.reserve(1, new LocalWalReservation()));
     LocalWalGroupAppendResult append = new LocalWalGroupAppendResult();
-    LocalWalForceResult force = new LocalWalForceResult();
+    LocalWalForceTarget force = new LocalWalForceTarget();
     assertEquals(StatusCode.OK,
         primary.wal.appendLogicalStreamContinuation(
             stream, new LongBatch(211, 223), append));
     assertEquals(StatusCode.OK, primary.wal.forceLogicalStreamBatch(stream, force));
-    assertEquals(StatusCode.OK, primary.wal.releaseLogicalStreamBatch(stream));
+    assertEquals(0, force.commitSequence());
+    assertTrue(force.durabilityComplete());
+    long continuationToken = force.token();
+    assertEquals(StatusCode.OK,
+        primary.wal.releaseLogicalStreamBatch(stream, force, continuationToken));
     assertEquals(true, stream.isActive());
 
     assertEquals(StatusCode.OK,
         primary.wal.appendLogicalStreamFinal(
             stream, new LongBatch(227, 229), 7, append));
     assertEquals(StatusCode.OK, primary.wal.forceLogicalStreamBatch(stream, force));
-    assertEquals(StatusCode.OK, primary.wal.releaseLogicalStreamBatch(stream));
+    assertEquals(StatusCode.CONFLICT,
+        primary.wal.releaseLogicalStreamBatch(stream, force, continuationToken));
+    assertEquals(StatusCode.OK,
+        primary.wal.releaseLogicalStreamBatch(stream, force, force.token()));
     assertEquals(false, stream.isActive());
     assertEquals(7, primary.wal.quorumDurableCommitSequence());
     assertEquals(primary.wal.tailEnd(), followerOne.wal.tailEnd());
@@ -161,11 +169,16 @@ final class DurableWalQuorumTest {
     assertEquals(StatusCode.OK, followerOne.wal.close());
     assertEquals(StatusCode.OK, followerTwo.wal.close());
 
-    LocalWalReservation reservation = reserve(primary.wal, 109);
-    assertEquals(
-        StatusCode.FENCED,
-        primary.wal.publish(
-            reservation, 29, 1, 1, 5, 1, new LocalWalAppendResult()));
+    appendUnforced(primary.wal, 29, 1, 109);
+    LocalWalForceTarget target = new LocalWalForceTarget();
+    assertEquals(StatusCode.FENCED, primary.wal.forcePending(target));
+    assertTrue(target.locallyForced());
+    assertFalse(target.durabilityComplete());
+    assertEquals(target.endOffset(), primary.wal.durableEnd());
+    assertEquals(1, primary.wal.currentCommitSequence());
+    assertEquals(0, primary.wal.quorumDurableCommitSequence());
+    assertEquals(StatusCode.CONFLICT, target.reset());
+    assertEquals(StatusCode.FENCED, primary.wal.releaseForcedBatch(target, target.token()));
     assertEquals(1, primary.wal.availableDurableNodeCount());
     assertEquals(StatusCode.FENCED, primary.wal.reserve(1, new LocalWalReservation()));
     assertEquals(StatusCode.OK, primary.wal.close());

@@ -25,7 +25,7 @@ final class LocalWalRotator {
         || wal.hasOpenLogicalStream()
         || wal.hasActiveReservation()
         || wal.hasPendingRecords()
-        || wal.hasForcedBatch()) {
+        || wal.hasRetainedForceTarget()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     LocalWalOpenResult opened = new LocalWalOpenResult();

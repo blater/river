@@ -10,8 +10,8 @@ final class DurableWalLogicalStreams {
       new LocalWalLogicalStream[DurableWalQuorum.MAXIMUM_FOLLOWERS];
   private final LocalWalGroupAppendResult[] appendResults =
       new LocalWalGroupAppendResult[DurableWalQuorum.MAXIMUM_FOLLOWERS];
-  private final LocalWalForceResult[] forceResults =
-      new LocalWalForceResult[DurableWalQuorum.MAXIMUM_FOLLOWERS];
+  private final LocalWalForceTarget[] forceTargets =
+      new LocalWalForceTarget[DurableWalQuorum.MAXIMUM_FOLLOWERS];
   private final LocalWalReadResult read = new LocalWalReadResult();
   private final LocalWalForcedCursor cursor = new LocalWalForcedCursor();
   private final CopiedRecord copied = new CopiedRecord();
@@ -25,7 +25,7 @@ final class DurableWalLogicalStreams {
     for (int index = 0; index < owner.followerCount(); index++) {
       streams[index] = new LocalWalLogicalStream();
       appendResults[index] = new LocalWalGroupAppendResult();
-      forceResults[index] = new LocalWalForceResult();
+      forceTargets[index] = new LocalWalForceTarget();
     }
   }
 
@@ -45,11 +45,12 @@ final class DurableWalLogicalStreams {
   }
 
   StatusCode replicate(
-      LocalWal primary, long recordCount, LocalWalForceCause cause) {
+      LocalWal primary, LocalWalForceTarget forceTarget, LocalWalForceCause cause) {
+    long recordCount = forceTarget.recordCount();
     if (quorum.fenced() || primary == null || recordCount <= 0) {
       return StatusCode.FENCED;
     }
-    StatusCode status = primary.openForcedCursor(cursor);
+    StatusCode status = primary.openForcedCursor(forceTarget, forceTarget.token(), cursor);
     long payloadBytes = 0;
     boolean finalBatch = false;
     for (long record = 0; status.isOk() && record < recordCount; record++) {
@@ -86,7 +87,7 @@ final class DurableWalLogicalStreams {
     }
     cursor.reset();
     if (!status.isOk()) return quorum.fence(status);
-    return forceFollowers(primary, cause, payloadBytes, finalBatch);
+    return forceFollowers(forceTarget.commitSequence(), cause, payloadBytes, finalBatch);
   }
 
   StatusCode cancel() {
@@ -108,7 +109,7 @@ final class DurableWalLogicalStreams {
   }
 
   private StatusCode forceFollowers(
-      LocalWal primary,
+      long commitSequence,
       LocalWalForceCause cause,
       long payloadBytes,
       boolean finalBatch) {
@@ -117,8 +118,11 @@ final class DurableWalLogicalStreams {
       if (!quorum.followerAvailable(follower)) continue;
       LocalWal target = quorum.follower(follower);
       StatusCode status = target.forceLogicalStreamBatch(
-          streams[follower], forceResults[follower], cause);
-      if (status.isOk()) status = target.releaseLogicalStreamBatch(streams[follower]);
+          streams[follower], forceTargets[follower], cause);
+      if (status.isOk()) {
+        status = target.releaseLogicalStreamBatch(
+            streams[follower], forceTargets[follower], forceTargets[follower].token());
+      }
       if (!status.isOk()) {
         retireAndFence(follower);
       } else {
@@ -133,7 +137,7 @@ final class DurableWalLogicalStreams {
         }
       }
     }
-    return quorum.acceptLogicalDurability(durableNodes, primary.currentCommitSequence());
+    return quorum.acceptLogicalDurability(durableNodes, commitSequence);
   }
 
   private void retireAndFence(int follower) {

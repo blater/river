@@ -236,7 +236,7 @@ val localWalPackage = "io.riverdb.wal.local"
 val localWalDescriptor = "Lio/riverdb/wal/local/LocalWal;"
 val localWalReservationDescriptor = "Lio/riverdb/wal/local/LocalWalReservation;"
 val localWalAppendResultDescriptor = "Lio/riverdb/wal/local/LocalWalAppendResult;"
-val localWalForceResultDescriptor = "Lio/riverdb/wal/local/LocalWalForceResult;"
+val localWalForceTargetDescriptor = "Lio/riverdb/wal/local/LocalWalForceTarget;"
 val localWalReadResultDescriptor = "Lio/riverdb/wal/local/LocalWalReadResult;"
 val walRecordHeaderDescriptor = "Lio/riverdb/format/wal/WalRecordHeader;"
 val databaseIncarnationDescriptor = "Lio/riverdb/base/id/DatabaseIncarnation;"
@@ -380,22 +380,24 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "$localWalPackage.LocalWal",
     "forcePending",
-    "($localWalForceResultDescriptor)$statusCodeDescriptor"
+    "($localWalForceTargetDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "$localWalPackage.DurableWalQuorum",
     "replicateForcedBatch",
-    "(${localWalDescriptor}I)$statusCodeDescriptor"
+    "($localWalDescriptor$localWalForceTargetDescriptor"
+        + "Lio/riverdb/wal/local/LocalWalForceCause;)$statusCodeDescriptor"
   ),
   hotMethod(
     "$localWalPackage.LocalWal",
-    "readForcedRecord",
-    "(I$localWalReadResultDescriptor)$statusCodeDescriptor"
+    "openForcedCursor",
+    "(${localWalForceTargetDescriptor}JLio/riverdb/wal/local/LocalWalForcedCursor;)"
+        + statusCodeDescriptor
   ),
   hotMethod(
     "$localWalPackage.LocalWal",
     "releaseForcedBatch",
-    "()$statusCodeDescriptor"
+    "(${localWalForceTargetDescriptor}J)$statusCodeDescriptor"
   ),
   hotMethod(
     "$localWalPackage.LocalWal",
