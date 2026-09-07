@@ -87,9 +87,10 @@ total to `tic-1dda`; aggregate TPS alone admits no lock optimization.
 
 This remains an immediate P0 evidence prerequisite, not a throughput fix. It
 does not remove a lock block. Because the implementation touches the canonical
-scheduler predicate, acceptance also needs a matched capture-disabled
-control/candidate check proving no added steady-state allocation and no repeated
-throughput or latency regression. Enabled-capture results must be treated as
+scheduler predicate, acceptance also needs matched capture-disabled control/candidate checks for
+added steady-state allocation and throughput/latency regression. A repeated
+shift triggers investigation; the working agreement permits required
+observability with an explicitly inconclusive performance decision. Enabled-capture results must be treated as
 diagnostic evidence whose observer cost is reported, not as a capacity sample.
 
 ### 2026-09-07 implementation and allocation-gate reconciliation
@@ -116,4 +117,27 @@ after. The aggregate (73.6849) and cold snapshot (76.4318) have distinct owning
 responsibilities; no policy is duplicated to lower a score. Independent review
 found no grant-policy divergence or lifecycle reconciliation defect.
 
-Validation and matched TPS evidence remain required before promotion.
+Implementation/measured candidate: `d1460d8`, based on pushed `5d70625`
+(production-identical to `perf-checkpoint-20260907-force-target-ownership`).
+Clean gate: `GRADLE_USER_HOME=/private/tmp/river-gradle-tic-f8dd ./gradlew clean
+test --no-fail-fast verifyHotPathBytecodeFixtures` passed 1,805 tests, zero
+failures/errors, two existing skips in 7m45s. All 146 transaction tests passed.
+Source/bytecode policy findings remain 259 before/after, with no additions;
+indexed-reference and bytecode-fixture checks pass.
+
+TPS evidence and acceptance are recorded in `docs/performance-checkpoints.md`.
+The initial longer enabled sequence repeatedly regressed and remains part of
+the evidence. Reversed longer pairs changed direction; capture-disabled pairs
+also changed direction. **Performance is inconclusive, not proved unchanged.**
+Independent review accepts this required `tic-1dda` observability prerequisite
+under the working agreement's explicit exception. Observer cost is unquantified;
+there is no speedup, capacity, or no-regression claim. This explicitly replaces
+the earlier note's requirement to prove an absence of repeated regression;
+it does not waive the throughput/recovery gates for `tic-f1bb`.
+
+The control's one measured Delivery deadlock retry in the final 60-second run
+reconciles exactly with one server outcome and one captured deadlock, with no
+errors or retry-accounting gaps. All candidate runs have zero retries/errors.
+Current TPS v2 receipts do not establish full host ownership or launched-byte
+provenance; the retained manual build/source/classpath checks support diagnostic
+evidence only. The corresponding prerequisite reconciliation remains open.

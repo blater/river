@@ -42,6 +42,108 @@ Decision and attribution:
 
 ## Checkpoints
 
+
+### 2026-09-07 causal lock-block aggregates (`tic-af29`)
+
+**Required observability; performance inconclusive.** Candidate `d1460d8`
+adds one bounded 432-bucket phase aggregate through the canonical scheduler
+predicate, without changing grant policy, lock lifetime, durability, or the
+workload. `tic-8e74` retains ownership of the snapshot-registry cleanup gauge.
+Base `5d70625` is production-identical to pushed tagged integration `195c641`
+(`perf-checkpoint-20260907-force-target-ownership`).
+
+Independent concurrency and performance review accepted the preserved release
+and fairness invariants, enabled/disabled release-order tests, revoked handoffs,
+quiescent capture retry/reset/close, exact bucket/disposition reconciliation,
+and overflow rejection. Clean full `./gradlew clean test --no-fail-fast
+verifyHotPathBytecodeFixtures` with
+`GRADLE_USER_HOME=/private/tmp/river-gradle-tic-f8dd` passed **1,805 tests, zero
+failures/errors, two existing skips**, in 7m45s. This includes all 146 transaction
+tests. Source/bytecode findings remain **259 → 259, zero added**;
+indexed-reference and bytecode-fixture checks pass.
+
+Slopmark touched-file review: TransactionManager 159.851 → 160.306;
+LockExactTable 87.5097 → 90.2038; admission 31.6231 → 38.3106;
+LockManager 10 → 10.7039; conflicts 25 unchanged. New grant-decision owner
+101.8, aggregate 73.6849, cold snapshot 76.4318. Scheduler and remaining touched
+adapters/lifecycle files score zero before/after. These are accepted ownership
+boundaries, not a numeric complexity improvement. No policy was scattered to
+reduce the score.
+
+Both lock allocation modes preserve the existing **≤512-byte allowance over
+10,000 measured rounds after 1,000 warmup rounds**, with unchanged resources.
+Exploratory failures are retained: 152 bytes under an exact-zero assertion and
+roughly 7.2 KB under the bounded assertion. JFR traced the larger failure to
+optional `TransactionGroupCompletionTimings` class loading through existing
+null-timing cleanup. Resolving that type in test setup makes the full suite
+pass without changing the allowance or production. Bytecode inspection finds
+only fixed aggregate/snapshot constructor arrays, with no classifier allocation
+or clock-read sites. The measured gate is bounded evidence, not literal zero.
+
+All runs used tiny/standard, 10 terminals, one warehouse, seed 42, serializable,
+no-wait-stress, synchronous WAL, 32 maximum attempts and the same resource
+budgets. TPS JVM was pinned to OpenJDK **26.0.2.1** at
+`/opt/homebrew/Cellar/openjdk/26.0.2.1/libexec/openjdk.jdk/Contents/Home/bin/java`;
+build/test toolchain remains GraalVM 25.0.4. `./make.sh` prepared the runtime before
+workloads. Standard command was `tools/tps-test.sh --seed=42
+--warmup-seconds=W --measured-seconds=D --output-dir=ARTIFACT`.
+
+Individual committed TPS samples, in execution order within each series:
+
+| Series | Warmup/measure | Samples (A control, B candidate) |
+| --- | --- | --- |
+| Standard enabled, before edits | 1s/10s | A 164.800, A 156.700 |
+| Standard enabled, candidate | 1s/10s | B 157.700, B 162.400 |
+| Capture disabled, before edits | 1s/10s | A 161.300, A 167.400 |
+| Capture disabled, candidate | 1s/10s | B 170.000, B 167.300 |
+| Longer enabled | 5s/30s | A 177.900, B 160.300, A 175.467, B 164.167 |
+| Longer disabled | 5s/30s | A 180.100, B 166.400, A 178.567, B 180.833 |
+| Matched client/server JFR | 5s/30s | A 175.033, B 167.333 |
+| Reversed enabled | 5s/60s | B 170.967, A 154.767, B 152.667, A 169.533 |
+
+The disabled diagnostics invoke the same existing Java runner/server with all
+four metrics-control arguments omitted; no workload, production flag, or TPS
+wrapper change was introduced. They are **supplemental Java-runner diagnostics,
+not passing tps-test runs**. Their receipts record stable source/classpath
+hashes, zero terminal transactions/locks/waiters, successful exits and database
+cleanup. Runtime content comparison finds exactly the expected engine and
+transaction jar differences; all other 22 entries match.
+
+The initial 30-second enabled regressions are not discarded. They followed a
+repeated short-run Payment maximum increase despite unchanged coarse percentile
+bounds. In the profiled pair, measured-window FileForce means were 3.318ms A
+and 3.463ms B, while acquisition/scheduler execution samples did not increase.
+That association does not explain every earlier pair, and sparse virtual-thread
+monitor/park attribution leaves uncertainty. The 60-second pairs reverse
+direction; their means (B 161.817, A 162.150) do not prove equivalence. Duration
+and profiler groups remain separate. Short enabled/disabled means 160.05/168.65
+are descriptive only; they do not isolate observer cost from other capture
+instrumentation and changing host conditions.
+
+All runs passed invariants and completed cleanup with zero errors. Every
+candidate had zero retries. The final 60-second control had one measured
+Delivery DEADLOCK retry: attempt tag 10240, terminal 6, logical sequence 1030,
+step 39; one server outcome, one client retry and one captured deadlock reconcile,
+with zero unclassified outcomes or overflow. Candidate block totals and terminal
+dispositions reconcile exactly; the short runs classified 1,991 and 2,054 blocks
+with no unclassified/overflow cases. Roughly 70% were FIFO_QUEUE_HEAD; this is
+count-at-admission evidence, not waiting duration or transaction-family cause.
+
+Decision: accept the required `tic-1dda` observability prerequisite under the
+working agreement's explicit **inconclusive-performance exception**. This is
+neither a speedup nor proof of unchanged performance; observer cost remains
+unquantified. The existing `tic-f1bb` performance and recovery gates remain.
+Background host load and incomplete current TPS host/launched-byte provenance
+remain explicit: v2 success receipts authenticate the current diagnostic
+publication, not the removed stronger ownership/build contract. Builds and
+workloads were manually serialized, and all raw negative results are retained.
+
+Evidence root: `/private/tmp/river-tic-af29-evidence-20260907`, including
+per-run directories/logs, `samples.json`, `disabled-samples.json`, causal and
+mechanism summaries, JFR recordings/window reports, allocation traces, clean
+XML/logs, slopmark reports, bytecode audit, policy delta and independent review.
+Integration commit/tag and post-merge smoke are recorded upon promotion.
+
 ### 2026-09-07 serial WAL force-target ownership (`tic-7352`)
 
 Architecture checkpoint, with no speedup claim. Implementation/measured candidate
