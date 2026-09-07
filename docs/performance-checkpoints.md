@@ -48,8 +48,8 @@ Architecture checkpoint, with no speedup claim. Implementation/measured candidat
 `91b00ea` replaces mutable-tail completion and global forced-batch release/cursors
 with captured coverage and exact target/token ownership in the existing serial
 path. Group/direct/vacuum callers validate retained coverage; local force and
-configured durability success remain distinct. Annotated checkpoint tag
-`perf-checkpoint-20260907-force-target-ownership` is assigned at promotion.
+configured durability success remain distinct. Pushed integration `195c6419afda3e288caf1f57f6e29aae5e51101c`
+has annotated checkpoint `perf-checkpoint-20260907-force-target-ownership`; its post-merge smoke passes.
 
 Fresh pinned OpenJDK 26.0.2.1, tiny/standard serializable synchronous-WAL,
 10-terminal seed 42 controls: **155.500/157.200 TPS**; candidates:
