@@ -5,8 +5,9 @@ Status: Accepted contract; ratified by
 acceptance of exact `tic-11a5` candidate
 `a7ca80184fb91141c2d4266e9a28dd3d53cc1c2e`
 
-ADR 0014 is the single normative source. It prevails when this accepted plan
-summarizes a public command, status, format, security, or recovery rule. The
+The [CLI contract](../riverd-cli.md) owns user-facing commands and behavior.
+ADR 0014 owns status mappings, formats, security and recovery mechanisms.
+Both prevail over summaries in this implementation plan. The
 complete scalable audit contract is the independently accepted `tic-a221` evidence merged at
 `e592addff67ac6016ae6e9e37e3bf374a6511f0d`; this plan does not define a second
 audit state machine. Acceptance ratifies documentation only: production code,
@@ -165,70 +166,9 @@ processes and never terminates or otherwise signals a PID.
 
 ### 4.1 Commands
 
-```text
-riverd
-riverd start [-D PATH|--datadir=PATH] [--port=PORT] [--ip=ADDRESS]
-             [--maximum-connections=N] [--ready-file=PATH]
-riverd stop [-D PATH|--datadir=PATH] [--timeout=DURATION]
-riverd ps
-riverd audit archive [-D PATH|--datadir=PATH]
-riverd credentials renew [-D PATH|--datadir=PATH]
-riverd version
-riverd -h
-riverd --help
-riverd help
-riverd start -h
-riverd start --help
-riverd stop -h
-riverd stop --help
-riverd ps -h
-riverd ps --help
-riverd version -h
-riverd version --help
-riverd audit -h
-riverd audit --help
-riverd audit archive -h
-riverd audit archive --help
-riverd credentials -h
-riverd credentials --help
-riverd credentials renew -h
-riverd credentials renew --help
-riverd help start
-riverd help stop
-riverd help ps
-riverd help version
-riverd help audit
-riverd help audit archive
-riverd help credentials
-riverd help credentials renew
-```
-
-`riverd start` and `riverd stop` are the lifecycle commands in the first
-delivery. `riverd ps` is read-only. `riverd audit archive` and `riverd
-credentials renew` are the two offline security recovery operations and
-require exclusive ownership of a stopped instance. Invoking `riverd` without arguments prints useful brief usage and exits zero. Do not add daemonisation, service installation,
-remote administration, or database deletion.
-
-Help behaviour:
-
-- bare `riverd` and global `-h` print a useful usage summary: short command
-  descriptions, a start example, default data location and port, and a pointer
-  to full help; command/group `-h` gives useful brief usage for that scope;
-- `riverd help` and `riverd --help` are equivalent and print full global help;
-  command/group `--help` and listed `riverd help ...` forms print the full
-  reference for that scope;
-- help and version do not create directories or otherwise mutate state;
-- any other help placement, extra token, bare group, abbreviation, combined
-  short option, or syntax prints a short error plus brief usage and exits with
-  status 2 before mutation.
-
-Exit zero is `OK`; invalid syntax is exit 2 with
-`INVALID_EXTERNAL_INPUT`; every operational failure is exit 1 with the exact
-native `StatusCode` and stable number required by ADR 0014. Failure records go
-to standard error and do not replace native status propagation with diagnostic
-text. A pre-readiness-commit failure emits no `riverd_status=ready`; a prior
-irrevocable readiness observation may be followed by the specified terminal
-`IO_FAILURE`, ordered cleanup, and exit 1.
+Use the [riverd CLI contract](../riverd-cli.md) for command grammar, help,
+instance selection, defaults and user-facing operation. The following sections
+explain implementation and integration; they do not define another CLI.
 
 ### 4.2 Start options and defaults
 

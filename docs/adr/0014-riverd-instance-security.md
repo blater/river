@@ -4,8 +4,9 @@ Status: Accepted
 
 ## Authority and scope
 
-This ADR is the public lifecycle and security contract for the first installed
-`riverd`. It ratifies
+The [riverd CLI contract](../riverd-cli.md) owns the user-facing interface.
+This ADR defines the security and durable lifecycle mechanisms for the first
+installed `riverd`. It ratifies
 [`docs/plans/riverd-standalone-server-plan.md`](../plans/riverd-standalone-server-plan.md)
 and replaces every alternative or deferred description of the same behavior.
 The decision closes the ownership and deletion gaps inventoried by `tic-de1d`, merged at
@@ -22,7 +23,7 @@ is part of this decision.
 [ADR 0012](0012-embedded-api-and-protocol-boundaries.md) remains authoritative
 for the embedded API, protocol, client, server, TLS, authentication,
 authorization, and audit-before-admission boundaries. This ADR supplies the
-launcher-owned identity, filesystem, command, discovery, and recovery
+launcher-owned identity, filesystem, discovery, and recovery
 contract. River is pre-V1: the authenticated lifecycle replaces all unreleased
 plain production paths; it does not wrap or preserve them.
 
@@ -35,118 +36,18 @@ the security, durability, and recovery outcomes. Historical reviews below
 accepted the earlier design; they do not establish implementation or acceptance
 of this amendment. The required-platform matrix is part of standalone delivery.
 
-## Public command grammar and mutation boundary
+## Command contract and mutation boundary
 
-The installed executable is `riverd`. Its complete first-version grammar is:
+The [riverd command-line contract](../riverd-cli.md) owns commands, options,
+defaults, help, user-facing operation and exit codes. This ADR owns the security,
+identity, filesystem, publication and recovery mechanisms behind that contract.
 
-```text
-riverd
-riverd start [-D PATH|--datadir=PATH] [--port=PORT] [--ip=ADDRESS]
-             [--maximum-connections=N] [--ready-file=PATH]
-riverd stop [-D PATH|--datadir=PATH] [--timeout=DURATION]
-riverd ps
-riverd audit archive [-D PATH|--datadir=PATH]
-riverd credentials renew [-D PATH|--datadir=PATH]
-riverd version
-riverd -h
-riverd --help
-riverd help
-riverd start -h
-riverd start --help
-riverd stop -h
-riverd stop --help
-riverd ps -h
-riverd ps --help
-riverd version -h
-riverd version --help
-riverd audit -h
-riverd audit --help
-riverd audit archive -h
-riverd audit archive --help
-riverd credentials -h
-riverd credentials --help
-riverd credentials renew -h
-riverd credentials renew --help
-riverd help start
-riverd help stop
-riverd help ps
-riverd help version
-riverd help audit
-riverd help audit archive
-riverd help credentials
-riverd help credentials renew
-```
+Validate command input and path collisions before filesystem or network
+mutation. Help and version are side-effect free. Platform shutdown and the
+cooperative stop request enter one ordered shutdown owner; forced termination
+follows crash recovery. Command changes do not weaken these guarantees.
 
-With no arguments, `riverd` prints a brief, useful usage summary and exits zero.
-It includes short command descriptions, a start example, the default data
-location and port, and a pointer to `riverd help` for the full reference. It does
-not list instances or read the registry. `riverd ps` lists instances.
-`start` is a foreground command.
-Unix signals, Windows console shutdown, and the cooperative `stop` command
-enter the same ordered shutdown owner. Forced process termination is a crash
-and follows recovery rules; Windows is not required to emulate POSIX signals. The
-default data directory is `$HOME/.river/default`, the default listener is
-`127.0.0.1:9191`, the default maximum connection count is 16, and the default
-stop timeout is 30 seconds. `--port` accepts decimal `0..65535`; zero
-requests an available port. Optional `--ip` defaults to `127.0.0.1` and accepts
-`127.0.0.1` or `::1` (without brackets). Wildcard, non-loopback, hostname,
-malformed, and out-of-range inputs are invalid. `N` is canonical decimal `1..2147483647`; values outside the addressable
-slot width are `INVALID_EXTERNAL_INPUT`, while a valid count that cannot compile
-within the declared resource profile is `RESOURCE_EXHAUSTED` before mutation.
-The launcher compiles it once; there are no individual engine tuning flags.
-`DURATION` is one positive canonical decimal followed by `ms`, `s`, or `m`;
-checked conversion must fit a positive signed-long millisecond value. Fractions,
-signs, whitespace, missing units, zero, and overflow are invalid.
-
-Parsing, duplicate/conflicting option detection, path normalization, control
-character rejection, range validation, and the path-collision proof below
-complete before any filesystem or network mutation. Global or command/group
-`-h` prints useful brief usage. `riverd help` is equivalent to `riverd --help`;
-both print the full global help. Command/group `--help` and every listed
-`help ...` form print full help for that exact scope. Any unlisted
-help placement, extra token, bare `audit`/`credentials`, abbreviation, or
-combined short option is invalid before mutation. Help and version are
-side-effect free.
-There is no daemon, service, delete, repair, migrate, remote administration,
-stop-all, trust-all, no-authentication, TLS-disable, credential-by-value, or
-secret environment-variable command.
-
-`riverd version` prints exactly:
-
-```text
-riverd_version=<distribution-version>
-riverd_contract=riverd-v1
-riverd_protocol=river-v4
-riverd_status=OK
-```
-
-After verified process exit and matching owned-record removal, `riverd stop`
-prints:
-
-```text
-riverd_datadir=<normalized-absolute-path>
-riverd_pid=<positive-decimal-long>
-riverd_status=OK
-```
-
-## Exit codes, native statuses, and diagnostics
-
-The process has three public exit classes:
-
-| Exit | Native outcome | Meaning |
-| --- | --- | --- |
-| 0 | `OK` | Help, version, listing including an empty list, successful offline operation, or a foreground server that shut down cleanly. |
-| 2 | `INVALID_EXTERNAL_INPUT` | Invalid command syntax or option value, detected before mutation. |
-| 1 | Named non-`OK` `StatusCode` | Startup, lifecycle, security, audit, filesystem, I/O, or shutdown failure. |
-
-An exit-1/2 command writes a concise diagnostic followed by exactly
-`riverd_status_code=<StatusCode.stableCode()>` and final
-`riverd_status=<StatusCode-name>` records to standard error. A failure known
-before the selected readiness commit emits no successful readiness. A command
-whose readiness observation is already irrevocable may later emit these
-failure records and exit 1 under the post-commit rules below; it does not emit
-a second or retracting readiness record. Human text is diagnostic only and is
-not a second status contract.
+## Security and lifecycle outcomes
 
 The owning boundary uses these exact outcomes:
 
