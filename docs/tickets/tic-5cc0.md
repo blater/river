@@ -96,5 +96,53 @@ This was discovered during `tic-af29` affected-module verification;
 
 The old feature commit is not on master. Adapt its accounting only, preserving
 current program handling and observed-durability semantics. Fresh untouched
-OpenJDK26.0.2.1 baseline samples are156.2/162.0 TPS; subsequent parent changes
+OpenJDK 26.0.2.1 baseline samples are 156.2/162.0 TPS; subsequent parent changes
 are documentation-only. Evidence: `/private/tmp/river-tic-5cc0-evidence-20260907`.
+
+## Implementation and validation
+
+Implementation `3c338fc`; candidate measurement revision
+`f20f2e14590ff4823bac1b719f4a74765fb03555` includes documentation-only master
+updates. The existing session shape lease now reserves retained named-savepoint
+arrays, name buffers, carriers and conservative SQL-owned lower-stack capacity
+before relational mutation. SQL owns at most one statement savepoint in addition
+to named capacity. High-water storage remains charged and reusable until lease
+close; failed allocation returns only its uninstalled charge. Program handling,
+statement rollback and observed durability behavior are unchanged.
+
+Independent review accepted the exact adaptation and the strengthened tests.
+The identical real SQL budget-boundary test fails on unchanged 2216407 with
+expected RESOURCE_EXHAUSTED/actual OK, and passes after. Six resource tests plus
+that boundary test and affected statement/savepoint regressions pass: 16 focused
+cases. Clean full `./gradlew clean test --no-fail-fast` passed 1,788 tests with
+zero failures and two skips in 7m42s; no retry or weakened threshold was needed.
+
+Slopmark: SqlTransactionState 0->0; SqlSessionExecutionCoordinator 283.768->283.768.
+The constructor passes the existing budget; no new technical responsibility or
+hot-path allocation/copy is introduced. Source/bytecode policy checks retain
+261 identical pre-existing violations, 0 added/removed. Indexed-table reference
+verification passes. Full logs and XML are preserved in the evidence directory.
+
+All four samples use OpenJDK 26.0.2.1 via the exact pinned launcher
+`/opt/homebrew/Cellar/openjdk/26.0.2.1/libexec/openjdk.jdk/Contents/Home/bin/java`,
+seed 42, tiny standard mix, 10 terminals, 1 warehouse, serializable/no-wait stress,
+32 maximum attempts, synchronous WAL, 1s warmup and 10s measured. Commands are
+`tools/tps-test.sh --seed=42 --warmup-seconds=1 --measured-seconds=10
+--output-dir=<evidence>/<sample>`, preceded by daemon-backed `./make.sh` and with
+`RIVER_JAVA` pinned. Gradle used `/private/tmp/river-gradle-tic-f8dd` sequentially
+with worktree-local project/build outputs; no parallel build/workload ran.
+
+| Sample | TPS | Retries / errors | Receipt |
+| --- | ---: | --- | --- |
+| baseline-1 |156.2|0 /0|success /OK|
+| baseline-2 |162.0|0 /0|success /OK|
+| candidate-1 |164.0|0 /0|success /OK|
+| candidate-2 |161.3|0 /0|success /OK|
+
+Invariants, capture and terminal cleanup pass. Runtime launcher hashes, clean
+source, source stability and identical configuration fingerprints were checked.
+This is correctness/resource admission evidence with no independent speedup
+claim and no repeated short-sample regression signal. User-declared background
+PC load remains part of the diagnostic context; empty host-observation files
+and the current receipts do not prove exclusive-host ownership. Broader P0
+provenance/host and scaling gates remain open.

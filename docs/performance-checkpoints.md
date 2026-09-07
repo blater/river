@@ -42,6 +42,28 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-07 resource-accounted SQL savepoints (`tic-5cc0`)
+
+Correctness/resource ownership checkpoint; no independent speedup claim.
+Implementation `3c338fc`, measured candidate `f20f2e14590ff4823bac1b719f4a74765fb03555`.
+The existing session shape lease admits retained savepoint storage before mutation
+and returns it on close. SQL program/rollback/durability behavior is preserved.
+
+Pinned OpenJDK 26.0.2.1, identical tiny/standard serializable synchronous-WAL
+10-terminal seed 42 workload, 1s warmup/10s measurement: controls 156.2/162.0 TPS,
+candidates 164.0/161.3 TPS. All zero retries/errors and successful invariants,
+capture, cleanup and receipts; no repeated short-sample regression signal.
+Background host load remains recorded; these are diagnostics, not exclusive-host
+or cross-database capacity evidence.
+
+The real SQL boundary regression fails before and passes after; 16 focused tests
+and the first clean full test build pass (1,788 tests, 0 failures, 2 skips; 7m42s).
+Independent review accepted code/tests. Slopmark state 0 unchanged/coordinator
+283.768 unchanged. Indexed-table reference check passes; source/bytecode policy
+checks still fail with the same 261 violations, 0 added/removed. No thresholds or
+policy allowances changed. Evidence and commands:
+[`tic-5cc0`](tickets/tic-5cc0.md), `/private/tmp/river-tic-5cc0-evidence-20260907`.
+
 ### 2026-09-06 metadata-directory reload correctness (`tic-f8dd`)
 
 - Stable base: `e6e17b1fd7dbc0433e64c01b2918e9075cc25858`.
@@ -65,7 +87,7 @@ changing its limit. Source/bytecode policy checks retain exactly **261 existing
 control violations**, with none added/removed; class-reference verification passes.
 Slopmark row directory **40.5049 -> 40.4243**, version directory **28.4651 unchanged**.
 
-Explicit OpenJDK 26.0.2.1, seed42, tiny/standard, serializable, ten terminals,
+Explicit OpenJDK 26.0.2.1, seed 42, tiny/standard, serializable, ten terminals,
 one warehouse, user background load left running. Untouched 10-second baselines
 **153.4/161.5 TPS**, candidates **160.1/156.8**. The original 30-second configuration
 passes twice (**181.533/175.733**); the 60-second run also passes (**153.767**).
