@@ -1,6 +1,7 @@
 package io.riverdb.bench.tpcc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -20,12 +21,35 @@ final class TpccValuesTest {
   }
 
   @Test
-  void originalMarkerReplacesBytesWithinTheRequestedWidth() {
+  void generatedValuesRespectWidthsAndOriginalMarkerBounds() {
     TpccValues values = new TpccValues(91);
-    for (int index = 0; index < 100; index++) {
-      String value = values.originalData(26, 50, true);
-      assertTrue(value.length() >= 26 && value.length() <= 50);
-      assertTrue(value.contains("ORIGINAL"));
+    assertEquals(8, values.alpha(8, 8).length());
+    assertEquals(16, values.alpha(16, 16).length());
+    assertEquals(16, values.numeric(16).length());
+    String minimumMarked = values.originalData(26, 26, true);
+    assertEquals(26, minimumMarked.length());
+    assertTrue(minimumMarked.contains("ORIGINAL"));
+    String maximumMarked = values.originalData(50, 50, true);
+    assertEquals(50, maximumMarked.length());
+    assertTrue(maximumMarked.contains("ORIGINAL"));
+    String minimumUnmarked = values.originalData(26, 26, false);
+    assertEquals(26, minimumUnmarked.length());
+    assertFalse(minimumUnmarked.contains("ORIGINAL"));
+
+    for (int index = 0; index < 1_000; index++) {
+      assertTrue(values.lastName(index).length() <= 16);
+    }
+
+    for (int index = 0; index < 64; index++) {
+      String alpha = values.alpha(8, 16);
+      assertTrue(alpha.length() >= 8);
+      assertTrue(alpha.length() <= 16);
+      String marked = values.originalData(26, 50, true);
+      assertTrue(marked.length() >= 26 && marked.length() <= 50);
+      assertTrue(marked.contains("ORIGINAL"));
+      String unmarked = values.originalData(26, 50, false);
+      assertTrue(unmarked.length() >= 26 && unmarked.length() <= 50);
+      assertFalse(unmarked.contains("ORIGINAL"));
     }
   }
 }

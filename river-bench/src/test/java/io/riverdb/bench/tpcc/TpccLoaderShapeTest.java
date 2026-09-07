@@ -24,15 +24,7 @@ final class TpccLoaderShapeTest {
   }
 
   @Test
-  void generatedValuesStayInsideDeclaredWidthsAndLineBounds() {
-    TpccValues values = new TpccValues(91);
-    for (int index = 0; index < 10_000; index++) {
-      assertTrue(values.alpha(8, 16).length() <= 16);
-      assertTrue(values.numeric(16).length() <= 16);
-      assertTrue(values.lastName(index).length() <= 16);
-      assertTrue(values.originalData(26, 50, true).length() <= 50);
-      assertTrue(values.originalData(26, 50, false).length() <= 50);
-    }
+  void initialLineCountsStayWithinDeclaredBounds() {
     TpccConfig config = TpccConfig.parse(new String[] {
         "--url=jdbc:river://localhost:9", "--tiny", "--artifact=shape.properties"
     });
@@ -45,6 +37,5 @@ final class TpccLoaderShapeTest {
         assertTrue(loader.initialLineCount(2, district, order) <= 15);
       }
     }
-    assertEquals(50, values.originalData(50, 50, true).length());
   }
 }

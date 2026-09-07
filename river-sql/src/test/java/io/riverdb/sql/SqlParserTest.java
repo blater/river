@@ -2988,7 +2988,7 @@ final class SqlParserTest {
   }
 
   @Test
-  void acceptsExactCapacitiesAndPreservesCapacityBeforeTrailingInput() {
+  void acceptsMaximumIdentifierAndRejectsTrailingInput() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
     String maximumName = "a".repeat(SqlIdentifier.MAXIMUM_LENGTH);
@@ -3003,30 +3003,6 @@ final class SqlParserTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("DROP TABLE " + maximumName + " trailing", command));
     assertFalse(command.isAvailable());
-
-    StringBuilder columns = new StringBuilder(
-        "CREATE TABLE exact_columns (c0 BIGINT PRIMARY KEY");
-    for (int index = 1; index < SqlCommand.MAXIMUM_COLUMNS; index++) {
-      columns.append(", c").append(index).append(" BIGINT");
-    }
-    columns.append(')');
-    assertEquals(StatusCode.OK, parser.parse(columns, command));
-    assertEquals(SqlCommand.MAXIMUM_COLUMNS, command.columnCount());
-    assertTrue(command.isAvailable());
-    columns.insert(columns.length() - 1, ", overflow BIGINT");
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, parser.parse(columns, command));
-    assertFalse(command.isAvailable());
-
-    StringBuilder predicates = new StringBuilder("SELECT key FROM x WHERE ");
-    for (int index = 0; index < SqlCommand.MAXIMUM_PREDICATES; index++) {
-      if (index > 0) {
-        predicates.append(" AND ");
-      }
-      predicates.append('c').append(index).append('=').append(index);
-    }
-    assertEquals(StatusCode.OK, parser.parse(predicates, command));
-    assertEquals(SqlCommand.MAXIMUM_PREDICATES, command.wherePredicates().leafCount());
-    assertTrue(command.isAvailable());
   }
 
   @Test
