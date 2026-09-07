@@ -1,23 +1,24 @@
 ---
 id: tic-1fe7
-status: in_progress
-base-commit: aa9fb062a3adb6ed64159c7038b7991084a896ae
-branch: ticket/tic-1fe7-tps-evidence-contracts
+status: closed
 type: story
 priority: 2
 assignee: blater
 parent: tic-5db4
 delivery: documentation
+base-commit: aa9fb062a3adb6ed64159c7038b7991084a896ae
+branch: ticket/tic-1fe7-tps-evidence-contracts
+delivered-commit: 7d95a835d67a19a8ae314fbc1a6a161293aae44d
 tags:
     - performance
     - tpcc
     - p0
     - architecture
     - provenance
-created: 2026-09-07T11:31:44.369339Z
 links:
     - tic-d7c2
     - tic-1dda
+created: 2026-09-07T11:31:44.369339Z
 ---
 # Reconcile separate-build TPS provenance and host contracts
 
