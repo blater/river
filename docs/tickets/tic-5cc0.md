@@ -1,10 +1,12 @@
 ---
 id: tic-5cc0
-status: open
+status: in_progress
 type: bug
 assignee: blater
 parent: tic-5db4
 delivery: code
+base-commit: 2216407
+branch: ticket/tic-5cc0-savepoint-admission-delivery
 tags:
     - p0
     - sql
@@ -89,3 +91,10 @@ with SHA-256
 `92c4d946d7345afc377ffd1b0eb43120b26e8af1587348ca86fda4bcc32bbab4`.
 This was discovered during `tic-af29` affected-module verification;
 `tic-af29` source was excluded by exact baseline reproduction.
+
+## 2026-09-07 resumed delivery
+
+The old feature commit is not on master. Adapt its accounting only, preserving
+current program handling and observed-durability semantics. Fresh untouched
+OpenJDK26.0.2.1 baseline samples are156.2/162.0 TPS; subsequent parent changes
+are documentation-only. Evidence: `/private/tmp/river-tic-5cc0-evidence-20260907`.
