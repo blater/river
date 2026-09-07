@@ -46,6 +46,29 @@ visibility/failure boundaries and resource/secret cleanup. Distribution and
 source/compiled checks prove that no plain path remains. `tic-95e8` independently
 checks the assembled delivery; `tic-9640` owns power-loss qualification.
 
+## User experience acceptance (2026-09-07)
+
+- `riverd start --listen=127.0.0.1:9192` selects a port; the default is 9191
+  and port zero selects an available port. Help shows these examples and the
+  data-directory option, defaults, foreground behavior and shutdown method.
+- `riverd --help` and `riverd start --help` explain the supported path in plain
+  language. Invalid options give a concise error and point to relevant help.
+- First start creates the credentials automatically. Startup identifies the
+  generated client configuration path without displaying secrets. Explain that
+  TLS authenticates the server and the instance token authenticates the client.
+- Ship one short, copyable JDBC example using the generated client settings.
+  Users should not need to understand certificate generation, trust stores or
+  protocol handshakes to connect. State how to obtain the River JDBC driver.
+- Validate the documented sequence from a fresh installed distribution: help,
+  start on a chosen port, connect, commit, stop and restart to read the data.
+  Use the existing lifecycle tests; do not add a separate usability framework.
+
+Delivery priority is this usable end-to-end path. Resolve routine reversible
+choices locally. Cut off unrelated investigations; only a concrete blocker to
+correctness, security, required platform support or this user flow may expand
+work. Do not add speculative features, metadata, review gates or documentation
+ceremony. Keep reviews scoped to changed behavior and reuse existing evidence.
+
 ## Stop boundary
 
 No filesystem adapter implementation, new credential/audit mechanism, PostgreSQL
