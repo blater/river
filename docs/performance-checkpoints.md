@@ -44,10 +44,10 @@ Decision and attribution:
 
 ### 2026-09-07 prebuilt TPS artifact provenance (`tic-ed12`)
 
-**Accepted for integration as required evidence correctness; no TPS speedup
-claimed.** Measured candidate `bd66b13` (implementation `18ca330`, followed by
+**Accepted required evidence correctness; no TPS speedup claimed.** Measured candidate `bd66b13` (implementation `18ca330`, followed by
 the real-build correction) binds each TPS diagnostic to a successful separate
-`make.sh` invocation. Baseline `04d4c09` is production-identical to
+`make.sh` invocation. Integration `737faca5bae4a97b7098c1e2154c903f48230444` is pushed and tagged
+`perf-checkpoint-20260907-prebuilt-tps-provenance`. Baseline `04d4c09` is production-identical to
 `perf-checkpoint-20260907-retained-snapshot-gauge`. No database Java, workload,
 isolation, retries, durability or resource budgets change. Ordered runtime
 class/JAR byte manifests are identical after normalizing only checkout roots.
@@ -112,6 +112,10 @@ logical sequence 175, terminal 7, step 2): one server outcome equals one client
 retry, with no exhaustion, unclassified outcome or overflow. Candidate directions
 are mixed; no repeated directional regression is identified. Absolute throughput
 variation is retained and is not attributed to artifact verification.
+
+The exact-merge smoke (1s warmup/3s measured) passed at **142.000 TPS** with
+zero retries/errors, passing invariants and all four cleanup gauges zero. This
+shorter run verifies integration correctness, not throughput equivalence.
 
 Evidence: `/private/tmp/river-tic-ed12-evidence-20260907`, including individual
 receipts/build records, source/runtime manifests, frozen tests, real input

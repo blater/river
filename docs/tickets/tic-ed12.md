@@ -1,13 +1,15 @@
 ---
 id: tic-ed12
-status: in_progress
-base-commit: 04d4c09c67f30c1330da1c0833e53618b9866a07
-branch: ticket/tic-ed12-prebuilt-tps-provenance
+status: closed
 type: story
 priority: 2
 assignee: blater
 parent: tic-5db4
 delivery: code
+base-commit: 04d4c09c67f30c1330da1c0833e53618b9866a07
+branch: ticket/tic-ed12-prebuilt-tps-provenance
+delivered-commit: 737faca5bae4a97b7098c1e2154c903f48230444
+checkpoint-tag: perf-checkpoint-20260907-prebuilt-tps-provenance
 tags:
     - performance
     - tpcc
@@ -143,3 +145,13 @@ are compared with unchanged `04d4c09`, not waived or represented as passing.
 The installed slopmark does not support shell/Kotlin, so architecture review
 supplies the review signal without a fabricated score. This remains required
 evidence correctness work; no database behavior or TPS improvement is claimed.
+
+## Delivery
+
+Merged and pushed at `737faca5bae4a97b7098c1e2154c903f48230444`, tagged
+`perf-checkpoint-20260907-prebuilt-tps-provenance`. The exact integration smoke
+(1s warmup, 3s measured) passed at 142.000 TPS with zero retries/errors, passing
+invariants and zero transaction/snapshot/lock/waiter counts at capture. This
+shorter smoke is correctness evidence, not a comparison with the 10s samples.
+Independent evidence review approved integration; host ownership remains
+unsupported pending `tic-d7c2`.
