@@ -49,7 +49,7 @@ the canonical commit-path components they name.
 
 ## Stop Conditions
 
-- Do not begin a production P1 child until its prerequisites and scope contract
+- Do not begin a production P1 child until its own prerequisites and scope contract
   are satisfied. A new prerequisite blocks that child; independent work becomes
   a separately ordered follow-up rather than expanding it.
 - Stop promotion on an unexplained regression, failed invariant, retry or
@@ -103,7 +103,10 @@ Do not add a false dependency from lifecycle correctness to commit throughput.
 The design-only `tic-b368` now consumes accepted `tic-f539`, `tic-f8dd` and
 `tic-e544` evidence. The broad P0 matrix is a production/promotion gate, not a
 prerequisite for reading current source and defining the state machine; its
-`tic-1dda` link remains and both code outcomes retain that hard dependency.
+`tic-1dda` link remains. Subsequent independent review of the narrowly serial
+7352 scope corrected its P0 dependency to a link: that campaign supplies no
+missing force-target invariant. The hard P0 gate remains on f1bb; 7352 retains
+its own complete correctness, clean, review, slopmark and matched TPS gates.
 This is an explicit dependency correction, not a declaration that P0 passed.
 Reconcile stale post-force descriptions before accepting b368; do not recreate
 already-delivered pre-force publication, lock release or observed-read barriers.
