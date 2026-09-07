@@ -28,6 +28,9 @@ real installed processes. Cover authenticated JDBC, restart/persistence,
 conflicting ownership, invalid credentials/configuration, readiness publication
 failures, interruption, process crashes, and resource/secret cleanup. Confirm
 packaging works without Gradle/source-tree knowledge and no plain path remains.
+Follow the shipped quick start from a fresh installation: help, explicit port,
+generated client settings, authenticated JDBC, commit and restart. Report any
+step that requires undocumented setup; reuse the existing lifecycle cases.
 Record the tested source, platform adapter, JDK/native runtime, filesystem, and
 relevant storage settings. Reuse unchanged component tests with a brief impact
 rationale. A new JAR checksum does not require a full platform requalification.
