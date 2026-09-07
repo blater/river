@@ -1970,20 +1970,22 @@ single-run artifact and printed reminder do not calculate or enforce the
 ten-sample confidence gate.
 
 `tools/tps-p4.sh` is not a normative runner until it enforces this complete
-matrix. The current calculator requires `river-tps-tool-v3` metadata
-paired with the canonical, no-replace `river-tps-terminal-v2` success receipt
+matrix. The current calculator requires `river-tps-tool-v4` metadata
+paired with the canonical, no-replace `river-tps-terminal-v3` success receipt
 validated by the shared TPS provenance owner. Each diagnostic binds the sealed
 prebuilt `make.sh` record, source manifest, ordered runtime classpath, and
-launched bytes. It records `host.guarantee=unsupported` and
-`host.release_outcome=not_acquired`, so diagnostic success is deliberately not
-promotion eligibility; the P4 consumer's promotion validation fails closed
-until `tic-d7c2` supplies actual invocation ownership. Superseded schemas,
-missing, failure, mutated, or noncanonical terminal evidence are rejected. The
-historical accepted `tic-0636` implementation enforced stronger provenance
-than the current wiring: later `866f1f4` and `8609d49` removed the
-build/classpath/host gates. `tic-1fe7` reconciles the separate build workflow;
-`tic-ed12` restores prebuilt artifact binding, and `tic-d7c2` must supply actual
-invocation ownership before these inputs can qualify. The calculator output
+launched bytes. Build and measurement own separate intervals under one
+canonical cooperative host lease. Both must retain qualified boundary
+observations and successful exact-owner release; the final completion/terminal
+attestation follows release. No ownership is claimed across the idle gap.
+Superseded schemas, absent or failed host evidence, mutated payloads, and
+noncanonical terminal evidence are rejected. This proves participating-workflow
+exclusion and the declared process observations, not absence of unrelated load
+or nonparticipants between observations. The historical accepted `tic-0636`
+implementation enforced stronger provenance than later `866f1f4` and `8609d49`,
+which removed the build/classpath/host gates. `tic-1fe7` reconciles the separate
+build workflow; `tic-ed12` restores prebuilt artifact binding, and `tic-d7c2`
+wires actual invocation ownership without measured-phase monitoring. The calculator output
 remains explicitly `partial-river-point-calculator` evidence. It cannot emit a
 passing Alpha3 result without the warmup, scaling, cross-engine, absolute,
 relative, latency, failure, retry, invariant, and provenance checks above.

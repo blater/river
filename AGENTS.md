@@ -56,17 +56,18 @@ and 3 of the engineering charter linked above.
 
 ## Fast build loop
 
-Use targeted, daemon-backed Gradle tasks while editing:
+Use targeted Gradle tasks with `--no-daemon` while editing:
 
 ```sh
-./gradlew :river-engine:compileJava
-./gradlew :river-engine:test \
+./gradlew --no-daemon :river-engine:compileJava
+./gradlew --no-daemon :river-engine:test \
   --tests io.riverdb.engine.relational.RelationalDatabaseTest
 ```
 
 - Run only one Gradle build at a time in a shared checkout.
 - Never run `clean` concurrently with another build.
-- Do not use `--no-daemon` for ordinary edit/compile/test feedback.
+- Always pass `--no-daemon`, including ordinary edit/compile/test feedback and
+  status queries. Repository defaults also disable persistent daemons.
 - Select the narrowest module, test class, or test method that proves the
   change. Expand to affected-module tests and policy checks before commit.
 - Reserve `./verify` and `./verify-clean-checkout` for integration checkpoints,
@@ -80,7 +81,7 @@ worktree also needs its own Gradle user home and project cache:
 
 ```sh
 GRADLE_USER_HOME=/private/tmp/river-gradle-agent-a \
-  ./gradlew --project-cache-dir /private/tmp/river-project-cache-agent-a \
+  ./gradlew --no-daemon --project-cache-dir /private/tmp/river-project-cache-agent-a \
   :river-engine:test
 ```
 
@@ -261,6 +262,36 @@ Do not merge a performance feature with an unexplained repeated regression,
 failed invariant, incomplete cleanup, retry-accounting gap, or invalid evidence
 capture. An inconclusive performance result may still be merged only when the
 feature is required for correctness or observability and is labelled as such.
+
+## Provenance review economy
+
+Spend materially more time on database behavior and its measurements. Target
+50–75% less provenance overhead than the September 2026 review loop.
+
+- Reuse accepted provenance tools and validators. An ordinary database change
+  does not reopen unchanged evidence formats, ownership mechanisms, or consumers.
+- Use one reviewer and one bounded pass over the changed evidence path. The
+  lead reconciles findings once. Re-review only the fix for a concrete blocker;
+  do not restart a whole-system provenance audit after each edit.
+- Budget eight minutes of provenance overhead for an ordinary database slice,
+  or fifteen minutes of review when provenance tooling itself is the requested
+  change. Count agent review, lead reconciliation, and provenance-specific
+  fixture/evidence rework; report automated waiting separately. Record actual
+  time briefly in the existing checkpoint entry, without a new tracking system.
+- A blocker must demonstrate possible acceptance of invalid measurements,
+  changed executed bytes, unsafe ownership/cleanup, or another violated explicit
+  correctness requirement. Speculative hardening, redundant metadata, cosmetic
+  completeness, and extra artifact layers do not block the database task.
+- At the budget, stop expanding provenance work. Fix demonstrated blockers in
+  the existing owner and report any necessary overrun with its concrete cause.
+  Simplify or remove redundant evidence machinery before adding checks. Do not
+  manufacture a new prerequisite or review round to keep investigating.
+- Run the existing focused validator tests and the real build/workload path.
+  Add a fixture only for a demonstrated failure or changed contract. Once these
+  pass, return to the database task and its TPS measurements.
+
+These limits reduce review breadth and repetition; they do not permit accepting
+known invalid evidence or bypassing independent database correctness review.
 
 ## Hot-path engineering
 

@@ -121,6 +121,11 @@ Every blocking comment names the violated invariant or supplies a reproducer,
 test, profile, or architectural rule. Style preferences enforced by tooling are
 not repeated manually in review.
 
+Provenance review follows the time budgets and one-pass rule in
+[`AGENTS.md`](../../AGENTS.md#provenance-review-economy). Reuse accepted evidence
+mechanisms and reserve repeated review for demonstrated correctness blockers;
+ordinary database slices must not become provenance redesigns.
+
 ### 3.3 Independence rules
 
 - The author may run a reviewer persona as a self-check, but that does not count
@@ -135,18 +140,18 @@ not repeated manually in review.
 
 ### 3.4 Fast build and worktree discipline
 
-Iteration uses the narrowest daemon-backed Gradle command that proves the
+Iteration uses the narrowest Gradle command with `--no-daemon` that proves the
 current edit. Typical commands are:
 
 ```sh
-./gradlew :river-engine:compileJava
-./gradlew :river-engine:test \
+./gradlew --no-daemon :river-engine:compileJava
+./gradlew --no-daemon :river-engine:test \
   --tests io.riverdb.engine.relational.RelationalDatabaseTest
 ```
 
 `./verify` is an integration gate, not an edit/compile loop. It intentionally
 runs reproducibility work and a clean check with disposable Gradle processes.
-Running it after every small edit wastes warm compiler/daemon state, destroys
+Running it after every small edit discards reusable build outputs, destroys
 incremental outputs, and makes agents sharing one checkout contend on locks and
 module `build/` directories.
 
@@ -154,7 +159,7 @@ The working rules are:
 
 - run only one Gradle build at a time in a shared checkout;
 - never run `clean` concurrently;
-- use the Gradle daemon for targeted compile and test feedback;
+- always pass `--no-daemon` for builds, tests and status queries;
 - expand from a test method or class to affected-module tests and policy checks
   before commit;
 - reserve `./verify` and `./verify-clean-checkout` for integration, release
@@ -546,7 +551,7 @@ ignored:
    and operations reviewers explicit blocking scopes.
 8. Require measurements and fault evidence rather than accepting performance or
    resilience claims by inspection.
-9. Use targeted daemon-backed Gradle builds for iteration; reserve cold clean
+9. Use targeted Gradle builds with `--no-daemon` for iteration; reserve cold clean
    and reproducibility gates for integration.
 10. Keep coupling minimal: `implementation` by default, explicit rare `api`
     edges, and permitted dependencies treated as a maximum allowlist.
