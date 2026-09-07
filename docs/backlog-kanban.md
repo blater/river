@@ -37,9 +37,11 @@ The [`tic-b368`](tickets/tic-b368.md) reconciliation defines the accepted serial
 force-target/cohort identity replacement and preserves existing pre-force
 publication/read-dependency behavior. The force-I/O/provider decision is owned
 by [`tic-92e3`](tickets/tic-92e3.md) before dynamic overlap is implemented. Next
-resolve the recorded P0/admission/WAL prerequisites and deliver the architecture
-checkpoint (no speedup expected, no unexplained regression), followed by the
-measured overlap change. Finally execute the existing lifecycle delivery path.
+deliver the narrowly serial architecture checkpoint under its accepted b368
+contract and focused correctness/review/clean/slopmark/TPS gates (no speedup
+expected, no unexplained regression). Independent review classifies P0 as broader
+promotion ordering for this slice; 7352 links that campaign. Then resolve the
+recorded P0/admission/WAL/execution prerequisites before measured overlap. Finally execute the existing lifecycle delivery path.
 Lifecycle is technically independent; this order is a scheduling preference.
 None of this mapping certifies outstanding P0 or external-harness gates.
 

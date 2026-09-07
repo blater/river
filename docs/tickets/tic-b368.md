@@ -59,8 +59,9 @@ contract is complete; do not infer dynamic overlap safety or a TPS gain from
 serial tests or the optimistic timing model.
 
 Source/design reconciliation consumes accepted f539/f8dd/e544 evidence; it may
-proceed before P0 workload revalidation. Both production outcomes retain their
-explicit `tic-1dda` gate. The new architecture story has no independent TPS gain
+proceed before P0 workload revalidation. The overlap outcome retains its explicit `tic-1dda` gate. Independent review
+subsequently separated 7352's serial identity replacement from that broader
+promotion ordering; the accepted evidence records the rationale. The new architecture story has no independent TPS gain
 requirement; repeated unexplained regression blocks acceptance. Overlap must
 prove its declared mechanism and repeatable workload benefit.
 
