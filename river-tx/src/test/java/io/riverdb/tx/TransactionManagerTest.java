@@ -39,14 +39,17 @@ final class TransactionManagerTest {
         StatusCode.RETRY,
         manager.begin(IsolationLevel.REPEATABLE_READ, source, transaction));
     assertFalse(transaction.isActiveHandle());
+    assertEquals(0, manager.retainedSnapshotCount());
 
     source.status = StatusCode.OK;
     assertEquals(
         StatusCode.OK,
         manager.begin(IsolationLevel.REPEATABLE_READ, source, transaction));
+    assertEquals(1, manager.retainedSnapshotCount());
     assertEquals(2, transaction.transactionId());
     assertEquals(11, transaction.snapshot().visibleCommitSequence());
     assertEquals(StatusCode.OK, manager.abort(transaction, new TransactionOutcome()));
+    assertEquals(0, manager.retainedSnapshotCount());
   }
 
   @Test
@@ -300,6 +303,7 @@ final class TransactionManagerTest {
     assertEquals(StatusCode.OK, manager.tryAcquireKey(transaction, 37, 38, held));
     assertEquals(StatusCode.OK, manager.prepareCommit(transaction, new TransactionOutcome()));
     assertEquals(1, manager.activeTransactionCount());
+    assertEquals(1, manager.retainedSnapshotCount());
     assertEquals(1, manager.activeLockCount());
 
     TransactionOutcome outcome = new TransactionOutcome();
@@ -308,6 +312,7 @@ final class TransactionManagerTest {
         new Transaction[] {transaction}, new TransactionOutcome[] {outcome}, 1, failure));
     assertEquals(TransactionState.ABORTED, outcome.state());
     assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.retainedSnapshotCount());
     assertEquals(0, manager.activeLockCount());
     assertEquals(0, manager.waitingLockCount());
     assertEquals(Long.MAX_VALUE, manager.oldestVisibleCommitSequence());
@@ -319,6 +324,7 @@ final class TransactionManagerTest {
         new Transaction[] {transaction}, new TransactionOutcome[] {secondOutcome}, 1, failure));
     assertFalse(secondOutcome.isAvailable());
     assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.retainedSnapshotCount());
     assertEquals(0, manager.activeLockCount());
 
     Transaction reusable = new Transaction(1);
@@ -1006,8 +1012,11 @@ final class TransactionManagerTest {
     TransactionManager manager = new TransactionManager(11, 13, 2, 4);
     Transaction first = new Transaction(4);
     Transaction second = new Transaction(4);
+    assertEquals(0, manager.retainedSnapshotCount());
     assertEquals(StatusCode.OK, manager.begin(IsolationLevel.REPEATABLE_READ, 7, first));
+    assertEquals(1, manager.retainedSnapshotCount());
     assertEquals(StatusCode.OK, manager.begin(IsolationLevel.REPEATABLE_READ, 7, second));
+    assertEquals(2, manager.retainedSnapshotCount());
     assertEquals(0, first.snapshot().activeTransactionCount());
     assertEquals(1, second.snapshot().activeTransactionCount());
     assertTrue(second.snapshot().excludesTransaction(first.transactionId()));
@@ -1020,9 +1029,11 @@ final class TransactionManagerTest {
     assertEquals(TransactionState.COMMITTED, outcome.state());
     assertEquals(8, outcome.commitSequence());
     assertEquals(1, manager.activeTransactionCount());
+    assertEquals(1, manager.retainedSnapshotCount());
     assertEquals(StatusCode.OK, manager.abort(second, outcome));
     assertEquals(TransactionState.ABORTED, outcome.state());
     assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.retainedSnapshotCount());
   }
 
   @Test
@@ -1031,15 +1042,19 @@ final class TransactionManagerTest {
     Transaction transaction = new Transaction(1);
     Transaction overflow = new Transaction(1);
     assertEquals(StatusCode.OK, manager.begin(IsolationLevel.READ_COMMITTED, 3, transaction));
+    assertEquals(1, manager.retainedSnapshotCount());
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         manager.begin(IsolationLevel.READ_COMMITTED, 3, overflow));
+    assertEquals(1, manager.retainedSnapshotCount());
     assertEquals(StatusCode.OK, manager.refreshReadCommitted(transaction, 4));
     assertEquals(4, transaction.snapshot().visibleCommitSequence());
+    assertEquals(1, manager.retainedSnapshotCount());
     assertEquals(
         StatusCode.CONFLICT,
         manager.refreshReadCommitted(transaction, 2));
     assertEquals(StatusCode.OK, manager.abort(transaction, new TransactionOutcome()));
+    assertEquals(0, manager.retainedSnapshotCount());
   }
 
   @Test

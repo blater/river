@@ -120,6 +120,11 @@ public final class TransactionManager {
     return snapshots.count() + completion.publishedPending();
   }
 
+  /** Cold registry gauge; published transactions awaiting completion no longer retain snapshots. */
+  public synchronized int retainedSnapshotCount() {
+    return snapshots.count();
+  }
+
   /** Oldest commit sequence still visible to an active transaction. */
   public synchronized long oldestVisibleCommitSequence() {
     return snapshots.oldestVisibleCommitSequence();
