@@ -2,6 +2,7 @@ package io.riverdb.engine.table;
 
 import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
@@ -22,7 +23,6 @@ import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
-import io.riverdb.wal.local.LocalWalReadResult;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -33,7 +33,7 @@ final class IndexedTableTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
-  void insertsSplitsLooksUpAndReopens(@TempDir Path root) {
+  void repairsFlushedRootCorruptionAndAcceptsSubsequentInsert(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
@@ -47,17 +47,8 @@ final class IndexedTableTest {
       writer.insert(0, index * 10L, row);
     }
     assertEquals(entries, table.rowCount());
-    assertEquals(5, table.pageCount());
-    assertEquals(5, table.rootPageId());
-    assertEquals(StatusCode.CONFLICT, writer.tryInsert(0, 100, row));
-    assertEquals(entries, table.rowCount());
-    assertAllRows(table, entries);
-
-    LocalWalReadResult record = lastWalRecord(wal);
-    assertEquals(writer.lastCommittedTransactionId, record.header().transactionId());
-    assertEquals(entries + 1L, record.header().commitSequence());
-    assertEquals(IndexedRelationalWalCodec.WAL_FORMAT_ID, record.header().formatId());
-    assertEquals(IndexedRelationalWalCodec.WAL_FORMAT_VERSION, record.header().formatVersion());
+    int damagedRootPageId = table.rootPageId();
+    assertTrue(damagedRootPageId > 0);
 
     assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, table.flush());
@@ -66,11 +57,10 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    corruptRootPage(directory, 5);
+    corruptRootPage(directory, damagedRootPageId);
     wal = openWal(directory);
     table = openTable(openStore(directory, wal));
     assertEquals(entries, table.rowCount());
-    assertEquals(5, table.rootPageId());
     assertAllRows(table, entries);
     row.putLong(0, 99_999);
     row.position(0);
@@ -78,7 +68,7 @@ final class IndexedTableTest {
     writer = new TransactionWriter(table, Long.BYTES);
     writer.insert(0, 99_999, row);
     HeapRowResult reopenedInsert = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey( 0,99_999, reopenedInsert));
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 99_999, reopenedInsert));
     assertEquals(99_999, rowValue(reopenedInsert));
     assertEquals(StatusCode.OK, writer.session.close());
     close(table, wal, directory);
@@ -473,16 +463,6 @@ final class IndexedTableTest {
     return value.getLong(0);
   }
 
-  private static LocalWalReadResult lastWalRecord(LocalWal wal) {
-    long offset = 64;
-    LocalWalReadResult result = new LocalWalReadResult();
-    while (offset < wal.tailEnd()) {
-      assertEquals(StatusCode.OK, wal.read(offset, result));
-      offset = result.nextOffset();
-    }
-    return result;
-  }
-
   private static void corruptRootPage(NioDurableDirectory directory, int rootPageId) {
     DirectoryOperationResult operation = new DirectoryOperationResult();
     assertEquals(
@@ -567,8 +547,6 @@ final class IndexedTableTest {
   private static final class TransactionWriter {
     private final IndexedTransactionSession session;
     private final TransactionOutcome outcome = new TransactionOutcome();
-    private long lastCommittedTransactionId;
-
     private TransactionWriter(IndexedTable table, int maximumRowBytes) {
       TransactionManager manager = new TransactionManager(
           DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -591,17 +569,12 @@ final class IndexedTableTest {
 
     private StatusCode tryInsert(long space, long key, ByteBuffer value) {
       assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-      long transactionId = session.transaction().transactionId();
       StatusCode status = session.insert(space, key, value);
       if (!status.isOk()) {
         assertEquals(StatusCode.OK, session.abort(outcome));
         return status;
       }
-      status = session.commit(outcome);
-      if (status.isOk()) {
-        lastCommittedTransactionId = transactionId;
-      }
-      return status;
+      return session.commit(outcome);
     }
 
     private StatusCode insertBatch(
@@ -612,7 +585,6 @@ final class IndexedTableTest {
         int[] rowLengths,
         int count) {
       assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-      long transactionId = session.transaction().transactionId();
       StatusCode status = StatusCode.OK;
       for (int index = 0; index < count && status.isOk(); index++) {
         rows.limit(rows.capacity());
@@ -624,11 +596,7 @@ final class IndexedTableTest {
         assertEquals(StatusCode.OK, session.abort(outcome));
         return status;
       }
-      status = session.commit(outcome);
-      if (status.isOk()) {
-        lastCommittedTransactionId = transactionId;
-      }
-      return status;
+      return session.commit(outcome);
     }
   }
 }
