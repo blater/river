@@ -15,6 +15,7 @@ import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.testsupport.TestTlsContexts;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -166,7 +167,7 @@ final class RiverSqlMainTest {
         """;
     int exit = RiverSqlMain.runAuthenticated(
         server.port(),
-        TestTlsContexts.client(),
+        TestTlsContexts.trustedClient(),
         token,
         token.length,
         new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8)),

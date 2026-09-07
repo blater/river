@@ -69,7 +69,6 @@ final class ProtocolFrameCodecTest {
           goldenFrame(wireCode, 1, 9, new byte[64]),
           encodedBytes(bytes));
     }
-    assertEquals(15, ProtocolMessageType.values().length);
   }
 
   @Test

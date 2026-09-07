@@ -1,3 +1,7 @@
+plugins {
+  id("java-test-fixtures")
+}
+
 // Production dependencies are declared by the root build.
 
 dependencies {

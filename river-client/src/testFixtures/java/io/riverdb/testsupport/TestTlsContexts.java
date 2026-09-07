@@ -1,4 +1,4 @@
-package io.riverdb.jdbc;
+package io.riverdb.testsupport;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -15,8 +15,8 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
 
-/** In-memory localhost identity used only by the TLS integration test. */
-final class TestTlsContexts {
+/** In-memory localhost identity used only by TLS integration tests. */
+public final class TestTlsContexts {
   private static final char[] PASSWORD = "river-test-only".toCharArray();
   private static final String PRIVATE_KEY = """
       MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQD1mEt1guOw+Zo6
@@ -88,11 +88,11 @@ final class TestTlsContexts {
   private TestTlsContexts() {
   }
 
-  static SSLContext server() throws GeneralSecurityException, IOException {
+  public static SSLContext server() throws GeneralSecurityException, IOException {
     return server(CERTIFICATE);
   }
 
-  static SSLContext wrongHostnameServer()
+  public static SSLContext wrongHostnameServer()
       throws GeneralSecurityException, IOException {
     return server(WRONG_HOST_CERTIFICATE);
   }
@@ -123,11 +123,11 @@ final class TestTlsContexts {
     return context;
   }
 
-  static SSLContext trustedClient() throws GeneralSecurityException, IOException {
+  public static SSLContext trustedClient() throws GeneralSecurityException, IOException {
     return trustedClient(CERTIFICATE);
   }
 
-  static SSLContext wrongHostnameClient()
+  public static SSLContext wrongHostnameClient()
       throws GeneralSecurityException, IOException {
     return trustedClient(WRONG_HOST_CERTIFICATE);
   }
