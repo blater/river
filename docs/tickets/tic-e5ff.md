@@ -82,3 +82,28 @@ hypotheses are the lock work proved removable by `tic-845d` and the real
 pre-force durability overlap required from `tic-f1bb`. Exposing WAL force,
 physical preflight, or relational execution as the next ceiling is acceptable;
 retaining a mechanism that moves no declared denominator is not.
+
+## 2026-09-07 user-directed follow-up mapping
+
+The user selected three ordered outcomes, represented by existing owners and
+one missing architecture story:
+
+1. `tic-7352`: explicit commit force-prefix/cohort ownership, designed by
+   `tic-b368`; neutral throughput is expected, unexplained regression rejected.
+2. `tic-f1bb`: use the accepted foundation to overlap next-cohort work with an
+   outstanding force, proving mechanism movement and repeatable TPS benefit.
+3. `tic-e1c9`: supported standalone `riverd`, retaining its existing lifecycle,
+   security, distribution and external-consumer children.
+
+The first two stay within the existing `tic-e5ff` P1 umbrella. These are three
+outcomes, not three new epics. `tic-f1bb` depends on `tic-7352`; the lifecycle
+track is technically independent and is scheduled afterward by user preference.
+Do not add a false dependency from lifecycle correctness to commit throughput.
+
+The design-only `tic-b368` now consumes accepted `tic-f539`, `tic-f8dd` and
+`tic-e544` evidence. The broad P0 matrix is a production/promotion gate, not a
+prerequisite for reading current source and defining the state machine; its
+`tic-1dda` link remains and both code outcomes retain that hard dependency.
+This is an explicit dependency correction, not a declaration that P0 passed.
+Reconcile stale post-force descriptions before accepting b368; do not recreate
+already-delivered pre-force publication, lock release or observed-read barriers.

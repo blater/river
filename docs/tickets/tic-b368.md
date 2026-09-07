@@ -12,8 +12,11 @@ tags:
     - wal
     - correctness
 deps:
-    - tic-1dda
+    - tic-f539
+    - tic-f8dd
+    - tic-e544
 links:
+    - tic-1dda
     - tic-32b3
 created: 2026-09-04T15:10:07.080647Z
 ---
@@ -81,3 +84,13 @@ cover dependent read-only and write acknowledgements, the irreversible point
 after decision append, cancellation, force failure, restart, and fencing. If
 all transaction locks remain held until force completes, the design has not
 created durability overlap and must not authorize `tic-f1bb`.
+
+## 2026-09-07 scope reconciliation
+
+Design-only reconciliation consumes the accepted f539/f8dd/e544 evidence.
+The P0 matrix remains a production/promotion prerequisite on both code outcomes;
+source/design reconciliation does not require that workload matrix to run first.
+Reconcile existing pre-force publication, lock release, observed-read barriers,
+and the remaining single-writer force wait before accepting a new design.
+
+The canonical outcome mapping is in [tic-e5ff](tic-e5ff.md).

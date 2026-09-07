@@ -22,3 +22,11 @@ docs/plans/riverd-standalone-server-plan.md is the authority. river-server remai
 ## Acceptance Criteria
 
 The child contract, distribution, operations, and consumer-migration epics close with real lifecycle, security, recovery, build-policy, and external-consumer evidence.
+
+## 2026-09-07 scope reconciliation
+
+This is the third user-selected outcome, scheduled after commit architecture
+and measured overlap. It remains technically independent and retains the
+existing security, distribution, operations and consumer-migration children.
+
+The canonical outcome mapping is in [tic-e5ff](tic-e5ff.md).
