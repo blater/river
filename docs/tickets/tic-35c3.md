@@ -1,12 +1,13 @@
 ---
 id: tic-35c3
-status: in_progress
+status: closed
 type: task
 priority: 2
 assignee: blater
 delivery: documentation
 base-commit: f61c150ddb7c9c8153f1ae4503d2f29a1c14e96d
 branch: ticket/tic-35c3-readme-current-limits
+delivered-commit: 3c1e0c48b5310c3bb4fc48fb8f15b08ca945d5b6
 tags:
     - documentation
 created: 2026-09-07T19:31:52.46172Z
