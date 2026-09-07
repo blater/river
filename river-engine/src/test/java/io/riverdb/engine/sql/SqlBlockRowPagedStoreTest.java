@@ -7,6 +7,7 @@ import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.runtime.RiverRuntimeConfig;
+import io.riverdb.engine.runtime.materialized.SqlMaterializedScratchFileCodec;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -91,16 +92,17 @@ final class SqlBlockRowPagedStoreTest {
       throws IOException {
     Files.writeString(
         root.resolve(RiverRuntimeConfig.FILE_NAME),
-        "river.sql.materialized.page=8KB\n"
-            + "river.sql.materialized.cache=64KB\n"
-            + "river.sql.materialized.sort-run=16KB\n",
+        "river.sql.materialized.page=4KB\n"
+            + "river.sql.materialized.cache=256KB\n"
+            + "river.sql.materialized.sort-run=8KB\n",
         StandardCharsets.UTF_8);
     SqlMaterializedTestFixture fixture = SqlMaterializedTestFixture.open(root);
     SqlBlockRow row = new SqlBlockRow();
     assertEquals(StatusCode.OK, row.reset(1));
     SqlBlockRowStore store = new SqlBlockRowStore(fixture.budget());
     assertEquals(StatusCode.OK, store.begin(schema(), 0, false));
-    int configuredRunRows = 2 * (8_000 - 32) / Long.BYTES;
+    int configuredRunRows = fixture.configuredSortRunPages()
+        * (fixture.pageBytes() - SqlMaterializedScratchFileCodec.PAGE_HEADER_BYTES) / Long.BYTES;
     int rowCount = configuredRunRows * 65 + 1;
     for (int key = 0; key < rowCount; key++) {
       append(store, row, key, rowCount - key);
