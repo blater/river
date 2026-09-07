@@ -13,6 +13,8 @@ tags:
     - transactions
 deps:
     - tic-b368
+    - tic-7352
+    - tic-1dda
     - tic-6f81
 links:
     - tic-32b3
@@ -89,3 +91,13 @@ the required durable frontier. Candidate evidence must show the intended
 direction in forces per write and cohort distribution, together with the
 predicted lock-residence change. If those denominators do not move, reject the
 implementation rather than retain a second state machine or publication path.
+
+## 2026-09-07 scope reconciliation
+
+The architecture checkpoint `tic-7352` now precedes this scheduling change.
+Retain P0 and WAL gates. Current code already publishes/releases eligible locks
+before force; the remaining target is next-cohort work blocked by writer force
+occupancy. The b368 reconciliation must replace stale post-force descriptions
+and identify the reviewed execution owner before implementation.
+
+The canonical outcome mapping is in [tic-e5ff](tic-e5ff.md).

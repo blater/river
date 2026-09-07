@@ -26,6 +26,22 @@ all controls and remaining per-index conservatism. This does not displace the
 broader P0/P1 frontier below. [`tic-186e`](tickets/tic-186e.md) remains the
 preceding catalog-resolution checkpoint.
 
+## User-directed follow-up sequence (2026-09-07)
+
+Map architecture to [`tic-7352`](tickets/tic-7352.md), TPS overlap to the existing
+[`tic-f1bb`](tickets/tic-f1bb.md), and supported lifecycle to the existing
+[`tic-e1c9`](tickets/tic-e1c9.md). The first two remain under P1 `tic-e5ff`; no
+parallel epics or duplicate implementation tracks are added.
+
+First reconcile [`tic-b368`](tickets/tic-b368.md) against accepted current-source
+publication/read-dependency behavior and exact force/cohort ownership. That
+source/design work can proceed on its accepted evidence dependencies. Then
+resolve the recorded P0/admission/WAL prerequisites and deliver the architecture
+checkpoint (no speedup expected, no unexplained regression), followed by the
+measured overlap change. Finally execute the existing lifecycle delivery path.
+Lifecycle is technically independent; this order is a scheduling preference.
+None of this mapping certifies outstanding P0 or external-harness gates.
+
 ## Board
 
 | Lane | Now: ready work | Next: unlocked by Now | Later: promotion path |
