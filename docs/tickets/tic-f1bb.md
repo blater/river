@@ -16,88 +16,74 @@ deps:
     - tic-7352
     - tic-1dda
     - tic-6f81
+    - tic-92e3
 links:
     - tic-32b3
 created: 2026-09-04T15:10:07.446626Z
 ---
-# Implement safe durability overlap and exact publication
+# Overlap next-cohort physical work with WAL force
 
-Apply the accepted visibility-frontier design so eligible prepared writers can overlap durability instead of forcing almost every write independently.
+The current group path already appends decisions, publishes visibility and hands
+off locks before force; observed result delivery and commit acknowledgement wait
+for their required durability. The canonical writer nevertheless blocks in that
+force and cannot prepare the next queued cohort. Remove that serialization while
+preserving the existing SQL/workload/isolation/durability contract.
 
 ## Outcome
 
-One atomic end-to-end implementation of the accepted `tic-b368` state machine
-allows eligible dependent work to progress before a predecessor's force
-returns while preserving durable acknowledgement, exact publication, recovery,
-and exactly-once cleanup. The mechanism must move force-per-write, useful
-cohorting, or the specifically predicted lock-residence denominator.
+Eligible queued work is physically prepared, appended and published while an
+earlier captured local force is outstanding. Repeated matched standard-workload
+TPS improves and declared queue/lock-residence or force/cohort denominators move.
+The existing transaction, WAL, publication and budget owners remain authoritative.
 
-## In Scope / Owning Mechanism
+## In scope and maximum change shape
 
-Extend the existing commit execution path, WAL durability dependency, and
-publication frontier as one vertical mechanism. Existing transaction, WAL, and
-publication owners retain their current responsibilities; all River-owned
-callers and focused concurrency/recovery tests change together.
+Implement the accepted b368/92e3 contract as one end-to-end extension of the
+existing path. Replace single-pending-cohort assumptions atomically: retained
+page-generation pins, preparation scratch reuse, resource-accounted descriptors,
+pending suffix visibility/durability, ordered completion/fencing and force-I/O
+handoff. All River-owned direct/group/quorum/maintenance callers change together.
+The serial identity foundation is delivered first by 7352.
+
+One physical writer and one commit queue remain. The WAL force-I/O responsibility
+must be explicitly accepted under 92e3, with bounded handoff and provider/memory
+ownership proof. No duplicate commit executor, outcome state machine, fallback,
+logical representation, dependency policy or compatibility mode.
 
 ## Non-goals
 
-- A second executor, commit queue, durability state machine, or publication
-  path.
-- WAL-format changes, lock-policy tuning, client/protocol work, retry tuning,
-  or benchmark-specific behavior.
-- Mere rearrangement of work after force has already returned.
-- Unrelated transaction, WAL, or lifecycle cleanup.
+No new WAL format, weaker acknowledgement, SQL transaction-program collapse,
+client/protocol changes, lock/retry tuning or artificial batching delay. Merely
+repeating existing pre-force publication or rearranging work after force returns
+is not the selected mechanism. No unrelated lifecycle or transaction cleanup.
 
-## Stop Conditions
+## Acceptance
 
-Do not begin if `tic-b368` does not identify safe pre-force dependent progress
-and its acknowledgement dependency. Stop and reject the implementation if it
-requires a prohibited parallel mechanism or cross-contract expansion. Reject
-it after measurement if the declared force, cohort, or lock-residence
-denominator does not move; do not retain complexity on an end-to-end TPS claim
-alone.
+- Held-force tests prove physical successor work progresses before force return;
+  successive mutations of the same page retain exact generations and dependencies.
+- Completing prefix A cannot acknowledge/unpin/unblock pending suffix B. Force,
+  partial append, quorum, close/rotation, cancellation and recovery faults pass
+  the accepted matrix, with exact transactions, snapshots, pins, receipts and locks.
+- Retained and prospective demand share existing budget authorities. No arbitrary
+  cohort cap, unbounded queue/arena, extra per-row allocation or unexplained copy.
+- Capture fresh pinned-JDK identical short TPS baselines/candidates, followed by
+  longer interleaved controls for the performance claim. Declare the mechanism
+  before edits: actual enqueue-to-selection delay and physical-work/force overlap,
+  predicted lock residence, plus force/cohort distributions. Queue/lock residence
+  may move before force-per-write; do not force a batching explanation onto it.
+- Require repeated main-workload benefit and investigate directional latency/TPS
+  shifts in single-worker and low-contention controls. All invariants/outcomes and
+  capture/cleanup receipts must pass. Slopmark, independent concurrency/recovery
+  review, affected tests, clean full gate and pushed checkpoint complete delivery.
 
-## Maximum Change Shape
+## Stop conditions and readiness
 
-One indivisible vertical extension of the existing commit state machine and
-path, even when it touches several owning modules. It must not be split into
-module-local partial deliveries, leave an alternate path, add compatibility
-behavior, or introduce more than one execution, queueing, durability, or
-publication mechanism.
+Do not begin until every dependency closes and the 92e3 execution/provider/resource
+contract is accepted. Reject the optimization if no declared mechanism moves, no
+repeatable benefit is demonstrated, or a regression/cleanup/failure remains
+unexplained. Open the exact discovered blocker separately rather than retain
+unproductive scheduling complexity. The b368 timing model is not a TPS promise.
 
-## Design
-
-Install forced generations invisibly, advance visibility according to durable dependencies, acknowledge only at the required durability point, and release every lock and lease exactly once on all outcomes.
-
-## Acceptance Criteria
-
-Recovery and concurrency fault matrices pass; no dependent transaction is acknowledged ahead of observed WAL; measured cohorts and forces demonstrate the intended mechanism or identify the next blocker precisely.
-
-## Notes
-
-### 2026-09-04T19:20:01Z
-
-Carry-over review docs/plans/billion-row-capacity-carryover-review.md requires focused faults for uncertain group durability and post-fence admission before implementation acceptance. The dirty worktree supplies scenarios only, not code.
-
-### 2026-09-04 ten-terminal architecture priority review
-
-This is the highest-leverage P1 throughput hypothesis and the highest-risk
-correctness change. Current source already appends, forces, installs forced
-generations invisibly, advances one frontier, and then releases transaction
-state. Repeating that post-force sequence is not an optimization. The accepted
-`tic-b368` design must let a blocked successor make progress before its
-predecessor's force returns while binding every dependent acknowledgement to
-the required durable frontier. Candidate evidence must show the intended
-direction in forces per write and cohort distribution, together with the
-predicted lock-residence change. If those denominators do not move, reject the
-implementation rather than retain a second state machine or publication path.
-
-## 2026-09-07 scope reconciliation
-
-The architecture checkpoint `tic-7352` now precedes this scheduling change.
-Retain P0 and WAL gates. Current code already publishes/releases eligible locks
-before force; the remaining target is next-cohort work blocked by writer force
-occupancy. The b368 reconciliation must replace stale post-force descriptions
-and identify the reviewed execution owner before implementation.
-
-The canonical outcome mapping is in [tic-e5ff](tic-e5ff.md).
+This reconciliation supersedes the 2026-09-04 post-force publication assumptions
+and requirement that force-per-write alone demonstrate progress. The canonical
+mapping remains in [tic-e5ff](tic-e5ff.md).
