@@ -1,10 +1,12 @@
 ---
 id: tic-b368
-status: open
+status: in_progress
 type: investigation
 assignee: blater
 parent: tic-e5ff
 delivery: evidence
+base-commit: 2a5e3ed
+branch: ticket/tic-b368-durability-reconciliation
 tags:
     - performance
     - tpcc
@@ -20,77 +22,43 @@ links:
     - tic-32b3
 created: 2026-09-04T15:10:07.080647Z
 ---
-# Design the durable visibility frontier and dependency fencing
+# Reconcile force-prefix ownership and safe commit overlap
 
-Specify how dependent reads and writes remain ordered while commit durability is overlapped across prepared transactions.
+Specify the remaining ownership and execution changes required to process a
+successor cohort while an earlier WAL force is outstanding. Preserve current
+pre-force visibility, lock handoff, observed-read dependencies and synchronous
+acknowledgement. Do not recreate those already-delivered behaviors.
 
-## Outcome
+## Outcome and scope
 
-One accepted durability and visibility state machine names the pre-force
-transition that permits dependent progress, the dependency inherited by that
-progress, and every acknowledgement, failure, restart, cancellation, fencing,
-and publication outcome. This ticket produces design evidence only and either
-authorizes `tic-f1bb` or records why safe overlap is not available.
+One reviewed source/state-machine and failure matrix identifies the serial
+architecture checkpoint (`tic-7352`) and the atomic overlap implementation
+(`tic-f1bb`). Existing transaction, WAL, publication and budget owners retain
+semantic authority. This ticket delivers evidence only.
 
-## In Scope / Owning Mechanism
-
-The existing transaction commit coordinator owns transaction state and
-acknowledgement; the existing WAL owner owns append, force, and durable
-frontiers; the existing publication owner controls visibility. Specify their
-single shared dependency contract, transition table, invariants, and failure
-matrix without introducing another owner.
+The canonical reconciliation is
+[2026-09-07 durability reconciliation](../delivery/evidence/2026-09-07-tic-b368-durability-reconciliation.md).
+It supersedes this ticket's 2026-09-04 post-force implementation assumptions.
+The outcome mapping remains owned by [tic-e5ff](tic-e5ff.md).
 
 ## Non-goals
 
-- Production-code or test implementation.
-- Queue, batching, lock-policy, retry, or benchmark tuning.
-- A new WAL format, client/protocol contract, or alternative commit path.
-- General transaction-state cleanup unrelated to durability overlap.
+No production, tests, build, benchmark or runtime changes; no batching delay,
+lock-policy change, workload collapse, weaker durability or new WAL format.
+No duplicate commit queue, physical writer, outcome model or dependency policy.
+A force-I/O handoff is an explicit architecture decision within the WAL owner,
+not permission to create a second transaction executor.
 
-## Stop Conditions
+## Acceptance and stop conditions
 
-Stop without authorizing `tic-f1bb` if the design cannot allow a dependent
-transaction to make progress before its predecessor's force returns, or cannot
-bind every dependent acknowledgement to the required durable frontier. Record
-missing prerequisite evidence or separately owned contracts as blockers; do
-not absorb their implementation here.
+Independent concurrency/recovery review accepts the current-source trace,
+force-target identity, retained ownership, state transitions and failure matrix.
+Every missing prerequisite names an owner. Authorize only the delivery whose
+contract is complete; do not infer dynamic overlap safety or a TPS gain from
+serial tests or the optimistic timing model.
 
-## Maximum Change Shape
-
-One evidence-only design comprising one canonical state machine, one invariant
-set, and one failure/recovery matrix. No production source, build logic,
-benchmark tooling, or runtime configuration may change under this ticket.
-
-## Design
-
-Define sequence assignment, WAL dependency, visibility, acknowledgement, force failure, cancellation, fencing, recovery, and exactly-once publication using the existing transaction and WAL owners.
-
-## Acceptance Criteria
-
-Independent concurrency and recovery review accepts a concrete state machine and failure matrix; no lock is released before an equivalent durable dependency contract protects observed data.
-
-## Notes
-
-### 2026-09-04T19:20:01Z
-
-Carry-over review docs/plans/billion-row-capacity-carryover-review.md identifies decision-appended cancellation versus fencing and post-fence transaction admission as explicit state-machine cases. Derive behavior from the accepted durability/visibility contract; do not import the dirty conditionals.
-
-### 2026-09-04 ten-terminal architecture priority review
-
-This is the first P1 design decision after P0. The accepted state machine must
-name the pre-force transition at which a lock-blocked successor may execute or
-enqueue while inheriting a durability dependency from its predecessor. It must
-cover dependent read-only and write acknowledgements, the irreversible point
-after decision append, cancellation, force failure, restart, and fencing. If
-all transaction locks remain held until force completes, the design has not
-created durability overlap and must not authorize `tic-f1bb`.
-
-## 2026-09-07 scope reconciliation
-
-Design-only reconciliation consumes the accepted f539/f8dd/e544 evidence.
-The P0 matrix remains a production/promotion prerequisite on both code outcomes;
-source/design reconciliation does not require that workload matrix to run first.
-Reconcile existing pre-force publication, lock release, observed-read barriers,
-and the remaining single-writer force wait before accepting a new design.
-
-The canonical outcome mapping is in [tic-e5ff](tic-e5ff.md).
+Source/design reconciliation consumes accepted f539/f8dd/e544 evidence; it may
+proceed before P0 workload revalidation. Both production outcomes retain their
+explicit `tic-1dda` gate. The new architecture story has no independent TPS gain
+requirement; repeated unexplained regression blocks acceptance. Overlap must
+prove its declared mechanism and repeatable workload benefit.

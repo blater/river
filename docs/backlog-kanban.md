@@ -33,9 +33,10 @@ Map architecture to [`tic-7352`](tickets/tic-7352.md), TPS overlap to the existi
 [`tic-e1c9`](tickets/tic-e1c9.md). The first two remain under P1 `tic-e5ff`; no
 parallel epics or duplicate implementation tracks are added.
 
-First reconcile [`tic-b368`](tickets/tic-b368.md) against accepted current-source
-publication/read-dependency behavior and exact force/cohort ownership. That
-source/design work can proceed on its accepted evidence dependencies. Then
+The [`tic-b368`](tickets/tic-b368.md) reconciliation defines the accepted serial
+force-target/cohort identity replacement and preserves existing pre-force
+publication/read-dependency behavior. The force-I/O/provider decision is owned
+by [`tic-92e3`](tickets/tic-92e3.md) before dynamic overlap is implemented. Next
 resolve the recorded P0/admission/WAL prerequisites and deliver the architecture
 checkpoint (no speedup expected, no unexplained regression), followed by the
 measured overlap change. Finally execute the existing lifecycle delivery path.
