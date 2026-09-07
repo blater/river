@@ -30,3 +30,11 @@ and measured overlap. It remains technically independent and retains the
 existing security, distribution, operations and consumer-migration children.
 
 The canonical outcome mapping is in [tic-e5ff](tic-e5ff.md).
+
+## Required platforms (2026-09-07)
+
+This delivery must work on macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS.
+Use the amended ADR 0014 portable contract and platform adapters; do not require
+POSIX permissions, Unix signals, or SecureDirectoryStream on every platform.
+Platform-specific tests must preserve the same ownership, security, durability,
+and recovery outcomes. The platform support is required, not yet implemented.

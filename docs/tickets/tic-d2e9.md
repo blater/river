@@ -34,3 +34,15 @@ No-argument and ps behavior match; empty guidance, two-instance start/list/stop,
 port collision, same-directory lock contention, stale-registry replacement,
 warning-without-delete, and matching-record removal by shutdown/stop tests pass
 without signalling unrelated processes.
+
+## Required platforms (2026-09-07)
+
+This delivery must work on macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS.
+Use the amended ADR 0014 portable contract and platform adapters; do not require
+POSIX permissions, Unix signals, or SecureDirectoryStream on every platform.
+Platform-specific tests must preserve the same ownership, security, durability,
+and recovery outcomes. The platform support is required, not yet implemented.
+
+## Stop boundary
+
+Own only registry validation, ps, and multi-instance composition over the existing start/stop path. No process-table discovery, service manager, remote administration, or new registry format without a demonstrated contract defect.

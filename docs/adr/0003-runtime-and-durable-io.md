@@ -11,8 +11,11 @@ themselves prove survival across power loss.
 ## Decision
 
 Use JDK 25 and Gradle 9.7.0. The Java NIO `FileChannel` provider is the Phase 1
-reference implementation. Mapped memory and native/direct-I/O providers are
-optional accelerators behind the same River-owned platform contracts.
+reference implementation. Platform-specific native calls may be required for
+correctness where Java NIO
+cannot supply a required guarantee. They remain behind the same River-owned
+platform contracts. Mapped memory and direct I/O used only for performance
+remain optional accelerators.
 
 Phase 0 P08 defines the minimal `FileIoProvider`, `DurableFile`,
 `DurableDirectory`, clock, scheduler, memory, and fault SPIs plus
@@ -42,9 +45,13 @@ directory-durability protocols.
 
 ## Consequences
 
-Portable NIO remains the correctness baseline and native optimization stays
-replaceable. Supported deployments may initially be narrower than platforms on
-which River merely starts.
+River retains one portable durability contract, implemented by NIO and, where
+necessary, platform-specific native operations. The standalone server must
+support macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS under the amended
+[ADR 0014](0014-riverd-instance-security.md). Each provider needs actual crash
+and power-loss evidence; those platform requirements do not claim completed
+qualification. Evidence is reassessed when relevant operations or platform
+dependencies change, not automatically for every unrelated launcher rebuild.
 
 ## Alternatives
 

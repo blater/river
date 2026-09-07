@@ -51,3 +51,15 @@ reload-missing-secret `IO_FAILURE`, with no silent truncation, repair, or secret
 exposure. Prove exactly one wall-clock/fence read per authentication/statement,
 zero warmed River allocation, and the ADR's interleaved 1/4/16-client cost
 evidence; investigate every repeated shift outside adjacent-sample variation.
+
+## Required platforms (2026-09-07)
+
+This delivery must work on macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS.
+Use the amended ADR 0014 portable contract and platform adapters; do not require
+POSIX permissions, Unix signals, or SecureDirectoryStream on every platform.
+Platform-specific tests must preserve the same ownership, security, durability,
+and recovery outcomes. The platform support is required, not yet implemented.
+
+## Stop boundary
+
+Own only the two specified offline commands over the existing audit and credential state machines. No new audit engine, certificate scheme, filesystem adapter, online renewal, or background rotation. Missing component behavior returns to its existing owner.

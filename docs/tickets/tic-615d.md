@@ -10,56 +10,41 @@ tags:
     - security
     - identity
     - filesystem
-deps:
-    - tic-11a5
 created: 2026-09-04T15:23:11.178601Z
+deps:
+    - tic-485d
 ---
-# Implement incarnation-bound instance credentials and identity
+# Implement instance credentials and identity
 
-Create the non-empty `river-server-app` boundary with launcher-owned atomic
-instance metadata, POSIX filesystem proof, owner-only credential generations,
-and the one bounded client-configuration format for first creation and strict
-restart.
+## Outcome
 
-## Design
+Create one persistent database identity and credential generation, write the
+client settings, and reopen them safely through the portable filesystem owner.
+The format, security, and recovery authority is
+[ADR 0014](../adr/0014-riverd-instance-security.md).
 
-Bind the database incarnation, credential generation, certificate/token
-digests, algorithms, principal, permissions, validity, and client
-configuration. `river-client` owns the only config parser. Generate the
-certificate with one local `BouncyCastleProvider` object passed explicitly to
-EC key generation, signer, converter, certificate parsing, and signature
-verification; never install/select it globally. Treat `token-sha256` and the
-security manifest as credential-equivalent, and implement the exact owned
-buffer/authenticator destruction lifecycle and honest public-JSSE cleanup.
-Implement only the ADR-enumerated path calls with parent file-key revalidation,
-same-parent regular-file staging, both-parent directory-move force, and matching
-hard-link alias recovery. Require every SDS regular-file/lock channel to be a
-public `FileChannel` before force/tryLock. Add real code/tests plus used
-module/settings and dependency-policy entries; do not add the application
-distribution yet.
+## Scope
 
-## Acceptance Criteria
+Own first creation, strict restart, bound stage recovery, certificate/token
+construction and destruction, and the single `river-client` configuration
+parser. Create `river-server-app` only with this real instance consumer.
+Consume `tic-485d`'s filesystem contract; platform adapters are owned by
+`tic-485d`, `tic-867d`, and `tic-b75d`. Do not implement their operations here.
+Keep the ADR's local explicit cryptographic provider and secret-lifetime rules.
 
-Partial first publication is recoverable only before instance authority exists;
-accepted missing or mismatched material fails closed; no implicit regeneration
-or arbitrary non-empty-directory adoption occurs. Under-lock new/torn/stale
-pre-bootstrap lock recovery is limited to the otherwise empty authority-free
-tree; bootstrap/instance cases require their identity and absent process. Exact
-nonce-staged bootstrap and every properties checksum pass forced-write/rename/
-directory-force fault tests, including the bound `.instance-<nonce>.stage` in
-`DATADIR`. A partial bound instance stage is removed/recreated only after exact
-path/type/owner/mode, stable file-key, and non-alias proof; unbound, aliased,
-wrong-type, or changed/wrong-file-key objects are preserved.
-POSIX/no-follow/provider tests cover overriding ACLs, the sole
-fixed-component path-based directory create and revalidation race, file-key
-swaps, immutable hard-link target/source force and alias recovery, cross-parent
-directory force, SDS-returned `FileChannel` force/tryLock, and probed atomic
-exclusive/replacement/force API semantics; the runtime probe makes no durability
-claim. Implement the canonical qualification-record parser and runtime-observable
-tuple/probe matcher without claiming to observe its evidence-only fields.
-Unsupported stores including
-APFS/NFS/FUSE and capabilities fail closed, while the
-qualified default-Linux local ext4/xfs adapter passes. X.509 provider
-selection, expiry, manifest, config-loader, River-owned secret zero/destroy on
-every path, provider-key destroy false/throw `IO_FAILURE`, public session
-enumeration/reference clearing, format-bound, fault, and permission tests pass.
+## Acceptance
+
+Prove first creation/reopen, correct client configuration, owner-only secret
+handling, corruption/mismatch refusal, expiry, interrupted publication recovery,
+and cleanup on failure. Use shared filesystem fixtures and the available APFS
+adapter. The installed all-platform lifecycle gate remains with `tic-95e8`.
+All required formats and failure outcomes follow the ADR; this ticket does not
+invent additional metadata or duplicate its full specification.
+
+## Stop boundary
+
+No installed command/distribution, audit engine, credential-renewal command,
+registry, service manager, new filesystem framework, or performance tooling.
+Do not regenerate accepted missing credentials or add compatibility paths.
+A missing platform operation goes to its adapter owner. Stop when creation and
+restart can supply the validated instance and client settings to `tic-ec50`.

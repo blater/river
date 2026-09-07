@@ -31,3 +31,7 @@ together; no transitional authorization wrapper remains.
 ## Acceptance Criteria
 
 Authentication and statement admission, group force, crash, corruption, exhaustion, cancellation, archive, allocation, and secret-erasure tests pass; matched authenticated TPS shows the removed force mechanism without an unexplained regression.
+
+## Stop boundary
+
+Own only audit admission, byte accounting, group forcing, and recovery under the accepted audit design. No launcher, platform adapter, archival CLI, credentials, new audit format for convenience, or benchmark framework. `tic-b901` owns the archive command. Stop after focused failure tests and matched authenticated TPS validate this mechanism.

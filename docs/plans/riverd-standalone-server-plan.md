@@ -156,7 +156,7 @@ sequenceDiagram
 
 Arguments and path-tree collisions are fully validated before the first
 filesystem mutation. Shutdown always proceeds listener first, database second.
-The stop command performs the ADR's bounded SDS scan of the fixed request,
+The stop command performs the ADR's bounded scan through the platform adapter of the fixed request,
 nonce-stage, and accepted-receipt control names, then validates the bounded
 runtime/lock identity before a new publication. It never searches arbitrary
 processes and never terminates or otherwise signals a PID.
@@ -299,44 +299,39 @@ to bootstrap, instance, security, client, runtime, lock, stop request, registry,
 ready file, renewal intent, and public-archive manifests; stdout is not such a
 record.
 
-The exact filesystem admission contract is ADR 0014: the resolved data tree is
-POSIX owner-only with no overriding ACL/access grant. Existing owned paths are
-accessed through no-follow `SecureDirectoryStream` handles. Because that API
-cannot create directories, the sole path-based create is a validated fixed
-component under a verified `0700` parent followed immediately by parent/child
-file-key, no-follow, owner/mode/ACL, and secure-stream revalidation. The
-qualified default-Linux NIO adapter supports only local `ext4`/`xfs` POSIX ACL
-mask semantics. The ADR enumerates the only path calls, parent file-key
-revalidation, target/source force order, destination-parent staging,
-source/destination alias recovery, and both-parent forcing for a cross-parent
-directory move. The adapter uses hard-link publication only for forced
-immutable files staged beside their targets; cross-parent regular-file
-link/unlink is forbidden. Bootstrap binds `.instance-<nonce>.stage` in
-`DATADIR`, and renewal binds `.security-<nonce>.stage` in `security/`.
-Every SDS `newByteChannel` result used for regular files or locking must be a
-public `FileChannel`, otherwise `FEATURE_NOT_SUPPORTED`; the probe exercises
-`force(true)` and `tryLock` through those returned channels.
+The required platforms and filesystem guarantees are defined in
+[ADR 0014](../adr/0014-riverd-instance-security.md#required-platforms-and-filesystem-guarantees):
+macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS. Each must support the installed
+server and authenticated JDBC lifecycle. These are requirements, not completed
+platform qualification.
 
-The exact executable profile is
-`<distribution-home>/lib/riverd-filesystem-qualification-v1.properties`,
-checksummed and one-way bound by the launcher-JAR manifest to its contract,
-version, source revision, and record checksum. Its `runtime-*` JDK/provider/
-OS/FileStore fields are matched through public APIs on every instance,
-registry, and ready-parent store; its `evidence-*` mkfs/device/mount/barrier/
-ACL-mask/fault-harness fields are evidence-only and are not falsely inferred
-from `FileStore`. The runtime probe is not durability evidence: `tic-95e8` must
-bind API/process-crash evidence and `tic-9640` ADR-0003 power-loss evidence to
-the identical qualification-record and launcher-JAR checksums before support
-is promoted. A rebuilt pair requires new evidence. macOS/APFS and
-unrecognized/remote/access-unprovable stores are unsupported. Unsupported proof is
-`FEATURE_NOT_SUPPORTED`; wrong type/owner/mode/ACL/symlink proof is
-`ACCESS_DENIED`. Before mutation, equality, unintended ancestor/descendant,
-symlink, file-key, and hard-link alias collisions among the data tree, its
-pairwise-disjoint fixed children, registry, and ready target are
-`INVALID_EXTERNAL_INPUT`; only a fixed child's declared direct containment in
-`DATADIR` is allowed. There is no
-best-effort or non-POSIX mode. Version-1 property formats reject control
-characters and `=` in paths; there is no encoding alternative.
+River owns one portable contract for exclusive instance ownership, effective
+owner-only permissions, stable object identity, atomic publication, durable
+namespace changes, and recovery. Platform adapters implement those operations;
+Java APIs may be supplemented with native calls where required. POSIX modes,
+SecureDirectoryStream, hard links, and Java directory-force calls are not
+universal requirements. No platform adapter may weaken durability or credentials.
+The same adapter contract covers the instance, registry, and ready-file trees.
+Bootstrap binds `.instance-<nonce>.stage` in `DATADIR`, and renewal binds
+`.security-<nonce>.stage` in `security/`; platform operations preserve those
+state machines and their safe recovery rules.
+
+Path handling includes Windows drive paths, separators, case aliases, and
+reparse points. The per-user home is resolved on each platform. Normal Windows
+console shutdown and the cooperative stop command share the lifecycle owner
+used by Unix signals; forced termination follows crash recovery.
+
+`tic-95e8` tests the installed distribution's filesystem/security and process-
+crash behavior on each platform; `tic-9640` qualifies operational and power-loss
+recovery, including the actual database durable-I/O provider. Runtime checks
+verify available capabilities and effective permissions; they cannot certify
+power-loss durability. Evidence follows the tested adapter operations and
+relevant platform dependencies. An unrelated launcher/JAR change does not
+require a new full power-loss campaign or a machine-specific runtime manifest.
+
+Reject missing capabilities before dependent mutation, preserve ambiguous or
+corrupt state, and keep the ADR's collision and properties-format rules. A
+required platform cannot be delivered by permanently returning unsupported.
 
 ### 4.3 Security bootstrap and client discovery
 
@@ -547,7 +542,7 @@ then force and atomically publish the ADR's incarnation-, runtime-checksum-, and
 owner-nonce-bound `stop.request`. The lock-owning
 server validates and atomically renames the request to its exact accepted
 receipt before invoking the same lifecycle owner as a directly delivered
-SIGINT/SIGTERM. PID/start/command are evidence and display fields only.
+platform shutdown (Unix SIGINT/SIGTERM or Windows console shutdown). PID/start/command are evidence and display fields only.
 
 Exact retries and concurrent CLIs join the one valid pending/accepted request
 for the same owner/runtime; contenders remove only their own unpublished
@@ -608,7 +603,7 @@ record-sha256=...
 On the first start:
 
 1. Parse and validate all arguments without mutation.
-2. Resolve the secure parent, create or validate POSIX `0700` `DATADIR`, and
+2. Resolve the secure parent, create or validate owner-only `DATADIR`, and
    acquire its exclusive `instance.lock` through no-follow handles.
 3. Classify authority under the exact file lock. For a genuinely new tree,
    generate the incarnation/attempt nonce and replace a torn/stale lock record
@@ -665,8 +660,7 @@ returns `CONFLICT`/`CORRUPTION`/`NOT_OWNER`.
 7. matching registry record;
 8. one optional ready-file or stdout readiness commitment.
 
-Register the JVM shutdown hook only after database ownership exists. On SIGINT
-or SIGTERM, close the listener first and the database second, reporting both
+Register the JVM shutdown hook only after database ownership exists. On Unix SIGINT/SIGTERM or Windows console shutdown, close the listener first and the database second, reporting both
 native `StatusCode` outcomes. The normal close path and shutdown hook must
 share one idempotent lifecycle owner so each resource is closed at most once.
 
@@ -704,7 +698,7 @@ river-server-app/
     RiverDaemonInstance.java    create/open/start/close ownership
     RiverDaemonIdentity.java    bounded metadata read/write
     RiverDaemonCredentials.java exact credential generation/validation
-    RiverDaemonFileSystem.java  POSIX/no-follow trust proof
+    RiverDaemonFileSystem.java  portable permission/identity/durability contract
     RiverDaemonRegistry.java    owned live-instance records and listing
     RiverDaemonOutput.java      stable startup/error records
     RiverDaemonResources.java   one resource-plan policy
@@ -717,8 +711,10 @@ different failure boundaries. Do not introduce interfaces unless a genuine
 provider boundary is needed for deterministic tests; package-private concrete
 classes and injected narrow Java facilities are sufficient.
 
-`tic-615d` owns the identity, credential, filesystem, and client-configuration
-classes and the non-empty module boundary. `tic-ec50` owns the command,
+`tic-485d` owns the shared filesystem operations and APFS implementation;
+`tic-867d` and `tic-b75d` add Linux and Windows adapters against that contract.
+`tic-615d` owns identity, credentials, client configuration, and the non-empty
+app module, consuming those platform operations. `tic-ec50` owns the command,
 lifecycle, resources, output, final runtime/registry publication formats,
 application distribution, and complete caller
 migration. It secures `TpccServerMain` and deletes every plain server/client
@@ -729,6 +725,19 @@ and must not enter `riverd`.
 
 `tic-b901` owns the running-validity fence and shutdown behavior together with
 offline credential renewal, so neither validity boundary can diverge.
+
+### Delivery scope controls
+
+Each platform ticket implements the same operations for one OS; none owns
+credential or lifecycle policy. `tic-615d` stops at validated instance creation
+and restart. `tic-ec50` composes those results into the installed start/JDBC path
+and migrates the existing callers without changing workload semantics. Stop/ps
+and offline maintenance remain with their existing tickets. Validation tickets
+consume existing tests and retain failures; they do not grow new tooling or
+repair production code. The named ticket stop boundaries are delivery limits.
+A newly discovered independent mechanism or defect needs a separate ticket,
+and blocks only its actual consumer. No additional platform, service manager,
+remote binding, or PostgreSQL protocol work is included in this delivery.
 
 ## 9. Build and distribution
 
@@ -744,7 +753,7 @@ application {
 The supported developer build is:
 
 ```sh
-./gradlew :river-server-app:installDist
+./gradlew --no-daemon :river-server-app:installDist
 river-server-app/build/install/riverd/bin/riverd --help
 river-server-app/build/install/riverd/bin/riverd start
 ```
@@ -851,15 +860,13 @@ not exempt the new module from existing build policy.
   every pre/post-authority force/crash boundary, durable old-secret unlink,
   `ACCESS_DENIED` loaded-old versus `IO_FAILURE` missing reload, and no
   old-token overlap;
-- supported and unsupported POSIX/secure-directory providers, symlink swaps,
-  ACL override, every enumerated path operation, parent file-key and
-  directory-create races, source/destination aliases and parent forces,
-  incorrect atomic exclusive/replacement semantics, owner/mode/type failures,
-  SDS-returned non-`FileChannel`, force/tryLock, and every format framing bound
-  have focused tests; qualification-record checksum/JAR-manifest binding and
-  runtime-observable matching are negative-tested while evidence-only fields
-  remain promotion checks, not runtime claims; the runtime probe is not
-  accepted as durability evidence;
+- macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS adapters pass shared
+  permission, identity, locking, exclusive/replacement publication, cleanup,
+  and recovery tests. Cover ACL inheritance, symlinks/reparse points, case and
+  hard-link aliases, path races, failed flushes, Windows sharing/deletion
+  behavior, and format bounds using the actual platform operations. Unsupported
+  capabilities fail before dependent mutation. Runtime probes are not accepted
+  as power-loss evidence; qualification reuse requires a scoped impact review;
 - a source and compiled-code check proves that production contains no plain
   listener/client fallback.
 
@@ -891,7 +898,7 @@ Use the narrow loop while implementing:
 
 ```sh
 ./gradlew :river-server-app:test
-./gradlew :river-server-app:installDist
+./gradlew --no-daemon :river-server-app:installDist
 ./gradlew moduleDependencyPolicy
 ```
 
@@ -960,7 +967,7 @@ The launcher slice is complete when:
 - default and overridden paths/address are printed exactly once at startup;
 - first start, clean stop, restart, connection, and persistence work through
   the real distribution;
-- SIGINT/SIGTERM close the listener before the database;
+- platform shutdown (Unix SIGINT/SIGTERM or Windows console shutdown) close the listener before the database;
 - `riverd stop` stops only the server that consumes the verified owner-bound
   request, never signals by PID, and returns a clear nonzero result for stale
   or mismatched state;

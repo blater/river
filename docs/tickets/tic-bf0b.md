@@ -25,3 +25,11 @@ The first module delivery contains a functioning command, not scaffolding. It co
 ## Acceptance Criteria
 
 Installed help, first start, authenticated SQL, orderly shutdown, restart, persistence, port zero, readiness, build policy, and failure cleanup pass through the real distribution.
+
+## Required platforms (2026-09-07)
+
+This delivery must work on macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS.
+Use the amended ADR 0014 portable contract and platform adapters; do not require
+POSIX permissions, Unix signals, or SecureDirectoryStream on every platform.
+Platform-specific tests must preserve the same ownership, security, durability,
+and recovery outcomes. The platform support is required, not yet implemented.

@@ -59,7 +59,7 @@ None of this mapping certifies outstanding P0 or external-harness gates.
 
 | Lane | Now: ready work | Next: unlocked by Now | Later: promotion path |
 | --- | --- | --- | --- |
-| Standalone `riverd` | [`tic-72ea`](tickets/tic-72ea.md) and [`tic-615d`](tickets/tic-615d.md) in parallel; [`tic-11a5`](tickets/tic-11a5.md) ratified accepted ADR 0014 | [`tic-ec50`](tickets/tic-ec50.md): deliver the installable authenticated lifecycle | Safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
+| Standalone `riverd` | [`tic-72ea`](tickets/tic-72ea.md) and [`tic-485d`](tickets/tic-485d.md) in parallel; [`tic-11a5`](tickets/tic-11a5.md) ratified accepted ADR 0014 | [`tic-615d`](tickets/tic-615d.md) consumes APFS operations; [`tic-867d`](tickets/tic-867d.md) and [`tic-b75d`](tickets/tic-b75d.md) add Linux/Windows; then [`tic-ec50`](tickets/tic-ec50.md) composes the installed lifecycle | Safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
 | Transaction performance | [`tic-2828`](tickets/tic-2828.md) is closed with warmed page-generation reuse and a passing joint engine/clean-test gate; `tic-288d`, `tic-e2be` and `tic-50e8` are closed against the accepted joint checkpoint; `tic-5cc0` is now closed at `perf-checkpoint-20260907-savepoint-admission`; [`tic-af29`](tickets/tic-af29.md) is closed at `perf-checkpoint-20260907-lock-block-causality` as required observability with inconclusive performance; [`tic-8e74`](tickets/tic-8e74.md) is closed with the independent snapshot-cleanup gauge and no repeated diagnostic regression; [`tic-0636`](tickets/tic-0636.md) remains historically closed, but later commits removed its wired guarantees; [`tic-1fe7`](tickets/tic-1fe7.md) is closed with the current contract reconciliation; [`tic-ed12`](tickets/tic-ed12.md) is closed with verified prebuilt artifact binding; [`tic-d7c2`](tickets/tic-d7c2.md) is closed with qualified invocation host ownership; resume [`tic-1dda`](tickets/tic-1dda.md) | Complete [`tic-1dda`](tickets/tic-1dda.md) with the serializable P0 matrix, including the mixed-isolation reproducer; preserve the first failed criterion | The accepted [`tic-b368`](tickets/tic-b368.md) design and closed [`tic-7352`](tickets/tic-7352.md) serial ownership foundation precede overlap; after P0, complete the [`tic-4d14`](tickets/tic-4d14.md) lock-scope audit; re-baseline existing logical/WAL mechanisms before editing them; then admit cumulative cohorts, remove one proved redundant holding rule, implement only a real pre-force overlap mechanism, run P1 promotion, and proceed to the Payment A/B |
 | Stress and comparison | No River promotion work until [`tic-45a7`](tickets/tic-45a7.md) closes; `tools/tps-test.sh` remains available for River diagnostics | Verify `river-harness` uses the published `riverd` process contract; establish the independent artifact-comparison sidecar | [`tic-c7bb`](tickets/tic-c7bb.md): 500 committed TPS; then [`tic-9c58`](tickets/tic-9c58.md): MariaDB/PostgreSQL comparison and Alpha3 parity |
 | Workflow safety | [`tic-701f`](tickets/tic-701f.md) and [`tic-dd80`](tickets/tic-dd80.md) may proceed when they do not displace P0 product work | Atomic cross-worktree claims and promotion enforcement | Close [`tic-ef07`](tickets/tic-ef07.md) when both enforcement gaps are proved |
@@ -72,14 +72,24 @@ is non-blocking support work and must not become a substitute for delivery.
 
 ### A. Make `riverd` the supported benchmark lifecycle
 
+The first standalone delivery requires macOS/APFS, Linux/ext4 and XFS, and
+Windows/NTFS. The amended ADR 0014 defines shared security and durability
+contracts with platform-specific implementations where needed. Platform support
+and validation are outstanding work; Linux-only completion cannot close this
+path. `tic-831a` records the user's platform requirement amendment.
+
 1. The [`tic-a221`](tickets/tic-a221.md) audit design and parallel
    [`tic-de1d`](tickets/tic-de1d.md) boundary inventory are closed.
 2. [`tic-11a5`](tickets/tic-11a5.md) is closed after independent acceptance of
    the one ADR 0014 lifecycle/security contract.
 3. Implement resource-accounted audit durability in
-   [`tic-72ea`](tickets/tic-72ea.md) and instance identity/credentials in
-   [`tic-615d`](tickets/tic-615d.md) (**Now**). These may proceed in parallel after the ADR;
-   `tic-615d` creates the non-empty app boundary with its real security consumer.
+   [`tic-72ea`](tickets/tic-72ea.md) and the portable filesystem contract with
+   APFS in [`tic-485d`](tickets/tic-485d.md) (**Now**). Once that contract works,
+   [`tic-615d`](tickets/tic-615d.md) consumes it for credentials while
+   [`tic-867d`](tickets/tic-867d.md) and [`tic-b75d`](tickets/tic-b75d.md) add Linux
+   and Windows implementations. They may proceed independently with disjoint
+   ownership; they cannot redefine the shared contract. The app module begins
+   with `tic-615d`'s real instance consumer.
 4. Complete authenticated start/restart in [`tic-ec50`](tickets/tic-ec50.md),
    migrate every River caller including diagnostics, and delete all plain APIs;
    then prove the distribution and no-plain-path gate in

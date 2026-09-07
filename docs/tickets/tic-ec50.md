@@ -10,45 +10,46 @@ tags:
     - server
     - security
     - distribution
+created: 2026-09-04T15:23:11.26945Z
 deps:
     - tic-72ea
     - tic-615d
-created: 2026-09-04T15:23:11.26945Z
+    - tic-867d
+    - tic-b75d
 ---
-# Deliver the installable authenticated riverd start and restart path
+# Deliver the installed authenticated riverd start and restart path
 
-Complete the `river-server-app` boundary with a real foreground riverd command
-and installed distribution that own one instance, start authenticated TLS
-loopback, emit stable readiness, shut down in order, and reopen persistent data.
+## Outcome
 
-## Design
+An installed foreground `riverd` starts a persistent database, accepts River
+JDBC connections, shuts down cleanly, and reopens committed data on macOS/APFS,
+Linux/ext4 and XFS, and Windows/NTFS.
 
-The module is the only composition root. Add application/distribution,
-archive, reproducibility, and only-used dependency entries; remove the dormant
-`river-server -> river-engine` allowance. Arguments validate before mutation
-and the resource profile has one owner. Migrate every River server, client,
-JDBC, CLI, benchmark, script, and test caller to authenticated config, including
-`TpccServerMain`, then delete all plain/nullable APIs and tests in the same
-delivery without wrappers.
+## Scope
 
-## Acceptance Criteria
+Compose the delivered instance, filesystem, audit, database, and transport
+owners in `river-server-app`. Own argument/resource configuration, installed
+packaging, readiness, and ordered shutdown. Follow
+[ADR 0014](../adr/0014-riverd-instance-security.md) for exact behavior.
+Migrate every River-owned plain listener/client caller, including JDBC, CLI,
+benchmarks and tests, to authenticated configuration and delete the superseded
+APIs in this delivery. Migration changes connection setup, not workload or SQL
+semantics. Do not introduce temporary wrappers or optional authentication.
 
-The installed distribution handles help/version, defaults, explicit paths,
-loopback IPv4/IPv6, port zero, ready-file refusal, first start, authenticated
-SQL, SIGINT/SIGTERM, restart, persistence, and reverse-order failure cleanup
-without Gradle or classpath knowledge. It packages and enforces the fixed
-qualification-record location, launcher-manifest binding, runtime-observable
-matcher, and SDS public-`FileChannel` capability while leaving durability
-acceptance to `tic-95e8`/`tic-9640`. With a ready file, forced atomic
-publication is the sole commit and broken stdout is an irrelevant mirror;
-without one, prefix/partial failures clean up but an observed complete final
-ready record remains irrevocable across later flush failure. Publication races
-are deterministic. A post-visibility target/parent/source force failure or
-ambiguous stdout-only final failure sets terminal `IO_FAILURE`, cleans up, and
-eventually exits 1; ready-file mirror failure stays nonterminal. Under-lock
-stale-ready cleanup removes only an exact incarnation/owner/process/file-key
-binding. Normal, failed, and signal shutdown release the listener,
-workers, and JSSE before idempotent authenticator destruction; caller scratch
-is zeroed on every path, public session/key cleanup failure is `IO_FAILURE`,
-and no provider-owned opaque erasure is claimed. Source and compiled-code checks find no plain
-listener/client fallback or optional authentication branch.
+## Acceptance
+
+Run installed help/version, first start, authenticated SQL, commit/restart,
+port-zero readiness, conflicting starts, wrong credentials, startup failure,
+and shutdown on each OS. Unix signals and Windows console shutdown enter the
+same owner; forced termination follows crash recovery. Test the ADR's readiness
+visibility/failure boundaries and resource/secret cleanup. Distribution and
+source/compiled checks prove that no plain path remains. `tic-95e8` independently
+checks the assembled delivery; `tic-9640` owns power-loss qualification.
+
+## Stop boundary
+
+No filesystem adapter implementation, new credential/audit mechanism, PostgreSQL
+wire protocol, remote binding, service-manager integration, installer, stop/ps
+command, renewal/archive command, or benchmark comparison policy. Missing
+prerequisites return to their existing owners. Stop when the installed start,
+JDBC, shutdown, and restart path works; no additional admin commands join it.
