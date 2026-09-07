@@ -48,8 +48,10 @@ checks the assembled delivery; `tic-9640` owns power-loss qualification.
 
 ## User experience acceptance (2026-09-07)
 
-- `riverd start --listen=127.0.0.1:9192` selects a port; the default is 9191
-  and port zero selects an available port. Help shows these examples and the
+- `riverd start --port=9192` selects a port; the default is 9191
+  and port zero selects an available port. Optional `--ip=::1` selects IPv6
+  loopback; the default IP is `127.0.0.1`. These replace `--listen` and `-L`.
+  Help shows these examples and the
   data-directory option, defaults, foreground behavior and shutdown method.
 - `riverd --help` and `riverd start --help` explain the supported path in plain
   language. Invalid options give a concise error and point to relevant help.

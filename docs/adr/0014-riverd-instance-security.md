@@ -41,7 +41,7 @@ The installed executable is `riverd`. Its complete first-version grammar is:
 
 ```text
 riverd
-riverd start [-D PATH|--datadir=PATH] [-L HOST:PORT|--listen=HOST:PORT]
+riverd start [-D PATH|--datadir=PATH] [--port=PORT] [--ip=ADDRESS]
              [--maximum-connections=N] [--ready-file=PATH]
 riverd stop [-D PATH|--datadir=PATH] [--timeout=DURATION]
 riverd ps
@@ -83,10 +83,10 @@ enter the same ordered shutdown owner. Forced process termination is a crash
 and follows recovery rules; Windows is not required to emulate POSIX signals. The
 default data directory is `$HOME/.river/default`, the default listener is
 `127.0.0.1:9191`, the default maximum connection count is 16, and the default
-stop timeout is 30 seconds. `-L` accepts only `localhost`, `127.0.0.1`, or
-bracketed `::1`; port zero requests an ephemeral port. Wildcard,
-non-loopback, ambiguous multi-address, malformed, and out-of-range inputs are
-invalid. `N` is canonical decimal `1..2147483647`; values outside the addressable
+stop timeout is 30 seconds. `--port` accepts decimal `0..65535`; zero
+requests an available port. Optional `--ip` defaults to `127.0.0.1` and accepts
+`127.0.0.1` or `::1` (without brackets). Wildcard, non-loopback, hostname,
+malformed, and out-of-range inputs are invalid. `N` is canonical decimal `1..2147483647`; values outside the addressable
 slot width are `INVALID_EXTERNAL_INPUT`, while a valid count that cannot compile
 within the declared resource profile is `RESOURCE_EXHAUSTED` before mutation.
 The launcher compiles it once; there are no individual engine tuning flags.
