@@ -142,7 +142,10 @@ Evidence root: `/private/tmp/river-tic-af29-evidence-20260907`, including
 per-run directories/logs, `samples.json`, `disabled-samples.json`, causal and
 mechanism summaries, JFR recordings/window reports, allocation traces, clean
 XML/logs, slopmark reports, bytecode audit, policy delta and independent review.
-Integration commit/tag and post-merge smoke are recorded upon promotion.
+Feature evidence tip: `0b39bfe`. Integration: `8d1d2bc8837fb3426a35b6f5ca7b415f22a1127b`.
+Annotated tag: `perf-checkpoint-20260907-lock-block-causality`. Feature,
+integration and tag were pushed atomically. Post-merge 1s/3s smoke passed at
+145.000 TPS, zero retries/errors and valid capture; this smoke is not comparative.
 
 ### 2026-09-07 serial WAL force-target ownership (`tic-7352`)
 

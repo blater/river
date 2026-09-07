@@ -1,12 +1,14 @@
 ---
 id: tic-af29
-status: in_progress
+status: closed
 type: story
 assignee: blater
 parent: tic-5db4
 delivery: code
 base-commit: 5d70625
 branch: ticket/tic-af29-lock-block-causality-delivery
+delivered-commit: 8d1d2bc8837fb3426a35b6f5ca7b415f22a1127b
+checkpoint-tag: perf-checkpoint-20260907-lock-block-causality
 tags:
     - performance
     - tpcc
