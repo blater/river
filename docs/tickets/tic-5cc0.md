@@ -1,12 +1,14 @@
 ---
 id: tic-5cc0
-status: in_progress
+status: closed
 type: bug
 assignee: blater
 parent: tic-5db4
 delivery: code
-base-commit: 2216407
+base-commit: "2216407"
 branch: ticket/tic-5cc0-savepoint-admission-delivery
+delivered-commit: 274968e8be4ddff0949086ea98e44dbe5ea4a81a
+checkpoint-tag: perf-checkpoint-20260907-savepoint-admission
 tags:
     - p0
     - sql
@@ -146,3 +148,9 @@ claim and no repeated short-sample regression signal. User-declared background
 PC load remains part of the diagnostic context; empty host-observation files
 and the current receipts do not prove exclusive-host ownership. Broader P0
 provenance/host and scaling gates remain open.
+
+## Delivery
+
+Merged/pushed at `274968e8be4ddff0949086ea98e44dbe5ea4a81a`, annotated tag
+`perf-checkpoint-20260907-savepoint-admission`. Post-merge smoke passed
+invariants/capture/shutdown with zero retries/errors; its3s TPS is not comparative.

@@ -45,6 +45,8 @@ Decision and attribution:
 ### 2026-09-07 resource-accounted SQL savepoints (`tic-5cc0`)
 
 Correctness/resource ownership checkpoint; no independent speedup claim.
+Integration `274968e8be4ddff0949086ea98e44dbe5ea4a81a`, pushed annotated tag
+`perf-checkpoint-20260907-savepoint-admission`; post-merge smoke passes.
 Implementation `3c338fc`, measured candidate `f20f2e14590ff4823bac1b719f4a74765fb03555`.
 The existing session shape lease admits retained savepoint storage before mutation
 and returns it on close. SQL program/rollback/durability behavior is preserved.
@@ -87,7 +89,7 @@ changing its limit. Source/bytecode policy checks retain exactly **261 existing
 control violations**, with none added/removed; class-reference verification passes.
 Slopmark row directory **40.5049 -> 40.4243**, version directory **28.4651 unchanged**.
 
-Explicit OpenJDK 26.0.2.1, seed 42, tiny/standard, serializable, ten terminals,
+Explicit OpenJDK 26.0.2.1, seed42, tiny/standard, serializable, ten terminals,
 one warehouse, user background load left running. Untouched 10-second baselines
 **153.4/161.5 TPS**, candidates **160.1/156.8**. The original 30-second configuration
 passes twice (**181.533/175.733**); the 60-second run also passes (**153.767**).
