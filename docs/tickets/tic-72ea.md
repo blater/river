@@ -128,3 +128,7 @@ statement decisions. All statement correlations were nonzero and 103 decisions
 had positive program steps. The 540 records comprise 12 setup and 528 workload
 decisions; reopening preserved that count. This does not map synthetic workload
 IDs to individual wire requests.
+
+A final caller scan found the authenticated CLI test still passing the old
+audit path. It now uses the same shared fixture; its module suite passes
+(`audit-cli-tests-1.log`). This follow-up changes connection setup only.
