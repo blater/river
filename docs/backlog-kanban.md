@@ -44,13 +44,11 @@ speedup claim. Its P0 relationship remains a broader campaign link. Next resolve
 the recorded P0/admission/WAL/execution prerequisites before measured overlap,
 `tic-af29` is now closed as required observability with inconclusive performance;
 `tic-8e74` is now closed at `perf-checkpoint-20260907-retained-snapshot-gauge`;
-`tic-1fe7` is closed with the current provenance/host reconciliation, preserving
-separate `make.sh` and TPS commands. `tic-ed12` is closed and pushed at
-`perf-checkpoint-20260907-prebuilt-tps-provenance`, with current artifact
-binding and truthful diagnostic receipts. `tic-d7c2` is closed and pushed at
-`perf-checkpoint-20260907-invocation-host-ownership`, with qualified cooperative
-host ownership. Next resume `tic-1dda` revalidation; these deliveries do not
-certify the P0 matrix.
+The earlier TPS provenance deliveries (`tic-1fe7`, `tic-ed12`, `tic-d7c2`) are
+historical checkpoints. Their runtime descriptors, host ownership checks, and
+receipts are superseded by [`tic-0b7e`](tickets/tic-0b7e.md): ordinary runner
+JARs and a branch or explicit variation name identify diagnostic runs.
+Next resume `tic-1dda` revalidation; this does not certify the P0 matrix.
 Finally execute the existing lifecycle delivery path.
 Lifecycle is technically independent; this order is a scheduling preference.
 None of this mapping certifies outstanding P0 or external-harness gates.

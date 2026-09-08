@@ -153,9 +153,14 @@ bytecode, source-policy, and SQL-shape checks. Details are in the
 [checkpoint ledger](docs/performance-checkpoints.md).
 
 For River-specific TPS diagnostics, run `./make.sh` first, then
-`tools/tps-test.sh`. The TPS command uses the existing build. Follow the
-[performance loop](AGENTS.md#tpc-c-performance-loop) when choosing workloads
-and collecting evidence.
+`tools/tps-test.sh`. `make.sh` runs `:river-bench:installTps` to build the
+runnable benchmark distribution;
+the TPS command consumes that distribution and does not run Gradle or inspect
+the source tree. The default test version is the current Git branch. When a
+branch contains several meaningful variants, pass
+`--version=<meaningful-variation>` and record that value in the TPS log or
+artifact. Follow the [performance loop](AGENTS.md#tpc-c-performance-loop)
+when choosing workloads and collecting evidence.
 
 ## Direction and backlog
 
