@@ -15,6 +15,9 @@ import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.SecurityAuditLog;
+import io.riverdb.server.SecurityAuditLogFactory;
+import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -140,6 +143,9 @@ final class RiverSqlMainTest {
     assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
+    SecurityAuditLog audit = SecurityAuditTestOwner.create(
+        root, DATABASE, 1, SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+        SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
     assertEquals(
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
@@ -147,7 +153,7 @@ final class RiverSqlMainTest {
             0,
             TestTlsContexts.server(),
             authenticated.authenticator(),
-            root,
+            audit,
             LoopbackServerLimits.defaults(8),
             listener));
     LoopbackRiverServer server = listener.server();

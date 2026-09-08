@@ -29,6 +29,9 @@ import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.SecurityAuditLog;
+import io.riverdb.server.SecurityAuditLogFactory;
+import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -406,6 +409,13 @@ final class M5TypeRecoveryBoundaryTest {
     assertEquals(
         StatusCode.OK,
         TokenAuthenticator.create(token, token.length, authenticated));
+    SecurityAuditLog auditOwner = Files.exists(audit.resolve("audit/audit-1.log"))
+        ? SecurityAuditTestOwner.reopen(audit, DATABASE, 1,
+            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES)
+        : SecurityAuditTestOwner.create(audit, DATABASE, 1,
+            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
     LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -414,7 +424,7 @@ final class M5TypeRecoveryBoundaryTest {
             0,
             TestTlsContexts.server(),
             authenticated.authenticator(),
-            audit,
+            auditOwner,
             LoopbackServerLimits.defaults(8),
             listener));
     return listener.server();

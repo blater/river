@@ -21,6 +21,10 @@ import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.SecurityAuditLog;
+import io.riverdb.server.SecurityAuditLogFactory;
+import io.riverdb.testsupport.SecurityAuditTestOwner;
+import java.io.IOException;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -49,7 +53,7 @@ final class SecureRemoteJdbcGateTest {
         token, 42, SessionPermissions.READ);
     SSLContext serverContext = TestTlsContexts.server();
     SSLContext clientContext = TestTlsContexts.trustedClient();
-    LoopbackServerLimits limits = new LoopbackServerLimits(4, 5_000, 30_000, 128);
+    LoopbackServerLimits limits = new LoopbackServerLimits(4, 5_000, 30_000);
     LoopbackRiverServer server = startAudited(
         database, root, serverContext, authenticator, limits);
 
@@ -94,7 +98,7 @@ final class SecureRemoteJdbcGateTest {
       connection.rollback();
     }
     source.close();
-    int records = server.auditRecordCount();
+    long records = server.auditRecordCount();
     assertTrue(records >= 9);
     assertEquals(StatusCode.OK, server.close());
     assertTrue(server.authorizationFailures() >= 3);
@@ -114,7 +118,7 @@ final class SecureRemoteJdbcGateTest {
     byte[] token = "river-audit-corrupt-token".getBytes(StandardCharsets.UTF_8);
     TokenAuthenticator authenticator = authenticator(
         token, 55, SessionPermissions.READ);
-    LoopbackServerLimits limits = new LoopbackServerLimits(2, 5_000, 30_000, 16);
+    LoopbackServerLimits limits = new LoopbackServerLimits(2, 5_000, 30_000);
     LoopbackRiverServer server = startAudited(
         database, root, TestTlsContexts.server(), authenticator, limits);
     RiverDataSource source = source(
@@ -126,22 +130,14 @@ final class SecureRemoteJdbcGateTest {
     source.close();
     assertEquals(StatusCode.OK, server.close());
 
-    Path auditFile = root.resolve("river.security-audit");
+    Path auditFile = root.resolve("audit/audit-1.log");
     byte[] bytes = Files.readAllBytes(auditFile);
     bytes[8] ^= 1;
     Files.write(auditFile, bytes);
 
-    LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
-    assertEquals(
-        StatusCode.CORRUPTION,
-        LoopbackRiverServer.startAuthenticated(
-            database,
-            0,
-            TestTlsContexts.server(),
-            authenticator,
-            root,
-            limits,
-            opened));
+    assertThrows(IOException.class, () -> SecurityAuditTestOwner.reopen(
+        root, DATABASE, 1, SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+        SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES));
     Arrays.fill(token, (byte) 0);
     assertEquals(StatusCode.OK, database.close());
   }
@@ -159,7 +155,8 @@ final class SecureRemoteJdbcGateTest {
         root,
         TestTlsContexts.server(),
         authenticator,
-        new LoopbackServerLimits(2, 5_000, 30_000, 2));
+        new LoopbackServerLimits(2, 5_000, 30_000),
+        2);
     RiverDataSource source = source(
         server, TestTlsContexts.trustedClient(), token);
 
@@ -195,7 +192,7 @@ final class SecureRemoteJdbcGateTest {
         root,
         TestTlsContexts.server(),
         authenticator,
-        new LoopbackServerLimits(2, 5_000, 30_000, 64));
+        new LoopbackServerLimits(2, 5_000, 30_000));
     RiverDataSource source = source(
         server, TestTlsContexts.trustedClient(), token);
 
@@ -238,7 +235,7 @@ final class SecureRemoteJdbcGateTest {
         root,
         TestTlsContexts.server(),
         authenticator,
-        new LoopbackServerLimits(2, 5_000, 30_000, 64));
+        new LoopbackServerLimits(2, 5_000, 30_000));
     RiverDataSource source = source(
         server, TestTlsContexts.trustedClient(), token);
 
@@ -309,7 +306,27 @@ final class SecureRemoteJdbcGateTest {
       Path auditDirectory,
       SSLContext context,
       TokenAuthenticator authenticator,
-      LoopbackServerLimits limits) {
+      LoopbackServerLimits limits) throws Exception {
+    return startAudited(database, auditDirectory, context, authenticator, limits, 0);
+  }
+
+  private static LoopbackRiverServer startAudited(
+      RiverDatabase database,
+      Path auditDirectory,
+      SSLContext context,
+      TokenAuthenticator authenticator,
+      LoopbackServerLimits limits,
+      int maximumRecords) throws Exception {
+    long activeBytes = maximumRecords > 0
+        ? 64L + 108L * Math.max(2, maximumRecords)
+        : SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES;
+    SecurityAuditLog audit = Files.exists(auditDirectory.resolve("audit/audit-1.log"))
+        ? SecurityAuditTestOwner.reopen(auditDirectory, DATABASE, 1,
+            activeBytes,
+            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES)
+        : SecurityAuditTestOwner.create(auditDirectory, DATABASE, 1,
+            activeBytes,
+            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
     LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -318,7 +335,7 @@ final class SecureRemoteJdbcGateTest {
             0,
             context,
             authenticator,
-            auditDirectory,
+            audit,
             limits,
             opened));
     assertTrue(opened.server().isDurablyAudited());

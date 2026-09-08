@@ -1,5 +1,6 @@
 package io.riverdb.server;
 
+import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.protocol.ProtocolMemoryBudget;
@@ -15,7 +16,6 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
-import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -42,6 +42,7 @@ public final class LoopbackRiverServer {
   final ConnectionSlot[] slots;
   private final AtomicInteger activeConnections = new AtomicInteger();
   private final AtomicLong acceptedConnections = new AtomicLong();
+  private final AtomicLong nextConnectionCorrelation = new AtomicLong(1);
   private final AtomicLong completedRequests = new AtomicLong();
   private final AtomicLong rejectedConnections = new AtomicLong();
   private final AtomicLong rejectedFrames = new AtomicLong();
@@ -103,7 +104,7 @@ public final class LoopbackRiverServer {
       int port,
       SSLContext context,
       TokenAuthenticator authenticator,
-      Path auditDirectory,
+      SecurityAuditLog audit,
       LoopbackServerLimits limits,
       LoopbackServerOpenResult result) {
     if (limits == null
@@ -111,17 +112,10 @@ public final class LoopbackRiverServer {
         || !validStart(database, port, limits.maximumConnections(), result)
         || context == null
         || authenticator == null
-        || auditDirectory == null) {
+        || audit == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    SecurityAuditOpenResult auditResult = new SecurityAuditOpenResult();
-    StatusCode status = SecurityAuditLog.open(
-        auditDirectory, limits.maximumAuditRecords(), auditResult);
-    if (!status.isOk()) {
-      return status;
-    }
-    SecurityAuditLog audit = auditResult.audit();
     try {
       SSLServerSocket socket = (SSLServerSocket) context
           .getServerSocketFactory()
@@ -132,7 +126,8 @@ public final class LoopbackRiverServer {
           limits.maximumConnections());
       return startBound(database, socket, authenticator, limits, audit, result);
     } catch (IOException failure) {
-      audit.close();
+      audit.beginClose();
+      audit.finishClose();
       return StatusCode.IO_FAILURE;
     }
   }
@@ -184,8 +179,13 @@ public final class LoopbackRiverServer {
   public long retainedProtocolBufferBytes() { return bufferBudget.retainedBytes(); }
   public long maximumProtocolBufferBytes() { return bufferBudget.maximumBytes(); }
 
-  public int auditRecordCount() {
+  public long auditRecordCount() {
     return audit == null ? 0 : audit.recordCount();
+  }
+
+  /** Returns a point-in-time copy of the audit persistence counters. */
+  public SecurityAuditSnapshot auditSnapshot() {
+    return audit == null ? SecurityAuditSnapshot.empty() : audit.snapshot();
   }
 
   public boolean isDurablyAudited() {
@@ -234,9 +234,13 @@ public final class LoopbackRiverServer {
     if (!running) {
       return null;
     }
+    long connectionCorrelation = nextConnectionCorrelation.get();
+    if (connectionCorrelation <= 0 || connectionCorrelation == Long.MAX_VALUE) return null;
     for (ConnectionSlot slot : slots) {
       if (slot.socket == null && slot.worker == null) {
         slot.socket = connection;
+        slot.connectionCorrelation = connectionCorrelation;
+        nextConnectionCorrelation.set(connectionCorrelation + 1);
         activeConnections.incrementAndGet();
         return slot;
       }
@@ -250,6 +254,7 @@ public final class LoopbackRiverServer {
     synchronized (this) {
       slot.socket = null;
       slot.worker = null;
+      slot.cancellation.reset();
       activeConnections.decrementAndGet();
     }
     if (!released.isOk()) lastStatus = released;
@@ -274,6 +279,8 @@ public final class LoopbackRiverServer {
           authenticationTimeoutMillis,
           slot.memory,
           slot.responses,
+          slot.connectionCorrelation,
+          slot.cancellation,
           opened);
       if (!opened.status().isOk()) {
         lastStatus = opened.status();
@@ -422,14 +429,14 @@ public final class LoopbackRiverServer {
           audit);
     } catch (OutOfMemoryError failure) {
       socket.close();
-      if (audit != null) audit.close();
+      closeAudit(audit);
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode completed = result.complete(server);
     if (!completed.isOk()) {
       socket.close();
       if (audit != null) {
-        audit.close();
+        closeAudit(audit);
       }
       return completed;
     }
@@ -438,6 +445,13 @@ public final class LoopbackRiverServer {
         .name("river-loopback-acceptor")
         .start(server::runAccepts);
     return StatusCode.OK;
+  }
+
+  private static void closeAudit(SecurityAuditLog audit) {
+    if (audit != null) {
+      audit.beginClose();
+      audit.finishClose();
+    }
   }
 
   private static int readExact(
@@ -468,6 +482,8 @@ public final class LoopbackRiverServer {
 
   final class ConnectionSlot implements Runnable {
     final int index;
+    long connectionCorrelation;
+    final MutableCancellationToken cancellation = new MutableCancellationToken();
     private final ServerConnectionMemory memory = new ServerConnectionMemory(bufferBudget);
     private final ProtocolFrameHeader requestHeader = new ProtocolFrameHeader();
     private final ServerRequestAssembly requests =

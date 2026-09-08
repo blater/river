@@ -362,7 +362,7 @@ public final class EmbeddedRiver {
       if (query.active) return StatusCode.CONFLICT;
       SqlPreparedPlan plan = prepared.resolve(handle, false);
       if (plan == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-      StatusCode status = session.executePrepared(plan, parameters, execution);
+      StatusCode status = session.executePrepared(plan, parameters, execution, 0);
       return status.isOk() ? copyExecution(result) : status;
     }
 
@@ -505,7 +505,7 @@ public final class EmbeddedRiver {
       if (closed) return StatusCode.CLOSED;
       if (query.active) return StatusCode.CONFLICT;
       StatusCode status = scan.reset();
-      if (status.isOk()) status = session.beginPreparedScan(plan, parameters, scan);
+      if (status.isOk()) status = session.beginPreparedScan(plan, parameters, scan, 0);
       if (status.isOk()) status = query.prepare();
       if (status.isOk()) {
         query.active = true;

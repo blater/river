@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.SessionAuthorizer;
 import io.riverdb.engine.api.ParameterSet;
+import io.riverdb.engine.api.SessionAuthorizationPhase;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.sql.SqlCommandType;
@@ -156,7 +157,8 @@ final class SqlSessionExecutionCoordinator {
   }
 
   StatusCode executePrepared(
-      SqlPreparedPlan plan, ParameterSet parameters, SqlExecutionResult result) {
+      SqlPreparedPlan plan, ParameterSet parameters, SqlExecutionResult result,
+      int programStep) {
     if (plan == null || parameters == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -177,7 +179,10 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
     if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
     runtimeParameters.reset();
-    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) {
+      status = authorize(bound.command.type(), SessionAuthorizationPhase.EXECUTE_PREPARED,
+          programStep);
+    }
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
     if (!status.isOk()) return status;
     preparedExecutions++;
@@ -197,7 +202,9 @@ final class SqlSessionExecutionCoordinator {
     if (queries.hasActiveScan()) return StatusCode.CONFLICT;
     bound.reset();
     status = parser.parseTemplate(sql, bound.query, bound.command);
-    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) {
+      status = authorize(bound.command.type(), SessionAuthorizationPhase.PREPARE, 0);
+    }
     boolean began = false;
     if (status.isOk()) {
       status = atomic.begin(IsolationLevel.READ_COMMITTED);
@@ -261,7 +268,7 @@ final class SqlSessionExecutionCoordinator {
             ? parser.parseQuery(sql, bound.query, bound.command)
             : parser.parse(sql, bound.command);
     if (status.isOk()) {
-      status = authorize(bound.command.type());
+      status = authorize(bound.command.type(), SessionAuthorizationPhase.EXECUTE, 0);
     }
     if (status.isOk()) {
       status = binder.captureExecutableQuery(bound);
@@ -295,7 +302,7 @@ final class SqlSessionExecutionCoordinator {
   }
 
   StatusCode beginPreparedScan(
-      SqlPreparedPlan plan, ParameterSet parameters, SqlScanCursor cursor) {
+      SqlPreparedPlan plan, ParameterSet parameters, SqlScanCursor cursor, int programStep) {
     StatusCode status = admitScan(cursor);
     if (!status.isOk()) return status;
     if (plan == null || parameters == null) return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -308,7 +315,10 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
     if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
     runtimeParameters.reset();
-    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) {
+      status = authorize(bound.command.type(), SessionAuthorizationPhase.QUERY_PREPARED,
+          programStep);
+    }
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
     if (status.isOk() && !SqlSessionCommandKinds.query(bound.command.type())) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -326,7 +336,8 @@ final class SqlSessionExecutionCoordinator {
       ParameterSet parameters,
       SqlScanCursor cursor,
       SqlExecutionResult result,
-      SqlPreparedQueryPath path) {
+      SqlPreparedQueryPath path,
+      int programStep) {
     if (path == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     path.reset();
     StatusCode status = admitScan(cursor);
@@ -341,7 +352,10 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
     if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
     runtimeParameters.reset();
-    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) {
+      status = authorize(bound.command.type(), SessionAuthorizationPhase.QUERY_PREPARED,
+          programStep);
+    }
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
     if (status.isOk() && !SqlSessionCommandKinds.query(bound.command.type())) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -420,7 +434,7 @@ final class SqlSessionExecutionCoordinator {
         ? parseInvocation(sql, parameters)
         : parser.parseQuery(sql, bound.query, bound.command);
     if (status.isOk()) {
-      status = authorize(bound.command.type());
+      status = authorize(bound.command.type(), SessionAuthorizationPhase.QUERY, 0);
     }
     if (status.isOk()) {
       status = binder.captureExecutableQuery(bound);
@@ -580,12 +594,16 @@ final class SqlSessionExecutionCoordinator {
     return StatusCode.OK;
   }
 
-  private StatusCode authorize(SqlCommandType type) {
+  private StatusCode authorize(SqlCommandType type, int phase, int programStep) {
     if (authorizer == null) {
       return StatusCode.OK;
     }
+    // A positive program step is the canonical owner boundary for program
+    // execution.  The server authorizer requires PROGRAM_STEP in that case;
+    // ordinary SQL retains the phase selected by its operation.
+    int effectivePhase = programStep > 0 ? SessionAuthorizationPhase.PROGRAM_STEP : phase;
     return authorizer.authorize(
-        SqlCommandAuthorization.requiredPermission(type));
+        SqlCommandAuthorization.requiredPermission(type), effectivePhase, programStep);
   }
 
   StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {

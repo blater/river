@@ -1,5 +1,6 @@
 package io.riverdb.server;
 
+import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.PreparedOpenResult;
@@ -66,41 +67,11 @@ public final class SessionEndpoint {
   private long pendingRequestId;
   private boolean pendingQueryActive;
   private long rowsReturned;
-
-  public SessionEndpoint(RiverDatabase engineDatabase) {
-    this(engineDatabase, null, 0, 0, null, null, null);
-  }
-
-  SessionEndpoint(
-      RiverDatabase engineDatabase,
-      TokenAuthenticator tokenAuthenticator,
-      long nonceHigh,
-      long nonceLow,
-      byte[] binding) {
-    this(engineDatabase, tokenAuthenticator, nonceHigh, nonceLow, binding, null, null);
-  }
-
-  SessionEndpoint(
-      RiverDatabase engineDatabase,
-      TokenAuthenticator tokenAuthenticator,
-      long nonceHigh,
-      long nonceLow,
-      byte[] binding,
-      SecurityAuditLog audit) {
-    this(engineDatabase, tokenAuthenticator, nonceHigh, nonceLow, binding, audit, null);
-  }
-
-  SessionEndpoint(
-      RiverDatabase engineDatabase,
-      TokenAuthenticator tokenAuthenticator,
-      long nonceHigh,
-      long nonceLow,
-      byte[] binding,
-      SecurityAuditLog audit,
-      ServerConnectionMemory connectionMemory) {
-    this(engineDatabase, tokenAuthenticator, nonceHigh, nonceLow, binding,
-        audit, connectionMemory, null);
-  }
+  private final long connectionCorrelation;
+  private long sessionCorrelation;
+  private long nextSessionOrdinal = 1;
+  private long activeRequestId;
+  private final MutableCancellationToken connectionCancellation;
 
   SessionEndpoint(
       RiverDatabase engineDatabase,
@@ -110,7 +81,9 @@ public final class SessionEndpoint {
       byte[] binding,
       SecurityAuditLog audit,
       ServerConnectionMemory connectionMemory,
-      ServerResponseBuffer responseProvider) {
+      ServerResponseBuffer responseProvider,
+      long suppliedConnectionCorrelation,
+      MutableCancellationToken suppliedCancellation) {
     database = engineDatabase;
     memory = connectionMemory;
     command = new CommandResult(lease());
@@ -130,6 +103,8 @@ public final class SessionEndpoint {
     challengeHigh = nonceHigh;
     challengeLow = nonceLow;
     channelBinding = binding;
+    connectionCorrelation = suppliedConnectionCorrelation;
+    connectionCancellation = suppliedCancellation;
   }
 
   /**
@@ -157,7 +132,14 @@ public final class SessionEndpoint {
       return codec.encodeStatusResponse(
           response, type, frame.requestId(), StatusCode.INVALID_EXTERNAL_INPUT, state == QUERY);
     }
-    return switch (type) {
+    activeRequestId = frame.requestId();
+    if (sessionAuthorizer != null) {
+      sessionAuthorizer.bindRequest(
+          connectionCorrelation, sessionCorrelation, activeRequestId,
+          connectionCancellation, 0);
+    }
+    try {
+      return switch (type) {
       case HELLO -> hello(response);
       case AUTHENTICATE -> authenticate(response);
       case OPEN_SESSION -> openSession(response);
@@ -173,7 +155,11 @@ public final class SessionEndpoint {
       case PREPARE_PROGRAM -> prepareProgram(response);
       case EXECUTE_PROGRAM -> executeProgram(response);
       case CLOSE_PROGRAM -> closeProgram(response);
-    };
+      };
+    } finally {
+      if (sessionAuthorizer != null) sessionAuthorizer.clearRequest();
+      activeRequestId = 0;
+    }
   }
 
   StatusCode retryResponse(ByteBuffer response) {
@@ -191,6 +177,8 @@ public final class SessionEndpoint {
   }
 
   public StatusCode close() {
+    connectionCancellation.cancel();
+    if (sessionAuthorizer != null) sessionAuthorizer.cancelActiveRequest();
     if (state == CLOSED) {
       return StatusCode.CLOSED;
     }
@@ -287,7 +275,7 @@ public final class SessionEndpoint {
     StatusCode status;
     if (state == AUTHENTICATING) {
       status = authenticator.verify(frame, challengeHigh, challengeLow, channelBinding);
-      StatusCode audited = sessionAuthorizer.auditAuthentication(status.isOk());
+      StatusCode audited = sessionAuthorizer.auditAuthentication(status);
       if (!audited.isOk()) {
         state = CLOSED;
         status = audited;
@@ -328,6 +316,10 @@ public final class SessionEndpoint {
         status = StatusCode.RESOURCE_EXHAUSTED;
       }
     }
+    if (status.isOk()
+        && (nextSessionOrdinal <= 0 || nextSessionOrdinal == Long.MAX_VALUE)) {
+      status = StatusCode.RESOURCE_EXHAUSTED;
+    }
     if (status.isOk()) {
       status = sessionAuthorizer == null
           ? database.createSession(openedSession)
@@ -335,6 +327,7 @@ public final class SessionEndpoint {
     }
     if (status.isOk()) {
       session = openedSession.session();
+      sessionCorrelation = nextSessionOrdinal++;
       sqlRequest = decoder;
       state = SESSION;
     }

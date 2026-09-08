@@ -19,6 +19,9 @@ import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.SecurityAuditLog;
+import io.riverdb.server.SecurityAuditLogFactory;
+import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
@@ -2720,7 +2723,10 @@ final class RiverDriverTest {
       RiverDatabase database,
       Path auditDirectory,
       SSLContext context,
-      TokenAuthenticator authenticator) {
+      TokenAuthenticator authenticator) throws Exception {
+    SecurityAuditLog audit = SecurityAuditTestOwner.create(
+        auditDirectory, DATABASE, 1, SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+        SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -2729,7 +2735,7 @@ final class RiverDriverTest {
             0,
             context,
             authenticator,
-            auditDirectory,
+            audit,
             LoopbackServerLimits.defaults(
                 LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS),
             result));
