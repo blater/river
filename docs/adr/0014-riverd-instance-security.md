@@ -1,6 +1,6 @@
 # ADR 0014: `riverd` instance security and client discovery
 
-Status: Accepted
+Status: Accepted, amended 2026-09-08
 
 ## Authority and scope
 
@@ -12,20 +12,31 @@ and replaces every alternative or deferred description of the same behavior.
 The decision closes the ownership and deletion gaps inventoried by `tic-de1d`, merged at
 `4827f84e349c0aed7b4c585aede13d505efb1eb9` and recorded closed at
 `5b120a179055a9ec1c640152b4e2bf057d23f5ac`.
-It is pinned to the accepted audit design merged at
-`e592addff67ac6016ae6e9e37e3bf374a6511f0d` and recorded closed on `master` at
-`8df484694039e9b53cd7ff6c5cccb44973b86c0e`. Every audit event, state,
-durability, recovery, byte-budget, exhaustion, archive, allocation, copy, and
-performance rule in that
-[`tic-a221` evidence](../delivery/evidence/2026-09-04-tic-a221-audit-durability-design.md)
-is part of this decision.
+The earlier audit design and its measurements remain historical records. They
+are superseded as an active River contract by the 2026-09-08 amendment below.
 
 [ADR 0012](0012-embedded-api-and-protocol-boundaries.md) remains authoritative
-for the embedded API, protocol, client, server, TLS, authentication,
-authorization, and audit-before-admission boundaries. This ADR supplies the
+for the embedded API, protocol, client, server, TLS, authentication, and
+authorization boundaries. This ADR supplies the
 launcher-owned identity, filesystem, discovery, and recovery
 contract. River is pre-V1: the authenticated lifecycle replaces all unreleased
 plain production paths; it does not wrap or preserve them.
+
+## 2026-09-08 audit deferral amendment
+
+SQL/security audit collection is off the immediate roadmap. It is not required
+for `riverd` readiness, SQL admission, authorization, lifecycle acceptance, or
+the installed-server milestone, and there is no `riverd audit archive` command
+in the current contract. Authentication, authorization, TLS, instance
+ownership, filesystem safety, database/WAL durability, recovery, and resource
+cleanup remain required.
+
+The former `tic-a221` design, `tic-72ea` implementation, audit archive work, and
+their measurements are preserved as superseded historical evidence. They do
+not create a prerequisite, placeholder implementation, compatibility path, or
+near-term study. Reconsider audit only after a concrete design demonstrates
+neutral impact on TPS, latency, and resource use and supports that performance
+property through its architecture and acceptance evidence.
 
 ## 2026-09-07 platform requirement amendment
 
@@ -59,8 +70,6 @@ The owning boundary uses these exact outcomes:
 | Existing ready file, held instance, bind collision, archive name collision, or incompatible staged retry | `CONFLICT` |
 | Missing/stale/reused/mismatched runtime owner or unexpectedly free live lock | `NOT_OWNER` |
 | Malformed, missing after authority, mismatched, torn, or checksum-invalid persistent state | `CORRUPTION` |
-| Active audit bytes unavailable or terminal audit identity exhausted | `RESOURCE_EXHAUSTED` |
-| Pending audit bytes unavailable before a sequence exists | `RETRY` |
 | Cancelled/deadline/stop wait | `CANCELLED`, `TIMEOUT`, or `TIMEOUT` respectively |
 | Java/NIO, control-publication, or lifecycle I/O failure | `IO_FAILURE` |
 | Ready visibility committed, then target/parent/source force fails, or stdout-only final transfer/flush is ambiguous | Irrevocable ready observation followed by terminal `IO_FAILURE`, ordered shutdown, and eventual exit 1 |
@@ -69,9 +78,6 @@ The owning boundary uses these exact outcomes:
 A well-formed but expired/not-yet-valid credential is `ACCESS_DENIED` on
 `start`; `credentials renew` may validate and replace either out-of-interval
 generation.
-An audit I/O ambiguity returns `IO_FAILURE`, fences the audit owner, and makes
-later admissions return `FENCED`, exactly as accepted by `tic-a221`.
-
 ## Instance path and filesystem trust proof
 
 `-D` identifies one complete instance:
@@ -101,7 +107,6 @@ DATADIR/
       server-certificate.der
     archive/
     .renew-<old>-to-<new>-<nonce>/
-  audit/
 ```
 
 The launcher resolves an absolute normalized path through the nearest existing
@@ -245,11 +250,8 @@ process, or taking a lifecycle action. The checksum detects corruption; it is
 not authentication. `instance.properties` and `bootstrap.properties` are at
 most 4096 bytes; security, client, runtime, lock, stop-request, registry,
 ready-file, renewal-intent, and credential-public records are each at most
-8192 bytes. Audit
-event/control checksums and bounds remain the binary contract accepted by
-`tic-a221`; they are not launcher properties. Stdout is not a persistent-
-properties record and has no checksum. These are format framing
-bounds, not workload or audit-event caps. Oversize external input is
+8192 bytes. Stdout is not a persistent-properties record and has no checksum.
+These are format framing bounds, not workload caps. Oversize external input is
 `INVALID_EXTERNAL_INPUT`; oversize, noncanonical, or checksum-invalid accepted
 state is `CORRUPTION`.
 
@@ -290,7 +292,7 @@ instance authority, replacement instead requires that incarnation plus absent
 old-process proof; the acquired launcher retains the prior lock bytes until any
 matching stale ready/runtime/registry cleanup completes, then publishes its new
 lock record. No lock-record recovery changes bootstrap, instance,
-database, credential, or audit authority.
+database or credential authority.
 
 The temporary first-create record has this exact ordered schema:
 
@@ -304,7 +306,6 @@ command=<normalized-absolute-ProcessHandle-command>
 attempt-nonce=<32-lowercase-hex>
 database-name=database
 security-name=security
-audit-name=audit
 staging-name=.riverd-bootstrap-<attempt-nonce>
 instance-stage-name=.instance-<attempt-nonce>.stage
 record-sha256=<64-lowercase-hex>
@@ -312,8 +313,8 @@ record-sha256=<64-lowercase-hex>
 
 The nonzero attempt nonce is 16 random bytes encoded as 32 lowercase hex
 characters. Its only staging namespace is
-`.riverd-bootstrap-<attempt-nonce>`; inside it the only names are `database`,
-`security`, and `audit`. The instance-authority stage is the bootstrap-bound
+`.riverd-bootstrap-<attempt-nonce>`; inside it the only names are `database`
+and `security`. The instance-authority stage is the bootstrap-bound
 `.instance-<attempt-nonce>.stage` directly in `DATADIR`, the same parent as its
 target. While holding the forced lock record, first creation performs these
 exact durable steps:
@@ -324,11 +325,11 @@ exact durable steps:
 2. It creates the nonce staging directory with the fixed-component directory
    operation, validates its identity, and forces `DATADIR`.
 3. It creates and forces the bound database, initial credential generation and
-   manifest, and initial audit state beneath the staging namespace; it forces
-   each file and containing directory.
-4. It atomically publishes staged `database`, then `security`, then `audit`
-   without overwrite to their final fixed names, forcing `DATADIR` after each
-   rename. A staged child's bootstrap/incarnation header and file key are
+   manifest beneath the staging namespace; it forces each file and containing
+   directory.
+4. It atomically publishes staged `database`, then `security` without overwrite
+   to their final fixed names, forcing `DATADIR` after each rename. A staged
+   child's bootstrap/incarnation header and file key are
    checked immediately before its rename.
 5. It writes and forces the bound `.instance-<attempt-nonce>.stage` directly in
    `DATADIR`, uses same-parent exclusive-file publication without overwrite as
@@ -360,7 +361,7 @@ is permitted during recovery.
 | Bootstrap target and stage are matching hard-link aliases | Apply exclusive-file alias recovery, retain the target as intent, and resume namespace creation with the recorded identity. |
 | Bootstrap authoritative, namespace absent or empty | Recreate the one recorded namespace and resume step 3 with the recorded incarnation/nonce. |
 | A staged child is partial, no corresponding final child | Validate its bootstrap identity; remove/recreate only that child, force its parent, and resume. |
-| Exactly the ordered prefix of `database`, `security`, and `audit` is final | Validate the prefix and remaining staged identities, then perform only the next rename and force. |
+| Exactly the ordered prefix of `database` and `security` is final | Validate the prefix and remaining staged identities, then perform only the next rename and force. |
 | Bound `.instance-<nonce>.stage` exists in `DATADIR` but is partial/noncanonical, instance target absent | Only when the canonical bootstrap binds that exact direct-child name and nonce and all three final children validate: require one owner/mode-correct regular file, no other direct child in that verified parent with its file key, and one unchanged non-null file key across no-follow lookup, adapter open/read, parent scan, and immediate pre-remove lookup. Remove only that exact name through the verified `DATADIR` handle, force `DATADIR`, and recreate step 5. An unbound name, alias, symlink/special/wrong-type object, or missing/changed/null file key is preserved as `CONFLICT`/`CORRUPTION`. |
 | Bound `.instance-<nonce>.stage` is complete in `DATADIR`, instance target absent | Revalidate all three final children, then same-parent publish/force the recorded instance authority. |
 | Instance target is complete but its matching `.instance-<nonce>.stage` alias or last directory force remains | Apply same-parent alias recovery if needed, revalidate all final bytes and identities, and repeat the idempotent `DATADIR` force before treating authority as committed. |
@@ -370,7 +371,7 @@ Any state outside exactly one row, including a gap in the published-child
 order, is preserved and fails closed.
 
 After `instance.properties` exists, the instance is authoritative. Every
-required database, security, and audit artifact must validate against it;
+required database and security artifacts must validate against it;
 missing or mismatched state is `CORRUPTION` and is preserved. Restart calls
 `EmbeddedRiver.openExisting` with the exact stored identity and never repairs,
 regenerates, deletes, infers, or falls back to create.
@@ -446,7 +447,7 @@ before database/listener admission. The raw token, private key,
 are credential-equivalent; the digest is the HMAC key used by the current
 `TokenProof`, not a public password hash. All are owner-only, never copied to a
 public archive, and never enter argv, environment, URLs, readiness, registry,
-logs, or audit.
+or logs.
 
 The launcher reads token and private-key bytes into fixed owned buffers and
 zeros every caller scratch buffer in `finally` on success and every failure.
@@ -521,11 +522,17 @@ nullable authentication branch in `RiverClientConnector`, JDBC clear/unset
 authentication, CLI plain selection, and their tests. `TpccServerMain` remains
 only as an authenticated diagnostic composition until `tic-3f57` preserves or
 replaces all of its evidence producers. There is no public compatibility
-wrapper, inactive plain flag, or unaudited remote mode after `tic-ec50`.
+wrapper, inactive plain flag, or unauthenticated remote mode after `tic-ec50`.
 
-## Audit admission, durability, capacity, and exhaustion
+## Historical audit admission design (superseded)
 
-The complete accepted `tic-a221` event and state-machine contract is normative:
+The following section records the former `tic-a221` proposal for historical
+traceability only. It is not a current requirement, admission gate, resource
+budget, or implementation direction. SQL/security audit collection is deferred
+until a concrete design proves neutral TPS, latency, and resource impact.
+
+For the historical candidate, the former accepted `tic-a221` event and
+state-machine contract was normative:
 
 - every evaluable authentication decision and every actual canonical
   statement-admission decision is durable before its allowed effect or denied
@@ -549,13 +556,13 @@ and sequence remain. Pending-byte pressure returns `RETRY` before sequence
 assignment. Startup must be able to reserve the header plus one authentication
 and one statement-decision record before readiness.
 
-Audit is mandatory for remote riverd. It is non-applicable to an embedded
-session with no remote `SessionAuthorizer`; that path creates no audit file,
-coordinator, queue, staging arena, thread, force, or per-row work.
+The former design made audit mandatory for remote riverd. That decision is
+superseded; the current riverd path has no audit file, coordinator, queue,
+staging arena, audit thread, audit force, or per-row audit work.
 
 ## Readiness, runtime record, and registry formats
 
-After identity/security/audit/database validation, listener bind, current
+After identity/security/database validation, listener bind, current
 client-configuration publication, runtime publication, and registry publication
 all succeed, start prepares these ordered UTF-8 records for standard output:
 
@@ -719,7 +726,7 @@ and receives no cleanup.
 ## Foreground lifecycle and exact stop fencing
 
 Start owns resources in this order: secure directory handle, instance lock,
-validated identity/security/audit, `RiverDatabase`, authenticated
+validated identity/security, `RiverDatabase`, authenticated
 `LoopbackRiverServer`, current client configuration, runtime record, registry
 record, ready file or stdout commitment. The
 shutdown hook is installed after database ownership. Startup failure and
@@ -728,7 +735,7 @@ before the database. One idempotent lifecycle owner serves normal close,
 Unix SIGINT/SIGTERM, Windows console shutdown, and the
 cooperative request below; it reports both close statuses, preserves the first
 fatal outcome, removes only matching readiness/runtime/registry/control
-records, and never deletes database/identity/security/audit data.
+records, and never deletes database/identity/security data.
 
 `riverd stop` never signals a PID, calls `ProcessHandle.destroy`, acquires or
 steals the live lock, or selects a process by an identifier that can be reused.
@@ -817,10 +824,14 @@ and returns `NOT_OWNER`.
 | Server crashes before acceptance | The next lock owner proves old-owner absence, removes the matching request/stage, and directory-forces before readiness. |
 | Server crashes after acceptance | The next lock owner validates recovery, removes only the matching receipt, and directory-forces before readiness; it never replays shutdown. |
 
-## Offline audit archive
+## Historical audit archive design (superseded)
 
-`riverd audit archive -D PATH` requires the stopped instance lock and no live
-owner or pending slot. It performs the accepted `tic-a221` five-step protocol:
+`riverd audit archive` is removed from the current CLI contract. The following
+description is retained only as historical evidence of the former design; it
+does not authorize a command or create an implementation prerequisite.
+
+The former `riverd audit archive -D PATH` required the stopped instance lock and no live
+owner or pending slot. It performed the accepted `tic-a221` five-step protocol:
 validate/force old active; create/force and directory-force the linked new
 generation; publish/force/directory-force `ARCHIVING` control; rename the old
 file without overwrite to
@@ -850,9 +861,8 @@ read and one fence read before effect. If `now < notBefore` or
 invokes the lifecycle owner. A primitive-state watcher calls the same check at
 least once per second so an idle server also exits; admission correctness does
 not depend on watcher timing. The listener stops accepting, any later request
-on an existing or resumed transport is denied with `ACCESS_DENIED`, its actual
-authorizer decision is audited before a returned denial, and no new statement
-effect is admitted. Work already admitted before the fence completes normally
+ on an existing or resumed transport is denied with `ACCESS_DENIED`, and no new
+ statement effect is admitted. Work already admitted before the fence completes normally
 or follows ordinary shutdown cancel/rollback.
 
 The launcher then closes listener/workers, performs the honest public-JSSE and
@@ -874,7 +884,7 @@ admission, clock/fence reads, allocation, errors, and retries for every sample. 
 allocation and correctness are absolute; a repeated throughput/latency/CPU
 shift outside adjacent-sample variation is investigated with longer
 interleaving and cannot be silently waived. This evidence is separate from and
-does not weaken the accepted `tic-a221` audit performance gates.
+does not add an audit performance gate to credential renewal.
 
 `riverd credentials renew -D PATH` requires the stopped instance lock. It
 validates the complete current credential generation except that current-time
@@ -1015,11 +1025,11 @@ interval and names this stopped-instance command.
 
 | Owner | Responsibility and delivery |
 | --- | --- |
-| `river-server-app` | Identity, credentials, filesystem-policy composition, command/lifecycle composition, resource plan, readiness, runtime/registry, archive/renew operations. `tic-615d` creates this non-empty module with identity/security/config production code; `tic-ec50` adds the installed application and complete composition. |
-| `river-server` | Authenticated TLS listener, canonical authentication/authorization/audit admission, connection and shutdown behavior; never concrete engine composition. `tic-72ea` replaces audit persistence. |
+| `river-server-app` | Identity, credentials, filesystem-policy composition, command/lifecycle composition, resource plan, readiness, runtime/registry, and credential-renewal operations. `tic-615d` creates this non-empty module with identity/security/config production code; `tic-ec50` adds the installed application and complete composition. |
+| `river-server` | Authenticated TLS listener, authentication/authorization, connection and shutdown behavior; never concrete engine composition. |
 | `river-client` | One bounded client-configuration parser and pinned authenticated connector. |
 | `river-jdbc` / `river-cli` | Public adapters over `river-client`; no duplicate trust/config parser and no optional plain path. |
-| `river-bench` | Audit benchmark and authenticated River diagnostics only; no launcher defaults or public process contract. |
+| `river-bench` | Authenticated River diagnostics only; no launcher defaults or public process contract. |
 | `river-engine` / `river-engine-api` | Embedded implementation and public database lifecycle respectively; launcher composes without leaking engine types. |
 
 `tic-ec50` also removes the unused root `river-server -> river-engine`
@@ -1030,9 +1040,14 @@ against these formats after ADR acceptance. `tic-9640` proves their composed
 recovery matrix;
 `tic-4cb6` publishes the stable external consumer subset only after that gate.
 
-## Audit performance and acceptance contract
+## Historical audit performance contract (superseded)
 
-`tic-72ea` must run the exact accepted `tic-a221` matched evidence plan. Its
+The former audit thresholds below are retained as historical evidence only.
+They are not a current gate or near-term study. Any future audit proposal must
+first provide a concrete architecture with neutral TPS, latency, and resource
+impact, then pass matched evidence for that property.
+
+The former `tic-72ea` plan required the exact accepted `tic-a221` matched evidence plan. Its
 fixed-count correctness runs use client counts 1, 2, 4, and 16. Timed control
 and candidate samples use `C,A,A,C,C,A,A,C,C,A`, five 30-second measured
 samples per source/count, and 10,000 fixed-seed whole-sample bootstrap
@@ -1054,9 +1069,10 @@ PostgreSQL wire compatibility, non-loopback listening, multi-principal SQL
 roles/grants, daemon/service/privilege integration, remote administration,
 automated database deletion/repair/migration/backup/restore, benchmark metrics
 inside riverd, and a broad tuning CLI are deferred. TLS 1.3, the token,
-single-principal authorization, audit-before-admission, credentials, exact
-lifecycle, and authenticated-only River callers are mandatory and are not
-included in those deferrals.
+single-principal authorization, credentials, exact lifecycle,
+authenticated-only River callers, database durability, and WAL recovery are
+mandatory and are not included in those deferrals. SQL/security audit
+collection and its archive command are deferred.
 
 ## Review history
 
@@ -1092,7 +1108,6 @@ included in those deferrals.
 The first riverd must support macOS/APFS, Linux/ext4/XFS, and Windows/NTFS
 with the same security and durability guarantees. Unsupported storage
 configurations do not receive weaker security, accepted corrupt state is preserved rather than
-repaired, credential expiry requires an explicit offline rotation, and audit
-exhaustion stops admission before effects. In return, a process/file consumer
+repaired, and credential expiry requires an explicit offline rotation. In return, a process/file consumer
 has one non-secret discovery contract and River owns one authenticated remote
 path without unreleased compatibility debt.

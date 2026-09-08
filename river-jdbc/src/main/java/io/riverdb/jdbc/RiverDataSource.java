@@ -1,86 +1,43 @@
 package io.riverdb.jdbc;
 
-import io.riverdb.client.RiverClientConnection;
 import java.io.PrintWriter;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
-import java.util.Arrays;
 import java.util.logging.Logger;
-import javax.net.ssl.SSLContext;
 import javax.sql.DataSource;
 
-/** Configurable loopback data source with optional TLS-bound token authentication. */
+/** JDBC data source backed by a generated River client-properties file. */
 public final class RiverDataSource implements DataSource, AutoCloseable {
   private static final int LOGIN_TIMEOUT_SECONDS = 5;
 
-  private SSLContext sslContext;
-  private byte[] token;
+  private Path clientFile;
   private PrintWriter logWriter;
-  private int port;
   private boolean closed;
 
-  public synchronized void setPort(int listenerPort) throws SQLException {
+  public synchronized void setClientFile(Path file) throws SQLException {
     requireOpen();
-    if (listenerPort <= 0 || listenerPort > 65_535) {
-      throw JdbcExceptions.invalid("port must be between 1 and 65535");
+    if (file == null || !file.isAbsolute() || !file.equals(file.normalize())) {
+      throw JdbcExceptions.invalid("client properties path must be absolute and normalized");
     }
-    port = listenerPort;
+    clientFile = file;
   }
 
-  public synchronized int getPort() throws SQLException {
+  public synchronized Path getClientFile() throws SQLException {
     requireOpen();
-    return port;
-  }
-
-  public synchronized void setAuthentication(
-      SSLContext context,
-      byte[] sourceToken,
-      int tokenBytes) throws SQLException {
-    requireOpen();
-    if (context == null
-        || sourceToken == null
-        || tokenBytes < RiverClientConnection.MINIMUM_TOKEN_BYTES
-        || tokenBytes > RiverClientConnection.MAXIMUM_TOKEN_BYTES
-        || tokenBytes > sourceToken.length) {
-      throw JdbcExceptions.invalid("TLS context and bounded token are required");
-    }
-    clearToken();
-    sslContext = context;
-    token = Arrays.copyOf(sourceToken, tokenBytes);
-  }
-
-  public synchronized void clearAuthentication() throws SQLException {
-    requireOpen();
-    clearToken();
-    sslContext = null;
+    return clientFile;
   }
 
   @Override
   public Connection getConnection() throws SQLException {
-    SSLContext context;
-    byte[] connectionToken;
-    int listenerPort;
+    Path file;
     synchronized (this) {
       requireOpen();
-      if (port == 0) {
-        throw JdbcExceptions.invalid("River data source port is not configured");
-      }
-      context = sslContext;
-      connectionToken = token == null ? null : Arrays.copyOf(token, token.length);
-      listenerPort = port;
+      file = clientFile;
     }
-    try {
-      return RiverDriver.openLoopback(
-          listenerPort,
-          context,
-          connectionToken,
-          connectionToken == null ? 0 : connectionToken.length);
-    } finally {
-      if (connectionToken != null) {
-        Arrays.fill(connectionToken, (byte) 0);
-      }
-    }
+    if (file == null) throw JdbcExceptions.invalid("client properties path is not configured");
+    return RiverDriver.connectFile(file);
   }
 
   @Override
@@ -138,8 +95,7 @@ public final class RiverDataSource implements DataSource, AutoCloseable {
     if (closed) {
       return;
     }
-    clearToken();
-    sslContext = null;
+    clientFile = null;
     logWriter = null;
     closed = true;
   }
@@ -150,10 +106,4 @@ public final class RiverDataSource implements DataSource, AutoCloseable {
     }
   }
 
-  private void clearToken() {
-    if (token != null) {
-      Arrays.fill(token, (byte) 0);
-      token = null;
-    }
-  }
 }

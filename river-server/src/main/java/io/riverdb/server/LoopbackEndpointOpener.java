@@ -1,6 +1,7 @@
 package io.riverdb.server;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.protocol.auth.TlsChannelBinding;
 import io.riverdb.protocol.auth.TokenAuthenticator;
@@ -17,19 +18,16 @@ final class LoopbackEndpointOpener {
       Socket connection,
       RiverDatabase database,
       TokenAuthenticator authenticator,
+      CredentialValidityFence validityFence,
       SecureRandom random,
-      SecurityAuditLog audit,
       int authenticationTimeoutMillis,
       ServerConnectionMemory memory,
       ServerResponseBuffer responses,
+      MutableCancellationToken cancellation,
       LoopbackEndpointOpenResult result) throws IOException {
     result.reset();
-    if (authenticator == null) {
-      result.set(new SessionEndpoint(
-          database, null, 0, 0, null, null, memory, responses), 0);
-      return;
-    }
-    if (!(connection instanceof SSLSocket secure)) {
+    if (authenticator == null || validityFence == null || random == null
+        || !(connection instanceof SSLSocket secure)) {
       result.fail(StatusCode.INVARIANT_BROKEN);
       return;
     }
@@ -51,12 +49,13 @@ final class LoopbackEndpointOpener {
         new SessionEndpoint(
             database,
             authenticator,
+            validityFence,
             challengeHigh,
             challengeLow,
             binding,
-            audit,
             memory,
-            responses),
+            responses,
+            cancellation),
         System.nanoTime() + authenticationTimeoutMillis * 1_000_000L);
   }
 }

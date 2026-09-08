@@ -3,6 +3,7 @@ package io.riverdb.server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.IsolationLevel;
@@ -12,12 +13,16 @@ import io.riverdb.engine.api.ProgramOpenResult;
 import io.riverdb.engine.api.QueryOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.api.RiverSession;
+import io.riverdb.engine.api.SessionAuthorizer;
 import io.riverdb.engine.api.SessionOpenResult;
 import io.riverdb.engine.api.TransactionProgram;
 import io.riverdb.engine.api.TransactionProgramArguments;
 import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolMessageType;
+import io.riverdb.protocol.auth.TokenAuthenticator;
+import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
+import io.riverdb.protocol.auth.TokenProof;
 import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 
@@ -25,15 +30,31 @@ final class SessionEndpointTerminalCleanupTest {
   @Test
   void disconnectTransfersRetryableCloseExactlyOnce() {
     RetryDatabase database = new RetryDatabase();
-    SessionEndpoint endpoint = new SessionEndpoint(database);
+    byte[] token = new byte[TokenProof.MINIMUM_TOKEN_BYTES];
+    TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
+    assertEquals(StatusCode.OK, TokenAuthenticator.create(token, token.length, authenticator));
+    CredentialValidityFenceOpenResult fence = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    assertEquals(StatusCode.OK,
+        CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
+    byte[] binding = new byte[] {1, 2, 3};
+    SessionEndpoint endpoint = new SessionEndpoint(database, authenticator.authenticator(),
+        fence.fence(), 11, 12, binding, null, null, new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     assertEquals(StatusCode.OK,
         codec.encodeRequest(request, ProtocolMessageType.HELLO, 1));
     assertEquals(StatusCode.OK, endpoint.process(request, response));
+    byte[] proof = new byte[TokenProof.PROOF_BYTES];
+    assertEquals(StatusCode.OK, TokenProof.compute(
+        token, token.length, 11, 12, binding, proof));
+    assertEquals(StatusCode.OK, codec.encodeBinaryRequest(
+        request, ProtocolMessageType.AUTHENTICATE, 2,
+        proof, proof.length));
+    assertEquals(StatusCode.OK, endpoint.process(request, response));
     assertEquals(StatusCode.OK,
-        codec.encodeRequest(request, ProtocolMessageType.OPEN_SESSION, 2));
+        codec.encodeRequest(request, ProtocolMessageType.OPEN_SESSION, 3));
     assertEquals(StatusCode.OK, endpoint.process(request, response));
 
     assertEquals(StatusCode.RETRY, ServerTerminalSessionCleanup.complete(endpoint));
@@ -52,6 +73,11 @@ final class SessionEndpointTerminalCleanupTest {
     @Override
     public StatusCode createSession(SessionOpenResult result) {
       return result.complete(session);
+    }
+
+    @Override
+    public StatusCode createSession(SessionAuthorizer authorizer, SessionOpenResult result) {
+      return authorizer == null ? StatusCode.INVALID_EXTERNAL_INPUT : result.complete(session);
     }
 
     @Override

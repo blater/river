@@ -1,6 +1,5 @@
 package io.riverdb.jdbc;
 
-import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -8,13 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.EmbeddedRiver;
-import io.riverdb.engine.api.DatabaseOpenResult;
-import io.riverdb.engine.api.RiverDatabase;
-import io.riverdb.server.LoopbackRiverServer;
-import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.app.GeneratedClientFileTestFixture;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -30,22 +23,12 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.function.Executable;
 
 final class RiverExactTypeJdbcTest {
-  private static final DatabaseIncarnation DATABASE =
-      DatabaseIncarnation.of(0x4a44424345584143L, 0x5454595045303031L);
-  private static final WalGeneration GENERATION = WalGeneration.of(1);
-
   @Test
   void bindsAndReturnsBooleanAndScaledBigDecimal(@TempDir Path root) throws Exception {
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(
-        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
-    RiverDatabase database = opened.database();
-    LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
-    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, listener));
-    LoopbackRiverServer server = listener.server();
+    GeneratedClientFileTestFixture fixture = GeneratedClientFileTestFixture.open(root);
 
     try (Connection connection = DriverManager.getConnection(
-        RiverDriver.URL_PREFIX + server.port())) {
+        RiverDriver.CLIENT_FILE_PREFIX + fixture.clientFile())) {
       try (Statement schema = connection.createStatement()) {
         assertEquals(0, schema.executeUpdate(
             "CREATE TABLE invoices (id BIGINT PRIMARY KEY, paid BOOLEAN, "
@@ -152,9 +135,9 @@ final class RiverExactTypeJdbcTest {
         assertEquals("22003", overflow.getSQLState());
         assertFalse(value.next());
       }
+    } finally {
+      assertEquals(StatusCode.OK, fixture.close());
     }
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
   }
 
   private static void assertUnsupported(Executable operation) {

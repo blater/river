@@ -1024,3 +1024,115 @@ The next performance checkpoint must be created prospectively by a ticketed
 feature that completes the clean gate, matched samples, evidence recording,
 merge, annotated tag, and push requirements. The P0 matrix in `tic-1dda` remains
 the immediate performance evidence priority.
+
+
+## riverd authenticated lifecycle candidate — 2026-09-08 (not accepted)
+
+Branch: `ticket/tic-ec50-riverd-launcher`, building on pushed checkpoint
+`75775e20`. This delivery replaces plain connections with TLS, generated client
+configuration and the accepted durable security-audit path. Database isolation,
+commit durability, workload SQL and the explicit TPS resource profile were kept
+unchanged. No promotion is approved by these results.
+
+Two pre-change samples at `75775e20` measured **162.4 and 163.4 committed TPS**.
+Two authenticated candidate samples measured **8.5 and 8.1 TPS**. Both pairs used:
+
+```sh
+tools/tps-test.sh --profile=tiny --mix=standard --terminals=4   --warehouses=1 --warmup-seconds=2 --measured-seconds=10 --seed=42   --output-dir=<unique-evidence-directory>
+```
+
+These River-specific diagnostic runs used GraalVM Java 25.0.4, serializable
+isolation and no-wait-stress scheduling on the same AC-powered Mac. No build or
+other workload overlapped a sample. All four measured runs reported zero errors,
+successful checkpoint/deadlock reconciliation and valid performance capture.
+The slowdown repeats and is much larger than adjacent sample variation. This is
+a comparison of the delivery's added security cost, not an audited TPC-C result.
+
+Artifacts under `/private/tmp/riverd-delivery-evidence`:
+
+- Baseline: `launcher-tps-before-1`, `launcher-tps-before-2`.
+- Candidate: `launcher-tps-after-2`, `launcher-tps-after-3`.
+- `launcher-tps-after-1` failed before readiness because the temporary directory
+  used the macOS `/var` alias. Canonicalizing the tool-owned directory fixed the
+  launch; that failed attempt contains no TPS measurement.
+- `launcher-tps-candidate-build-2.log` records the successful no-daemon build;
+  its sealed build identity is
+  `5321106e462ca6ad9205057839b1ce39dd450d641cd82884f63b5e7b5eb03379`.
+- `launcher-tps-audit-cost` and `launcher-audit-cost.server.jfr` are a separate
+  diagnostic capture, also 8.5 TPS. The JFR includes startup/load activity and
+  does not provide measured-window audit-force accounting or an allocation
+  claim. Its samples include audit append/wait and APFS force paths.
+
+Focused review traced each executed program step to its required synchronous
+security-audit admission. The coordinator forces the active audit stream once
+per cohort; it does not force the control files for every decision. Earlier
+single-client audit evidence measured roughly 3.9 ms per force, but that is a
+separate workload. No redundant authorization was identified. Removing or
+postponing required audit records would change the accepted security contract.
+The user has been asked whether normal statement execution should require this
+separate durable audit, retaining authentication and database commit durability.
+That decision is pending; the implementation has not relaxed the contract.
+
+Slopmark (`launcher-slopmark-2.txt`): instance ownership rose from 153.77 to
+245.744, principally from retaining each nonterminal resource and its identity
+lock during cleanup. Independent review checked that ownership behavior and its
+busy-session test. The instance owner still coordinates existing components;
+credential, audit, path and record-format policy remain with their existing
+owners. Server score fell from 131.928 to 122.729; client connection from
+196.723 to 195.799. Identity and runtime-record scores stayed at 988.965 and
+552.142. These scores prompted review, not a speculative refactor or a quality
+claim. Full integration validation and Windows qualification remain separate
+completion gates.
+
+
+### Final candidate integration checks (2026-09-08)
+
+The clean `--no-daemon --no-parallel clean test` integration run executed
+1,879 tests successfully, with 18 skips and no failures or errors (1,897 total).
+The accompanying policy tasks left the overall command red: the module ledger
+was corrected and `verifyModuleGraph` then passed; pre-existing source-policy
+and SQL-shape violations remain. No release-check pass is claimed. Evidence:
+`/private/tmp/riverd-delivery-evidence/launcher-clean-integration-1.log` and
+`launcher-policy-check-2.log` in the same directory.
+
+The migrated UPDATE trace tool built with `--no-daemon`, used generated TLS
+client configuration, and completed its UPDATE/COMMIT trace successfully.
+Evidence: `/private/tmp/riverd-delivery-evidence/launcher-update-trace-1.log`
+and the adjacent `launcher-update-trace-1/` artifacts.
+
+This is a feature checkpoint only. Windows execution evidence and the decision
+on synchronous SQL auditing remain outstanding; do not promote or close the
+standalone milestone from these results.
+
+
+## 2026-09-08 — Remove mandatory riverd SQL/security auditing
+
+The user removed auditing from the immediate roadmap. `tic-1c4d` deletes the
+subsystem rather than adding a disabled mode. Authentication, permissions,
+credential fencing, database/WAL durability, and workload SQL remain intact.
+Future consideration requires a concrete architecture supporting performance
+neutrality; no audit implementation or study is scheduled.
+
+Existing audited JARs (`23a1cb8e`) measured 8.2 and 8.2 TPS; the audit-free
+candidate measured 71.9 and 71.9 TPS. Commands used GraalVM 25, tiny/standard,
+four terminals, one warehouse, seed 42, two seconds warmup, ten measured.
+Successful samples had zero errors and passing reconciliation/capture.
+The user reported battery power; power was not independently controlled across
+the series. These diagnostics do not establish AC performance neutrality or
+justify comparison with the earlier 162–163 TPS result. The subsequent master
+control timed out in warmup and provides no TPS comparison. No further battery
+performance investigation is included in this removal.
+
+Evidence paths: `/private/tmp/riverd-noaudit-before-2/`, `before-3/`, `after-1/`,
+and `after-2/` (all share the `riverd-noaudit-` prefix). `before-1` is excluded
+because an agent built concurrently in the wrong checkout; those unintended
+source edits were restored. The invalid control is `riverd-noaudit-control-1/`.
+
+The clean test/distribution/module-graph build passed with 1,863 passed tests,
+18 skips, no failures/errors; unchanged tasks used Gradle cache results.
+Audit-only tests were deleted, while authentication/permission/expiry and
+cancellation checks remain. Installed lifecycle passed on macOS/APFS and
+Linux/ext4/XFS. Slopmark fell for identity (988.965→935.340), instance owner
+(245.744→221.793), and server (122.729→113.333). Full evidence and review are
+recorded in `docs/tickets/tic-1c4d.md`. Windows execution remains outstanding
+for the overall standalone milestone.

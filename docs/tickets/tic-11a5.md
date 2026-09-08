@@ -31,3 +31,10 @@ Resolve exact command/status outcomes, TLS and token identity, filesystem proof,
 ## Acceptance Criteria
 
 The accepted ADR and updated plan have no alternative behaviors, name owners and failure statuses, include the audit performance contract, and pass architecture, security, operations, and compatibility review.
+
+## 2026-09-08 supersession
+
+This closed documentation delivery remains a historical record. The audit
+durability, archive, and audit-performance portions of its accepted contract
+are superseded; authentication, authorization, filesystem safety, database/WAL
+durability, and lifecycle requirements remain active.

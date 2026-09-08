@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -107,7 +108,8 @@ final class CatalogV2SuccessorTest {
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
     assertEquals(StatusCode.OK, database.close());
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     SchemaPin reopened = open(database, "items");
     assertEquals(2, reopened.catalogGeneration());
@@ -145,7 +147,8 @@ final class CatalogV2SuccessorTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     SchemaPin reopened = open(database, "wide_items");
     assertEquals(objectId, reopened.tableId());

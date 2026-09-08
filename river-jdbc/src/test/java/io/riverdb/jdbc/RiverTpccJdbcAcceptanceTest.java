@@ -1,21 +1,14 @@
 package io.riverdb.jdbc;
 
-import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.EmbeddedRiver;
-import io.riverdb.engine.api.DatabaseOpenResult;
-import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.runtime.RiverRuntimeConfig;
-import io.riverdb.server.LoopbackRiverServer;
-import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.app.GeneratedClientFileTestFixture;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -36,9 +29,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 /** JDBC semantic gate for the standard TPC-C relational and transaction shapes. */
 final class RiverTpccJdbcAcceptanceTest {
-  private static final DatabaseIncarnation DATABASE =
-      DatabaseIncarnation.of(0x545043434A444243L, 0x4143434550543031L);
-  private static final WalGeneration GENERATION = WalGeneration.of(1);
   private static final String WAREHOUSE_DDL =
       "CREATE TABLE warehouse (w_id SMALLINT PRIMARY KEY,w_name VARCHAR(10) NOT NULL,"
           + "w_street_1 VARCHAR(20) NOT NULL,w_street_2 VARCHAR(20) NOT NULL,"
@@ -47,12 +37,8 @@ final class RiverTpccJdbcAcceptanceTest {
 
   @Test
   void loadsWarehouseRowsThroughPreparedJdbcBatch(@TempDir Path root) throws Exception {
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(
-        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
-    RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
-    try (Connection connection = DriverManager.getConnection(url(server));
+    GeneratedClientFileTestFixture fixture = GeneratedClientFileTestFixture.open(root);
+    try (Connection connection = DriverManager.getConnection(clientUrl(fixture));
         Statement ddl = connection.createStatement()) {
       assertEquals(0, ddl.executeUpdate(WAREHOUSE_DDL));
       connection.setAutoCommit(false);
@@ -72,96 +58,36 @@ final class RiverTpccJdbcAcceptanceTest {
         assertEquals(2, rows.getInt(1));
         assertFalse(rows.next());
       }
+    } finally {
+      assertEquals(io.riverdb.base.error.StatusCode.OK, fixture.close());
     }
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
   }
 
   @Test
   void executesFiveTransactionFamiliesOverCompositeAndKeylessSchema(@TempDir Path root)
       throws Exception {
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(
-        databaseRequest(16), root, DATABASE, GENERATION, 16, opened));
-    RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
-    try (Connection connection = DriverManager.getConnection(url(server))) {
-      createSchema(connection);
-      seed(connection);
-      newOrder(connection);
-      newOrderIntentionalRollback(connection);
-      paymentByLastName(connection);
-      orderStatus(connection);
-      delivery(connection);
-      stockLevel(connection);
-      assertBusinessInvariants(connection);
-      try (Statement statement = connection.createStatement()) {
-        assertEquals(0, statement.executeUpdate("CHECKPOINT"));
-      }
-    }
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
-    opened.reset();
-    assertEquals(
-        StatusCode.OK,
-        EmbeddedRiver.openExisting(
-            databaseRequest(16), root, DATABASE, GENERATION, 16, opened));
-    database = opened.database();
-    server = start(database);
-    try (Connection connection = DriverManager.getConnection(url(server))) {
-      assertBusinessInvariants(connection);
-      stockLevel(connection);
-    }
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
+    runRestartProbe(root.toRealPath(), "create-recovery");
+    runRestartProbe(root.toRealPath().resolve("instance"), "recovery");
   }
 
   @Test
   void lockWaitTimeoutDoesNotPoisonTheExplicitJdbcTransaction(@TempDir Path root)
       throws Exception {
+    runRestartProbe(root.toRealPath(), "create-lock");
+    Path database = root.toRealPath().resolve("instance").resolve("database");
     Files.writeString(
-        root.resolve(RiverRuntimeConfig.FILE_NAME),
+        database.resolve(RiverRuntimeConfig.FILE_NAME),
         "river.tx.lock-wait-timeout=20ms\n",
         StandardCharsets.UTF_8);
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(
-        databaseRequest(16), root, DATABASE, GENERATION, 16, opened));
-    RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
-    try (Connection first = DriverManager.getConnection(url(server));
-        Connection second = DriverManager.getConnection(url(server))) {
-      createSchema(first);
-      seed(first);
-      first.setAutoCommit(false);
-      second.setAutoCommit(false);
-      assertEquals(2, lockedNextOrder(first));
-      SQLException timeout = assertThrows(SQLException.class, () -> lockedNextOrder(second));
-      assertEquals("HYT00", timeout.getSQLState());
-      try (PreparedStatement disjoint = second.prepareStatement(
-          "UPDATE customer SET c_delivery_cnt=c_delivery_cnt+1 "
-              + "WHERE c_w_id=? AND c_d_id=? AND c_id=?")) {
-        bindTriple(disjoint, 1, 1, 2);
-        assertEquals(1, disjoint.executeUpdate());
-      }
-      second.rollback();
-      first.commit();
-      assertEquals(2, lockedNextOrder(second));
-      second.rollback();
-    }
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
+    runRestartProbe(root.toRealPath().resolve("instance"), "lock-timeout");
   }
 
   @Test
   void opposingCompositeKeyLocksReportOneDeadlockAndGrantTheSurvivor(@TempDir Path root)
       throws Exception {
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(
-        databaseRequest(16), root, DATABASE, GENERATION, 16, opened));
-    RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
-    try (Connection first = DriverManager.getConnection(url(server));
-        Connection second = DriverManager.getConnection(url(server))) {
+    GeneratedClientFileTestFixture fixture = GeneratedClientFileTestFixture.open(root);
+    try (Connection first = DriverManager.getConnection(clientUrl(fixture));
+        Connection second = DriverManager.getConnection(clientUrl(fixture))) {
       createSchema(first);
       seed(first);
       RiverTransactionDiagnostics firstDiagnostics =
@@ -207,9 +133,9 @@ final class RiverTpccJdbcAcceptanceTest {
         }
         first.rollback();
       }
+    } finally {
+      assertEquals(io.riverdb.base.error.StatusCode.OK, fixture.close());
     }
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
   }
 
   private static void createSchema(Connection connection) throws SQLException {
@@ -581,7 +507,7 @@ final class RiverTpccJdbcAcceptanceTest {
     }
   }
 
-  private static void stockLevel(Connection connection) throws SQLException {
+  static void stockLevel(Connection connection) throws SQLException {
     try (PreparedStatement next = connection.prepareStatement(
             "SELECT d_next_o_id FROM district WHERE d_w_id=? AND d_id=?");
         PreparedStatement low = connection.prepareStatement(
@@ -609,7 +535,7 @@ final class RiverTpccJdbcAcceptanceTest {
     }
   }
 
-  private static void assertBusinessInvariants(Connection connection) throws SQLException {
+  static void assertBusinessInvariants(Connection connection) throws SQLException {
     try (Statement statement = connection.createStatement()) {
       assertScalar(statement, "SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1", 3);
       assertScalar(statement, "SELECT s_quantity FROM stock WHERE s_w_id=1 AND s_i_id=1", 95);
@@ -617,6 +543,48 @@ final class RiverTpccJdbcAcceptanceTest {
       assertScalar(statement, "SELECT COUNT(*) FROM new_order", 1);
       assertScalar(statement, "SELECT COUNT(*) FROM orders", 2);
       assertScalar(statement, "SELECT COUNT(*) FROM order_line", 2);
+    }
+  }
+
+  static void runTransactionFamilies(Path clientFile) throws Exception {
+    try (Connection connection = DriverManager.getConnection(
+        RiverDriver.CLIENT_FILE_PREFIX + clientFile)) {
+      createSchema(connection);
+      seed(connection);
+      newOrder(connection);
+      newOrderIntentionalRollback(connection);
+      paymentByLastName(connection);
+      orderStatus(connection);
+      delivery(connection);
+      stockLevel(connection);
+      assertBusinessInvariants(connection);
+      try (Statement statement = connection.createStatement()) {
+        assertEquals(0, statement.executeUpdate("CHECKPOINT"));
+      }
+    }
+  }
+
+  static void runLockWaitTimeout(Path clientFile) throws Exception {
+    String url = RiverDriver.CLIENT_FILE_PREFIX + clientFile;
+    try (Connection first = DriverManager.getConnection(url);
+        Connection second = DriverManager.getConnection(url)) {
+      createSchema(first);
+      seed(first);
+      first.setAutoCommit(false);
+      second.setAutoCommit(false);
+      assertEquals(2, lockedNextOrder(first));
+      SQLException timeout = assertThrows(SQLException.class, () -> lockedNextOrder(second));
+      assertEquals("HYT00", timeout.getSQLState());
+      try (PreparedStatement disjoint = second.prepareStatement(
+          "UPDATE customer SET c_delivery_cnt=c_delivery_cnt+1 "
+              + "WHERE c_w_id=? AND c_d_id=? AND c_id=?")) {
+        bindTriple(disjoint, 1, 1, 2);
+        assertEquals(1, disjoint.executeUpdate());
+      }
+      second.rollback();
+      first.commit();
+      assertEquals(2, lockedNextOrder(second));
+      second.rollback();
     }
   }
 
@@ -703,13 +671,25 @@ final class RiverTpccJdbcAcceptanceTest {
     statement.setBigDecimal(9, new BigDecimal("300000.00"));
   }
 
-  private static LoopbackRiverServer start(RiverDatabase database) {
-    LoopbackServerOpenResult result = new LoopbackServerOpenResult();
-    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, result));
-    return result.server();
+  private static String clientUrl(GeneratedClientFileTestFixture fixture) {
+    return RiverDriver.CLIENT_FILE_PREFIX + fixture.clientFile();
   }
 
-  private static String url(LoopbackRiverServer server) {
-    return RiverDriver.URL_PREFIX + server.port();
+  private static void runRestartProbe(Path datadir, String mode)
+      throws IOException, InterruptedException {
+    String javaExecutable = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+    Process process = new ProcessBuilder(
+        javaExecutable,
+        "--enable-native-access=ALL-UNNAMED", "-Xmx1g",
+        "-cp", System.getProperty("river.test.classpath", System.getProperty("java.class.path")),
+        RiverTpccForkMain.class.getName(), datadir.toString(), mode)
+        .inheritIO()
+        .start();
+    try {
+      assertTrue(process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS), "TPCC child timed out");
+      assertEquals(0, process.exitValue());
+    } finally {
+      if (process.isAlive()) { process.destroyForcibly(); process.waitFor(); }
+    }
   }
 }

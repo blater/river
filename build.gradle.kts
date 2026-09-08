@@ -41,6 +41,7 @@ val productionModules = listOf(
   "river-protocol",
   "river-client",
   "river-server",
+  "river-server-app",
   "river-jdbc",
   "river-cli",
   "river-admin",
@@ -95,9 +96,13 @@ val allowedDependencies = mapOf(
     "river-planner", "river-exec", "river-engine-api"
   ),
   "river-protocol" to setOf("river-engine-api"),
-  "river-client" to setOf("river-protocol", "river-engine-api"),
+  "river-client" to setOf("river-protocol", "river-engine-api", "river-platform"),
   "river-server" to setOf(
     "river-platform", "river-protocol", "river-engine-api", "river-engine"
+  ),
+  "river-server-app" to setOf(
+    "river-platform", "river-protocol", "river-engine-api", "river-engine", "river-client",
+    "river-server", "river-jdbc", "river-format"
   ),
   "river-jdbc" to setOf("river-client"),
   "river-cli" to setOf("river-client"),
@@ -125,9 +130,13 @@ val declaredDependencies = mapOf(
   "river-sql" to setOf("river-base"),
   "river-engine-api" to setOf("river-base"),
   "river-protocol" to setOf("river-base", "river-engine-api"),
-  "river-client" to setOf("river-base", "river-engine-api", "river-protocol"),
+  "river-client" to setOf("river-base", "river-engine-api", "river-protocol", "river-platform"),
   "river-server" to setOf(
-    "river-base", "river-platform", "river-engine-api", "river-protocol"
+    "river-base", "river-engine-api", "river-protocol"
+  ),
+  "river-server-app" to setOf(
+    "river-base", "river-platform", "river-engine-api", "river-protocol", "river-client",
+    "river-server", "river-engine", "river-jdbc", "river-format"
   ),
   "river-jdbc" to setOf("river-base", "river-client"),
   "river-cli" to setOf("river-base", "river-client"),
@@ -137,7 +146,8 @@ val declaredDependencies = mapOf(
   ),
   "river-inspect" to setOf("river-base", "river-format", "river-platform"),
   "river-bench" to setOf(
-    "river-base", "river-jdbc", "river-engine-api", "river-engine", "river-server"
+    "river-base", "river-jdbc", "river-engine-api", "river-engine", "river-server",
+    "river-client", "river-platform", "river-protocol", "river-server-app"
   )
 )
 
@@ -148,7 +158,7 @@ val declaredDependencies = mapOf(
 val approvedApiDependencies = mapOf(
   "river-engine-api" to setOf("river-base"),
   "river-protocol" to setOf("river-base", "river-engine-api"),
-  "river-client" to setOf("river-base", "river-engine-api")
+  "river-client" to setOf("river-base", "river-engine-api", "river-platform")
 )
 
 subprojects {

@@ -3,7 +3,7 @@ package io.riverdb.server;
 import io.riverdb.base.error.StatusCode;
 import java.io.IOException;
 
-/** Bounded shutdown of the listener, workers, sockets, and audit log. */
+/** Bounded shutdown of the listener, workers, and sockets. */
 final class LoopbackServerShutdown {
   private static final int SHUTDOWN_TIMEOUT_MILLIS = 5_000;
 
@@ -19,6 +19,7 @@ final class LoopbackServerShutdown {
       for (int index = 0; index < server.slots.length; index++) {
         LoopbackRiverServer.ConnectionSlot slot = server.slots[index];
         workers[index] = slot.worker;
+        slot.cancellation.cancel();
         if (slot.socket != null) {
           try {
             slot.socket.close();
@@ -29,13 +30,11 @@ final class LoopbackServerShutdown {
       }
     }
     for (Thread worker : workers) {
-      status = joinUntil(worker, deadline, status);
+      status = joinUnbounded(worker, status);
     }
-    if (server.audit != null) {
-      StatusCode auditStatus = server.audit.close();
-      if (status.isOk() && auditStatus != StatusCode.CLOSED) {
-        status = auditStatus;
-      }
+    if (server.validityFence != null) {
+      StatusCode fenceStatus = server.validityFence.close();
+      if (status.isOk() && !fenceStatus.isOk()) status = fenceStatus;
     }
     if (!status.isOk()) {
       server.lastStatus = status;
@@ -67,5 +66,20 @@ final class LoopbackServerShutdown {
       Thread.currentThread().interrupt();
       return StatusCode.CANCELLED;
     }
+  }
+
+  private static StatusCode joinUnbounded(Thread thread, StatusCode current) {
+    if (thread == null) return current;
+    boolean interrupted = false;
+    while (thread.isAlive()) {
+      try {
+        thread.join();
+      } catch (InterruptedException interruption) {
+        interrupted = true;
+        current = StatusCode.CANCELLED;
+      }
+    }
+    if (interrupted) Thread.currentThread().interrupt();
+    return current;
   }
 }

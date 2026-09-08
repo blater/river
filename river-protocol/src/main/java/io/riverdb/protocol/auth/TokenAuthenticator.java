@@ -13,6 +13,7 @@ public final class TokenAuthenticator {
   private final byte[] expectedProof = new byte[TokenProof.PROOF_BYTES];
   private long principalId;
   private int permissions;
+  private boolean destroyed;
 
   private TokenAuthenticator() {
   }
@@ -57,11 +58,29 @@ public final class TokenAuthenticator {
     return permissions;
   }
 
+  /**
+   * Erases every River-owned authentication buffer and makes this authenticator unusable.
+   * Destruction is idempotent so lifecycle cleanup can safely retry it.
+   */
+  public synchronized StatusCode destroy() {
+    Arrays.fill(tokenKey, (byte) 0);
+    Arrays.fill(offeredProof, (byte) 0);
+    Arrays.fill(expectedProof, (byte) 0);
+    principalId = 0;
+    permissions = SessionPermissions.NONE;
+    destroyed = true;
+    return StatusCode.OK;
+  }
+
   public synchronized StatusCode verify(
       ProtocolFrame frame,
       long challengeHigh,
       long challengeLow,
       byte[] channelBinding) {
+    if (destroyed) {
+      if (frame != null) frame.erasePayload();
+      return StatusCode.CLOSED;
+    }
     if (frame == null || frame.payloadBytes() != TokenProof.PROOF_BYTES) {
       if (frame != null) {
         frame.erasePayload();

@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -91,7 +92,8 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();
@@ -226,7 +228,8 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.dropTable("accounts"));
     assertEquals(StatusCode.CONFLICT, database.dropTable("accounts"));
@@ -277,7 +280,8 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();
@@ -478,7 +482,8 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessions));
     session = sessions.session();
@@ -547,7 +552,8 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(
         StatusCode.OK,
@@ -585,7 +591,8 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, database.close());
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(9), root, DATABASE, GENERATION, 9, opened));
+        RelationalDatabase.openExisting(databaseRequest(9), root, DATABASE, GENERATION, 9,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(
         StatusCode.OK,

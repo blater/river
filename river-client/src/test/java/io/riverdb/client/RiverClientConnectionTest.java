@@ -32,22 +32,32 @@ import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.protocol.ProtocolQueryMetadata;
+import io.riverdb.protocol.auth.TokenAuthenticator;
+import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
+import io.riverdb.protocol.auth.TokenProof;
+import io.riverdb.protocol.auth.TlsChannelBinding;
 import io.riverdb.server.LoopbackRiverServer;
+import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.testsupport.TestTlsContexts;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
-import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import javax.net.ssl.SSLSocket;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class RiverClientConnectionTest {
+  private static final byte[] TOKEN =
+      "river-client-connection-test-token".getBytes(StandardCharsets.UTF_8);
   private static DatabaseResourcePlanRequest databaseRequest(int owners) {
     return new DatabaseResourcePlanRequest()
         .memory(256_000_000L, 0, 0, 0, 64_000_000L)
@@ -494,7 +504,8 @@ final class RiverClientConnectionTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, engineResult));
+        EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            io.riverdb.engine.EmbeddedLockDiagnosticsConfig.disabled(), engineResult));
     engine = engineResult.database();
     server = start(engine);
     client = connect(server);
@@ -629,10 +640,11 @@ final class RiverClientConnectionTest {
   @Test
   void rejectsFetchRowsWithImpossibleSequenceBeforePublication() throws Exception {
     AtomicReference<Throwable> serverFailure = new AtomicReference<>();
-    try (ServerSocket server = new ServerSocket()) {
+    try (ServerSocket server = tlsServer()) {
       server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
       Thread responder = Thread.ofPlatform().start(() -> {
-        try (Socket connection = server.accept()) {
+        try (SSLSocket connection = (SSLSocket) server.accept()) {
+          connection.startHandshake();
           InputStream input = connection.getInputStream();
           OutputStream output = connection.getOutputStream();
           ByteBuffer response = ByteBuffer.allocate(
@@ -640,17 +652,18 @@ final class RiverClientConnectionTest {
           ProtocolFrameCodec codec = new ProtocolFrameCodec();
           expectRequest(input, ProtocolMessageType.HELLO, 1);
           assertEncoded(codec.encodeHelloResponse(
-              response, 1, StatusCode.OK, 0, 0));
+              response, 1, StatusCode.OK, 0x11L, 0x22L));
           writeResponse(output, response);
-          expectRequest(input, ProtocolMessageType.OPEN_SESSION, 2);
+          expectAuthentication(input, output, response, codec);
+          expectRequest(input, ProtocolMessageType.OPEN_SESSION, 3);
           assertEncoded(codec.encodeStatusResponse(
               response,
               ProtocolMessageType.OPEN_SESSION,
-              2,
+              3,
               StatusCode.OK,
               false));
           writeResponse(output, response);
-          expectRequest(input, ProtocolMessageType.BEGIN_QUERY, 3);
+          expectRequest(input, ProtocolMessageType.BEGIN_QUERY, 4);
           OneColumnQuery metadataQuery = new OneColumnQuery(SqlTypeDescriptor.timestamp(6));
           ProtocolQueryMetadata metadata = new ProtocolQueryMetadata();
           assertEncoded(metadata.capture(metadataQuery));
@@ -664,7 +677,7 @@ final class RiverClientConnectionTest {
           assertEncoded(codec.encodeQueryOpenResponse(
               response,
               ProtocolMessageType.BEGIN_QUERY,
-              3,
+              4,
               StatusCode.OK,
               metadata,
               first,
@@ -672,7 +685,7 @@ final class RiverClientConnectionTest {
               null,
               true));
           writeResponse(output, response);
-          expectRequest(input, ProtocolMessageType.FETCH, 4);
+          expectRequest(input, ProtocolMessageType.FETCH, 5);
           RowResult row = new RowResult();
           assertEncoded(row.complete(
               1,
@@ -683,7 +696,7 @@ final class RiverClientConnectionTest {
           assertEncoded(codec.encodeRowResponse(
               response,
               ProtocolMessageType.FETCH,
-              4,
+              5,
               StatusCode.OK,
               row,
               Long.MAX_VALUE,
@@ -698,7 +711,9 @@ final class RiverClientConnectionTest {
       RiverClientOpenResult clientResult = new RiverClientOpenResult();
       assertEquals(
           StatusCode.OK,
-          RiverClientConnection.connectLoopback(server.getLocalPort(), clientResult));
+          RiverClientConnection.connectAuthenticatedLoopback(
+              server.getLocalPort(), trustedClientContext(),
+              TOKEN, TOKEN.length, clientResult));
       RiverClientConnection client = clientResult.connection();
       SessionOpenResult sessionResult = new SessionOpenResult();
       assertEquals(StatusCode.OK, client.createSession(sessionResult));
@@ -723,22 +738,24 @@ final class RiverClientConnectionTest {
   @Test
   void preservesEveryNumericDescriptorAndCanonicalLaneAcrossTheClient() throws Exception {
     AtomicReference<Throwable> serverFailure = new AtomicReference<>();
-    try (ServerSocket server = new ServerSocket()) {
+    try (ServerSocket server = tlsServer()) {
       server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
       Thread responder = Thread.ofPlatform().start(() -> {
-        try (Socket connection = server.accept()) {
+        try (SSLSocket connection = (SSLSocket) server.accept()) {
+          connection.startHandshake();
           InputStream input = connection.getInputStream();
           OutputStream output = connection.getOutputStream();
           ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
           ProtocolFrameCodec codec = new ProtocolFrameCodec();
           expectRequest(input, ProtocolMessageType.HELLO, 1);
-          assertEncoded(codec.encodeHelloResponse(response, 1, StatusCode.OK, 0, 0));
+          assertEncoded(codec.encodeHelloResponse(response, 1, StatusCode.OK, 0x11L, 0x22L));
           writeResponse(output, response);
-          expectRequest(input, ProtocolMessageType.OPEN_SESSION, 2);
+          expectAuthentication(input, output, response, codec);
+          expectRequest(input, ProtocolMessageType.OPEN_SESSION, 3);
           assertEncoded(codec.encodeStatusResponse(
-              response, ProtocolMessageType.OPEN_SESSION, 2, StatusCode.OK, false));
+              response, ProtocolMessageType.OPEN_SESSION, 3, StatusCode.OK, false));
           writeResponse(output, response);
-          expectRequest(input, ProtocolMessageType.EXECUTE, 3);
+          expectRequest(input, ProtocolMessageType.EXECUTE, 4);
           CommandResult command = new CommandResult();
           long[] values = {
               -7,
@@ -759,11 +776,11 @@ final class RiverClientConnectionTest {
           assertEncoded(command.complete(
               1, 0, false, true, 0, values, 0, types, values.length));
           assertEncoded(codec.encodeCommandResponse(
-              response, ProtocolMessageType.EXECUTE, 3, StatusCode.OK, command, false));
+              response, ProtocolMessageType.EXECUTE, 4, StatusCode.OK, command, false));
           writeResponse(output, response);
-          expectRequest(input, ProtocolMessageType.CLOSE_SESSION, 4);
+          expectRequest(input, ProtocolMessageType.CLOSE_SESSION, 5);
           assertEncoded(codec.encodeStatusResponse(
-              response, ProtocolMessageType.CLOSE_SESSION, 4, StatusCode.OK, false));
+              response, ProtocolMessageType.CLOSE_SESSION, 5, StatusCode.OK, false));
           writeResponse(output, response);
         } catch (Throwable failure) {
           serverFailure.set(failure);
@@ -772,7 +789,9 @@ final class RiverClientConnectionTest {
 
       RiverClientOpenResult clientResult = new RiverClientOpenResult();
       assertEquals(StatusCode.OK,
-          RiverClientConnection.connectLoopback(server.getLocalPort(), clientResult));
+          RiverClientConnection.connectAuthenticatedLoopback(
+              server.getLocalPort(), trustedClientContext(),
+              TOKEN, TOKEN.length, clientResult));
       RiverClientConnection client = clientResult.connection();
       SessionOpenResult sessionResult = new SessionOpenResult();
       assertEquals(StatusCode.OK, client.createSession(sessionResult));
@@ -794,10 +813,11 @@ final class RiverClientConnectionTest {
 
   private static StatusCode connectToCorruptResponse(int corruption) throws Exception {
     AtomicReference<Throwable> serverFailure = new AtomicReference<>();
-    try (ServerSocket server = new ServerSocket()) {
+    try (ServerSocket server = tlsServer()) {
       server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
       Thread responder = Thread.ofPlatform().start(() -> {
-        try (Socket connection = server.accept()) {
+        try (SSLSocket connection = (SSLSocket) server.accept()) {
+          connection.startHandshake();
           byte[] requestHeader = new byte[ProtocolFrameCodec.HEADER_BYTES];
           if (!readExact(connection.getInputStream(), requestHeader, requestHeader.length)) {
             throw new IOException("client request header was truncated");
@@ -827,7 +847,9 @@ final class RiverClientConnectionTest {
         }
       });
       RiverClientOpenResult result = new RiverClientOpenResult();
-      StatusCode status = RiverClientConnection.connectLoopback(server.getLocalPort(), result);
+      StatusCode status = RiverClientConnection.connectAuthenticatedLoopback(
+          server.getLocalPort(), trustedClientContext(),
+          TOKEN, TOKEN.length, result);
       responder.join(2_000);
       assertFalse(responder.isAlive());
       if (serverFailure.get() != null) {
@@ -835,6 +857,21 @@ final class RiverClientConnectionTest {
       }
       return status;
     }
+  }
+
+  private static ServerSocket tlsServer() throws IOException {
+    return serverContext().getServerSocketFactory().createServerSocket();
+  }
+
+  private static void expectAuthentication(
+      InputStream input,
+      OutputStream output,
+      ByteBuffer response,
+      ProtocolFrameCodec codec) throws IOException {
+    expectRequest(input, ProtocolMessageType.AUTHENTICATE, 2);
+    assertEncoded(codec.encodeStatusResponse(
+        response, ProtocolMessageType.AUTHENTICATE, 2, StatusCode.OK, false));
+    writeResponse(output, response);
   }
 
   private static boolean readExact(InputStream input, byte[] target, int length)
@@ -938,16 +975,35 @@ final class RiverClientConnectionTest {
   private static LoopbackRiverServer start(
       RiverDatabase database,
       int maximumConnections) {
+    TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
+    assertEquals(StatusCode.OK, TokenAuthenticator.create(TOKEN, TOKEN.length, authenticator));
+    io.riverdb.server.CredentialValidityFenceOpenResult fence =
+        new io.riverdb.server.CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    assertEquals(
+        StatusCode.OK,
+        io.riverdb.server.CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
-        LoopbackRiverServer.start(database, 0, maximumConnections, result));
+        LoopbackRiverServer.startAuthenticated(
+            database,
+            InetAddress.getLoopbackAddress(),
+            0,
+            serverContext(),
+            authenticator.authenticator(),
+            fence.fence(),
+            LoopbackServerLimits.defaults(maximumConnections),
+            result));
     return result.server();
   }
 
   private static RiverClientConnection connect(LoopbackRiverServer server) {
     RiverClientOpenResult result = new RiverClientOpenResult();
-    assertEquals(StatusCode.OK, RiverClientConnection.connectLoopback(server.port(), result));
+    assertEquals(
+        StatusCode.OK,
+        RiverClientConnection.connectAuthenticatedLoopback(
+            server.port(), trustedClientContext(), TOKEN, TOKEN.length, result));
     return result.connection();
   }
 
@@ -963,5 +1019,21 @@ final class RiverClientConnectionTest {
     assertEquals(2, row.columnCount());
     assertEquals(first, row.valueAt(0));
     assertEquals(second, row.valueAt(1));
+  }
+
+  private static javax.net.ssl.SSLContext serverContext() {
+    try {
+      return TestTlsContexts.server();
+    } catch (java.security.GeneralSecurityException | java.io.IOException failure) {
+      throw new AssertionError("TLS test context", failure);
+    }
+  }
+
+  private static javax.net.ssl.SSLContext trustedClientContext() {
+    try {
+      return TestTlsContexts.trustedClient();
+    } catch (java.security.GeneralSecurityException | java.io.IOException failure) {
+      throw new AssertionError("TLS test context", failure);
+    }
   }
 }

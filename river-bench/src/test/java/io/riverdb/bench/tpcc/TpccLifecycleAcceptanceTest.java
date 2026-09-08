@@ -1,30 +1,18 @@
 package io.riverdb.bench.tpcc;
 
-import static io.riverdb.bench.tpcc.TpccTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.EmbeddedRiver;
-import io.riverdb.engine.api.DatabaseOpenResult;
-import io.riverdb.engine.api.RiverDatabase;
-import io.riverdb.server.LoopbackRiverServer;
-import io.riverdb.server.LoopbackServerOpenResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
 
-/** Owns the real checkpoint, database close/open, and server restart lifecycle. */
+/** Owns the real checkpoint, database close/open, and process restart lifecycle. */
 final class TpccLifecycleAcceptanceTest {
-  private static final DatabaseIncarnation DATABASE =
-      DatabaseIncarnation.of(0x5450_4343_4245_4E43L, 0x485F_4C49_4645_3031L);
-  private static final WalGeneration GENERATION = WalGeneration.of(1);
-
   @Test
   void tinyNoWaitRunSurvivesDatabaseCloseAndOpen(@TempDir Path root) throws Exception {
     runLifecycle(root, true, 1, 2);
@@ -44,35 +32,9 @@ final class TpccLifecycleAcceptanceTest {
 
   private static void runLifecycle(Path root, boolean tiny, int warmup, int measured)
       throws Exception {
-    Path databaseRoot = root.resolve("database");
     Path artifact = root.resolve("acceptance.properties");
-    Files.createDirectory(databaseRoot);
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK,
-        EmbeddedRiver.create(
-            databaseRequest(16), databaseRoot, DATABASE, GENERATION, 16, opened));
-    RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
-    try {
-      TpccAcceptanceMain.main(arguments(server.port(), artifact, tiny,
-          "load-run-checkpoint", warmup, measured));
-    } finally {
-      assertEquals(StatusCode.OK, server.close());
-      assertEquals(StatusCode.OK, database.close());
-    }
-    opened.reset();
-    assertEquals(StatusCode.OK,
-        EmbeddedRiver.openExisting(
-            databaseRequest(16), databaseRoot, DATABASE, GENERATION, 16, opened));
-    database = opened.database();
-    server = start(database);
-    try {
-      TpccAcceptanceMain.main(arguments(server.port(), artifact, tiny,
-          "recovery-verify", warmup, measured));
-    } finally {
-      assertEquals(StatusCode.OK, server.close());
-      assertEquals(StatusCode.OK, database.close());
-    }
+    runChild(root, artifact, tiny, "load-run-checkpoint", warmup, measured);
+    runChild(root, artifact, tiny, "recovery-verify", warmup, measured);
     Properties evidence = new Properties();
     try (java.io.InputStream input = Files.newInputStream(artifact)) {
       evidence.load(input);
@@ -81,26 +43,40 @@ final class TpccLifecycleAcceptanceTest {
     assertTrue(evidence.containsKey("recovery.verified_at"));
   }
 
-  private static String[] arguments(
-      int port, Path artifact, boolean tiny, String phase, int warmup, int measured) {
-    java.util.ArrayList<String> values = new java.util.ArrayList<>();
-    values.add("--url=jdbc:river://localhost:" + port);
-    values.add("--artifact=" + artifact);
-    values.add("--phase=" + phase);
-    values.add("--warmup-seconds=" + warmup);
-    values.add("--measured-seconds=" + measured);
-    String jfr = System.getenv("RIVER_TPCC_TEST_JFR");
-    if (jfr != null && phase.equals("load-run-checkpoint")) values.add("--jfr=" + jfr);
-    if (tiny) {
-      values.add("--tiny");
-      values.add("--scheduling=no-wait-stress");
+  /** Runs each phase in a fresh JVM so identity restart uses a distinct process owner. */
+  private static void runChild(
+      Path root, Path artifact, boolean tiny, String phase, int warmup, int measured)
+      throws Exception {
+    String javaExecutable = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+    java.util.ArrayList<String> command = new java.util.ArrayList<>();
+    command.add(javaExecutable);
+    command.add("--enable-native-access=ALL-UNNAMED");
+    command.add("-Xmx1g");
+    command.add("-cp");
+    command.add(System.getProperty(
+        "river.test.classpath", System.getProperty("java.class.path")));
+    command.add(TpccLifecycleChildMain.class.getName());
+    command.add("--root=" + root.toAbsolutePath());
+    command.add("--artifact=" + artifact.toAbsolutePath());
+    command.add("--phase=" + phase);
+    command.add("--warmup-seconds=" + warmup);
+    command.add("--measured-seconds=" + measured);
+    if (tiny) command.add("--tiny");
+    Process process = new ProcessBuilder(command)
+        .inheritIO()
+        .start();
+    long timeoutSeconds = Math.max(60L, (long) warmup + measured + 120L);
+    try {
+      assertTrue(
+          process.waitFor(timeoutSeconds, TimeUnit.SECONDS),
+          "TPC-C child timed out after " + timeoutSeconds + " seconds");
+      assertEquals(0, process.exitValue());
+    } finally {
+      if (process.isAlive()) {
+        process.destroyForcibly();
+        process.waitFor(10, TimeUnit.SECONDS);
+      }
     }
-    return values.toArray(String[]::new);
   }
 
-  private static LoopbackRiverServer start(RiverDatabase database) {
-    LoopbackServerOpenResult result = new LoopbackServerOpenResult();
-    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, result));
-    return result.server();
-  }
 }

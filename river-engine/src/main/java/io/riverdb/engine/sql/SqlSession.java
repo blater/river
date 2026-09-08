@@ -80,8 +80,8 @@ public final class SqlSession implements SqlRetainedBudget {
       SqlScanCursor cursor,
       SqlExecutionResult result,
       SqlPreparedQueryPath path) {
-    return deliver(
-        coordinator.executePreparedSingleton(plan, parameters, cursor, result, path));
+    return deliver(coordinator.executePreparedSingleton(
+        plan, parameters, cursor, result, path));
   }
 
   public StatusCode configureTransactionDiagnostics(

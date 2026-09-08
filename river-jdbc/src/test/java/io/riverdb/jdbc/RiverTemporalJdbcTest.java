@@ -1,6 +1,5 @@
 package io.riverdb.jdbc;
 
-import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -9,15 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.LocalTemporal;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.EmbeddedRiver;
-import io.riverdb.engine.api.DatabaseOpenResult;
-import io.riverdb.engine.api.RiverDatabase;
-import io.riverdb.server.LoopbackRiverServer;
-import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.app.GeneratedClientFileTestFixture;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.Date;
@@ -40,10 +33,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class RiverTemporalJdbcTest {
-  private static final DatabaseIncarnation DATABASE =
-      DatabaseIncarnation.of(0x4a44424354454d50L, 0x4f52414c30303031L);
-  private static final WalGeneration GENERATION = WalGeneration.of(1);
-
   @Test
   void convertsTemporalExtremaAndPrecisionZero() throws SQLException {
     char[] characters = new char[32];
@@ -118,16 +107,9 @@ final class RiverTemporalJdbcTest {
   @Test
   void exposesBinaryTemporalResultsThroughJavaTimeAndJdbcAccessors(
       @TempDir Path root) throws Exception {
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(
-        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
-    RiverDatabase database = opened.database();
-    LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
-    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, listener));
-    LoopbackRiverServer server = listener.server();
-
+    GeneratedClientFileTestFixture fixture = GeneratedClientFileTestFixture.open(root);
     try (Connection connection = DriverManager.getConnection(
-        RiverDriver.URL_PREFIX + server.port());
+        RiverDriver.CLIENT_FILE_PREFIX + fixture.clientFile());
         Statement statement = connection.createStatement()) {
       assertEquals(0, statement.executeUpdate(
           "CREATE TABLE temporal_jdbc (id BIGINT PRIMARY KEY, day DATE, "
@@ -159,9 +141,9 @@ final class RiverTemporalJdbcTest {
         assertEquals("0A000", wrongTemporalNull.getSQLState());
         assertFalse(rows.next());
       }
+    } finally {
+      assertEquals(StatusCode.OK, fixture.close());
     }
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
   }
 
   private static void assertMetadata(ResultSetMetaData metadata)

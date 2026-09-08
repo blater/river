@@ -2,8 +2,9 @@ package io.riverdb.jdbc;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.client.RiverClientConnection;
+import io.riverdb.client.RiverClientConfiguration;
+import io.riverdb.client.RiverClientConfigurationResult;
 import io.riverdb.client.RiverClientOpenResult;
-import io.riverdb.engine.api.RiverSession;
 import io.riverdb.engine.api.SessionOpenResult;
 import java.sql.Connection;
 import java.sql.Driver;
@@ -11,13 +12,14 @@ import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.Properties;
 import java.util.logging.Logger;
-import javax.net.ssl.SSLContext;
 
-/** Driver for the pre-V1 loopback URL {@code jdbc:river://localhost:PORT}. */
+/** Driver for generated client configuration {@code jdbc:river:client-file:PATH}. */
 public final class RiverDriver implements Driver {
-  public static final String URL_PREFIX = "jdbc:river://localhost:";
+  public static final String CLIENT_FILE_PREFIX = "jdbc:river:client-file:";
 
   static {
     try {
@@ -35,50 +37,52 @@ public final class RiverDriver implements Driver {
     if (properties != null && !properties.isEmpty()) {
       throw JdbcExceptions.unsupported();
     }
-    int port = parsePort(url);
-    if (port <= 0) {
-      throw JdbcExceptions.invalid("River JDBC URL must end with a valid port");
-    }
-    return openLoopback(port, null, null, 0);
+    return openClientFile(url);
   }
 
-  static Connection openLoopback(
-      int port,
-      SSLContext context,
-      byte[] token,
-      int tokenBytes) throws SQLException {
-    if (port <= 0
-        || port > 65_535
-        || (context == null) != (token == null)
-        || token == null && tokenBytes != 0
-        || token != null && (tokenBytes <= 0 || tokenBytes > token.length)) {
-      throw JdbcExceptions.invalid("loopback connection configuration is invalid");
+  private static Connection openClientFile(String url) throws SQLException {
+    String pathText = url.substring(CLIENT_FILE_PREFIX.length());
+    if (pathText.isEmpty() || !pathText.equals(pathText.strip())) {
+      throw JdbcExceptions.invalid("River client-file URL requires an absolute path");
     }
+    final Path path;
+    try {
+      path = Path.of(pathText);
+    } catch (InvalidPathException failure) {
+      throw JdbcExceptions.invalid("River client-file URL has an invalid path");
+    }
+    if (!path.isAbsolute() || !path.equals(path.normalize())) {
+      throw JdbcExceptions.invalid("River client-file URL requires an absolute normalized path");
+    }
+
+    RiverClientConfigurationResult configurationResult =
+        new RiverClientConfigurationResult();
+    StatusCode status = RiverClientConfiguration.load(path, configurationResult);
+    JdbcExceptions.require(status, "load River client configuration");
     RiverClientOpenResult connected = new RiverClientOpenResult();
-    StatusCode connectStatus = context == null
-        ? RiverClientConnection.connectLoopback(port, connected)
-        : RiverClientConnection.connectAuthenticatedLoopback(
-            port, context, token, tokenBytes, connected);
-    if (context != null
-        && (connectStatus == StatusCode.INVALID_EXTERNAL_INPUT
-            || connectStatus == StatusCode.FENCED)) {
-      throw JdbcExceptions.authentication(connectStatus);
+    status = configurationResult.configuration().connect(connected);
+    if (status == StatusCode.INVALID_EXTERNAL_INPUT || status == StatusCode.FENCED) {
+      throw JdbcExceptions.authentication(status);
     }
-    JdbcExceptions.require(connectStatus, "connect");
+    JdbcExceptions.require(status, "connect using River client configuration");
     RiverClientConnection client = connected.connection();
     SessionOpenResult opened = new SessionOpenResult();
-    StatusCode status = client.createSession(opened);
+    status = client.createSession(opened);
     if (!status.isOk()) {
       client.close();
       throw JdbcExceptions.failure(status, "open session");
     }
-    RiverSession session = opened.session();
-    return new RiverJdbcConnection(client, session, URL_PREFIX + port);
+    return new RiverJdbcConnection(client, opened.session(), url);
+  }
+
+  static Connection connectFile(Path path) throws SQLException {
+    if (path == null) throw JdbcExceptions.invalid("client properties path is required");
+    return openClientFile(CLIENT_FILE_PREFIX + path);
   }
 
   @Override
   public boolean acceptsURL(String url) {
-    return url != null && url.startsWith(URL_PREFIX);
+    return url != null && url.startsWith(CLIENT_FILE_PREFIX);
   }
 
   @Override
@@ -106,21 +110,4 @@ public final class RiverDriver implements Driver {
     throw JdbcExceptions.unsupported();
   }
 
-  private static int parsePort(String url) {
-    if (url.length() <= URL_PREFIX.length()) {
-      return -1;
-    }
-    int port = 0;
-    for (int index = URL_PREFIX.length(); index < url.length(); index++) {
-      char digit = url.charAt(index);
-      if (digit < '0' || digit > '9') {
-        return -1;
-      }
-      port = port * 10 + digit - '0';
-      if (port > 65_535) {
-        return -1;
-      }
-    }
-    return port;
-  }
 }

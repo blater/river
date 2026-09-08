@@ -128,8 +128,9 @@ final class RelationalDatabaseFactory {
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       RelationalDatabaseOpenResult result) {
-    if (resourceRequest == null || result == null) {
+    if (resourceRequest == null || lockDiagnostics == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -146,7 +147,8 @@ final class RelationalDatabaseFactory {
     EmbeddedDatabaseOpenResult embeddedResult = new EmbeddedDatabaseOpenResult();
     status = EmbeddedDatabase.openExisting(
         resources.root(), resources.plan(), directory, database, generation,
-        maximumActiveTransactions, configResult.config().lockWaitTimeoutNanos(), embeddedResult);
+        maximumActiveTransactions, configResult.config().lockWaitTimeoutNanos(),
+        lockDiagnostics, embeddedResult);
     return finish(embeddedResult, result, configResult.config(), status, false);
   }
 
@@ -157,8 +159,9 @@ final class RelationalDatabaseFactory {
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       RelationalDatabaseOpenResult result) {
-    if (resourceRoot == null || resourcePlan == null || result == null) {
+    if (resourceRoot == null || resourcePlan == null || lockDiagnostics == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -169,7 +172,8 @@ final class RelationalDatabaseFactory {
     EmbeddedDatabaseOpenResult embeddedResult = new EmbeddedDatabaseOpenResult();
     status = EmbeddedDatabase.openExisting(
         resourceRoot, resourcePlan, directory, database, generation,
-        maximumActiveTransactions, configResult.config().lockWaitTimeoutNanos(), embeddedResult);
+        maximumActiveTransactions, configResult.config().lockWaitTimeoutNanos(),
+        lockDiagnostics, embeddedResult);
     return finish(embeddedResult, result, configResult.config(), status, false);
   }
 

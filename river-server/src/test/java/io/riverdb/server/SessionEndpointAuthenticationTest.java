@@ -3,7 +3,9 @@ package io.riverdb.server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.engine.api.RiverDatabase;
+import io.riverdb.engine.api.SessionAuthorizer;
 import io.riverdb.engine.api.SessionOpenResult;
 import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
@@ -23,12 +25,20 @@ final class SessionEndpointAuthenticationTest {
     Arrays.fill(token, (byte) 7);
     TokenAuthenticatorOpenResult opened = new TokenAuthenticatorOpenResult();
     assertEquals(StatusCode.OK, TokenAuthenticator.create(token, token.length, opened));
+    CredentialValidityFenceOpenResult fenceResult = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    assertEquals(StatusCode.OK, CredentialValidityFence.create(
+        now - 300_000L, now + 86_400_000L, fenceResult));
     SessionEndpoint endpoint = new SessionEndpoint(
         new UnusedDatabase(),
         opened.authenticator(),
+        fenceResult.fence(),
         11,
         12,
-        new byte[] {1, 2, 3});
+        new byte[] {1, 2, 3},
+        null,
+        null,
+        new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ProtocolFrame frame = new ProtocolFrame();
     ProtocolResponse decoded = new ProtocolResponse();
@@ -92,11 +102,12 @@ final class SessionEndpointAuthenticationTest {
         21,
         StatusCode.CLOSED);
     assertEquals(StatusCode.CLOSED, endpoint.close());
+    assertEquals(StatusCode.OK, fenceResult.fence().close());
   }
 
   @Test
   void rejectsReadOnlyRequestsBeforeAdmission() {
-    SessionEndpoint endpoint = new SessionEndpoint(new UnusedDatabase());
+    SessionEndpoint endpoint = endpoint(new UnusedDatabase(), 102);
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
@@ -110,7 +121,7 @@ final class SessionEndpointAuthenticationTest {
 
   @Test
   void erasesSqlPayloadBeforeSessionStateResponses() {
-    SessionEndpoint endpoint = new SessionEndpoint(new UnusedDatabase());
+    SessionEndpoint endpoint = endpoint(new UnusedDatabase(), 103);
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ProtocolFrame frame = new ProtocolFrame();
     ProtocolResponse decoded = new ProtocolResponse();
@@ -139,7 +150,7 @@ final class SessionEndpointAuthenticationTest {
 
   @Test
   void erasesSqlPayloadWhenOuterFrameLengthIsMalformed() {
-    SessionEndpoint endpoint = new SessionEndpoint(new UnusedDatabase());
+    SessionEndpoint endpoint = endpoint(new UnusedDatabase(), 104);
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
@@ -155,6 +166,19 @@ final class SessionEndpointAuthenticationTest {
     for (int index = ProtocolFrameCodec.HEADER_BYTES; index < request.limit(); index++) {
       assertEquals(0, request.get(index));
     }
+  }
+
+  private static SessionEndpoint endpoint(RiverDatabase database, long connection) {
+    byte[] token = new byte[TokenProof.MINIMUM_TOKEN_BYTES];
+    Arrays.fill(token, (byte) 9);
+    TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
+    assertEquals(StatusCode.OK, TokenAuthenticator.create(token, token.length, authenticator));
+    CredentialValidityFenceOpenResult fence = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    assertEquals(StatusCode.OK,
+        CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
+    return new SessionEndpoint(database, authenticator.authenticator(), fence.fence(),
+        11, 12, new byte[] {1, 2, 3}, null, null, new MutableCancellationToken());
   }
 
   private static void assertStatus(
@@ -209,6 +233,11 @@ final class SessionEndpointAuthenticationTest {
   private static final class UnusedDatabase implements RiverDatabase {
     @Override
     public StatusCode createSession(SessionOpenResult result) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+
+    @Override
+    public StatusCode createSession(SessionAuthorizer authorizer, SessionOpenResult result) {
       return StatusCode.INVARIANT_BROKEN;
     }
 

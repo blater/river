@@ -155,7 +155,8 @@ final class OfflineDatabaseBackupTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(8), restored, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), restored, DATABASE, GENERATION, 8,
+            io.riverdb.engine.EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
     session = sessionResult.session();

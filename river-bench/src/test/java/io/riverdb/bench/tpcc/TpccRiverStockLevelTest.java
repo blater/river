@@ -1,18 +1,11 @@
 package io.riverdb.bench.tpcc;
 
-import static io.riverdb.bench.tpcc.TpccTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.EmbeddedRiver;
-import io.riverdb.engine.api.DatabaseOpenResult;
-import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.jdbc.RiverConnectionMetrics;
-import io.riverdb.server.LoopbackRiverServer;
-import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.app.GeneratedClientFileTestFixture;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -21,20 +14,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class TpccRiverStockLevelTest {
-  private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(8_201, 8_203);
-
   @Test
   void executesCompleteStockLevelInOneRequest(@TempDir Path root) throws Exception {
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK,
-        EmbeddedRiver.create(
-            databaseRequest(8), root, DATABASE, WalGeneration.of(1), 8, opened));
-    RiverDatabase database = opened.database();
-    LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
-    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, serverResult));
-    LoopbackRiverServer server = serverResult.server();
+    GeneratedClientFileTestFixture fixture = GeneratedClientFileTestFixture.open(root);
     try (Connection connection = DriverManager.getConnection(
-        "jdbc:river://localhost:" + server.port())) {
+        "jdbc:river:client-file:" + fixture.clientFile())) {
       createStockLevelData(connection);
       RiverConnectionMetrics metrics = connection.unwrap(RiverConnectionMetrics.class);
       try (TpccRiverStockLevel transaction = new TpccRiverStockLevel(connection)) {
@@ -50,8 +34,7 @@ final class TpccRiverStockLevelTest {
         assertEquals(1, transaction.lowStockCount());
       }
     } finally {
-      assertEquals(StatusCode.OK, server.close());
-      assertEquals(StatusCode.OK, database.close());
+      assertEquals(StatusCode.OK, fixture.close());
     }
   }
 

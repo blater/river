@@ -177,7 +177,9 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
     if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
     runtimeParameters.reset();
-    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) {
+      status = authorize(bound.command.type());
+    }
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
     if (!status.isOk()) return status;
     preparedExecutions++;
@@ -197,7 +199,9 @@ final class SqlSessionExecutionCoordinator {
     if (queries.hasActiveScan()) return StatusCode.CONFLICT;
     bound.reset();
     status = parser.parseTemplate(sql, bound.query, bound.command);
-    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) {
+      status = authorize(bound.command.type());
+    }
     boolean began = false;
     if (status.isOk()) {
       status = atomic.begin(IsolationLevel.READ_COMMITTED);
@@ -308,7 +312,9 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
     if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
     runtimeParameters.reset();
-    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) {
+      status = authorize(bound.command.type());
+    }
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
     if (status.isOk() && !SqlSessionCommandKinds.query(bound.command.type())) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -341,7 +347,9 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
     if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
     runtimeParameters.reset();
-    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) {
+      status = authorize(bound.command.type());
+    }
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
     if (status.isOk() && !SqlSessionCommandKinds.query(bound.command.type())) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -581,11 +589,8 @@ final class SqlSessionExecutionCoordinator {
   }
 
   private StatusCode authorize(SqlCommandType type) {
-    if (authorizer == null) {
-      return StatusCode.OK;
-    }
-    return authorizer.authorize(
-        SqlCommandAuthorization.requiredPermission(type));
+    return authorizer == null ? StatusCode.OK
+        : authorizer.authorize(SqlCommandAuthorization.requiredPermission(type));
   }
 
   StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {

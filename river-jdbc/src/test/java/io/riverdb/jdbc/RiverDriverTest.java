@@ -19,9 +19,14 @@ import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.CredentialValidityFence;
+import io.riverdb.server.CredentialValidityFenceOpenResult;
+import io.riverdb.server.app.GeneratedClientFileTestFixture;
 import io.riverdb.testsupport.TestTlsContexts;
-import java.nio.file.Path;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -34,7 +39,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.Arrays;
-import javax.net.ssl.SSLContext;
+import java.util.WeakHashMap;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -42,6 +48,8 @@ final class RiverDriverTest {
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x4a44424344524956L, 0x4552544553543031L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+  private static final Map<LoopbackRiverServer, Path> CLIENT_FILES =
+      new WeakHashMap<>();
 
   @Test
   void exposesAllocationFreeTransportCountersThroughJdbcUnwrap(@TempDir Path root)
@@ -50,7 +58,7 @@ final class RiverDriverTest {
     assertEquals(StatusCode.OK, EmbeddedRiver.create(
         databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
       assertTrue(connection.isWrapperFor(RiverConnectionMetrics.class));
@@ -73,7 +81,7 @@ final class RiverDriverTest {
     assertEquals(StatusCode.OK, EmbeddedRiver.create(
         databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement ddl = connection.createStatement()) {
       ddl.executeUpdate("CREATE TABLE retained (id INTEGER PRIMARY KEY,value INTEGER)");
@@ -112,7 +120,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     String url = url(server);
 
     try (Connection connection = DriverManager.getConnection(url);
@@ -928,9 +936,10 @@ final class RiverDriverTest {
     assertEquals(
         StatusCode.OK,
         EmbeddedRiver.openExisting(
-            databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+            databaseRequest(8), root, DATABASE, GENERATION, 8,
+            io.riverdb.engine.EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
-    server = start(database);
+    server = start(root, database);
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement();
         ResultSet row = statement.executeQuery(
@@ -992,7 +1001,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     String query = "SELECT id FROM isolation_values WHERE value="
         + "(SELECT value FROM isolation_values WHERE id=1) ORDER BY id";
 
@@ -1052,7 +1061,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
       assertEquals(
@@ -1089,12 +1098,12 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
 
     SQLException badUrl = assertThrows(
         SQLException.class,
         () -> DriverManager.getConnection("jdbc:river://localhost:not-a-port"));
-    assertEquals("22000", badUrl.getSQLState());
+    assertEquals("08001", badUrl.getSQLState());
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
       DatabaseMetaData metadata = connection.getMetaData();
@@ -1147,7 +1156,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
 
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
@@ -1215,7 +1224,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
 
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
@@ -1612,7 +1621,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
 
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement schema = connection.createStatement()) {
@@ -1714,7 +1723,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
 
     try (Connection connection = DriverManager.getConnection(url(server))) {
       try (Statement schema = connection.createStatement()) {
@@ -1811,7 +1820,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
 
     try (Connection connection = DriverManager.getConnection(url(server))) {
       try (Statement statement = connection.createStatement()) {
@@ -1870,7 +1879,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
       assertEquals(
@@ -1899,7 +1908,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
       assertEquals(
@@ -1933,7 +1942,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
       assertEquals(
@@ -1973,7 +1982,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
 
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
@@ -2047,59 +2056,41 @@ final class RiverDriverTest {
   @Test
   void dataSourceExecutesJdbcInsideTlsBoundTokenAuthentication(@TempDir Path root)
       throws Exception {
-    byte[] token = "river-jdbc-auth-token-0001".getBytes(StandardCharsets.UTF_8);
-    TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        TokenAuthenticator.create(token, token.length, authenticator));
-    SSLContext serverContext = TestTlsContexts.server();
-    SSLContext clientContext = TestTlsContexts.trustedClient();
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
-    RiverDatabase database = opened.database();
-    LoopbackRiverServer server = startAuthenticated(
-        database, root, serverContext, authenticator.authenticator());
-
-    RiverDataSource source = new RiverDataSource();
-    source.setPort(server.port());
-    assertEquals(5, source.getLoginTimeout());
-    source.setLoginTimeout(5);
-    assertThrows(
-        java.sql.SQLFeatureNotSupportedException.class,
-        () -> source.setLoginTimeout(0));
-    source.setAuthentication(clientContext, token, token.length);
-    Arrays.fill(token, (byte) 0);
-    try (Connection connection = source.getConnection();
-        Statement statement = connection.createStatement()) {
-      assertEquals(0, statement.executeUpdate(
-          "CREATE TABLE secure_jdbc (id BIGINT PRIMARY KEY, value BIGINT)"));
-      assertEquals(
-          1,
-          statement.executeUpdate("INSERT INTO secure_jdbc VALUES (1, 700)"));
-      try (ResultSet result = statement.executeQuery(
-          "SELECT value FROM secure_jdbc WHERE id=1")) {
-        assertTrue(result.next());
-        assertEquals(700, result.getLong("value"));
+    GeneratedClientFileTestFixture fixture = GeneratedClientFileTestFixture.open(root);
+    try {
+      RiverDataSource source = new RiverDataSource();
+      source.setClientFile(fixture.clientFile());
+      assertEquals(5, source.getLoginTimeout());
+      source.setLoginTimeout(5);
+      assertThrows(
+          java.sql.SQLFeatureNotSupportedException.class,
+          () -> source.setLoginTimeout(0));
+      try (Connection connection = source.getConnection();
+          Statement statement = connection.createStatement()) {
+        assertEquals(0, statement.executeUpdate(
+            "CREATE TABLE secure_jdbc (id BIGINT PRIMARY KEY, value BIGINT)"));
+        assertEquals(
+            1,
+            statement.executeUpdate("INSERT INTO secure_jdbc VALUES (1, 700)"));
+        try (ResultSet result = statement.executeQuery(
+            "SELECT value FROM secure_jdbc WHERE id=1")) {
+          assertTrue(result.next());
+          assertEquals(700, result.getLong("value"));
+        }
       }
+      source.close();
+      SQLException closed = assertThrows(SQLException.class, source::getConnection);
+      assertEquals("08003", closed.getSQLState());
+
+      fixture.replaceTokenWithWrongValue();
+      RiverDataSource wrong = new RiverDataSource();
+      wrong.setClientFile(fixture.clientFile());
+      SQLException rejected = assertThrows(SQLException.class, wrong::getConnection);
+      assertEquals("28000", rejected.getSQLState());
+      wrong.close();
+    } finally {
+      assertEquals(StatusCode.OK, fixture.close());
     }
-    source.close();
-    SQLException closed = assertThrows(SQLException.class, source::getConnection);
-    assertEquals("08003", closed.getSQLState());
-
-    byte[] wrongToken =
-        "wrong-jdbc-auth-token-0001".getBytes(StandardCharsets.UTF_8);
-    RiverDataSource wrong = new RiverDataSource();
-    wrong.setPort(server.port());
-    wrong.setAuthentication(clientContext, wrongToken, wrongToken.length);
-    SQLException rejected = assertThrows(SQLException.class, wrong::getConnection);
-    assertEquals("28000", rejected.getSQLState());
-    wrong.close();
-    Arrays.fill(wrongToken, (byte) 0);
-
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
   }
 
   @Test
@@ -2110,7 +2101,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
       statement.executeUpdate(
@@ -2227,7 +2218,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
       assertEquals(0, statement.executeUpdate(
@@ -2267,7 +2258,7 @@ final class RiverDriverTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(root, database);
 
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
@@ -2567,9 +2558,10 @@ final class RiverDriverTest {
     assertEquals(
         StatusCode.OK,
         EmbeddedRiver.openExisting(
-            databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+            databaseRequest(8), root, DATABASE, GENERATION, 8,
+            io.riverdb.engine.EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
-    server = start(database);
+    server = start(root, database);
     Connection connection = DriverManager.getConnection(url(server));
     assertCatalogRows(
         connection.getMetaData(),
@@ -2710,33 +2702,48 @@ final class RiverDriverTest {
     assertEquals(0, indexes.getLong("PAGES"));
   }
 
-  private static LoopbackRiverServer start(RiverDatabase database) {
-    LoopbackServerOpenResult result = new LoopbackServerOpenResult();
-    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, result));
-    return result.server();
-  }
-
-  private static LoopbackRiverServer startAuthenticated(
-      RiverDatabase database,
-      Path auditDirectory,
-      SSLContext context,
-      TokenAuthenticator authenticator) {
-    LoopbackServerOpenResult result = new LoopbackServerOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        LoopbackRiverServer.startAuthenticated(
-            database,
-            0,
-            context,
-            authenticator,
-            auditDirectory,
-            LoopbackServerLimits.defaults(
-                LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS),
-            result));
-    return result.server();
+  private static LoopbackRiverServer start(Path root, RiverDatabase database) {
+    try {
+      byte[] token = testToken();
+      TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
+      assertEquals(StatusCode.OK, TokenAuthenticator.create(
+          token, token.length, authenticator));
+      LoopbackServerOpenResult result = new LoopbackServerOpenResult();
+      assertEquals(StatusCode.OK, LoopbackRiverServer.startAuthenticated(
+          database, InetAddress.getLoopbackAddress(), 0, TestTlsContexts.server(),
+          authenticator.authenticator(), validityFence(),
+          LoopbackServerLimits.defaults(8), result));
+      LoopbackRiverServer server = result.server();
+      Path clientFile = TestTlsContexts.writeClientProperties(
+          Files.createTempDirectory(root, "driver-client-"), DATABASE, 1,
+          server.port(), token);
+      CLIENT_FILES.put(server, clientFile);
+      Arrays.fill(token, (byte) 0);
+      return server;
+    } catch (Exception failure) {
+      throw new AssertionError("open authenticated JDBC fixture", failure);
+    }
   }
 
   private static String url(LoopbackRiverServer server) {
-    return RiverDriver.URL_PREFIX + server.port();
+    Path clientFile = CLIENT_FILES.get(server);
+    if (clientFile == null) throw new AssertionError("missing generated client file");
+    return RiverDriver.CLIENT_FILE_PREFIX + clientFile;
+  }
+
+  private static byte[] testToken() {
+    byte[] token = new byte[32];
+    Arrays.fill(token, (byte) '-');
+    return token;
+  }
+
+  private static CredentialValidityFence validityFence() {
+    CredentialValidityFenceOpenResult opened = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    if (CredentialValidityFence.create(now - 300_000L, now + 86_400_000L, opened)
+        != StatusCode.OK) {
+      throw new AssertionError("test credential validity bounds");
+    }
+    return opened.fence();
   }
 }

@@ -1,7 +1,7 @@
 # riverd command-line contract
 
-Status: accepted implementation target. The standalone distribution is not yet
-implemented. This document owns the user-facing commands and behavior;
+Status: accepted implementation target. An installed start/JDBC/restart candidate
+is under validation; required platform and acceptance checks remain open. This document owns the user-facing commands and behavior;
 [ADR 0014](adr/0014-riverd-instance-security.md) owns their security and durable
 lifecycle mechanisms. The [delivery plan](plans/riverd-standalone-server-plan.md)
 maps implementation work.
@@ -16,7 +16,6 @@ riverd start [-D PATH|--datadir=PATH] [--port=PORT] [--ip=ADDRESS]
              [--maximum-connections=N] [--ready-file=PATH]
 riverd stop [-D PATH|--datadir=PATH] [--timeout=DURATION]
 riverd ps
-riverd audit archive [-D PATH|--datadir=PATH]
 riverd credentials renew [-D PATH|--datadir=PATH]
 ```
 
@@ -32,13 +31,13 @@ There is no separate instance name or `--instance` option.
 - `riverd help` and `riverd --help` print identical full global help.
 - Every command and group listed above accepts trailing `-h` for brief usage
   or `--help` for full help. `riverd help` followed by the command or group
-  gives the same full help: for example, `riverd help start`, `riverd help audit`
-  and `riverd help credentials renew`.
+  gives the same full help: for example, `riverd help start` and
+  `riverd help credentials renew`.
 - Help and version exit successfully without changing state.
 
 Help must explain the supported workflow in plain language, with copyable
 examples. Unknown options, duplicate/conflicting options, extra arguments,
-unlisted help placements, bare `audit` or `credentials`, abbreviations and
+unlisted help placements, bare `credentials`, abbreviations and
 combined short options are errors. Report a concise error and relevant help
 before changing files or opening a listener.
 
@@ -85,8 +84,8 @@ The distribution must explain how to obtain the River JDBC driver and include
 one copyable connection example using this generated configuration. Users must
 not need to construct certificates, configure a JVM trust store or implement an
 authentication handshake. JDBC and CLI use the same client configuration owner.
-Exact JDBC configuration syntax is part of the implementation delivery; it is
-not claimed as available here. Plain or unauthenticated connections are absent.
+The candidate accepts `jdbc:river:client-file:<absolute-path-to-client.properties>`.
+The installed distribution includes the JDBC driver and its dependencies in `lib/`. Plain or unauthenticated connections are absent.
 
 ## Stop and list
 
@@ -123,11 +122,12 @@ riverd_status=OK
 
 ## Offline maintenance
 
-`riverd audit archive` archives the active security audit through the accepted
-recovery protocol. `riverd credentials renew` replaces the instance credentials.
-Both require a stopped instance and accept the same data-directory option.
-After renewal, restart and use the newly published client settings; old
-credentials no longer authenticate. Neither operation deletes database data.
+`riverd credentials renew` replaces the instance credentials. It requires a
+stopped instance and accepts the same data-directory option. After renewal,
+restart and use the newly published client settings; old credentials no longer
+authenticate. The command does not delete database data. SQL/security audit
+collection and an audit archive command are deferred; they are not part of the
+current CLI contract.
 
 These are later operational deliveries. The first usable-server milestone is
 installed start, authenticated JDBC, graceful shutdown and persistent restart.
@@ -145,13 +145,17 @@ riverd_status=OK
 
 ## Exit codes and errors
 
-The process has three public exit classes:
+Ordinary command termination has three public exit classes:
 
 | Exit | Native outcome | Meaning |
 | --- | --- | --- |
 | 0 | `OK` | Help, version, listing including an empty list, successful offline operation, or a foreground server that shut down cleanly. |
 | 2 | `INVALID_EXTERNAL_INPUT` | Invalid command syntax or option value, detected before mutation. |
-| 1 | Named non-`OK` `StatusCode` | Startup, lifecycle, security, audit, filesystem, I/O, or shutdown failure. |
+| 1 | Named non-`OK` `StatusCode` | Startup, lifecycle, authentication/authorization, filesystem, I/O, or shutdown failure. |
+
+Termination by an operating-system signal retains the JVM/platform signal exit
+code (for example, 143 for SIGTERM on Unix), even when the shutdown hook completes
+cleanly. Automation must distinguish this from ordinary command termination.
 
 An exit-1/2 command writes a concise diagnostic followed by exactly
 `riverd_status_code=<StatusCode.stableCode()>` and final

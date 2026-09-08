@@ -1,7 +1,9 @@
 # River JDBC slice
 
-The pre-V1 driver accepts `jdbc:river:instance:/absolute/DATADIR` and uses the production
-River client, protocol, server, engine, WAL, and storage path. It currently
+The pre-V1 driver accepts the generated configuration URL
+`jdbc:river:client-file:/absolute/path/to/security/client.properties` and uses
+the production River client, protocol, server, engine, WAL, and storage path.
+It currently
 supports one statement per connection, auto-commit or explicit repeatable-read
 and serializable transactions, update counts, and streaming forward-only,
 read-only typed result sets. Each `next()` consumes one
@@ -60,20 +62,20 @@ Connection, statement, and result warnings are currently empty: `getWarnings`
 returns null and `clearWarnings` is a no-op while open; closed resources report
 `08003`.
 
-`RiverDataSource` accepts an instance directory, a `client.properties` path, or
-an explicit endpoint plus certificate-file and token-file paths. Every form
-uses TLS 1.3, pins the instance certificate exactly, and performs token
-authentication. The raw 32-byte token is read only for connection admission
-and the bounded buffer is erased afterward. Username/password connection
-overloads remain unsupported; River tokens are high-entropy credentials, not
-human passwords. Direct JDBC connections may equivalently use
-`jdbc:river:client-file:/absolute/security/client.properties`. The advanced
-`jdbc:river:files` form requires exactly the `endpoint`, `ca-file`, and
-`token-file` properties; credential values are never accepted.
+`RiverDataSource` accepts a generated `client.properties` path. Every
+connection uses TLS 1.3, pins the instance certificate exactly, and performs
+token authentication. The raw 32-byte token is read only for connection
+admission and the bounded buffer is erased afterward. Username/password
+connection overloads remain unsupported; River tokens are high-entropy
+credentials, not human passwords. Direct JDBC connections use the same
+generated file through
+`jdbc:river:client-file:/absolute/path/to/security/client.properties`.
+Endpoint, certificate, and token values are not accepted as separate JDBC
+configuration fields.
 
-The audited server path binds that token to a configured service-principal
-permission mask. Authorization denial is reported as SQLSTATE `42501`; audit
-capacity exhaustion is `53000`. `Statement.cancel()` deliberately fences and
+The authenticated server path binds that token to a configured service-principal
+permission mask. Authorization denial is reported as SQLSTATE `42501`.
+`Statement.cancel()` deliberately fences and
 closes the ordered connection so a blocked request unwinds on both peers, and
 `Connection.abort(Executor)` uses the same transport cancellation. Any open
 remote transaction is rolled back when the server observes the disconnect.
@@ -89,7 +91,7 @@ expose durable tables, views, and ready indexes;
 column names, order, aliases, and type descriptors come from the SQL binder,
 query and catalog-column nullability is exact, while unsupported default and
 identity details are reported as unknown. Secure JDBC configuration is provided
-by the instance-scoped driver URL or `RiverDataSource`.
+by the generated client-file URL or `RiverDataSource`.
 
 River uses status returns internally. JDBC-mandated `SQLException` objects are
 created only at this external adapter boundary.

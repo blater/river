@@ -8,22 +8,23 @@ are never labeled `tpmC`.
 
 ## Promotion lifecycle
 
-The database/server lifecycle belongs to the caller. Phase one must target an
-empty River database and exits after `CHECKPOINT`:
+The installed `riverd` lifecycle belongs to the caller. Start an empty
+instance, then use the generated client configuration for phase one:
 
 ```sh
-./gradlew :river-bench:tpccAcceptance --args='--url=jdbc:river://localhost:54321 --phase=load-run-checkpoint --artifact=/absolute/path/river-tpcc.properties'
+riverd start --datadir=/absolute/path/to/database --port=54321
+./gradlew --no-daemon :river-bench:tpccAcceptance --args='--url=jdbc:river:client-file:/absolute/path/to/database/security/client.properties --phase=load-run-checkpoint --artifact=/absolute/path/river-tpcc.properties'
 ```
 
 The defaults are the promoted profile: one warehouse, ten terminals fixed to
 home districts 1 through 10, five minutes of warmup, 30 measured minutes,
 standard keying/think scheduling, 32-row load commits, and four bounded
-whole-transaction attempts. Stop the server, close River, open the same
-database from its checkpoint/recovery path, restart the loopback server, then
-run phase two (the port may change):
+whole-transaction attempts. Stop the foreground server with Ctrl-C, restart the
+same data directory, and run phase two (the port may change):
 
 ```sh
-./gradlew :river-bench:tpccAcceptance --args='--url=jdbc:river://localhost:54322 --phase=recovery-verify --artifact=/absolute/path/river-tpcc.properties'
+riverd start --datadir=/absolute/path/to/database --port=54322
+./gradlew --no-daemon :river-bench:tpccAcceptance --args='--url=jdbc:river:client-file:/absolute/path/to/database/security/client.properties --phase=recovery-verify --artifact=/absolute/path/river-tpcc.properties'
 ```
 
 Phase two refuses an artifact with a different scale or seed, recomputes the
@@ -42,13 +43,13 @@ keying and think waits but preserves terminal ownership, transaction semantics,
 and the 45/43/4/4/4 selection mix:
 
 ```sh
-./gradlew :river-bench:tpccAcceptance --args='--url=jdbc:river://localhost:54321 --phase=load-run-checkpoint --artifact=/absolute/path/tiny.properties --tiny --scheduling=no-wait-stress --warmup-seconds=2 --measured-seconds=5'
+./gradlew --no-daemon :river-bench:tpccAcceptance --args='--url=jdbc:river:client-file:/absolute/path/to/database/security/client.properties --phase=load-run-checkpoint --artifact=/absolute/path/tiny.properties --tiny --scheduling=no-wait-stress --warmup-seconds=2 --measured-seconds=5'
 ```
 
 For the fixed ten-second no-wait smoke, build the prebuilt runtime and its
 provenance record first. Then `tools/tps-test.sh` consumes that runtime,
-creates a temporary database, starts a loopback server, and launches the JDBC
-workload. The temporary database is removed after the run:
+creates a temporary database, starts its temporary River server, and launches
+the JDBC workload. The temporary database is removed after the run:
 
 ```sh
 ./make.sh

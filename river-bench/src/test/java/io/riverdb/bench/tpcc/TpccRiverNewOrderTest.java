@@ -1,24 +1,17 @@
 package io.riverdb.bench.tpcc;
 
-import static io.riverdb.bench.tpcc.TpccTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.EmbeddedRiver;
-import io.riverdb.engine.api.DatabaseOpenResult;
-import io.riverdb.engine.api.RiverDatabase;
+import io.riverdb.server.app.GeneratedClientFileTestFixture;
 import io.riverdb.engine.api.TransactionProgram;
 import io.riverdb.engine.api.TransactionProgramArguments;
 import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.jdbc.RiverConnectionMetrics;
 import io.riverdb.jdbc.RiverTransactionPrograms;
-import io.riverdb.server.LoopbackRiverServer;
-import io.riverdb.server.LoopbackServerOpenResult;
 import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -36,7 +29,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class TpccRiverNewOrderTest {
-  private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(8_301, 8_303);
   private static final int ITEMS = 15;
 
   @Test
@@ -271,39 +263,35 @@ final class TpccRiverNewOrderTest {
   }
 
   private static final class Fixture implements AutoCloseable {
-    final RiverDatabase database;
-    final LoopbackRiverServer server;
+    final GeneratedClientFileTestFixture owner;
     final Connection connection;
     final RiverConnectionMetrics metrics;
 
     private Fixture(
-        RiverDatabase owner, LoopbackRiverServer loopback, Connection jdbc) throws java.sql.SQLException {
-      database = owner;
-      server = loopback;
+        GeneratedClientFileTestFixture owner, Connection jdbc) throws java.sql.SQLException {
+      this.owner = owner;
       connection = jdbc;
       metrics = jdbc.unwrap(RiverConnectionMetrics.class);
     }
 
     static Fixture open(Path root) throws java.sql.SQLException {
-      DatabaseOpenResult opened = new DatabaseOpenResult();
-      assertEquals(StatusCode.OK,
-          EmbeddedRiver.create(
-              databaseRequest(16), root, DATABASE, WalGeneration.of(1), 16, opened));
-      LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
-      assertEquals(StatusCode.OK,
-          LoopbackRiverServer.start(opened.database(), 0, serverResult));
+      GeneratedClientFileTestFixture owner;
+      try {
+        owner = GeneratedClientFileTestFixture.open(root);
+      } catch (java.io.IOException failure) {
+        throw new java.sql.SQLException("open authenticated benchmark fixture", failure);
+      }
       Connection connection = DriverManager.getConnection(
-          "jdbc:river://localhost:" + serverResult.server().port());
+          "jdbc:river:client-file:" + owner.clientFile());
       createSchema(connection);
       load(connection);
-      return new Fixture(opened.database(), serverResult.server(), connection);
+      return new Fixture(owner, connection);
     }
 
     @Override
     public void close() throws java.sql.SQLException {
       connection.close();
-      assertEquals(StatusCode.OK, server.close());
-      assertEquals(StatusCode.OK, database.close());
+      assertEquals(StatusCode.OK, owner.close());
     }
   }
 

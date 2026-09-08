@@ -12,19 +12,18 @@ tags:
     - audit
     - recovery
 deps:
-    - tic-72ea
     - tic-ec50
 created: 2026-09-04T15:23:11.631905Z
 ---
-# Implement offline audit archive and credential renewal
+# Implement credential renewal; defer SQL/security audit archive
 
-Implement exact `riverd audit archive -D` and `riverd credentials renew -D`
-stopped-instance operations under exclusive ownership.
+Implement `riverd credentials renew -D` as a stopped-instance operation under
+exclusive ownership. The SQL/security audit archive command is removed from the
+CLI contract and this ticket; no archive placeholder or near-term audit study
+is planned.
 
 ## Design
 
-Implement the accepted five-step audit control transition without overwrite,
-preserve corrupt audit, and refuse archive for terminal `EXHAUSTED` authority.
 Renew in the ADR's exact nonce-derived stage/archive names without overlap,
 preserving and forcing only the prior public certificate and redacted public
 manifest. Publish and force the external `renewal.intent` before creating its
@@ -36,9 +35,7 @@ authentication, statement admission, and ordered shutdown.
 
 ## Acceptance Criteria
 
-Live-owner rejection, audit/archive collision, corruption preservation,
-full-at-start, runtime exhaustion, and both audit control directory forces are
-proved. Renewal tests cover generation overflow, every force/crash boundary
+Renewal tests cover generation overflow, every force/crash boundary
 before and after authority switch, archive/stage identity collision, durable
 secret deletion, same-parent security-stage recovery and safe
 retry/cleanup. A partial intent-bound security stage is removed/recreated only
@@ -52,6 +49,10 @@ exposure. Prove exactly one wall-clock/fence read per authentication/statement,
 zero warmed River allocation, and the ADR's interleaved 1/4/16-client cost
 evidence; investigate every repeated shift outside adjacent-sample variation.
 
+Any future audit/archive proposal must first present a concrete architecture
+that supports neutral TPS, latency, and resource impact. Until then, audit work
+is deferred and has no active prerequisite or study.
+
 ## Required platforms (2026-09-07)
 
 This delivery must work on macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS.
@@ -62,4 +63,7 @@ and recovery outcomes. The platform support is required, not yet implemented.
 
 ## Stop boundary
 
-Own only the two specified offline commands over the existing audit and credential state machines. No new audit engine, certificate scheme, filesystem adapter, online renewal, or background rotation. Missing component behavior returns to its existing owner.
+Own only credential renewal over the existing credential state machine. No new
+audit engine, archive command, certificate scheme, filesystem adapter, online
+renewal, or background rotation. Missing component behavior returns to its
+existing owner.

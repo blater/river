@@ -4,20 +4,17 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.SessionAuthorizer;
 import io.riverdb.engine.api.SessionPermissions;
 
-/** Connection principal policy with audit-before-admission ordering. */
+/** Connection principal permission policy with credential validity fencing. */
 final class RemoteSessionAuthorizer implements SessionAuthorizer {
-  private final long principalId;
   private final int permissions;
-  private final SecurityAuditLog audit;
+  private final CredentialValidityFence validityFence;
   private long denials;
 
   RemoteSessionAuthorizer(
-      long authenticatedPrincipalId,
       int grantedPermissions,
-      SecurityAuditLog securityAudit) {
-    principalId = authenticatedPrincipalId;
+      CredentialValidityFence credentialValidityFence) {
     permissions = grantedPermissions;
-    audit = securityAudit;
+    validityFence = credentialValidityFence;
   }
 
   @Override
@@ -26,24 +23,14 @@ final class RemoteSessionAuthorizer implements SessionAuthorizer {
         || Integer.bitCount(requiredPermission) != 1) {
       return StatusCode.INVARIANT_BROKEN;
     }
-    boolean allowed = (permissions & requiredPermission) == requiredPermission;
-    StatusCode status = audit == null
-        ? StatusCode.OK
-        : audit.append(principalId, requiredPermission, allowed);
-    if (!status.isOk()) {
-      return status;
-    }
+    StatusCode validity = validityFence.checkNow();
+    boolean allowed = validity.isOk()
+        && (permissions & requiredPermission) == requiredPermission;
     if (!allowed) {
       denials++;
       return StatusCode.ACCESS_DENIED;
     }
     return StatusCode.OK;
-  }
-
-  StatusCode auditAuthentication(boolean allowed) {
-    return audit == null
-        ? StatusCode.OK
-        : audit.append(principalId, SecurityAuditLog.AUTHENTICATION, allowed);
   }
 
   long denials() {

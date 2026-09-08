@@ -1,5 +1,7 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.server.CredentialValidityFence;
+import io.riverdb.server.CredentialValidityFenceOpenResult;
 import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -40,22 +42,21 @@ final class SecureRemoteJdbcGateTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
-  void readRoleIsEnforcedAndDurablyAuditedAcrossServerRestart(
+  void readRoleIsEnforcedAcrossServerRestart(
       @TempDir Path root) throws Exception {
     RiverDatabase database = createDatabase(root);
     seed(database);
-    byte[] token = "river-read-role-token-0001".getBytes(StandardCharsets.UTF_8);
+    byte[] token = token("river-read-role-token-0001");
     TokenAuthenticator authenticator = authenticator(
         token, 42, SessionPermissions.READ);
     SSLContext serverContext = TestTlsContexts.server();
-    SSLContext clientContext = TestTlsContexts.trustedClient();
-    LoopbackServerLimits limits = new LoopbackServerLimits(4, 5_000, 30_000, 128);
-    LoopbackRiverServer server = startAudited(
-        database, root, serverContext, authenticator, limits);
+    LoopbackServerLimits limits = new LoopbackServerLimits(4, 5_000, 30_000);
+    LoopbackRiverServer server = startAuthenticated(
+        database, serverContext, authenticator, limits);
 
     byte[] wrongToken = token.clone();
     wrongToken[0] ^= 1;
-    RiverDataSource rejected = source(server, clientContext, wrongToken);
+    RiverDataSource rejected = source(root, server, wrongToken);
     SQLException authenticationFailure = assertThrows(
         SQLException.class,
         rejected::getConnection);
@@ -63,7 +64,7 @@ final class SecureRemoteJdbcGateTest {
     rejected.close();
     Arrays.fill(wrongToken, (byte) 0);
 
-    RiverDataSource source = source(server, clientContext, token);
+    RiverDataSource source = source(root, server, token);
     try (Connection connection = source.getConnection();
         Statement statement = connection.createStatement()) {
       try (ResultSet result = statement.executeQuery(
@@ -94,90 +95,24 @@ final class SecureRemoteJdbcGateTest {
       connection.rollback();
     }
     source.close();
-    int records = server.auditRecordCount();
-    assertTrue(records >= 9);
     assertEquals(StatusCode.OK, server.close());
     assertTrue(server.authorizationFailures() >= 3);
 
-    LoopbackRiverServer reopened = startAudited(
-        database, root, serverContext, authenticator, limits);
-    assertEquals(records, reopened.auditRecordCount());
-    assertEquals(StatusCode.OK, reopened.close());
-    Arrays.fill(token, (byte) 0);
-    assertEquals(StatusCode.OK, database.close());
-  }
-
-  @Test
-  void corruptAuditRecordPreventsAuthenticatedServerStartup(
-      @TempDir Path root) throws Exception {
-    RiverDatabase database = createDatabase(root);
-    byte[] token = "river-audit-corrupt-token".getBytes(StandardCharsets.UTF_8);
-    TokenAuthenticator authenticator = authenticator(
-        token, 55, SessionPermissions.READ);
-    LoopbackServerLimits limits = new LoopbackServerLimits(2, 5_000, 30_000, 16);
-    LoopbackRiverServer server = startAudited(
-        database, root, TestTlsContexts.server(), authenticator, limits);
-    RiverDataSource source = source(
-        server, TestTlsContexts.trustedClient(), token);
-    try (Connection connection = source.getConnection()) {
-      assertFalse(connection.isClosed());
-      assertEquals(1, server.auditRecordCount());
-    }
-    source.close();
-    assertEquals(StatusCode.OK, server.close());
-
-    Path auditFile = root.resolve("river.security-audit");
-    byte[] bytes = Files.readAllBytes(auditFile);
-    bytes[8] ^= 1;
-    Files.write(auditFile, bytes);
-
-    LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
-    assertEquals(
-        StatusCode.CORRUPTION,
-        LoopbackRiverServer.startAuthenticated(
-            database,
-            0,
-            TestTlsContexts.server(),
-            authenticator,
-            root,
-            limits,
-            opened));
-    Arrays.fill(token, (byte) 0);
-    assertEquals(StatusCode.OK, database.close());
-  }
-
-  @Test
-  void exhaustedAuditCapacityRejectsWorkBeforeExecution(
-      @TempDir Path root) throws Exception {
-    RiverDatabase database = createDatabase(root);
-    seed(database);
-    byte[] token = "river-audit-cap-token-0001".getBytes(StandardCharsets.UTF_8);
-    TokenAuthenticator authenticator = authenticator(
-        token, 7, SessionPermissions.READ);
-    LoopbackRiverServer server = startAudited(
-        database,
-        root,
-        TestTlsContexts.server(),
-        authenticator,
-        new LoopbackServerLimits(2, 5_000, 30_000, 2));
-    RiverDataSource source = source(
-        server, TestTlsContexts.trustedClient(), token);
-
-    try (Connection connection = source.getConnection();
+    LoopbackRiverServer reopened = startAuthenticated(
+        database, serverContext, authenticator, limits);
+    RiverDataSource restartedSource = source(root, reopened, token);
+    try (Connection connection = restartedSource.getConnection();
         Statement statement = connection.createStatement()) {
-      try (ResultSet result = statement.executeQuery(
-          "SELECT value FROM secure_rows WHERE id=1")) {
+      try (ResultSet result = statement.executeQuery("SELECT value FROM secure_rows WHERE id=1")) {
         assertTrue(result.next());
+        assertEquals(700, result.getLong(1));
       }
-      SQLException exhausted = assertThrows(
-          SQLException.class,
-          () -> statement.executeQuery(
-              "SELECT value FROM secure_rows WHERE id=1"));
-      assertEquals("53000", exhausted.getSQLState());
+      SQLException denied = assertThrows(SQLException.class,
+          () -> statement.executeUpdate("INSERT INTO secure_rows VALUES (2, 800)"));
+      assertEquals("42501", denied.getSQLState());
     }
-    source.close();
-    assertEquals(2, server.auditRecordCount());
-    assertEquals(StatusCode.OK, server.close());
+    restartedSource.close();
+    assertEquals(StatusCode.OK, reopened.close());
     Arrays.fill(token, (byte) 0);
     assertEquals(StatusCode.OK, database.close());
   }
@@ -187,17 +122,15 @@ final class SecureRemoteJdbcGateTest {
       @TempDir Path root) throws Exception {
     RiverDatabase database = createDatabase(root);
     seed(database);
-    byte[] token = "river-jdbc-cancel-token-01".getBytes(StandardCharsets.UTF_8);
+    byte[] token = token("river-jdbc-cancel-token-01");
     TokenAuthenticator authenticator = authenticator(
         token, 19, SessionPermissions.ALL);
-    LoopbackRiverServer server = startAudited(
+    LoopbackRiverServer server = startAuthenticated(
         database,
-        root,
         TestTlsContexts.server(),
         authenticator,
-        new LoopbackServerLimits(2, 5_000, 30_000, 64));
-    RiverDataSource source = source(
-        server, TestTlsContexts.trustedClient(), token);
+        new LoopbackServerLimits(2, 5_000, 30_000));
+    RiverDataSource source = source(root, server, token);
 
     try (Connection connection = source.getConnection();
         Statement statement = connection.createStatement()) {
@@ -230,17 +163,15 @@ final class SecureRemoteJdbcGateTest {
       @TempDir Path root) throws Exception {
     RiverDatabase database = createDatabase(root);
     seed(database);
-    byte[] token = "river-jdbc-abort-token-001".getBytes(StandardCharsets.UTF_8);
+    byte[] token = token("river-jdbc-abort-token-001");
     TokenAuthenticator authenticator = authenticator(
         token, 20, SessionPermissions.ALL);
-    LoopbackRiverServer server = startAudited(
+    LoopbackRiverServer server = startAuthenticated(
         database,
-        root,
         TestTlsContexts.server(),
         authenticator,
-        new LoopbackServerLimits(2, 5_000, 30_000, 64));
-    RiverDataSource source = source(
-        server, TestTlsContexts.trustedClient(), token);
+        new LoopbackServerLimits(2, 5_000, 30_000));
+    RiverDataSource source = source(root, server, token);
 
     Connection connection = source.getConnection();
     try (Statement statement = connection.createStatement()) {
@@ -304,35 +235,44 @@ final class SecureRemoteJdbcGateTest {
     return opened.authenticator();
   }
 
-  private static LoopbackRiverServer startAudited(
+  private static LoopbackRiverServer startAuthenticated(
       RiverDatabase database,
-      Path auditDirectory,
       SSLContext context,
       TokenAuthenticator authenticator,
-      LoopbackServerLimits limits) {
+      LoopbackServerLimits limits) throws Exception {
     LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
             database,
+            java.net.InetAddress.getLoopbackAddress(),
             0,
             context,
             authenticator,
-            auditDirectory,
+            validityFence(),
             limits,
             opened));
-    assertTrue(opened.server().isDurablyAudited());
     return opened.server();
   }
 
   private static RiverDataSource source(
+      Path root,
       LoopbackRiverServer server,
-      SSLContext context,
-      byte[] token) throws SQLException {
+      byte[] token) throws Exception {
+    Path clientFile = TestTlsContexts.writeClientProperties(
+        Files.createTempDirectory(root, "client-"), DATABASE, 1, server.port(), token);
     RiverDataSource source = new RiverDataSource();
-    source.setPort(server.port());
-    source.setAuthentication(context, token, token.length);
+    source.setClientFile(clientFile);
     return source;
+  }
+
+  private static byte[] token(String value) {
+    byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
+    if (encoded.length > 32) throw new IllegalArgumentException("test token too long");
+    byte[] token = new byte[32];
+    Arrays.fill(token, (byte) '-');
+    System.arraycopy(encoded, 0, token, 0, encoded.length);
+    return token;
   }
 
   private static void awaitConnections(
@@ -345,4 +285,14 @@ final class SecureRemoteJdbcGateTest {
     }
     assertEquals(expected, server.activeConnections());
   }
+  private static CredentialValidityFence validityFence() {
+    CredentialValidityFenceOpenResult opened = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    if (CredentialValidityFence.create(now - 300_000L, now + 86_400_000L, opened)
+        != StatusCode.OK) {
+      throw new AssertionError("test credential validity bounds");
+    }
+    return opened.fence();
+  }
+
 }

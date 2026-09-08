@@ -2,29 +2,25 @@ package io.riverdb.server;
 
 import io.riverdb.protocol.ProtocolMemoryBudget;
 
-/** Bounded connection, timeout, and audit capacities for one server. */
+/** Bounded connection and transport timeout limits for one server. */
 public record LoopbackServerLimits(
     int maximumConnections,
     int authenticationTimeoutMillis,
-    int idleTimeoutMillis,
-    int maximumAuditRecords) {
+    int idleTimeoutMillis) {
   public static final int DEFAULT_AUTHENTICATION_TIMEOUT_MILLIS = 5_000;
   public static final int DEFAULT_IDLE_TIMEOUT_MILLIS = 30_000;
-  public static final int DEFAULT_MAXIMUM_AUDIT_RECORDS = 4_096;
 
   public static LoopbackServerLimits defaults(int maximumConnections) {
     return new LoopbackServerLimits(
         maximumConnections,
         DEFAULT_AUTHENTICATION_TIMEOUT_MILLIS,
-        DEFAULT_IDLE_TIMEOUT_MILLIS,
-        DEFAULT_MAXIMUM_AUDIT_RECORDS);
+        DEFAULT_IDLE_TIMEOUT_MILLIS);
   }
 
   boolean isValid() {
     return maximumConnections > 0
         && ProtocolMemoryBudget.supportsServerConnections(maximumConnections)
         && authenticationTimeoutMillis > 0
-        && idleTimeoutMillis > 0
-        && maximumAuditRecords > 0;
+        && idleTimeoutMillis > 0;
   }
 }

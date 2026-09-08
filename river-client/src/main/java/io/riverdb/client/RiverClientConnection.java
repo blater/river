@@ -80,10 +80,6 @@ public final class RiverClientConnection implements RiverDatabase {
     programs = new RiverClientRemotePrograms(this);
   }
 
-  public static StatusCode connectLoopback(int port, RiverClientOpenResult result) {
-    return connect(port, null, null, 0, result);
-  }
-
   public static StatusCode connectAuthenticatedLoopback(
       int port,
       SSLContext context,
@@ -98,6 +94,12 @@ public final class RiverClientConnection implements RiverDatabase {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return connect(port, context, token, tokenBytes, result);
+  }
+
+  /** Opens an authenticated connection using the launcher-generated client configuration. */
+  public static StatusCode connect(
+      RiverClientConfiguration configuration, RiverClientOpenResult result) {
+    return RiverClientConnector.connect(configuration, result);
   }
 
   private static StatusCode connect(

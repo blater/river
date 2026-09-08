@@ -2,7 +2,7 @@ package io.riverdb.engine.api;
 
 import io.riverdb.base.error.StatusCode;
 
-/** Authenticates one already-bound principal's durable statement admission. */
+/** Authorizes one already-bound principal's statement admission. */
 @FunctionalInterface
 public interface SessionAuthorizer {
   StatusCode authorize(int requiredPermission);

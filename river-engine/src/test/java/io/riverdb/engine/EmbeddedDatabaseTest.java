@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databasePlan;
 import static io.riverdb.engine.TestDatabaseResources.runtimeRoot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -51,7 +52,8 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -104,7 +106,8 @@ final class EmbeddedDatabaseTest {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(
         StatusCode.CONFLICT,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     EmbeddedDatabase database = opened.database();
     assertEquals(StatusCode.OK, database.close());
@@ -119,6 +122,7 @@ final class EmbeddedDatabaseTest {
             DatabaseIncarnation.of(719, 727),
             GENERATION,
             2,
+            EmbeddedLockDiagnosticsConfig.disabled(),
             opened));
     assertEquals(
         StatusCode.FENCED,
@@ -128,10 +132,12 @@ final class EmbeddedDatabaseTest {
             DATABASE,
             WalGeneration.of(2),
             2,
+            EmbeddedLockDiagnosticsConfig.disabled(),
             opened));
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     assertEquals(StatusCode.OK, opened.database().close());
   }
 
@@ -146,7 +152,8 @@ final class EmbeddedDatabaseTest {
     Files.write(controlPath, control);
     assertEquals(
         StatusCode.CORRUPTION,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
   }
 
   @Test
@@ -191,7 +198,8 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -207,7 +215,8 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -243,7 +252,8 @@ final class EmbeddedDatabaseTest {
     Files.write(root.resolve(CheckpointControlStore.FILE_NAME), new byte[] {1});
     assertEquals(
         StatusCode.CORRUPTION,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
   }
 
   @Test
@@ -257,7 +267,8 @@ final class EmbeddedDatabaseTest {
     Files.delete(root.resolve("river.indexed.pages.checkpoint.2"));
     assertEquals(
         StatusCode.CORRUPTION,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
   }
 
   @Test
@@ -283,7 +294,8 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -299,7 +311,8 @@ final class EmbeddedDatabaseTest {
     Files.write(root.resolve("river.indexed.pages"), mainBytes);
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     assertEquals(StatusCode.OK, opened.database().close());
   }
 
@@ -328,7 +341,8 @@ final class EmbeddedDatabaseTest {
     Files.write(checkpointBase, checkpointBytes);
     assertEquals(
         StatusCode.CORRUPTION,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
   }
 
   @Test
@@ -363,7 +377,8 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(256, sessionResult));
     session = sessionResult.session();
@@ -410,7 +425,8 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -461,7 +477,8 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(4096, sessionResult));
     session = sessionResult.session();
@@ -507,7 +524,8 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -521,7 +539,8 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     assertEquals(StatusCode.OK, opened.database().close());
   }
 

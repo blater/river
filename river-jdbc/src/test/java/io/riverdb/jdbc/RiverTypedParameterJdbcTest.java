@@ -1,6 +1,5 @@
 package io.riverdb.jdbc;
 
-import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -9,23 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.EmbeddedRiver;
-import io.riverdb.engine.api.DatabaseOpenResult;
-import io.riverdb.engine.api.RiverDatabase;
-import io.riverdb.protocol.auth.TokenAuthenticator;
-import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
-import io.riverdb.server.LoopbackRiverServer;
-import io.riverdb.server.LoopbackServerLimits;
-import io.riverdb.server.LoopbackServerOpenResult;
-import io.riverdb.testsupport.TestTlsContexts;
+import io.riverdb.server.app.GeneratedClientFileTestFixture;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.Date;
+import java.sql.DriverManager;
 import java.sql.JDBCType;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -39,44 +28,17 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class RiverTypedParameterJdbcTest {
-  private static final DatabaseIncarnation DATABASE =
-      DatabaseIncarnation.of(0x4a44424350415241L, 0x4d45544552533031L);
-  private static final WalGeneration GENERATION = WalGeneration.of(1);
-
   @Test
   void sendsAuthenticatedTypedValuesAndOwnsBatchSnapshots(@TempDir Path root)
       throws Exception {
-    byte[] token = "river-typed-parameter-token".getBytes(StandardCharsets.UTF_8);
-    TokenAuthenticatorOpenResult authenticated = new TokenAuthenticatorOpenResult();
-    assertEquals(StatusCode.OK, TokenAuthenticator.create(
-        token, token.length, authenticated));
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(
-        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
-    RiverDatabase database = opened.database();
-    LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        LoopbackRiverServer.startAuthenticated(
-            database,
-            0,
-            TestTlsContexts.server(),
-            authenticated.authenticator(),
-            root,
-            LoopbackServerLimits.defaults(8),
-            listener));
-    LoopbackRiverServer server = listener.server();
-
-    RiverDataSource source = new RiverDataSource();
-    source.setPort(server.port());
-    source.setAuthentication(TestTlsContexts.trustedClient(), token, token.length);
-    Connection connection = source.getConnection();
-    try (connection) {
+    GeneratedClientFileTestFixture fixture = GeneratedClientFileTestFixture.open(root);
+    Connection connection = DriverManager.getConnection(
+        RiverDriver.CLIENT_FILE_PREFIX + fixture.clientFile());
+    try {
       createSchema(connection);
       insertTypedRows(connection);
       assertWideTextParameterRoundTrip(connection);
@@ -85,35 +47,29 @@ final class RiverTypedParameterJdbcTest {
       assertStrictStatusBoundaries(connection);
       assertBatchSnapshots(connection);
       assertOpenWarningLifecycle(connection);
+      connection.close();
+      assertClosedWarnings(connection);
+    } finally {
+      connection.close();
+      assertEquals(StatusCode.OK, fixture.close());
     }
-    assertClosedWarnings(connection);
-    source.close();
-    Arrays.fill(token, (byte) 0);
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
   }
 
   @Test
   void roundTripsSinglePageTextBoundaryThroughJdbc(@TempDir Path root)
       throws Exception {
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(
-        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
-    RiverDatabase database = opened.database();
-    LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
-    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, listener));
-    LoopbackRiverServer server = listener.server();
+    GeneratedClientFileTestFixture fixture = GeneratedClientFileTestFixture.open(root);
     try (Connection connection = java.sql.DriverManager.getConnection(
-            RiverDriver.URL_PREFIX + server.port());
+            RiverDriver.CLIENT_FILE_PREFIX + fixture.clientFile());
         Statement statement = connection.createStatement()) {
       assertEquals(0, statement.executeUpdate(
           "CREATE TABLE typed_page_text "
               + "(id BIGINT PRIMARY KEY, value VARCHAR(4041) NOT NULL,"
               + "flag_a BOOLEAN NOT NULL,flag_b BOOLEAN NOT NULL,flag_c BOOLEAN NOT NULL)"));
       assertSinglePageTextBoundaryRoundTrip(connection);
+    } finally {
+      assertEquals(StatusCode.OK, fixture.close());
     }
-    assertEquals(StatusCode.OK, server.close());
-    assertEquals(StatusCode.OK, database.close());
   }
 
   private static void createSchema(Connection connection) throws SQLException {

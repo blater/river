@@ -7,10 +7,9 @@ acceptance of exact `tic-11a5` candidate
 
 The [CLI contract](../riverd-cli.md) owns user-facing commands and behavior.
 ADR 0014 owns status mappings, formats, security and recovery mechanisms.
-Both prevail over summaries in this implementation plan. The
-complete scalable audit contract is the independently accepted `tic-a221` evidence merged at
-`e592addff67ac6016ae6e9e37e3bf374a6511f0d`; this plan does not define a second
-audit state machine. Acceptance ratifies documentation only: production code,
+Both prevail over summaries in this implementation plan. The earlier
+`tic-a221` audit design is retained as superseded historical evidence; it is not
+an active prerequisite or state machine. Acceptance ratifies documentation only: production code,
 build, filesystem qualification, recovery, security, and operational evidence
 remain required at the named downstream tickets.
 
@@ -124,7 +123,7 @@ sequenceDiagram
   alt first start
     D->>H: force bootstrap record
     D->>E: create(data, in-memory identity, generation)
-    D->>H: force initial security and audit
+    D->>H: force initial security
     D->>H: atomically publish instance identity last
   else existing instance
     D->>H: validate stored identity
@@ -207,7 +206,6 @@ DATADIR/
   runtime.properties       bounded process, endpoint, and client-config identity
   database/                River-owned embedded database directory
   security/                owner-only bundles/manifest; .security-<nonce>.stage is transient
-  audit/                   active forced audit and immutable archives
 ```
 
 `-D` identifies the complete River instance. The embedded engine owns the
@@ -316,7 +314,7 @@ JDBC and CLI delegate to that owner.
 The file carries incarnation, credential generation, principal, transport,
 protocol, selected host/port, certificate path/digest, and token path. It never
 carries a token or private key value. Advanced clients accept file paths, never
-secret argv, environment, URL, readiness, registry, log, or audit values.
+secret argv, environment, URL, readiness, registry, or log values.
 
 `riverd credentials renew -D PATH` is the only credential-validity recovery operation. It
 validates the old generation except for current-time validity, archives and forces only the
@@ -340,8 +338,7 @@ releases listener, workers, and JSSE before destroying authentication material,
 then closes the database and exits 1 `ACCESS_DENIED`; restart cannot become
 ready outside the validity interval. `tic-b901` proves exactly one
 `System.currentTimeMillis` and fence read per authentication/statement,
-zero warmed River allocation, and matched 1/4/16-client cost evidence without
-weakening the separate audit-performance gate.
+zero warmed River allocation, and matched 1/4/16-client cost evidence.
 
 ### 4.4 Multiple instances
 
@@ -506,28 +503,14 @@ On startup, a stale record may be replaced only after the instance lock has
 been acquired and the recorded process has been proved absent. The data and
 identity files are never removed by either lifecycle command.
 
-### 4.8 Audit archive and recovery
+### 4.8 Deferred SQL/security audit
 
-`riverd audit archive -D PATH` succeeds only after acquiring the stopped
-instance lock and proving no live owner or pending slot. It executes the
-accepted `tic-a221` order: validate and force the old active generation;
-create, force, and directory-force the linked new generation; publish and
-force an `ARCHIVING` control record and force its control directory;
-no-overwrite rename the old generation to
-`audit-<generation>-sha256-<digest>.log` and force the directory; then publish
-and force the next `ACTIVE` control record and force its control directory. It prints only the archive path,
-SHA-256 digest, and `riverd_status=OK`. Corrupt audit remains untouched and
-returns `CORRUPTION`; collision is `CONFLICT`. Retry follows the accepted
-idempotent recovery matrix. There is no preserve-and-reinitialize operation.
-
-The configured active-audit capacity must cover its declared immediate workload
-with documented headroom. Startup fails before readiness when it cannot admit
-at least one authentication and statement record. Runtime exhaustion returns
-`RESOURCE_EXHAUSTED` before statement admission and directs the owner to the
-offline archive command. Global sequence/generation/control terminal
-exhaustion instead persists `EXHAUSTED`; archive cannot clear it and recovery
-requires a reviewed wider format or new incarnation. Silent truncation,
-overwrite, deletion, and automatic rollover are prohibited.
+SQL/security audit collection and an audit archive command are outside the
+current `riverd` contract and immediate roadmap. The former `tic-a221`,
+`tic-72ea`, and archive designs remain historical evidence only; no placeholder
+state, archive format, or near-term audit study is planned. Reconsider this
+area only after a concrete design supports neutral TPS, latency, and resource
+impact and matched evidence can demonstrate that performance property.
 
 ## 5. Persistent identity, security, and open/create behaviour
 
@@ -559,10 +542,10 @@ On the first start:
 5. Exclusively publish and force the bootstrap record with the selected
    non-zero 128-bit incarnation and `SecureRandom` attempt nonce, then force
    `DATADIR`.
-6. Build only the three staged directories `database`, `security`, and `audit`
-   under that exact namespace; force every file and directory required to
+6. Build only the two staged directories `database` and `security` under that
+   exact namespace; force every file and directory required to
    reopen them. The instance stage is not inside the namespace.
-7. Atomically publish `database`, `security`, then `audit` without overwrite,
+7. Atomically publish `database`, then `security` without overwrite,
    forcing `DATADIR` after each. Write the bootstrap-bound
    `.instance-<nonce>.stage` directly in `DATADIR`, publish
    `instance.properties` last, and force `DATADIR`; that force is the single
@@ -593,7 +576,7 @@ returns `CONFLICT`/`CORRUPTION`/`NOT_OWNER`.
 `riverd start` remains in the foreground and owns these resources in order:
 
 1. secure directory handle and instance lock;
-2. validated identity, credential, and audit authority;
+2. validated identity and credential authority;
 3. opened `RiverDatabase`;
 4. authenticated `LoopbackRiverServer`;
 5. current client configuration;
@@ -771,7 +754,7 @@ not exempt the new module from existing build policy.
 - failures preserve the instance data directory for diagnosis and never delete
   data.
 
-### 10.3 Security and audit tests
+### 10.3 Security tests
 
 - first creation publishes a complete incarnation-bound 256-bit-token and
   pinned-certificate bundle; restart reuses the exact accepted identity;
@@ -792,11 +775,8 @@ not exempt the new module from existing build policy.
   enumeration/invalidation and reference clearing are exercised without an
   opaque/session-ticket erasure claim, and provider-key destroy false/throw is
   `IO_FAILURE`;
-- readiness, registry, diagnostics, process arguments, and audit contain no
-  secret values;
-- audit full-at-start, runtime exhaustion, intact archive, archive collision,
-  corruption preservation, terminal persistent exhaustion, every accepted
-  archive interruption point, and restart after archive have focused tests;
+- readiness, registry, diagnostics, and process arguments contain no secret
+  values;
 - credential renewal covers both validity bounds, active and resumed TLS
   sessions, generation overflow, external intent before namespace creation,
   exact public-only archive and staging names,
@@ -853,22 +833,12 @@ Capture a compact slopmark baseline for `river-server`, `river-server-app`, and
 the touched build files. A rising score or duplicated lifecycle/resource policy
 is a signal to move ownership back to one class rather than adding wrappers.
 
-### 10.6 Audit performance promotion
+### 10.6 Deferred audit evidence
 
-`tic-72ea` executes the exact accepted `tic-a221` correctness, fault,
-allocation/copy, and matched performance plan. Fixed-count correctness runs use
-1, 2, 4, and 16 clients. Five 30-second control/candidate samples per client
-count use interleave `C,A,A,C,C,A,A,C,C,A` and 10,000 fixed-seed whole-sample
-bootstrap resamples. Correctness, gap-free audit sequence, recovery, cleanup,
-zero warmed allocation/event, zero River-owned byte-array copies, and one force
-for the deterministic cohort are absolute.
-
-At 4 and 16 clients the forces/decision upper 95% bound is at most 0.75. At all
-client counts the throughput-ratio lower 95% bound is at least 0.95, while the
-p99.9 latency, CPU/decision, monitor-blocked/decision, GC pause/decision, and GC
-collections/million-decisions upper 95% ratio bounds are at most 1.10. A zero
-control metric requires zero candidate metric. Preserve failed artifacts; no
-diagnostic profile shape waives a numeric failure.
+No SQL/security audit implementation, placeholder, archive study, or audit
+performance campaign is part of this server delivery. Reconsideration requires
+a concrete architecture that supports neutral TPS, latency, and resource use,
+followed by matched evidence of that property.
 
 ## 11. Harness migration and deletion gate
 

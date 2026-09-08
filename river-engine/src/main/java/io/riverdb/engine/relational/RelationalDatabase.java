@@ -98,9 +98,12 @@ public final class RelationalDatabase {
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       RelationalDatabaseOpenResult result) {
+    if (lockDiagnostics == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     return RelationalDatabaseFactory.openExisting(
-        resourceRequest, directory, database, generation, maximumActiveTransactions, result);
+        resourceRequest, directory, database, generation, maximumActiveTransactions,
+        lockDiagnostics, result);
   }
 
   public static StatusCode openExisting(
@@ -110,10 +113,12 @@ public final class RelationalDatabase {
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       RelationalDatabaseOpenResult result) {
+    if (lockDiagnostics == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     return RelationalDatabaseFactory.openExisting(
         resourceRoot, resourcePlan, directory, database, generation,
-        maximumActiveTransactions, result);
+        maximumActiveTransactions, lockDiagnostics, result);
   }
 
   public static StatusCode openWithDurableWalQuorum(

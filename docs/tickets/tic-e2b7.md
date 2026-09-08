@@ -13,12 +13,14 @@ created: 2026-09-04T15:22:14.615706Z
 ---
 # R0: ratify riverd lifecycle and security contracts
 
-Resolve the proposed plan's remaining security, audit-durability, recovery-command, and deferred-scope ambiguities before launcher implementation.
+Resolve the proposed plan's remaining security, recovery-command, and deferred-scope ambiguities before launcher implementation. SQL/security audit is deferred.
 
 ## Design
 
-Use an accepted ADR for durable public and cross-module choices. Authenticated TLS loopback is mandatory; no development-only plain or unaudited production path is permitted.
+Use an accepted ADR for durable public and cross-module choices. Authenticated TLS loopback, authorization, database/WAL durability, and recovery are mandatory. SQL/security audit is not part of the current launcher contract.
 
 ## Acceptance Criteria
 
-The ADR and failure matrix name identity, credentials, TLS, authentication, audit durability/admission, lifecycle files, command outcomes, rotation/archive recovery, and performance obligations.
+The ADR and failure matrix name identity, credentials, TLS, authentication,
+authorization, database/WAL durability, lifecycle files, command outcomes,
+credential renewal recovery, and performance obligations.

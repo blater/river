@@ -8,7 +8,7 @@ usage() {
   cat <<'EOF'
 Usage: tools/tps-test.sh [options]
 
-Run one River JDBC TPC-C engineering sample. Run ./make.sh first to compile
+Run one authenticated River JDBC TPC-C engineering sample. Run ./make.sh first to compile
 the runner and its dependencies. This tool never builds. It owns a
 temporary database and loopback server,
 keeps output safe on every exit path, and reports load, preflight, warmup,
@@ -75,7 +75,7 @@ Options:
                                 Declared JDBC/program isolation (default: serializable)
   -h, --help                    Show this help
 
-The current Java path supports jdbc:river, all listed diagnostic mixes,
+The current Java path supports the generated jdbc:river:client-file URL, all listed diagnostic mixes,
 and explicit serializable, repeatable-read, or mixed-diagnostic isolation.
 MariaDB remains unavailable because the Java acceptance path validates
 jdbc:river. Java-emitted metrics are printed verbatim when present; unavailable
@@ -540,6 +540,7 @@ if [[ -n $client_jfr ]]; then
 fi
 
 echo "managed_server=starting port=$port"
+server_java_options=( "--enable-native-access=ALL-UNNAMED" "${server_java_options[@]}" )
 "$java_bin" "${server_java_options[@]}" -cp "$classpath" io.riverdb.bench.tpcc.TpccServerMain \
   "${server_args[@]}" >"$server_log" 2>&1 &
 server_pid=$!
@@ -560,7 +561,14 @@ fi
 managed_port=$(tr -d '\r\n' <"$server_ready")
 require_uint managed_port "$managed_port"
 ((managed_port > 0 && managed_port <= 65535)) || die "managed server returned invalid port: $managed_port"
-url="jdbc:river://localhost:$managed_port"
+client_file=$(sed -n 's/^server_client_config=//p' "$server_log" | head -1)
+if [[ ! -f $client_file ]]; then
+  run_result=startup_failed; run_phase=startup; run_status=CLIENT_CONFIGURATION_MISSING; run_exit_status=1
+  echo "=== TPS result ==="
+  echo "result=$run_result"; echo "phase=$run_phase"; echo "status=$run_status"; echo "tps=unavailable"
+  exit 1
+fi
+url="jdbc:river:client-file:$client_file"
 echo "managed_server=started port=$managed_port"
 echo "managed_server_resources=explicit maximum_bytes=$resource_maximum_bytes delivery_bytes=$resource_delivery_bytes lock_provider_bytes=$resource_lock_provider_bytes version_workspace_bytes=$resource_version_workspace_bytes page_cache_bytes=$resource_page_cache_bytes staging_frame_bytes=$resource_staging_frame_bytes staged_page_capacity=$resource_staged_page_capacity"
 [[ -n $server_jfr ]] && echo "managed_server_jfr=$server_jfr"
@@ -583,10 +591,10 @@ runner_args=( "--url=$url" "--fresh-load=$fresh_load" "--warmup-seconds=$warmup_
 [[ -n $retry_maximum_millis ]] && runner_args+=( "--retry-maximum-millis=$retry_maximum_millis" )
 [[ -n $client_jfr ]] && runner_args+=( "--jfr=$client_jfr" )
 
-echo "Running $measured_seconds seconds of River TPS testing against $url"
+echo "Running $measured_seconds seconds of authenticated River TPS testing against localhost:$managed_port"
 echo "profile=$profile mix=$mix warmup_seconds=$warmup_seconds measured_seconds=$measured_seconds scheduling=$scheduling evidence=$evidence"
 
-"$java_bin" "${client_java_options[@]}" -cp "$classpath" io.riverdb.bench.tpcc.TpccAcceptanceMain \
+"$java_bin" --enable-native-access=ALL-UNNAMED "${client_java_options[@]}" -cp "$classpath" io.riverdb.bench.tpcc.TpccAcceptanceMain \
   "${runner_args[@]}" >"$stdout_log" 2>"$stderr_log" &
 runner_pid=$!
 runner_started=$SECONDS

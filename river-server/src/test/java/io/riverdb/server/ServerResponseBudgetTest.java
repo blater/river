@@ -3,6 +3,7 @@ package io.riverdb.server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
+import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
@@ -14,6 +15,7 @@ import io.riverdb.engine.api.ProgramOpenResult;
 import io.riverdb.engine.api.QueryOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.api.RiverSession;
+import io.riverdb.engine.api.SessionAuthorizer;
 import io.riverdb.engine.api.SessionOpenResult;
 import io.riverdb.engine.api.TransactionProgram;
 import io.riverdb.engine.api.TransactionProgramAction;
@@ -24,6 +26,9 @@ import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.protocol.ProtocolResponse;
+import io.riverdb.protocol.auth.TokenAuthenticator;
+import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
+import io.riverdb.protocol.auth.TokenProof;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -222,13 +227,31 @@ final class ServerResponseBudgetTest {
 
   private static SessionEndpoint openedEndpoint(
       WideDatabase database, ServerResponseBuffer responses, ServerConnectionMemory memory) {
-    SessionEndpoint endpoint = memory == null ? new SessionEndpoint(database)
-        : new SessionEndpoint(database, null, 0, 0, null, null, memory, responses);
+    byte[] token = new byte[TokenProof.MINIMUM_TOKEN_BYTES];
+    TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
+    assertEquals(StatusCode.OK, TokenAuthenticator.create(token, token.length, authenticator));
+    CredentialValidityFenceOpenResult fence = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    assertEquals(StatusCode.OK,
+        CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
+    byte[] binding = new byte[] {1, 2, 3};
+    SessionEndpoint endpoint = memory == null
+        ? new SessionEndpoint(database, authenticator.authenticator(), fence.fence(), 11, 12,
+            binding, null, responses, new MutableCancellationToken())
+        : new SessionEndpoint(database, authenticator.authenticator(), fence.fence(), 11, 12,
+            binding, memory, responses, new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     assertEquals(StatusCode.OK, codec.encodeRequest(request, ProtocolMessageType.HELLO, 1));
     assertEquals(StatusCode.OK, responses.process(endpoint, request));
-    assertEquals(StatusCode.OK, codec.encodeRequest(request, ProtocolMessageType.OPEN_SESSION, 2));
+    byte[] proof = new byte[TokenProof.PROOF_BYTES];
+    assertEquals(StatusCode.OK, TokenProof.compute(
+        token, token.length, 11, 12, binding, proof));
+    assertEquals(StatusCode.OK, new ProtocolFrameCodec().encodeBinaryRequest(
+        request, ProtocolMessageType.AUTHENTICATE, 2,
+        proof, proof.length));
+    assertEquals(StatusCode.OK, responses.process(endpoint, request));
+    assertEquals(StatusCode.OK, codec.encodeRequest(request, ProtocolMessageType.OPEN_SESSION, 3));
     assertEquals(StatusCode.OK, responses.process(endpoint, request));
     return endpoint;
   }
@@ -255,6 +278,10 @@ final class ServerResponseBudgetTest {
     private final WideSession session = new WideSession();
     @Override
     public StatusCode createSession(SessionOpenResult result) { return result.complete(session); }
+    @Override
+    public StatusCode createSession(SessionAuthorizer authorizer, SessionOpenResult result) {
+      return authorizer == null ? StatusCode.INVALID_EXTERNAL_INPUT : result.complete(session);
+    }
     @Override
     public StatusCode deferTerminalClose(RiverSession value) { return StatusCode.OK; }
     @Override

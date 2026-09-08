@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -47,7 +48,8 @@ final class EmbeddedDatabasePageCacheResourceTest {
     opened.reset();
     assertEquals(StatusCode.OK, EmbeddedDatabase.openExisting(
         resources.root(), resources.plan(), directory,
-        DatabaseIncarnation.of(151, 157), WalGeneration.of(1), 8, opened));
+        DatabaseIncarnation.of(151, 157), WalGeneration.of(1), 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     assertEquals(resources.plan().stagedPageCapacity(),
         opened.database().resourceStagedPageCapacity());
     assertEquals(StatusCode.OK, opened.database().close());

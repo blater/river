@@ -11,6 +11,11 @@ import io.riverdb.engine.EmbeddedRiver;
 import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
+import io.riverdb.protocol.auth.TokenAuthenticator;
+import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
+import io.riverdb.protocol.auth.TokenProof;
+import io.riverdb.protocol.auth.TlsChannelBinding;
+import io.riverdb.testsupport.TestTlsContexts;
 import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolFrameHeader;
@@ -25,10 +30,15 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class LoopbackRiverServerTest {
+  private static final byte[] TOKEN =
+      "loopback-server-test-token".getBytes(StandardCharsets.UTF_8);
   private static DatabaseResourcePlanRequest databaseRequest(int owners) {
     return new DatabaseResourcePlanRequest()
         .memory(256_000_000L, 0, 0, 0, 64_000_000L)
@@ -51,7 +61,7 @@ final class LoopbackRiverServerTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(database, root);
 
     try (TestClient client = new TestClient(server.port())) {
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.HELLO));
@@ -88,9 +98,10 @@ final class LoopbackRiverServerTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            io.riverdb.engine.EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
-    server = start(database);
+    server = start(database, root);
     try (TestClient client = new TestClient(server.port())) {
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.HELLO));
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.OPEN_SESSION));
@@ -116,7 +127,7 @@ final class LoopbackRiverServerTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(database, root);
     try (TestClient client = new TestClient(server.port())) {
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.HELLO));
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.OPEN_SESSION));
@@ -176,10 +187,10 @@ final class LoopbackRiverServerTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(database, root);
     try (TestClient client = new TestClient(server.port())) {
-      assertStatus(StatusCode.CONFLICT, client.send(ProtocolMessageType.FETCH));
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.HELLO));
+      assertStatus(StatusCode.CONFLICT, client.send(ProtocolMessageType.FETCH));
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.OPEN_SESSION));
       assertStatus(StatusCode.INVALID_EXTERNAL_INPUT, client.sendBadUtf8());
       assertStatus(StatusCode.CONFLICT, client.send(ProtocolMessageType.FETCH));
@@ -197,7 +208,7 @@ final class LoopbackRiverServerTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(database, root);
     try (TestClient client = new TestClient(server.port())) {
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.HELLO));
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.OPEN_SESSION));
@@ -221,7 +232,8 @@ final class LoopbackRiverServerTest {
               "SELECT value FROM ledger WHERE key=9"));
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_SESSION));
     }
-    try (Socket socket = connect(server.port())) {
+    try (TestClient client = new TestClient(server.port())) {
+      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.HELLO));
       byte[] header = new byte[ProtocolFrameCodec.HEADER_BYTES];
       ByteBuffer bytes = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN);
       ProtocolFrameCodec codec = new ProtocolFrameCodec();
@@ -229,10 +241,8 @@ final class LoopbackRiverServerTest {
           StatusCode.OK,
           codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 99));
       bytes.putInt(24, ProtocolFrameCodec.MAXIMUM_PAYLOAD_BYTES + 1);
-      socket.getOutputStream().write(header);
-      socket.getOutputStream().flush();
-      socket.setSoTimeout(2_000);
-      assertEquals(-1, socket.getInputStream().read());
+      client.writeRaw(header, header.length);
+      assertEquals(-1, client.read());
     }
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, server.lastStatus());
     assertEquals(1, server.rejectedFrames());
@@ -248,7 +258,7 @@ final class LoopbackRiverServerTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database);
+    LoopbackRiverServer server = start(database, root);
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     byte[] header = new byte[ProtocolFrameCodec.HEADER_BYTES];
     ByteBuffer bytes = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN);
@@ -279,7 +289,7 @@ final class LoopbackRiverServerTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database, 2);
+    LoopbackRiverServer server = start(database, root, 2);
 
     try (Socket idle = connect(server.port())) {
       assertTrue(idle.isConnected());
@@ -309,7 +319,7 @@ final class LoopbackRiverServerTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database, 1);
+    LoopbackRiverServer server = start(database, root, 1);
 
     try (Socket incumbent = connect(server.port());
         Socket excess = connect(server.port())) {
@@ -347,7 +357,7 @@ final class LoopbackRiverServerTest {
     assertEquals(StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database, 1);
+    LoopbackRiverServer server = start(database, root, 1);
     long warmBytes = 2L * ProtocolFrameCodec.MAXIMUM_FRAME_BYTES;
     assertEquals(warmBytes, server.retainedProtocolBufferBytes());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
@@ -359,10 +369,10 @@ final class LoopbackRiverServerTest {
         " ".repeat(20_000) + "SELECT 1",
         null, 0, 0, 0));
     int firstFrameBytes = ProtocolFrameCodec.HEADER_BYTES + continued.getInt(24);
-    try (Socket partial = connect(server.port())) {
+    try (TestClient partial = new TestClient(server.port())) {
       awaitConnections(server, 1);
-      partial.getOutputStream().write(continued.array(), 0, firstFrameBytes);
-      partial.getOutputStream().flush();
+      partial.send(ProtocolMessageType.HELLO);
+      partial.writeRaw(continued.array(), firstFrameBytes);
     }
     awaitConnections(server, 0);
     assertEquals(warmBytes, server.retainedProtocolBufferBytes());
@@ -380,17 +390,36 @@ final class LoopbackRiverServerTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
-  private static LoopbackRiverServer start(RiverDatabase database) {
-    return start(database, LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS);
+  private static LoopbackRiverServer start(RiverDatabase database, Path root)
+      throws IOException {
+    return start(database, root, LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS);
   }
 
   private static LoopbackRiverServer start(
       RiverDatabase database,
+      Path root,
       int maximumConnections) {
+    TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        TokenAuthenticator.create(TOKEN, TOKEN.length, authenticator));
+    CredentialValidityFenceOpenResult fence = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    assertEquals(
+        StatusCode.OK,
+        CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
     LoopbackServerOpenResult started = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
-        LoopbackRiverServer.start(database, 0, maximumConnections, started));
+        LoopbackRiverServer.startAuthenticated(
+            database,
+            InetAddress.getLoopbackAddress(),
+            0,
+            serverContext(),
+            authenticator.authenticator(),
+            fence.fence(),
+            LoopbackServerLimits.defaults(maximumConnections),
+            started));
     assertTrue(InetAddress.getLoopbackAddress().isLoopbackAddress());
     return started.server();
   }
@@ -420,12 +449,11 @@ final class LoopbackRiverServerTest {
       byte[] header,
       int bytes,
       long expectedRejectedFrames) throws IOException {
-    try (Socket socket = connect(server.port())) {
-      socket.setSoTimeout(2_000);
-      socket.getOutputStream().write(header, 0, bytes);
-      socket.getOutputStream().flush();
-      socket.shutdownOutput();
-      assertEquals(-1, socket.getInputStream().read());
+    try (TestClient client = new TestClient(server.port())) {
+      client.send(ProtocolMessageType.HELLO);
+      client.writeRaw(header, bytes);
+      client.shutdownOutput();
+      assertEquals(-1, client.read());
     }
     long deadline = System.nanoTime() + 2_000_000_000L;
     while (server.rejectedFrames() != expectedRejectedFrames
@@ -455,7 +483,8 @@ final class LoopbackRiverServerTest {
   }
 
   private static Socket connect(int port) throws IOException {
-    Socket socket = new Socket();
+    SSLSocket socket = (SSLSocket) trustedClientContext()
+        .getSocketFactory().createSocket();
     socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port));
     return socket;
   }
@@ -480,13 +509,44 @@ final class LoopbackRiverServerTest {
 
     private TestClient(Socket connection) throws IOException {
       socket = connection;
+      if (socket instanceof SSLSocket secure) {
+        secure.setEnabledProtocols(new String[] {"TLSv1.3"});
+        secure.startHandshake();
+      }
       input = socket.getInputStream();
       output = socket.getOutputStream();
     }
 
     private ProtocolResponse send(ProtocolMessageType type) throws IOException {
       assertEquals(StatusCode.OK, codec.encodeRequest(request, type, requestId++));
-      return exchange();
+      ProtocolResponse exchanged = exchange();
+      if (type == ProtocolMessageType.HELLO && exchanged.status() == StatusCode.OK) {
+        long challengeHigh = exchanged.challengeHigh();
+        long challengeLow = exchanged.challengeLow();
+        byte[] binding = new byte[TlsChannelBinding.BINDING_BYTES];
+        byte[] proof = new byte[TokenProof.PROOF_BYTES];
+        try {
+          assertTrue(socket instanceof SSLSocket);
+          assertEquals(
+              StatusCode.OK,
+              TlsChannelBinding.export(
+                  ((SSLSocket) socket).getSession(), binding));
+          assertEquals(
+              StatusCode.OK,
+              TokenProof.compute(
+                  TOKEN, TOKEN.length, challengeHigh, challengeLow, binding, proof));
+          assertEquals(
+              StatusCode.OK,
+              codec.encodeBinaryRequest(
+                  request, ProtocolMessageType.AUTHENTICATE, requestId++, proof, proof.length));
+          exchanged = exchange();
+          assertEquals(StatusCode.OK, exchanged.status());
+        } finally {
+          Arrays.fill(binding, (byte) 0);
+          Arrays.fill(proof, (byte) 0);
+        }
+      }
+      return exchanged;
     }
 
     private ProtocolResponse send(ProtocolMessageType type, String sql) throws IOException {
@@ -506,6 +566,19 @@ final class LoopbackRiverServerTest {
 
     private long completedRequests() {
       return requestId - 1;
+    }
+
+    private void writeRaw(byte[] bytes, int length) throws IOException {
+      output.write(bytes, 0, length);
+      output.flush();
+    }
+
+    private int read() throws IOException {
+      return input.read();
+    }
+
+    private void shutdownOutput() throws IOException {
+      socket.shutdownOutput();
     }
 
     private ProtocolResponse exchange() throws IOException {
@@ -543,6 +616,22 @@ final class LoopbackRiverServerTest {
         }
         read += count;
       }
+    }
+  }
+
+  private static javax.net.ssl.SSLContext serverContext() {
+    try {
+      return TestTlsContexts.server();
+    } catch (java.security.GeneralSecurityException | java.io.IOException failure) {
+      throw new AssertionError("TLS test context", failure);
+    }
+  }
+
+  private static javax.net.ssl.SSLContext trustedClientContext() {
+    try {
+      return TestTlsContexts.trustedClient();
+    } catch (java.security.GeneralSecurityException | java.io.IOException failure) {
+      throw new AssertionError("TLS test context", failure);
     }
   }
 }

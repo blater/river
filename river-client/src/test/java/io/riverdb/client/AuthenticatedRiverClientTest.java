@@ -1,5 +1,7 @@
 package io.riverdb.client;
 
+import io.riverdb.server.CredentialValidityFence;
+import io.riverdb.server.CredentialValidityFenceOpenResult;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -7,6 +9,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
@@ -21,6 +24,7 @@ import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import javax.net.ssl.SSLContext;
@@ -60,7 +64,6 @@ final class AuthenticatedRiverClientTest {
     RiverDatabase engine = engineResult.database();
     LoopbackRiverServer wrongHostnameServer = start(
         engine,
-        root,
         TestTlsContexts.wrongHostnameServer(),
         authResult.authenticator());
     RiverClientOpenResult clientResult = new RiverClientOpenResult();
@@ -76,7 +79,6 @@ final class AuthenticatedRiverClientTest {
 
     LoopbackRiverServer server = start(
         engine,
-        root,
         serverContext,
         authResult.authenticator());
     assertTrue(server.isAuthenticatedTransport());
@@ -125,9 +127,10 @@ final class AuthenticatedRiverClientTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
+        EmbeddedRiver.openExisting(databaseRequest(4), root, DATABASE, GENERATION, 4,
+            EmbeddedLockDiagnosticsConfig.disabled(), engineResult));
     engine = engineResult.database();
-    server = start(engine, root, serverContext, authResult.authenticator());
+    server = start(engine, serverContext, authResult.authenticator());
     assertEquals(
         StatusCode.OK,
         RiverClientConnection.connectAuthenticatedLoopback(
@@ -181,11 +184,12 @@ final class AuthenticatedRiverClientTest {
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
             engine,
+            java.net.InetAddress.getLoopbackAddress(),
             0,
             TestTlsContexts.server(),
             authResult.authenticator(),
-            root,
-            new LoopbackServerLimits(1, 5_000, 200, 64),
+            validityFence(),
+            new LoopbackServerLimits(1, 5_000, 200),
             serverResult));
     LoopbackRiverServer server = serverResult.server();
     RiverClientOpenResult clientResult = new RiverClientOpenResult();
@@ -224,18 +228,18 @@ final class AuthenticatedRiverClientTest {
 
   private static LoopbackRiverServer start(
       RiverDatabase database,
-      Path auditDirectory,
       SSLContext context,
-      TokenAuthenticator authenticator) {
+      TokenAuthenticator authenticator) throws Exception {
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
             database,
+            java.net.InetAddress.getLoopbackAddress(),
             0,
             context,
             authenticator,
-            auditDirectory,
+            validityFence(),
             LoopbackServerLimits.defaults(
                 LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS),
             result));
@@ -252,4 +256,14 @@ final class AuthenticatedRiverClientTest {
     }
     assertEquals(expected, server.activeConnections());
   }
+  private static CredentialValidityFence validityFence() {
+    CredentialValidityFenceOpenResult opened = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    if (CredentialValidityFence.create(now - 300_000L, now + 86_400_000L, opened)
+        != StatusCode.OK) {
+      throw new AssertionError("test credential validity bounds");
+    }
+    return opened.fence();
+  }
+
 }
