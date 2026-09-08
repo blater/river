@@ -2,54 +2,58 @@ package io.riverdb.bench.tpcc;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.engine.EmbeddedRiver;
-import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
+import io.riverdb.platform.riverd.RiverDaemonFileSystemResult;
+import io.riverdb.platform.riverd.RiverDaemonFileSystems;
 import io.riverdb.server.LoopbackRiverServer;
-import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.LoopbackServerLimits;
+import io.riverdb.server.app.RiverDaemonInstance;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.security.SecureRandom;
 import java.util.concurrent.CountDownLatch;
 
-/** Owns one temporary database and loopback listener for the TPS shell tool. */
+/** Owns one temporary authenticated instance for the TPS shell tool. */
 public final class TpccServerMain {
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x5450_4343_5345_5256L, 0x303030_303030_3031L);
-  private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   private TpccServerMain() {}
 
   public static void main(String[] arguments) throws Exception {
     ServerArguments configuration = ServerArguments.parse(arguments);
-    Files.createDirectories(configuration.directory());
-
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    StatusCode status = EmbeddedRiver.create(
-        configuration.resourceRequest(), configuration.directory(), DATABASE, GENERATION,
-        configuration.maximumConnections(), configuration.lockDiagnostics(), opened);
+    RiverDaemonFileSystemResult filesystem = new RiverDaemonFileSystemResult();
+    StatusCode status = RiverDaemonFileSystems.current(filesystem);
     if (!status.isOk()) {
-      throw new IllegalStateException("TPS database create failed: " + status);
+      throw new IllegalStateException("TPS filesystem selection failed: " + status);
     }
 
-    LoopbackServerOpenResult listening = new LoopbackServerOpenResult();
-    status = LoopbackRiverServer.start(
-        opened.database(), configuration.port(), configuration.maximumConnections(), listening);
+    RiverDaemonInstance.OpenResult opened = new RiverDaemonInstance.OpenResult();
+    status = RiverDaemonInstance.open(
+        configuration.directory(), filesystem.fileSystem(), new SecureRandom(), DATABASE,
+        "localhost", InetAddress.getLoopbackAddress(), configuration.port(),
+        LoopbackServerLimits.defaults(configuration.maximumConnections()),
+        configuration.resourceRequest(), configuration.lockDiagnostics(),
+        configuration.maximumConnections(), opened);
     if (!status.isOk()) {
-      opened.database().close();
-      throw new IllegalStateException("TPS loopback server start failed: " + status);
+      throw new IllegalStateException("TPS authenticated instance start failed: " + status);
     }
 
-    LoopbackRiverServer server = listening.server();
-    RiverDatabase database = opened.database();
+    RiverDaemonInstance instance = opened.instance();
+    LoopbackRiverServer server = instance.server();
+    RiverDatabase database = instance.database();
     TpccTraceRecording recording = null;
     TpccPerformanceCapture.ServerResult performanceCapture =
         new TpccPerformanceCapture.ServerResult(false, StatusCode.OK, "");
     try {
+      System.out.println("server_client_config=" + instance.clientConfiguration());
+      System.out.flush();
       Files.writeString(
           configuration.readyFile(),
           Integer.toString(server.port()),
@@ -86,7 +90,7 @@ public final class TpccServerMain {
       writeMetrics(
           configuration.metricsFile(), database, configuration.maximumConnections(),
           performanceCapture);
-      close(server, opened);
+      close(instance);
     }
   }
 
@@ -150,13 +154,10 @@ public final class TpccServerMain {
     while (!Files.exists(file)) Thread.sleep(10);
   }
 
-  private static void close(LoopbackRiverServer server, DatabaseOpenResult opened) {
-    StatusCode serverStatus = server.close();
-    StatusCode databaseStatus = opened.database().close();
-    if (!serverStatus.isOk() || !databaseStatus.isOk()) {
-      System.err.println(
-          "TPS server shutdown failed: server=" + serverStatus
-              + " database=" + databaseStatus);
+  private static void close(RiverDaemonInstance instance) {
+    StatusCode status = instance.close();
+    if (!status.isOk() && status != StatusCode.CLOSED) {
+      System.err.println("TPS server shutdown failed: instance=" + status);
     }
   }
 

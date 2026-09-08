@@ -24,8 +24,9 @@ final class SecurityAuditTelemetryTest {
       throws Exception {
     SecurityAuditLog audit = SecurityAuditTestOwner.create(
         root, DATABASE, 1, ACTIVE_BYTES, PENDING_BYTES);
+    CredentialValidityFence fence = validityFence();
     RemoteSessionAuthorizer authorizer = new RemoteSessionAuthorizer(
-        7, SessionPermissions.READ, audit);
+        7, SessionPermissions.READ, audit, fence);
     authorizer.bindRequest(1, 1, 1, CancellationToken.NONE, 0);
     assertEquals(StatusCode.OK, authorizer.auditAuthentication(StatusCode.OK));
     assertEquals(StatusCode.OK, authorizer.authorize(
@@ -41,6 +42,7 @@ final class SecurityAuditTelemetryTest {
     assertEquals(3, snapshot.cohortHistogram()[0]);
     assertEquals(3, snapshot.durableFrontier());
     assertEquals(StatusCode.OK, audit.finishClose());
+    assertEquals(StatusCode.OK, fence.close());
   }
 
   @Test
@@ -88,4 +90,15 @@ final class SecurityAuditTelemetryTest {
     assertEquals(0, afterOpen.cohortHistogram()[0]);
     assertEquals(StatusCode.OK, reopened.finishClose());
   }
+
+  private static CredentialValidityFence validityFence() {
+    CredentialValidityFenceOpenResult opened = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    if (CredentialValidityFence.create(now - 300_000L, now + 86_400_000L, opened)
+        != StatusCode.OK) {
+      throw new AssertionError("test credential validity bounds");
+    }
+    return opened.fence();
+  }
+
 }

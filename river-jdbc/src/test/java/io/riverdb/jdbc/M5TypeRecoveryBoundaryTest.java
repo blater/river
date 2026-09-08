@@ -1,5 +1,7 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.server.CredentialValidityFence;
+import io.riverdb.server.CredentialValidityFenceOpenResult;
 import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -16,6 +18,7 @@ import io.riverdb.base.type.LocalTemporal;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.cli.RiverSqlMain;
 import io.riverdb.engine.EmbeddedRiver;
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.QueryOpenResult;
@@ -33,7 +36,6 @@ import io.riverdb.server.SecurityAuditLog;
 import io.riverdb.server.SecurityAuditLogFactory;
 import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
-import java.net.InetAddress;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -77,7 +79,7 @@ final class M5TypeRecoveryBoundaryTest {
     Path restored = Files.createDirectory(root.resolve("restored"));
     Path restoredAudit = Files.createDirectory(root.resolve("audit-restored"));
     Path failedRestore = Files.createDirectory(root.resolve("failed-restore"));
-    byte[] token = "m5-useful-sql-boundary-token".getBytes(StandardCharsets.UTF_8);
+    byte[] token = token("m5-useful-sql-boundary-token");
 
     createAuthenticatedCheckpointLineage(source, sourceAudit, token);
     assertEmbeddedReopen(source);
@@ -122,7 +124,7 @@ final class M5TypeRecoveryBoundaryTest {
         EmbeddedRiver.create(databaseRequest(8), source, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = startAuthenticated(database, audit, token);
-    RiverDataSource dataSource = dataSource(server, token);
+    RiverDataSource dataSource = dataSource(audit, server, token);
     try (Connection connection = dataSource.getConnection()) {
       createSchema(connection);
       insertRows(connection);
@@ -207,7 +209,8 @@ final class M5TypeRecoveryBoundaryTest {
     assertEquals(
         StatusCode.OK,
         EmbeddedRiver.openExisting(
-            databaseRequest(8), source, DATABASE, GENERATION, 8, opened));
+            databaseRequest(8), source, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -271,10 +274,11 @@ final class M5TypeRecoveryBoundaryTest {
     assertEquals(
         StatusCode.OK,
         EmbeddedRiver.openExisting(
-            databaseRequest(8), restored, DATABASE, GENERATION, 8, opened));
+            databaseRequest(8), restored, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = startAuthenticated(database, audit, token);
-    RiverDataSource dataSource = dataSource(server, token);
+    RiverDataSource dataSource = dataSource(audit, server, token);
     try (Connection connection = dataSource.getConnection();
         Statement statement = connection.createStatement();
         ResultSet rows = statement.executeQuery(
@@ -300,13 +304,13 @@ final class M5TypeRecoveryBoundaryTest {
       assertFalse(rows.next());
     }
     awaitConnections(server, 0);
-    assertCliRows(server, token);
+    assertCliRows(audit, server, token);
     awaitConnections(server, 0);
     assertDisconnectRollsBackTypedMutation(server, dataSource);
     dataSource.close();
 
     server = startAuthenticated(database, audit, token);
-    RiverDataSource reopened = dataSource(server, token);
+    RiverDataSource reopened = dataSource(audit, server, token);
     assertTypedMutationWasNotPublished(reopened);
     reopened.close();
     awaitConnections(server, 0);
@@ -379,17 +383,17 @@ final class M5TypeRecoveryBoundaryTest {
     assertEquals(6, metadata.getScale(8));
   }
 
-  private static void assertCliRows(LoopbackRiverServer server, byte[] token)
+  private static void assertCliRows(
+      Path root, LoopbackRiverServer server, byte[] token)
       throws Exception {
     String script = "SELECT id,flag,amount,label,day,clock,observed,captured "
         + "FROM m5_types ORDER BY id;";
     ByteArrayOutputStream output = new ByteArrayOutputStream();
     ByteArrayOutputStream errors = new ByteArrayOutputStream();
-    int exit = RiverSqlMain.runAuthenticated(
-        server.port(),
-        TestTlsContexts.trustedClient(),
-        token,
-        token.length,
+    Path clientFile = TestTlsContexts.writeClientProperties(
+        Files.createTempDirectory(root, "cli-client-"), DATABASE, 1, server.port(), token);
+    int exit = RiverSqlMain.runClientFile(
+        clientFile.toString(),
         new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8)),
         new PrintStream(output, true, StandardCharsets.UTF_8),
         new PrintStream(errors, true, StandardCharsets.UTF_8));
@@ -422,23 +426,33 @@ final class M5TypeRecoveryBoundaryTest {
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
             database,
-            InetAddress.getByName("127.0.0.1"),
+            java.net.InetAddress.getLoopbackAddress(),
             0,
             TestTlsContexts.server(),
             authenticated.authenticator(),
             auditOwner,
+            validityFence(),
             LoopbackServerLimits.defaults(8),
             listener));
     return listener.server();
   }
 
   private static RiverDataSource dataSource(
-      LoopbackRiverServer server, byte[] token) throws Exception {
+      Path root, LoopbackRiverServer server, byte[] token) throws Exception {
+    Path clientFile = TestTlsContexts.writeClientProperties(
+        Files.createTempDirectory(root, "client-"), DATABASE, 1, server.port(), token);
     RiverDataSource source = new RiverDataSource();
-    source.setPort(server.port());
-    source.setAuthentication(
-        TestTlsContexts.trustedClient(), token, token.length);
+    source.setClientFile(clientFile);
     return source;
+  }
+
+  private static byte[] token(String value) {
+    byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
+    if (encoded.length > 32) throw new IllegalArgumentException("test token too long");
+    byte[] token = new byte[32];
+    Arrays.fill(token, (byte) '-');
+    System.arraycopy(encoded, 0, token, 0, encoded.length);
+    return token;
   }
 
   private static void awaitConnections(
@@ -467,4 +481,14 @@ final class M5TypeRecoveryBoundaryTest {
     int length = row.copyTextAt(column, characters, 0);
     return new String(characters, 0, length);
   }
+  private static CredentialValidityFence validityFence() {
+    CredentialValidityFenceOpenResult opened = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    if (CredentialValidityFence.create(now - 300_000L, now + 86_400_000L, opened)
+        != StatusCode.OK) {
+      throw new AssertionError("test credential validity bounds");
+    }
+    return opened.fence();
+  }
+
 }

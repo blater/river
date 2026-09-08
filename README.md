@@ -9,7 +9,7 @@ agents: how to specify work, divide it between agents, and review the result.
 
 > River is pre-V1 evaluation software. APIs and on-disk formats may change
 > incompatibly; automatic upgrades are not provided. This README describes
-> `master` as of 2026-09-07. The
+> the `riverd` feature candidate as of 2026-09-08. The
 > [alpha.2 release notes](docs/delivery/alpha-2-known-limitations.md) describe
 > the earlier release.
 
@@ -42,8 +42,9 @@ agents: how to specify work, divide it between agents, and review the result.
   within the supported SQL shapes.
 - `ANALYZE`, `EXPLAIN`, and `EXPLAIN ANALYZE`, with stored statistics and
   execution counters.
-- Streaming JDBC 4.3 results and prepared parameters. Local clients can use
-  plain transport or TLS 1.3 with token authentication.
+- Streaming JDBC 4.3 results and prepared parameters. Installed clients use the
+  generated TLS 1.3 and token-authenticated `client.properties` configuration.
+  Embedded applications may use the embedded API directly.
 
 The [SQL conformance profile](docs/compatibility/sql-conformance-profile.md)
 and [JDBC support matrix](docs/compatibility/jdbc-support-matrix.md) describe
@@ -67,7 +68,7 @@ tested with that many rows.
 | Joins | Up to 64 table references in a left-associative `INNER`/`LEFT` chain. Join reordering and partitioned hash spill remain unfinished |
 | Materialized results | Paged storage and external sorting replace the old 65,536-row / 256 MB store cap. Capacity depends on memory budgets, temporary disk space, and address limits. Each encoded result-row payload is limited to 4,194,304 bytes |
 | Savepoints | Limited by the session's resource budget; the old three-savepoint cap is gone. Budget exhaustion returns `RESOURCE_EXHAUSTED` |
-| Network | Loopback only, with plain development access or TLS 1.3 and token authentication. Remote deployment is unsupported |
+| Network | Loopback only, with TLS 1.3 and token authentication. Remote deployment is unsupported |
 | JDBC | One live statement per connection; forward-only, read-only results. No callable statements or scrollable/updatable cursors |
 
 The main sources for these limits are
@@ -78,13 +79,12 @@ The main sources for these limits are
 
 ## What remains unfinished
 
-River still needs a supported standalone `riverd` service. Its required platforms
-are macOS/APFS, Linux/ext4 and XFS, and Windows/NTFS. These are delivery
-requirements; the standalone server is not yet implemented. Its accepted
-[command-line contract](docs/riverd-cli.md) describes the intended user experience.
-Applications must
-currently own database startup and shutdown. Backup and restore are offline;
-replication, failover, and online schema migration are not available.
+The current `riverd start` candidate workflow has been validated on
+macOS/APFS and Linux/ext4/XFS. Windows/NTFS validation and the final audit
+acceptance decision remain pending. The foreground server creates or reopens
+the database, publishes `security/client.properties`, and accepts only
+authenticated TLS 1.3 connections. Backup and restore are offline; replication,
+failover, and online schema migration are not available.
 
 Focused recovery, concurrency, and capacity tests pass, but the full crash,
 isolation, fault-injection, and long-running growth tests required for release
@@ -103,26 +103,28 @@ The build uses a JDK 25 toolchain and targets Java 25. Gradle verifies dependenc
 checksums. Always use `--no-daemon` and run one build or database workload at a
 time on the host.
 
-Build the module JARs and CLI distribution:
+Build the server and SQL client distributions:
 
 ```sh
-./gradlew --no-daemon assemble
+./gradlew --no-daemon :river-server-app:installDist :river-cli:installDist
 ```
 
-A host application opens the database through `EmbeddedRiver` and starts
-`LoopbackRiverServer`. See the [database how-to](HOWTO.md) for startup and
-shutdown code.
-
-After starting a plain loopback server, install and run the SQL client:
+Start the candidate server in the foreground. It writes the
+generated client configuration under its data directory:
 
 ```sh
-./gradlew --no-daemon :river-cli:installDist
-river-cli/build/install/river-cli/bin/river-cli 9191 < setup.sql
+river-server-app/build/install/riverd/bin/riverd start --datadir=/absolute/path/to/database --port=9191
+```
+
+Use the reported `security/client.properties` path with the SQL client or JDBC:
+
+```sh
+river-cli/build/install/river-cli/bin/river-cli /absolute/path/to/database/security/client.properties < setup.sql
 ```
 
 The CLI reads semicolon-terminated SQL, emits tab-separated rows, and stops at
-the first error. The [CLI reference](river-cli/README.md) covers TLS and token
-authentication.
+the first error. The [CLI reference](river-cli/README.md) and [database
+how-to](HOWTO.md) describe the generated client-file workflow.
 
 Size settings use decimal `KB`, `MB`, and `GB`. The exact byte counts in the
 limits table describe storage formats. See
@@ -147,9 +149,10 @@ For the clean release checks:
 and dependency policies. It uses an isolated Gradle home in the repository by
 default.
 
-The latest recorded clean checkpoint reports 1,805 tests, no failures or errors,
-and two skips. The full `check` still fails existing dependency-ledger,
-bytecode, source-policy, and SQL-shape checks. Details are in the
+The candidate clean test run reports 1,897 tests: 1,879 executed, 18 skipped,
+and no failures or errors. The module graph check passes; existing source-policy
+and SQL-shape violations still fail their checks. This run did not validate
+every additional release check. Details are in the
 [checkpoint ledger](docs/performance-checkpoints.md).
 
 For River-specific TPS diagnostics, run `./make.sh` first, then

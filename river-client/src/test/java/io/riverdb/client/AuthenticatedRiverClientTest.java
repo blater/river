@@ -1,5 +1,7 @@
 package io.riverdb.client;
 
+import io.riverdb.server.CredentialValidityFence;
+import io.riverdb.server.CredentialValidityFenceOpenResult;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -7,6 +9,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
@@ -23,7 +26,6 @@ import io.riverdb.server.SecurityAuditLog;
 import io.riverdb.server.SecurityAuditLogFactory;
 import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
-import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -130,7 +132,8 @@ final class AuthenticatedRiverClientTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
+        EmbeddedRiver.openExisting(databaseRequest(4), root, DATABASE, GENERATION, 4,
+            EmbeddedLockDiagnosticsConfig.disabled(), engineResult));
     engine = engineResult.database();
     server = start(engine, root, serverContext, authResult.authenticator());
     assertEquals(
@@ -189,11 +192,12 @@ final class AuthenticatedRiverClientTest {
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
             engine,
-            InetAddress.getByName("127.0.0.1"),
+            java.net.InetAddress.getLoopbackAddress(),
             0,
             TestTlsContexts.server(),
             authResult.authenticator(),
             audit,
+            validityFence(),
             new LoopbackServerLimits(1, 5_000, 200),
             serverResult));
     LoopbackRiverServer server = serverResult.server();
@@ -248,11 +252,12 @@ final class AuthenticatedRiverClientTest {
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
             database,
-            InetAddress.getByName("127.0.0.1"),
+            java.net.InetAddress.getLoopbackAddress(),
             0,
             context,
             authenticator,
             audit,
+            validityFence(),
             LoopbackServerLimits.defaults(
                 LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS),
             result));
@@ -269,4 +274,14 @@ final class AuthenticatedRiverClientTest {
     }
     assertEquals(expected, server.activeConnections());
   }
+  private static CredentialValidityFence validityFence() {
+    CredentialValidityFenceOpenResult opened = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    if (CredentialValidityFence.create(now - 300_000L, now + 86_400_000L, opened)
+        != StatusCode.OK) {
+      throw new AssertionError("test credential validity bounds");
+    }
+    return opened.fence();
+  }
+
 }

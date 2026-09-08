@@ -61,7 +61,7 @@ final class TpccMultiWarehouseInputTest {
   @Test
   void oneWarehouseNeverGeneratesRemoteAccess() {
     TpccConfig config = TpccConfig.parse(new String[] {
-        "--url=jdbc:river://localhost:9", "--tiny"
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny"
     });
     TpccValues values = new TpccValues(7);
     TpccInputs.NewOrder order = new TpccInputs.NewOrder();
@@ -79,7 +79,7 @@ final class TpccMultiWarehouseInputTest {
 
   private static TpccConfig multiWarehouseConfig() {
     return TpccConfig.parse(new String[] {
-        "--url=jdbc:river://localhost:9", "--tiny", "--warehouses=4"
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny", "--warehouses=4"
     });
   }
 }

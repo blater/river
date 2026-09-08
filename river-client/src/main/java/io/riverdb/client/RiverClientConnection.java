@@ -80,10 +80,6 @@ public final class RiverClientConnection implements RiverDatabase {
     programs = new RiverClientRemotePrograms(this);
   }
 
-  public static StatusCode connectLoopback(int port, RiverClientOpenResult result) {
-    return connect(port, null, null, 0, result);
-  }
-
   public static StatusCode connectAuthenticatedLoopback(
       int port,
       SSLContext context,

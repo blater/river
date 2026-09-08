@@ -6,12 +6,6 @@ import java.util.HexFormat
 // Module policy and production dependencies are declared by the root build.
 
 dependencies {
-  implementation(project(":river-platform"))
-  implementation(project(":river-engine"))
-  implementation(project(":river-engine-api"))
-  implementation(project(":river-client"))
-  implementation(project(":river-protocol"))
-  implementation(project(":river-server"))
   implementation("com.fasterxml.jackson.core:jackson-databind:2.20.0")
   implementation("org.hdrhistogram:HdrHistogram:2.2.2")
   implementation("org.openjdk.jmh:jmh-core:1.37")
@@ -20,6 +14,7 @@ dependencies {
   testImplementation(project(":river-engine"))
   testImplementation(project(":river-engine-api"))
   testImplementation(project(":river-server"))
+  testImplementation(testFixtures(project(":river-server-app")))
 }
 
 tasks.withType<JavaCompile>().configureEach {
@@ -149,7 +144,7 @@ tasks.register<JavaExec>("tpccAcceptance") {
   classpath = sourceSets.main.get().runtimeClasspath
   mainClass.set("io.riverdb.bench.tpcc.TpccAcceptanceMain")
   val riverUrl = providers.gradleProperty("riverTpccUrl")
-  args("--url=${riverUrl.orNull ?: "jdbc:river://localhost:54321"}")
+  if (riverUrl.isPresent) args("--url=${riverUrl.get()}")
 }
 
 tasks.register<JavaExec>("securityAuditAdmission") {
@@ -157,4 +152,10 @@ tasks.register<JavaExec>("securityAuditAdmission") {
   description = "Runs the authenticated security-audit admission measurement."
   classpath = sourceSets.main.get().runtimeClasspath
   mainClass.set("io.riverdb.bench.security.SecurityAuditAdmissionMain")
+}
+
+tasks.withType<Test>().configureEach {
+  systemProperty("river.test.classpath", sourceSets.test.get().runtimeClasspath.asPath)
+  maxHeapSize = "1g"
+  jvmArgs("--enable-native-access=ALL-UNNAMED")
 }

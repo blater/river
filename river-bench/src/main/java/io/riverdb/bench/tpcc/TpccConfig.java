@@ -33,7 +33,7 @@ public record TpccConfig(
     Path metricsStoppedFile,
     TpccEvidenceMode evidence) {
   public TpccConfig {
-    if (url == null || !url.startsWith("jdbc:river:") || warehouses < 1
+    if (url == null || !url.startsWith("jdbc:river:client-file:") || warehouses < 1
         || districts < 1
         || customersPerDistrict < 1 || itemCount < 1 || ordersPerDistrict < 1
         || firstUndeliveredOrder < 1

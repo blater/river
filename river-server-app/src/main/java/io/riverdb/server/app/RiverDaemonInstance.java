@@ -3,6 +3,7 @@ package io.riverdb.server.app;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.engine.EmbeddedRiver;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
@@ -10,6 +11,8 @@ import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.platform.riverd.RiverDaemonFileSystem;
 import io.riverdb.platform.riverd.RiverDirectory;
 import io.riverdb.platform.riverd.RiverDirectoryResult;
+import io.riverdb.server.CredentialValidityFence;
+import io.riverdb.server.CredentialValidityFenceOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
@@ -34,6 +37,7 @@ public final class RiverDaemonInstance {
   protected RiverDaemonCredentials.Material material;
   protected SecurityAuditLog audit;
   protected LoopbackRiverServer server;
+  protected CredentialValidityFence validityFence;
   protected RiverDaemonTlsContext.TlsContextResult tls;
   protected RiverDirectory databaseDirectory;
   protected RiverDirectory securityDirectory;
@@ -56,21 +60,20 @@ public final class RiverDaemonInstance {
       Path datadir,
       RiverDaemonFileSystem filesystem,
       SecureRandom random,
-      boolean firstCreate,
       DatabaseIncarnation requestedIncarnation,
       String host,
       InetAddress bindAddress,
       int port,
       LoopbackServerLimits limits,
       DatabaseResourcePlanRequest resourcePlan,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       int maximumActiveTransactions,
       OpenResult result) {
     if (result == null || datadir == null || filesystem == null || random == null
         || host == null || bindAddress == null || limits == null || resourcePlan == null
-        || maximumActiveTransactions <= 0) {
+        || lockDiagnostics == null || maximumActiveTransactions <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (!firstCreate) return StatusCode.FEATURE_NOT_SUPPORTED;
     result.reset();
     ProcessMetadata process = ProcessMetadata.read();
     if (process == null) return StatusCode.FEATURE_NOT_SUPPORTED;
@@ -86,7 +89,7 @@ public final class RiverDaemonInstance {
 
     RiverDaemonInstance state = new RiverDaemonInstance(identity, datadir);
     status = openCreate(state, random, host, bindAddress, port, limits, resourcePlan,
-        maximumActiveTransactions);
+        lockDiagnostics, maximumActiveTransactions);
     if (!status.isOk()) {
       state.close();
       return status;
@@ -100,10 +103,11 @@ public final class RiverDaemonInstance {
       RiverDaemonFileSystem filesystem,
       SecureRandom random,
       DatabaseResourcePlanRequest resourcePlan,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       int maximumActiveTransactions,
       RestartPreparation result) {
     if (result == null || datadir == null || filesystem == null || random == null
-        || resourcePlan == null || maximumActiveTransactions <= 0) {
+        || resourcePlan == null || lockDiagnostics == null || maximumActiveTransactions <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -114,7 +118,7 @@ public final class RiverDaemonInstance {
         datadir, filesystem, random, process.pid, process.startMillis, process.command, identity);
     if (status.isOk()) {
       RiverDaemonInstance state = new RiverDaemonInstance(identity, datadir);
-      status = validateRestart(state, resourcePlan, maximumActiveTransactions);
+      status = validateRestart(state, resourcePlan, lockDiagnostics, maximumActiveTransactions);
       if (status.isOk()) result.complete(state);
       else state.close();
     }
@@ -160,6 +164,7 @@ public final class RiverDaemonInstance {
       int port,
       LoopbackServerLimits limits,
       DatabaseResourcePlanRequest resourcePlan,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       int maximumActiveTransactions) {
     RiverDaemonIdentity.IdentityResult identity = state.identity;
     DatabaseIncarnation incarnation = identity.incarnation();
@@ -197,7 +202,7 @@ public final class RiverDaemonInstance {
       DatabaseOpenResult databaseResult = new DatabaseOpenResult();
       status = EmbeddedRiver.openExisting(
           resourcePlan, existingDatabase, incarnation, WalGeneration.of(1),
-          maximumActiveTransactions, databaseResult);
+          maximumActiveTransactions, lockDiagnostics, databaseResult);
       if (!status.isOk()) return status;
       state.database = databaseResult.database();
       status = state.closeDatabase();
@@ -208,7 +213,7 @@ public final class RiverDaemonInstance {
       DatabaseOpenResult databaseResult = new DatabaseOpenResult();
       status = EmbeddedRiver.create(
           resourcePlan, stagedDatabase, incarnation, WalGeneration.of(1),
-          maximumActiveTransactions, databaseResult);
+          maximumActiveTransactions, lockDiagnostics, databaseResult);
       if (!status.isOk()) return status;
       state.database = databaseResult.database();
       status = state.closeDatabase();
@@ -224,12 +229,13 @@ public final class RiverDaemonInstance {
 
     return openPublishedComponents(
         state, random, host, bindAddress, port, limits, resourcePlan,
-        maximumActiveTransactions);
+        lockDiagnostics, maximumActiveTransactions);
   }
 
   private static StatusCode validateRestart(
       RiverDaemonInstance state,
       DatabaseResourcePlanRequest resourcePlan,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       int maximumActiveTransactions) {
     RiverDaemonIdentity.IdentityResult identity = state.identity;
     StatusCode status;
@@ -263,7 +269,8 @@ public final class RiverDaemonInstance {
     status = EmbeddedRiver.openExisting(
         resourcePlan,
         state.datadir.resolve(RiverDaemonIdentity.DATABASE_NAME),
-        identity.incarnation(), WalGeneration.of(1), maximumActiveTransactions, databaseOpen);
+        identity.incarnation(), WalGeneration.of(1), maximumActiveTransactions,
+        lockDiagnostics, databaseOpen);
     if (!status.isOk()) return status;
     state.database = databaseOpen.database();
 
@@ -279,13 +286,15 @@ public final class RiverDaemonInstance {
       int port,
       LoopbackServerLimits limits,
       DatabaseResourcePlanRequest resourcePlan,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       int maximumActiveTransactions) {
     RiverDaemonIdentity.IdentityResult identity = state.identity;
     DatabaseOpenResult databaseResult = new DatabaseOpenResult();
     StatusCode status = EmbeddedRiver.openExisting(
         resourcePlan,
         state.datadir.resolve(RiverDaemonIdentity.DATABASE_NAME),
-        identity.incarnation(), WalGeneration.of(1), maximumActiveTransactions, databaseResult);
+        identity.incarnation(), WalGeneration.of(1), maximumActiveTransactions,
+        lockDiagnostics, databaseResult);
     if (!status.isOk()) return status;
     state.database = databaseResult.database();
 
@@ -323,6 +332,21 @@ public final class RiverDaemonInstance {
     return status;
   }
 
+  private static StatusCode openValidityFence(RiverDaemonInstance state) {
+    if (state.validityFence != null || state.material == null
+        || state.material.certificate() == null) {
+      return state.validityFence == null
+          ? StatusCode.INVARIANT_BROKEN : StatusCode.CONFLICT;
+    }
+    long notBeforeMillis = state.material.certificate().getNotBefore().getTime();
+    long notAfterMillis = state.material.certificate().getNotAfter().getTime();
+    CredentialValidityFenceOpenResult opened = new CredentialValidityFenceOpenResult();
+    StatusCode status = CredentialValidityFence.create(
+        notBeforeMillis, notAfterMillis, opened);
+    if (status.isOk()) state.validityFence = opened.fence();
+    return status;
+  }
+
   private static StatusCode openListener(
       RiverDaemonInstance state,
       SecureRandom random,
@@ -330,14 +354,16 @@ public final class RiverDaemonInstance {
       InetAddress bindAddress,
       int port,
       LoopbackServerLimits limits) {
+    StatusCode status = openValidityFence(state);
+    if (!status.isOk()) return status;
     RiverDaemonTlsContext.TlsContextResult tls = new RiverDaemonTlsContext.TlsContextResult();
-    StatusCode status = RiverDaemonTlsContext.create(state.material, random, tls);
+    status = RiverDaemonTlsContext.create(state.material, random, tls);
     if (!status.isOk()) return status;
     state.tls = tls;
     LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
     status = LoopbackRiverServer.startAuthenticated(
         state.database, bindAddress, port, tls.context(), state.material.authenticator(),
-        state.audit, limits, serverResult);
+        state.audit, state.validityFence, limits, serverResult);
     if (!status.isOk()) return status;
     state.server = serverResult.server();
     state.clientConfiguration = state.datadir.resolve(RiverDaemonIdentity.SECURITY_NAME)
@@ -356,6 +382,16 @@ public final class RiverDaemonInstance {
   public Path clientConfiguration() { return clientConfiguration; }
   public long credentialGeneration() { return material == null ? 0 : material.generation(); }
 
+  /** Returns whether all service owners reached terminal cleanup. */
+  public synchronized boolean servicesClosed() {
+    return servicesClosed;
+  }
+
+  /** Checks the instance credential fence for the foreground lifecycle owner. */
+  public synchronized StatusCode checkCredentialValidity() {
+    return validityFence == null ? StatusCode.INVARIANT_BROKEN : validityFence.checkNow();
+  }
+
   public String serverCertificateSha256() {
     if (material == null || material.certificate() == null) return null;
     try {
@@ -369,30 +405,49 @@ public final class RiverDaemonInstance {
   /** Closes listener, TLS, credentials, database, and duplicate component handles. */
   public synchronized StatusCode closeServices() {
     if (servicesClosed) return StatusCode.CLOSED;
-    servicesClosed = true;
     StatusCode status = StatusCode.OK;
-    LoopbackRiverServer ownedServer = server;
-    server = null;
-    status = firstFailure(status, ownedServer == null ? StatusCode.OK : ownedServer.close());
-    SecurityAuditLog ownedAudit = audit;
-    audit = null;
-    status = firstFailure(status, closeAuditValue(ownedAudit));
-    RiverDaemonTlsContext.TlsContextResult ownedTls = tls;
-    tls = null;
-    status = firstFailure(status, ownedTls == null ? StatusCode.OK
-        : RiverDaemonTlsContext.cleanup(ownedTls));
-    RiverDaemonCredentials.Material ownedMaterial = material;
-    material = null;
-    status = firstFailure(status, ownedMaterial == null ? StatusCode.OK : ownedMaterial.destroy());
-    RiverDatabase ownedDatabase = database;
-    database = null;
-    status = firstFailure(status, ownedDatabase == null ? StatusCode.OK : ownedDatabase.close());
-    RiverDirectory ownedDatabaseDirectory = databaseDirectory;
-    databaseDirectory = null;
-    status = firstFailure(status, closeDirectory(ownedDatabaseDirectory));
-    RiverDirectory ownedSecurityDirectory = securityDirectory;
-    securityDirectory = null;
-    status = firstFailure(status, closeDirectory(ownedSecurityDirectory));
+
+    if (server != null) {
+      StatusCode closedServer = server.close();
+      status = firstFailure(status, closedServer);
+      if (terminal(closedServer)) server = null;
+    }
+    if (validityFence != null) {
+      StatusCode closedFence = validityFence.close();
+      status = firstFailure(status, closedFence);
+      if (terminal(closedFence)) validityFence = null;
+    }
+    if (audit != null) {
+      StatusCode closedAudit = closeAuditValue(audit);
+      status = firstFailure(status, closedAudit);
+      if (terminal(closedAudit)) audit = null;
+    }
+    if (tls != null) {
+      StatusCode cleanedTls = RiverDaemonTlsContext.cleanup(tls);
+      status = firstFailure(status, cleanedTls);
+      if (terminal(cleanedTls)) tls = null;
+    }
+    if (material != null) {
+      StatusCode destroyedMaterial = material.destroy();
+      status = firstFailure(status, destroyedMaterial);
+      if (terminal(destroyedMaterial)) material = null;
+    }
+    if (database != null) {
+      StatusCode closedDatabase = closeDatabaseValue(database);
+      status = firstFailure(status, closedDatabase);
+      if (terminal(closedDatabase)) database = null;
+    }
+    if (databaseDirectory != null) {
+      StatusCode closedDatabaseDirectory = closeDirectory(databaseDirectory);
+      status = firstFailure(status, closedDatabaseDirectory);
+      if (terminal(closedDatabaseDirectory)) databaseDirectory = null;
+    }
+    if (securityDirectory != null) {
+      StatusCode closedSecurityDirectory = closeDirectory(securityDirectory);
+      status = firstFailure(status, closedSecurityDirectory);
+      if (terminal(closedSecurityDirectory)) securityDirectory = null;
+    }
+    if (status.isOk()) servicesClosed = true;
     return status;
   }
 
@@ -400,12 +455,19 @@ public final class RiverDaemonInstance {
   public synchronized StatusCode close() {
     if (closed) return StatusCode.CLOSED;
     StatusCode status = closeServices();
+    if (!status.isOk() && status != StatusCode.CLOSED) return status;
     if (status == StatusCode.CLOSED) status = StatusCode.OK;
-    RiverDaemonIdentity.IdentityResult ownedIdentity = identity;
-    identity = null;
-    status = firstFailure(status, ownedIdentity == null ? StatusCode.OK : ownedIdentity.close());
-    closed = true;
+    if (identity != null) {
+      StatusCode closedIdentity = identity.close();
+      status = firstFailure(status, closedIdentity);
+      if (terminal(closedIdentity)) identity = null;
+    }
+    if (status.isOk()) closed = true;
     return status;
+  }
+
+  private static boolean terminal(StatusCode status) {
+    return status == StatusCode.OK || status == StatusCode.CLOSED;
   }
 
   private static StatusCode closeAuditValue(SecurityAuditLog value) {
@@ -415,17 +477,24 @@ public final class RiverDaemonInstance {
     return status == StatusCode.CLOSED ? StatusCode.OK : status;
   }
 
+  private static StatusCode closeDatabaseValue(RiverDatabase value) {
+    if (value == null) return StatusCode.OK;
+    StatusCode status = value.close();
+    return status == StatusCode.CLOSED ? StatusCode.OK : status;
+  }
+
   private StatusCode closeDatabase() {
     RiverDatabase value = database;
-    database = null;
-    StatusCode status = value == null ? StatusCode.OK : value.close();
-    return status == StatusCode.CLOSED ? StatusCode.OK : status;
+    StatusCode status = closeDatabaseValue(value);
+    if (terminal(status)) database = null;
+    return status;
   }
 
   private StatusCode closeAudit() {
     SecurityAuditLog value = audit;
-    audit = null;
-    return closeAuditValue(value);
+    StatusCode status = closeAuditValue(value);
+    if (terminal(status)) audit = null;
+    return status;
   }
 
   /** Caller-owned transfer result for a completely opened instance. */

@@ -78,7 +78,10 @@ final class TpccArguments {
   }
 
   private TpccConfig configuration() {
-    if (url == null) throw new IllegalArgumentException("--url=jdbc:river://localhost:PORT required");
+    if (url == null) {
+      throw new IllegalArgumentException(
+          "--url=jdbc:river:client-file:/absolute/path/to/client.properties required");
+    }
     int customers = tiny ? 30 : 3_000;
     int items = tiny ? 100 : 100_000;
     int orders = tiny ? 30 : 3_000;

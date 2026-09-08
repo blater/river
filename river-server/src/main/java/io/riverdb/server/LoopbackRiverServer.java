@@ -35,6 +35,7 @@ public final class LoopbackRiverServer {
   private final TokenAuthenticator authenticator;
   private final SecureRandom random;
   final SecurityAuditLog audit;
+  final CredentialValidityFence validityFence;
   private final ProtocolMemoryBudget bufferBudget;
   private final int authenticationTimeoutMillis;
   private final int idleTimeoutMillis;
@@ -57,45 +58,20 @@ public final class LoopbackRiverServer {
       ServerSocket serverSocket,
       TokenAuthenticator tokenAuthenticator,
       LoopbackServerLimits limits,
-      SecurityAuditLog securityAudit) {
+      SecurityAuditLog securityAudit,
+      CredentialValidityFence credentialValidityFence) {
     database = engineDatabase;
     listener = serverSocket;
     authenticator = tokenAuthenticator;
     audit = securityAudit;
+    validityFence = credentialValidityFence;
     authenticationTimeoutMillis = limits.authenticationTimeoutMillis();
     idleTimeoutMillis = limits.idleTimeoutMillis();
-    random = tokenAuthenticator == null ? null : new SecureRandom();
+    random = new SecureRandom();
     bufferBudget = ProtocolMemoryBudget.forServer(limits.maximumConnections());
     slots = new ConnectionSlot[limits.maximumConnections()];
     for (int index = 0; index < slots.length; index++) {
       slots[index] = new ConnectionSlot(index);
-    }
-  }
-
-  public static StatusCode start(
-      RiverDatabase database,
-      int port,
-      LoopbackServerOpenResult result) {
-    return start(database, port, DEFAULT_MAXIMUM_CONNECTIONS, result);
-  }
-
-  public static StatusCode start(
-      RiverDatabase database,
-      int port,
-      int maximumConnections,
-      LoopbackServerOpenResult result) {
-    if (!validStart(database, port, maximumConnections, result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    try {
-      ServerSocket socket = new ServerSocket();
-      socket.bind(
-          new InetSocketAddress(InetAddress.getLoopbackAddress(), port),
-          maximumConnections);
-      return startBound(database, socket, null, maximumConnections, result);
-    } catch (IOException failure) {
-      return StatusCode.IO_FAILURE;
     }
   }
 
@@ -106,9 +82,11 @@ public final class LoopbackRiverServer {
       SSLContext context,
       TokenAuthenticator authenticator,
       SecurityAuditLog audit,
+      CredentialValidityFence validityFence,
       LoopbackServerLimits limits,
       LoopbackServerOpenResult result) {
     if (bindAddress == null || !bindAddress.isLoopbackAddress()
+        || validityFence == null
         || limits == null
         || !limits.isValid()
         || !validStart(database, port, limits.maximumConnections(), result)
@@ -118,18 +96,27 @@ public final class LoopbackRiverServer {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
+    SSLServerSocket socket = null;
     try {
-      SSLServerSocket socket = (SSLServerSocket) context
+      socket = (SSLServerSocket) context
           .getServerSocketFactory()
           .createServerSocket();
       socket.setEnabledProtocols(new String[] {"TLSv1.3"});
       socket.bind(
           new InetSocketAddress(bindAddress, port),
           limits.maximumConnections());
-      return startBound(database, socket, authenticator, limits, audit, result);
+      return startBound(database, socket, authenticator, limits, audit, validityFence, result);
     } catch (IOException failure) {
       audit.beginClose();
       audit.finishClose();
+      validityFence.close();
+      if (socket != null) {
+        try {
+          socket.close();
+        } catch (IOException ignored) {
+          // Preserve the original bind/start failure status.
+        }
+      }
       return StatusCode.IO_FAILURE;
     }
   }
@@ -269,13 +256,13 @@ public final class LoopbackRiverServer {
     try (connection;
         InputStream input = connection.getInputStream();
         OutputStream output = connection.getOutputStream()) {
-      connection.setSoTimeout(
-          authenticator == null ? idleTimeoutMillis : authenticationTimeoutMillis);
+      connection.setSoTimeout(authenticationTimeoutMillis);
       LoopbackEndpointOpenResult opened = new LoopbackEndpointOpenResult();
       LoopbackEndpointOpener.open(
           connection,
           database,
           authenticator,
+          validityFence,
           random,
           audit,
           authenticationTimeoutMillis,
@@ -403,23 +390,9 @@ public final class LoopbackRiverServer {
       RiverDatabase database,
       ServerSocket socket,
       TokenAuthenticator authenticator,
-      int maximumConnections,
-      LoopbackServerOpenResult result) throws IOException {
-    return startBound(
-        database,
-        socket,
-        authenticator,
-        LoopbackServerLimits.defaults(maximumConnections),
-        null,
-        result);
-  }
-
-  private static StatusCode startBound(
-      RiverDatabase database,
-      ServerSocket socket,
-      TokenAuthenticator authenticator,
       LoopbackServerLimits limits,
       SecurityAuditLog audit,
+      CredentialValidityFence validityFence,
       LoopbackServerOpenResult result) throws IOException {
     LoopbackRiverServer server;
     try {
@@ -428,10 +401,12 @@ public final class LoopbackRiverServer {
           socket,
           authenticator,
           limits,
-          audit);
+          audit,
+          validityFence);
     } catch (OutOfMemoryError failure) {
       socket.close();
       closeAudit(audit);
+      closeFence(validityFence);
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode completed = result.complete(server);
@@ -440,6 +415,7 @@ public final class LoopbackRiverServer {
       if (audit != null) {
         closeAudit(audit);
       }
+      closeFence(validityFence);
       return completed;
     }
     server.acceptor = Thread.ofPlatform()
@@ -454,6 +430,10 @@ public final class LoopbackRiverServer {
       audit.beginClose();
       audit.finishClose();
     }
+  }
+
+  private static void closeFence(CredentialValidityFence fence) {
+    if (fence != null) fence.close();
   }
 
   private static int readExact(

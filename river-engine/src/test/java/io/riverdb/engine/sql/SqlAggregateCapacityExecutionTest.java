@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -44,7 +45,8 @@ final class SqlAggregateCapacityExecutionTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.openExisting(databaseRequest(7), root, DATABASE, GENERATION, 7,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     session = open(database);
     int[] boundaries = {8, 9, 63, 64, 65, SqlShapeLimits.MAX_AGGREGATES};
@@ -434,7 +436,8 @@ final class SqlAggregateCapacityExecutionTest {
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.openExisting(databaseRequest(7), root, DATABASE, GENERATION, 7,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     session = open(database);
     SqlScanCursor cursor = new SqlScanCursor();

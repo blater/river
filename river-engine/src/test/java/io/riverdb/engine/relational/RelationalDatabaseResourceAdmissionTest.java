@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -47,7 +48,8 @@ final class RelationalDatabaseResourceAdmissionTest {
 
     assertEquals(StatusCode.OK,
         RelationalDatabase.openExisting(
-            resourceRequest(), directory, DATABASE, GENERATION, 8, opened));
+            resourceRequest(), directory, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     assertTrue(opened.database().resourceGoverned());
     assertTrue(opened.database().resourceWriteEntryCapacity() > 384);
     assertEquals(StatusCode.OK, opened.database().close());
@@ -72,7 +74,8 @@ final class RelationalDatabaseResourceAdmissionTest {
 
     assertEquals(StatusCode.OK,
         RelationalDatabase.openExisting(
-            root, plan, directory, DATABASE, GENERATION, 8, opened));
+            root, plan, directory, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     assertEquals(DATABASE_BYTES, root.admittedAccountedBytes());
     assertEquals(StatusCode.OK, opened.database().close());
     assertEquals(0, root.admittedAccountedBytes());
@@ -324,7 +327,8 @@ final class RelationalDatabaseResourceAdmissionTest {
 
     assertEquals(StatusCode.OK,
         RelationalDatabase.openExisting(
-            root, plan, directory, DATABASE, GENERATION, 8, opened));
+            root, plan, directory, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     assertEquals(StatusCode.OK, SqlSession.create(opened.database(), sessions));
     session = sessions.session();
     SqlScanCursor scan = new SqlScanCursor();

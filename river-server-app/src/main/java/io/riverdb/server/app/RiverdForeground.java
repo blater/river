@@ -2,6 +2,7 @@ package io.riverdb.server.app;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.platform.riverd.RiverDaemonFileSystem;
 import io.riverdb.platform.riverd.RiverDaemonFileSystemResult;
 import io.riverdb.platform.riverd.RiverDaemonFileSystems;
@@ -64,17 +65,18 @@ final class RiverdForeground {
     if (probe.committed) {
       preparation = new RiverDaemonInstance.RestartPreparation();
       status = RiverDaemonInstance.prepareRestart(paths.datadir, filesystem, random,
-          resources.request(), resources.maximumActiveTransactions(), preparation);
+          resources.request(), EmbeddedLockDiagnosticsConfig.disabled(),
+          resources.maximumActiveTransactions(), preparation);
       if (status.isOk()) status = RiverDaemonRuntimeRecords.recoverStale(
           paths.datadir, filesystem, preparation.identity(), paths.registry);
       if (status.isOk()) status = RiverDaemonInstance.openPreparedRestart(
           preparation, random, command.ip(), address, command.port(),
           LoopbackServerLimits.defaults(command.maximumConnections()), opened);
     } else {
-      status = RiverDaemonInstance.open(paths.datadir, filesystem, random, true,
+      status = RiverDaemonInstance.open(paths.datadir, filesystem, random,
           randomIncarnation(random), command.ip(), address, command.port(),
           LoopbackServerLimits.defaults(command.maximumConnections()), resources.request(),
-          resources.maximumActiveTransactions(), opened);
+          EmbeddedLockDiagnosticsConfig.disabled(), resources.maximumActiveTransactions(), opened);
     }
     if (!status.isOk()) {
       if (preparation != null) preparation.close();
@@ -171,7 +173,9 @@ final class RiverdForeground {
 
     synchronized StatusCode publish(
         RiverDaemonFileSystem filesystem, RiverDaemonPaths.Result paths, String certificateSha256) {
-      StatusCode current = publishRuntimeAndRegistry(filesystem, paths, identity, metadata);
+      if (stopped()) return StatusCode.CANCELLED;
+      StatusCode current = instance.checkCredentialValidity();
+      if (current.isOk()) current = publishRuntimeAndRegistry(filesystem, paths, identity, metadata);
       if (current.isOk()) current = RiverDaemonReadyOutput.publish(
           filesystem, paths.registry, metadata, certificateSha256, System.out, System.err);
       return current;
@@ -180,16 +184,28 @@ final class RiverdForeground {
     synchronized void shutdown() {
       if (stopped.getCount() == 0) return;
       status = firstFailure(status, instance.closeServices());
-      status = firstFailure(status, RiverDaemonRuntimeRecords.cleanupCurrent(
-          filesystem, identity, registry, metadata));
-      status = firstFailure(status, instance.close());
+      if (instance.servicesClosed()) {
+        status = firstFailure(status, RiverDaemonRuntimeRecords.cleanupCurrent(
+            filesystem, identity, registry, metadata));
+        status = firstFailure(status, instance.close());
+      }
+      // A nonterminal database close retains its lock and runtime records until process
+      // termination. A later process must recover that exact abandoned ownership.
       stopped.countDown();
     }
 
     boolean stopped() { return stopped.getCount() == 0; }
     synchronized boolean serverRunning() {
+      if (stopped()) return false;
+      StatusCode validity = instance.checkCredentialValidity();
+      if (!validity.isOk()) {
+        status = firstFailure(status, validity);
+        return false;
+      }
       LoopbackRiverServer server = instance.server();
-      return server != null && server.isRunning();
+      if (server != null && server.isRunning()) return true;
+      status = firstFailure(status, StatusCode.IO_FAILURE);
+      return false;
     }
     synchronized StatusCode status() { return status; }
   }

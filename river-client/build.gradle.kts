@@ -5,6 +5,8 @@ plugins {
 // Production dependencies are declared by the root build.
 
 dependencies {
+  testFixturesImplementation(project(":river-base"))
+  testFixturesImplementation(project(":river-platform"))
   testImplementation(project(":river-engine"))
   testImplementation(project(":river-server"))
   testImplementation(testFixtures(project(":river-server")))

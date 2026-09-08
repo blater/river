@@ -26,7 +26,7 @@ final class TpccLoaderShapeTest {
   @Test
   void initialLineCountsStayWithinDeclaredBounds() {
     TpccConfig config = TpccConfig.parse(new String[] {
-        "--url=jdbc:river://localhost:9", "--tiny", "--artifact=shape.properties"
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny", "--artifact=shape.properties"
     });
     TpccLoader loader = new TpccLoader(config);
     for (int district = 1; district <= 10; district++) {

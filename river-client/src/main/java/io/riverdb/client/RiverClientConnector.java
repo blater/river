@@ -1,7 +1,6 @@
 package io.riverdb.client;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.protocol.auth.TokenProof;
 import io.riverdb.protocol.auth.TlsChannelBinding;
@@ -55,7 +54,9 @@ final class RiverClientConnector {
       byte[] token,
       int tokenBytes,
       RiverClientOpenResult result) {
-    if (port <= 0 || port > 65535 || result == null) {
+    if (host == null || port <= 0 || port > 65535 || context == null
+        || token == null || result == null || tokenBytes < TokenProof.MINIMUM_TOKEN_BYTES
+        || tokenBytes > TokenProof.MAXIMUM_TOKEN_BYTES || tokenBytes > token.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -63,70 +64,50 @@ final class RiverClientConnector {
     byte[] proof = null;
     byte[] channelBinding = null;
     try {
-      socket = context == null
-          ? new Socket() : context.getSocketFactory().createSocket();
+      socket = context.getSocketFactory().createSocket();
       socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
       socket.setSoTimeout(READ_TIMEOUT_MILLIS);
-      if (socket instanceof SSLSocket secure) {
-        secure.setEnabledProtocols(new String[] {"TLSv1.3"});
-        SSLParameters parameters = secure.getSSLParameters();
-        parameters.setEndpointIdentificationAlgorithm("HTTPS");
-        secure.setSSLParameters(parameters);
-        secure.startHandshake();
-        channelBinding = new byte[TlsChannelBinding.BINDING_BYTES];
-        StatusCode bindingStatus = TlsChannelBinding.export(
-            secure.getSession(), channelBinding);
-        if (!bindingStatus.isOk()) {
-          RiverClientConnection.closeQuietly(socket);
-          return bindingStatus;
-        }
+      SSLSocket secure = (SSLSocket) socket;
+      secure.setEnabledProtocols(new String[] {"TLSv1.3"});
+      SSLParameters parameters = secure.getSSLParameters();
+      parameters.setEndpointIdentificationAlgorithm("HTTPS");
+      secure.setSSLParameters(parameters);
+      secure.startHandshake();
+      channelBinding = new byte[TlsChannelBinding.BINDING_BYTES];
+      StatusCode status = TlsChannelBinding.export(
+          secure.getSession(), channelBinding);
+      if (!status.isOk()) {
+        RiverClientConnection.closeQuietly(socket);
+        return status;
       }
+      proof = new byte[TokenProof.PROOF_BYTES];
       RiverClientConnection connection = new RiverClientConnection(
           socket, socket.getInputStream(), socket.getOutputStream());
-      StatusCode status = connection.exchange(ProtocolMessageType.HELLO, null);
+      status = connection.exchange(ProtocolMessageType.HELLO, null);
+      if (status.isOk()) status = connection.response.status();
       if (status.isOk()) {
-        status = connection.response.status();
-      }
-      if (status.isOk() && context != null) {
-        proof = new byte[TokenProof.PROOF_BYTES];
         status = TokenProof.compute(
-            token,
-            tokenBytes,
-            connection.response.challengeHigh(),
-            connection.response.challengeLow(),
-            channelBinding,
-            proof);
-        if (status.isOk()) {
-          status = connection.exchangeBinary(
-              ProtocolMessageType.AUTHENTICATE,
-              proof,
-              proof.length);
-        }
-        if (status.isOk()) {
-          status = connection.response.status();
-        }
+            token, tokenBytes, connection.response.challengeHigh(),
+            connection.response.challengeLow(), channelBinding, proof);
       }
+      if (status.isOk()) {
+        status = connection.exchangeBinary(
+            ProtocolMessageType.AUTHENTICATE, proof, proof.length);
+      }
+      if (status.isOk()) status = connection.response.status();
       if (!status.isOk()) {
         connection.fail(status);
         return status;
       }
       status = result.complete(connection);
-      if (!status.isOk()) {
-        connection.closeSocket();
-      }
+      if (!status.isOk()) connection.closeSocket();
       return status;
     } catch (IOException failure) {
-      if (socket != null) {
-        RiverClientConnection.closeQuietly(socket);
-      }
+      if (socket != null) RiverClientConnection.closeQuietly(socket);
       return StatusCode.IO_FAILURE;
     } finally {
-      if (proof != null) {
-        Arrays.fill(proof, (byte) 0);
-      }
-      if (channelBinding != null) {
-        Arrays.fill(channelBinding, (byte) 0);
-      }
+      if (proof != null) Arrays.fill(proof, (byte) 0);
+      if (channelBinding != null) Arrays.fill(channelBinding, (byte) 0);
     }
   }
 }

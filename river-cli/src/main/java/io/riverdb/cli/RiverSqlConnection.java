@@ -1,6 +1,8 @@
 package io.riverdb.cli;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.client.RiverClientConfiguration;
+import io.riverdb.client.RiverClientConfigurationResult;
 import io.riverdb.client.RiverClientConnection;
 import io.riverdb.client.RiverClientOpenResult;
 import io.riverdb.engine.api.RiverSession;
@@ -8,33 +10,36 @@ import io.riverdb.engine.api.SessionOpenResult;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
-import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
-import java.security.GeneralSecurityException;
-import java.util.Arrays;
-import javax.net.ssl.SSLContext;
 
-/** Owns plain or authenticated CLI connection admission and cleanup. */
+/** Owns client-file CLI connection admission and cleanup. */
 final class RiverSqlConnection {
   private RiverSqlConnection() {}
 
   static int run(
-      int port,
-      SSLContext context,
-      byte[] token,
-      int tokenBytes,
+      String clientFile,
       InputStream input,
       PrintStream output,
       PrintStream errors) {
-    if (port <= 0 || port > 65_535 || input == null || output == null || errors == null) {
+    if (clientFile == null || input == null || output == null || errors == null) {
       return 2;
     }
+    final Path path;
+    try {
+      path = Path.of(clientFile);
+    } catch (InvalidPathException failure) {
+      return failure(errors, StatusCode.INVALID_EXTERNAL_INPUT);
+    }
+    if (!path.isAbsolute() || !path.equals(path.normalize())) {
+      return failure(errors, StatusCode.INVALID_EXTERNAL_INPUT);
+    }
+    RiverClientConfigurationResult configurationResult =
+        new RiverClientConfigurationResult();
+    StatusCode status = RiverClientConfiguration.load(path, configurationResult);
+    if (!status.isOk()) return failure(errors, status);
     RiverClientOpenResult connected = new RiverClientOpenResult();
-    StatusCode status = context == null
-        ? RiverClientConnection.connectLoopback(port, connected)
-        : RiverClientConnection.connectAuthenticatedLoopback(
-            port, context, token, tokenBytes, connected);
+    status = configurationResult.configuration().connect(connected);
     if (!status.isOk()) return failure(errors, status);
     RiverClientConnection client = connected.connection();
     SessionOpenResult opened = new SessionOpenResult();
@@ -44,31 +49,6 @@ final class RiverSqlConnection {
       return failure(errors, status);
     }
     return executeAndClose(client, opened.session(), input, output, errors);
-  }
-
-  static int runTokenFile(
-      int port,
-      String tokenFile,
-      InputStream input,
-      PrintStream output,
-      PrintStream errors) {
-    byte[] token = null;
-    try {
-      Path path = Path.of(tokenFile);
-      long bytes = Files.size(path);
-      if (bytes < RiverClientConnection.MINIMUM_TOKEN_BYTES
-          || bytes > RiverClientConnection.MAXIMUM_TOKEN_BYTES) {
-        return failure(errors, StatusCode.INVALID_EXTERNAL_INPUT);
-      }
-      token = new byte[(int) bytes];
-      readToken(path, token);
-      return run(
-          port, SSLContext.getDefault(), token, token.length, input, output, errors);
-    } catch (IOException | GeneralSecurityException | InvalidPathException failure) {
-      return failure(errors, StatusCode.IO_FAILURE);
-    } finally {
-      if (token != null) Arrays.fill(token, (byte) 0);
-    }
   }
 
   private static int executeAndClose(
@@ -84,21 +64,10 @@ final class RiverSqlConnection {
       exit = failure(errors, StatusCode.IO_FAILURE);
     }
     StatusCode sessionClose = session.close();
-    StatusCode clientClose = sessionClose.isOk() ? client.close() : sessionClose;
+    StatusCode clientClose = client.close();
+    if (!sessionClose.isOk()) clientClose = sessionClose;
     return exit == 0 && !clientClose.isOk()
         ? failure(errors, clientClose) : exit;
-  }
-
-  private static void readToken(Path path, byte[] token) throws IOException {
-    try (InputStream input = Files.newInputStream(path)) {
-      int offset = 0;
-      while (offset < token.length) {
-        int read = input.read(token, offset, token.length - offset);
-        if (read < 0) throw new IOException("token file was truncated");
-        offset += read;
-      }
-      if (input.read() >= 0) throw new IOException("token file grew");
-    }
   }
 
   private static int failure(PrintStream errors, StatusCode status) {

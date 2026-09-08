@@ -37,6 +37,7 @@ public final class SessionEndpoint {
 
   private final RiverDatabase database;
   private final TokenAuthenticator authenticator;
+  private final CredentialValidityFence validityFence;
   private final RemoteSessionAuthorizer sessionAuthorizer;
   private final long challengeHigh;
   private final long challengeLow;
@@ -76,6 +77,7 @@ public final class SessionEndpoint {
   SessionEndpoint(
       RiverDatabase engineDatabase,
       TokenAuthenticator tokenAuthenticator,
+      CredentialValidityFence credentialValidityFence,
       long nonceHigh,
       long nonceLow,
       byte[] binding,
@@ -94,12 +96,12 @@ public final class SessionEndpoint {
     row = new RowResult(lease());
     lookahead = new RowResult(lease());
     authenticator = tokenAuthenticator;
-    sessionAuthorizer = tokenAuthenticator == null
-        ? null
-        : new RemoteSessionAuthorizer(
-            tokenAuthenticator.principalId(),
-            tokenAuthenticator.permissions(),
-            audit);
+    validityFence = credentialValidityFence;
+    sessionAuthorizer = new RemoteSessionAuthorizer(
+        tokenAuthenticator.principalId(),
+        tokenAuthenticator.permissions(),
+        audit,
+        credentialValidityFence);
     challengeHigh = nonceHigh;
     challengeLow = nonceLow;
     channelBinding = binding;
@@ -251,30 +253,38 @@ public final class SessionEndpoint {
   }
 
   boolean authenticationComplete() {
-    return authenticator == null || state >= READY && state < CLOSED;
+    return state >= READY && state < CLOSED;
   }
 
   long authorizationFailures() {
-    return sessionAuthorizer == null ? 0 : sessionAuthorizer.denials();
+    return sessionAuthorizer.denials();
   }
 
   private StatusCode hello(ByteBuffer response) {
     StatusCode status = state == NEW ? StatusCode.OK : StatusCode.CONFLICT;
     if (status.isOk()) {
-      state = authenticator == null ? READY : AUTHENTICATING;
+      state = AUTHENTICATING;
     }
     return codec.encodeHelloResponse(
         response,
         frame.requestId(),
         status,
-        authenticator == null ? 0 : challengeHigh,
-        authenticator == null ? 0 : challengeLow);
+        challengeHigh,
+        challengeLow);
   }
 
   private StatusCode authenticate(ByteBuffer response) {
     StatusCode status;
     if (state == AUTHENTICATING) {
-      status = authenticator.verify(frame, challengeHigh, challengeLow, channelBinding);
+      boolean validityDenied;
+      status = validityFence.checkNow();
+      validityDenied = !status.isOk();
+      if (status.isOk()) {
+        status = authenticator.verify(frame, challengeHigh, challengeLow, channelBinding);
+      } else {
+        StatusCode erased = frame.erasePayload();
+        if (!erased.isOk()) status = erased;
+      }
       StatusCode audited = sessionAuthorizer.auditAuthentication(status);
       if (!audited.isOk()) {
         state = CLOSED;
@@ -282,6 +292,9 @@ public final class SessionEndpoint {
         clearChannelBinding();
       } else if (status.isOk()) {
         state = READY;
+        clearChannelBinding();
+      } else if (validityDenied) {
+        state = CLOSED;
         clearChannelBinding();
       } else {
         authenticationAttempts++;
@@ -321,9 +334,14 @@ public final class SessionEndpoint {
       status = StatusCode.RESOURCE_EXHAUSTED;
     }
     if (status.isOk()) {
-      status = sessionAuthorizer == null
-          ? database.createSession(openedSession)
-          : database.createSession(sessionAuthorizer, openedSession);
+      StatusCode validity = validityFence.checkNow();
+      if (!validity.isOk()) {
+        StatusCode audited = sessionAuthorizer.auditValidityDenial(validity);
+        status = audited.isOk() ? validity : audited;
+      }
+    }
+    if (status.isOk()) {
+      status = database.createSession(sessionAuthorizer, openedSession);
     }
     if (status.isOk()) {
       session = openedSession.session();

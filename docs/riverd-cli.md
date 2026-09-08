@@ -1,7 +1,7 @@
 # riverd command-line contract
 
-Status: accepted implementation target. The standalone distribution is not yet
-implemented. This document owns the user-facing commands and behavior;
+Status: accepted implementation target. An installed start/JDBC/restart candidate
+is under validation; required platform and acceptance checks remain open. This document owns the user-facing commands and behavior;
 [ADR 0014](adr/0014-riverd-instance-security.md) owns their security and durable
 lifecycle mechanisms. The [delivery plan](plans/riverd-standalone-server-plan.md)
 maps implementation work.
@@ -85,8 +85,8 @@ The distribution must explain how to obtain the River JDBC driver and include
 one copyable connection example using this generated configuration. Users must
 not need to construct certificates, configure a JVM trust store or implement an
 authentication handshake. JDBC and CLI use the same client configuration owner.
-Exact JDBC configuration syntax is part of the implementation delivery; it is
-not claimed as available here. Plain or unauthenticated connections are absent.
+The candidate accepts `jdbc:river:client-file:<absolute-path-to-client.properties>`.
+The installed distribution includes the JDBC driver and its dependencies in `lib/`. Plain or unauthenticated connections are absent.
 
 ## Stop and list
 
@@ -145,13 +145,17 @@ riverd_status=OK
 
 ## Exit codes and errors
 
-The process has three public exit classes:
+Ordinary command termination has three public exit classes:
 
 | Exit | Native outcome | Meaning |
 | --- | --- | --- |
 | 0 | `OK` | Help, version, listing including an empty list, successful offline operation, or a foreground server that shut down cleanly. |
 | 2 | `INVALID_EXTERNAL_INPUT` | Invalid command syntax or option value, detected before mutation. |
 | 1 | Named non-`OK` `StatusCode` | Startup, lifecycle, security, audit, filesystem, I/O, or shutdown failure. |
+
+Termination by an operating-system signal retains the JVM/platform signal exit
+code (for example, 143 for SIGTERM on Unix), even when the shutdown hook completes
+cleanly. Automation must distinguish this from ordinary command termination.
 
 An exit-1/2 command writes a concise diagnostic followed by exactly
 `riverd_status_code=<StatusCode.stableCode()>` and final

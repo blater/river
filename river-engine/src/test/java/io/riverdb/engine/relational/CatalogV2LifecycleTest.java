@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -53,7 +54,8 @@ final class CatalogV2LifecycleTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     SchemaPin walPin = new SchemaPin();
     assertEquals(StatusCode.OK,
@@ -66,7 +68,8 @@ final class CatalogV2LifecycleTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     SchemaPin checkpointPin = new SchemaPin();
     assertEquals(StatusCode.OK,
@@ -129,7 +132,8 @@ final class CatalogV2LifecycleTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.CORRUPTION,
-        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
   }
 
   private static void corruptFirstChild(RelationalDatabase database, long objectId) {

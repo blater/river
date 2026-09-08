@@ -11,6 +11,7 @@ final class RemoteSessionAuthorizer implements SessionAuthorizer {
   private final long principalId;
   private final int permissions;
   private final SecurityAuditLog audit;
+  private final CredentialValidityFence validityFence;
   private long denials;
   private long connectionCorrelation;
   private long sessionCorrelation;
@@ -21,10 +22,12 @@ final class RemoteSessionAuthorizer implements SessionAuthorizer {
   RemoteSessionAuthorizer(
       long authenticatedPrincipalId,
       int grantedPermissions,
-      SecurityAuditLog securityAudit) {
+      SecurityAuditLog securityAudit,
+      CredentialValidityFence credentialValidityFence) {
     principalId = authenticatedPrincipalId;
     permissions = grantedPermissions;
     audit = securityAudit;
+    validityFence = credentialValidityFence;
   }
 
   @Override
@@ -37,7 +40,9 @@ final class RemoteSessionAuthorizer implements SessionAuthorizer {
         || (programStep > 0 && phase != SessionAuthorizationPhase.PROGRAM_STEP)) {
       return StatusCode.INVARIANT_BROKEN;
     }
-    boolean allowed = (permissions & requiredPermission) == requiredPermission;
+    StatusCode validity = validityFence.checkNow();
+    boolean allowed = validity.isOk()
+        && (permissions & requiredPermission) == requiredPermission;
     StatusCode decision = allowed ? StatusCode.OK : StatusCode.ACCESS_DENIED;
     StatusCode status = audit == null
         ? StatusCode.OK
@@ -63,6 +68,11 @@ final class RemoteSessionAuthorizer implements SessionAuthorizer {
             connectionCorrelation, sessionCorrelation, requestCorrelation,
             0, 0, 0, allowed, authenticationStatus,
             cancellation, deadlineNanos);
+  }
+
+  /** Records a post-authentication credential-fence denial without inventing a SQL phase. */
+  StatusCode auditValidityDenial(StatusCode denial) {
+    return auditAuthentication(denial);
   }
 
   void bindRequest(long connection, long session, long request,

@@ -158,7 +158,9 @@ public final class EmbeddedDatabase {
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       EmbeddedDatabaseOpenResult result) {
+    if (lockDiagnostics == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     return open(
         resourceRoot,
         resourcePlan,
@@ -168,6 +170,7 @@ public final class EmbeddedDatabase {
         maximumActiveTransactions,
         TransactionManager.DEFAULT_LOCK_WAIT_TIMEOUT_NANOS,
         false,
+        lockDiagnostics,
         result);
   }
 
@@ -179,10 +182,12 @@ public final class EmbeddedDatabase {
       WalGeneration generation,
       int maximumActiveTransactions,
       long lockWaitTimeoutNanos,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       EmbeddedDatabaseOpenResult result) {
+    if (lockDiagnostics == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     return open(
         resourceRoot, resourcePlan, directoryPath, database, generation,
-        maximumActiveTransactions, lockWaitTimeoutNanos, false, result);
+        maximumActiveTransactions, lockWaitTimeoutNanos, false, lockDiagnostics, result);
   }
 
   public static StatusCode openWithDurableWalQuorum(

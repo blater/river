@@ -42,6 +42,10 @@ final class LoopbackServerShutdown {
         status = auditStatus;
       }
     }
+    if (server.validityFence != null) {
+      StatusCode fenceStatus = server.validityFence.close();
+      if (status.isOk() && !fenceStatus.isOk()) status = fenceStatus;
+    }
     if (!status.isOk()) {
       server.lastStatus = status;
     }

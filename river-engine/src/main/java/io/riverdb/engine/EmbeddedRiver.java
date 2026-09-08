@@ -121,7 +121,9 @@ public final class EmbeddedRiver {
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       DatabaseOpenResult result) {
+    if (lockDiagnostics == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     return open(
         resourceRequest,
         directory,
@@ -129,7 +131,7 @@ public final class EmbeddedRiver {
         generation,
         maximumActiveTransactions,
         false,
-        EmbeddedLockDiagnosticsConfig.disabled(),
+        lockDiagnostics,
         result);
   }
 
@@ -153,7 +155,7 @@ public final class EmbeddedRiver {
             lockDiagnostics, opened)
         : RelationalDatabase.openExisting(
             resourceRequest, directory, database, generation,
-            maximumActiveTransactions, opened);
+            maximumActiveTransactions, lockDiagnostics, opened);
     if (!status.isOk()) {
       result.detail().copyFrom(opened.detail());
       if (result.detail().code().isOk()) result.detail().set(status);

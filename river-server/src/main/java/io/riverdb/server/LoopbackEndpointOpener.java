@@ -18,6 +18,7 @@ final class LoopbackEndpointOpener {
       Socket connection,
       RiverDatabase database,
       TokenAuthenticator authenticator,
+      CredentialValidityFence validityFence,
       SecureRandom random,
       SecurityAuditLog audit,
       int authenticationTimeoutMillis,
@@ -27,13 +28,8 @@ final class LoopbackEndpointOpener {
       MutableCancellationToken cancellation,
       LoopbackEndpointOpenResult result) throws IOException {
     result.reset();
-    if (authenticator == null) {
-      result.set(new SessionEndpoint(
-          database, null, 0, 0, null, null, memory, responses,
-          connectionCorrelation, cancellation), 0);
-      return;
-    }
-    if (!(connection instanceof SSLSocket secure)) {
+    if (authenticator == null || validityFence == null || audit == null || random == null
+        || !(connection instanceof SSLSocket secure)) {
       result.fail(StatusCode.INVARIANT_BROKEN);
       return;
     }
@@ -55,6 +51,7 @@ final class LoopbackEndpointOpener {
         new SessionEndpoint(
             database,
             authenticator,
+            validityFence,
             challengeHigh,
             challengeLow,
             binding,

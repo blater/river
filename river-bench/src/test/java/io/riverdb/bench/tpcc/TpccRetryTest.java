@@ -12,7 +12,7 @@ final class TpccRetryTest {
   @Test
   void distinguishesExpectedBusinessRollbackFromRetryExhaustion() throws Exception {
     TpccConfig config = TpccConfig.parse(new String[] {
-        "--url=jdbc:river://localhost:9", "--tiny"
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny"
     });
     TpccRetry.Result result = TpccRetry.execute(
         () -> false, config, System.nanoTime() + 5_000_000_000L,
@@ -25,7 +25,7 @@ final class TpccRetryTest {
   @Test
   void reportsSerializationExhaustionAsBoundedRollback() throws Exception {
     TpccConfig config = TpccConfig.parse(new String[] {
-        "--url=jdbc:river://localhost:9", "--tiny", "--maximum-attempts=2"
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny", "--maximum-attempts=2"
     });
     int[] attempts = {0};
     TpccRetry.Result result = TpccRetry.execute(() -> {
@@ -43,7 +43,7 @@ final class TpccRetryTest {
   @Test
   void doesNotMergeUnknownSerializationSqlStateIntoRiverRetry() throws Exception {
     TpccConfig config = TpccConfig.parse(new String[] {
-        "--url=jdbc:river://localhost:9", "--tiny", "--maximum-attempts=2"
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny", "--maximum-attempts=2"
     });
     SQLException failure = org.junit.jupiter.api.Assertions.assertThrows(
         SQLException.class,

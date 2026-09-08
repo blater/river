@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -561,7 +562,8 @@ final class SqlSessionTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
     session = sessionResult.session();
@@ -646,7 +648,8 @@ final class SqlSessionTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.openExisting(databaseRequest(4), root, DATABASE, GENERATION, 4,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
     session = sessionResult.session();
@@ -1082,7 +1085,8 @@ final class SqlSessionTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
     observer = sessionResult.session();
@@ -1475,7 +1479,8 @@ final class SqlSessionTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
     SqlSession reopened = sessions.session();
@@ -1529,7 +1534,8 @@ final class SqlSessionTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
     session = sessions.session();
@@ -1662,7 +1668,8 @@ final class SqlSessionTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
     session = sessions.session();
@@ -1902,7 +1909,8 @@ final class SqlSessionTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
     session = sessions.session();
@@ -2116,7 +2124,8 @@ final class SqlSessionTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
     session = sessions.session();

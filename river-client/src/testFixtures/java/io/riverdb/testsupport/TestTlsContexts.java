@@ -1,9 +1,27 @@
 package io.riverdb.testsupport;
 
+import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.id.DatabaseIncarnation;
+import io.riverdb.platform.file.ForceMode;
+import io.riverdb.platform.file.IoResult;
+import io.riverdb.platform.riverd.RiverDaemonFileSystem;
+import io.riverdb.platform.riverd.RiverDirectory;
+import io.riverdb.platform.riverd.RiverDirectoryResult;
+import io.riverdb.platform.riverd.RiverFile;
+import io.riverdb.platform.riverd.RiverFileResult;
+import io.riverdb.platform.riverd.RiverOpenMode;
+import io.riverdb.platform.riverd.RiverDaemonFileSystems;
+import io.riverdb.platform.riverd.RiverDaemonFileSystemResult;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.KeyStore;
+import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.SecureRandom;
 import java.security.cert.Certificate;
@@ -11,6 +29,8 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Base64;
+import java.util.HexFormat;
+import java.util.Set;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
@@ -130,6 +150,129 @@ public final class TestTlsContexts {
   public static SSLContext wrongHostnameClient()
       throws GeneralSecurityException, IOException {
     return trustedClient(WRONG_HOST_CERTIFICATE);
+  }
+
+  /** Writes a checksummed client.properties fixture for a manually started TLS server. */
+  public static Path writeClientProperties(
+      Path directory,
+      DatabaseIncarnation incarnation,
+      long credentialGeneration,
+      int port,
+      byte[] token) throws IOException, GeneralSecurityException {
+    if (directory == null || incarnation == null || !incarnation.isValid()
+        || credentialGeneration <= 0 || port <= 0 || port > 65535
+        || token == null || token.length != 32) {
+      throw new IllegalArgumentException("invalid client fixture parameters");
+    }
+    Path root = Files.createDirectories(directory).toRealPath();
+    setPrivateDirectoryPermissions(root);
+    byte[] certificateBytes = certificate(CERTIFICATE).getEncoded();
+    Path certificatePath = root.resolve("server-certificate.der");
+    Path tokenPath = root.resolve("token.bin");
+    String certificateDigest = digest(certificateBytes);
+    StringBuilder body = new StringBuilder();
+    appendLine(body, "format=riverd-client-v1");
+    appendLine(body, "database-incarnation-high=" + incarnation.high());
+    appendLine(body, "database-incarnation-low=" + incarnation.low());
+    appendLine(body, "credential-generation=" + credentialGeneration);
+    appendLine(body, "principal-id=1");
+    appendLine(body, "transport=tls-v1.3");
+    appendLine(body, "protocol=river-v4");
+    // The static fixture certificate carries the localhost DNS SAN used by the
+    // endpoint-identifying client connector.
+    appendLine(body, "host=localhost");
+    appendLine(body, "port=" + port);
+    appendLine(body, "server-certificate-file=" + certificatePath);
+    appendLine(body, "server-certificate-sha256=" + certificateDigest);
+    appendLine(body, "token-file=" + tokenPath);
+    byte[] prefix = body.toString().getBytes(StandardCharsets.UTF_8);
+    StringBuilder record = new StringBuilder(body);
+    appendLine(record, "record-sha256=" + digest(prefix));
+    Path clientPath = root.resolve("client.properties");
+    byte[] recordBytes = record.toString().getBytes(StandardCharsets.UTF_8);
+    try {
+      writePrivateFiles(root, certificateBytes, token, recordBytes);
+      return clientPath;
+    } finally {
+      java.util.Arrays.fill(certificateBytes, (byte) 0);
+      java.util.Arrays.fill(prefix, (byte) 0);
+      java.util.Arrays.fill(recordBytes, (byte) 0);
+    }
+  }
+
+  private static void writePrivateFiles(
+      Path root, byte[] certificate, byte[] token, byte[] record) throws IOException {
+    RiverDirectoryResult directoryResult = new RiverDirectoryResult();
+    StatusCode status = provider().openDirectory(root, directoryResult);
+    if (!status.isOk()) throw new IOException("open client fixture directory: " + status);
+    RiverDirectory directory = directoryResult.directory();
+    try {
+      writePrivateFile(directory, "server-certificate.der", certificate);
+      writePrivateFile(directory, "token.bin", token);
+      writePrivateFile(directory, "client.properties", record);
+    } finally {
+      StatusCode close = directory.close();
+      if (!close.isOk() && close != StatusCode.CLOSED) {
+        throw new IOException("close client fixture directory: " + close);
+      }
+    }
+  }
+
+  private static void writePrivateFile(
+      RiverDirectory directory, String name, byte[] bytes) throws IOException {
+    RiverFileResult fileResult = new RiverFileResult();
+    StatusCode status = directory.openFile(name, RiverOpenMode.CREATE_NEW, fileResult);
+    if (!status.isOk()) throw new IOException("create client fixture file: " + status);
+    RiverFile file = fileResult.file();
+    try {
+      ByteBuffer source = ByteBuffer.wrap(bytes);
+      IoResult io = new IoResult();
+      long position = 0;
+      while (source.hasRemaining()) {
+        int before = source.position();
+        io.reset();
+        status = file.write(position, source, io);
+        int transferred = io.bytesTransferred();
+        if (!status.isOk() || transferred <= 0
+            || transferred != source.position() - before) {
+          throw new IOException("write client fixture file: " + status);
+        }
+        position += transferred;
+      }
+      status = file.force(ForceMode.CONTENT_AND_METADATA);
+      if (!status.isOk()) throw new IOException("force client fixture file: " + status);
+    } finally {
+      StatusCode close = file.close();
+      if (!close.isOk() && close != StatusCode.CLOSED) {
+        throw new IOException("close client fixture file: " + close);
+      }
+    }
+  }
+
+  private static void setPrivateDirectoryPermissions(Path root) throws IOException {
+    try {
+      Files.setPosixFilePermissions(root, Set.of(
+          PosixFilePermission.OWNER_READ,
+          PosixFilePermission.OWNER_WRITE,
+          PosixFilePermission.OWNER_EXECUTE));
+    } catch (UnsupportedOperationException ignored) {
+      // The selected River provider performs the platform-specific private check.
+    }
+  }
+
+  private static RiverDaemonFileSystem provider() throws IOException {
+    RiverDaemonFileSystemResult result = new RiverDaemonFileSystemResult();
+    StatusCode status = RiverDaemonFileSystems.current(result);
+    if (!status.isOk()) throw new IOException("select test filesystem: " + status);
+    return result.fileSystem();
+  }
+
+  private static void appendLine(StringBuilder target, String line) {
+    target.append(line).append('\n');
+  }
+
+  private static String digest(byte[] bytes) throws GeneralSecurityException {
+    return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
   }
 
   private static SSLContext trustedClient(String encodedCertificate)

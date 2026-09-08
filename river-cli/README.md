@@ -1,13 +1,19 @@
 # River SQL CLI
 
-`RiverSqlMain PORT` reads semicolon-terminated SQL from standard input and
-executes it against the plain loopback River server. `RiverSqlMain --tls PORT
-TOKEN_FILE` uses TLS 1.3 and token authentication; the token itself is never an
-argument, the bounded token file is read into an erased byte buffer, and the
-default JVM trust configuration validates the server identity. Query output is
-tab separated, followed by a `ROWS` count; command output reports affected rows
-and commit sequence. Scripts stop on the first error and statements are bounded
-to 64 KB.
+The installed `river-cli` reads semicolon-terminated SQL from standard input
+through the generated client configuration:
+
+```sh
+river-cli /absolute/path/to/database/security/client.properties < setup.sql
+```
+
+The client configuration identifies the loopback endpoint, pins the server
+certificate, and points to the generated token file. TLS 1.3 verifies the
+server; the instance token authenticates the client. Secrets are never command
+arguments. Query output is tab separated, followed by a `ROWS` count; command
+output reports affected rows and commit sequence. Scripts stop on the first
+error and statements are bounded to 64 KB. Plain or unauthenticated transport
+is not available.
 
 Statement framing is quote-aware, including semicolons and doubled quotes inside
 VARCHAR literals. Result formatting is descriptor-driven: Boolean, scaled

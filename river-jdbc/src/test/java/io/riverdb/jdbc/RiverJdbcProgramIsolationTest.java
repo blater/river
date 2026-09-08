@@ -22,7 +22,7 @@ final class RiverJdbcProgramIsolationTest {
   void programsUseOwningConnectionIsolation() throws SQLException {
     CapturingSession session = new CapturingSession();
     RiverJdbcConnection connection = new RiverJdbcConnection(
-        null, session, "jdbc:river://localhost:1");
+        null, session, "jdbc:river:client-file:/tmp/client.properties");
     RiverTransactionPrograms programs = connection.unwrap(RiverTransactionPrograms.class);
     TransactionProgramArguments arguments = new TransactionProgramArguments();
     TransactionProgramResult result = new TransactionProgramResult();

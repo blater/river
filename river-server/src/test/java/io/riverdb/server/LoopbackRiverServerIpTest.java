@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.server.CredentialValidityFence;
+import io.riverdb.server.CredentialValidityFenceOpenResult;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
@@ -32,7 +34,7 @@ final class LoopbackRiverServerIpTest {
       LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
       StatusCode status = LoopbackRiverServer.startAuthenticated(
           fixture.database, address, 0, TestTlsContexts.server(), fixture.authenticator,
-          fixture.audit, LoopbackServerLimits.defaults(2), opened);
+          fixture.audit, validityFence(), LoopbackServerLimits.defaults(2), opened);
       assertEquals(StatusCode.OK, status);
       LoopbackRiverServer server = opened.server();
       fixture.server = server;
@@ -50,7 +52,7 @@ final class LoopbackRiverServerIpTest {
       LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
       StatusCode status = LoopbackRiverServer.startAuthenticated(
           fixture.database, address, 0, TestTlsContexts.server(), fixture.authenticator,
-          fixture.audit, LoopbackServerLimits.defaults(2), opened);
+          fixture.audit, validityFence(), LoopbackServerLimits.defaults(2), opened);
       assertEquals(StatusCode.OK, status);
       LoopbackRiverServer server = opened.server();
       fixture.server = server;
@@ -64,16 +66,28 @@ final class LoopbackRiverServerIpTest {
   void rejectsNonLoopbackAuthenticatedBindBeforeSocketCreation(@TempDir Path root)
       throws Exception {
     Fixture fixture = openFixture(root);
+    CredentialValidityFence fence = validityFence();
     try {
       LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
       assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, LoopbackRiverServer.startAuthenticated(
           fixture.database, InetAddress.getByName("192.0.2.1"), 0,
           TestTlsContexts.server(), fixture.authenticator, fixture.audit,
-          LoopbackServerLimits.defaults(2), opened));
+          fence, LoopbackServerLimits.defaults(2), opened));
       assertNull(opened.server());
     } finally {
+      assertEquals(StatusCode.OK, fence.close());
       assertEquals(StatusCode.OK, fixture.close());
     }
+  }
+
+  private static CredentialValidityFence validityFence() {
+    CredentialValidityFenceOpenResult opened = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    if (CredentialValidityFence.create(now - 300_000L, now + 86_400_000L, opened)
+        != StatusCode.OK) {
+      throw new AssertionError("test credential validity bounds");
+    }
+    return opened.fence();
   }
 
   private static Fixture openFixture(Path root) throws Exception {

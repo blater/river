@@ -37,6 +37,8 @@ import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.CredentialValidityFence;
+import io.riverdb.server.CredentialValidityFenceOpenResult;
 import io.riverdb.server.SecurityAuditLog;
 import io.riverdb.server.SecurityAuditLogFactory;
 import io.riverdb.server.SecurityAuditOpenResult;
@@ -117,6 +119,7 @@ public final class SecurityAuditAdmissionMain {
 
     RiverDatabase database = null;
     LoopbackRiverServer server = null;
+    CredentialValidityFence validityFence = null;
     AuditTlsMaterial tls = null;
     TokenAuthenticator authenticator = null;
     byte[] token = "river-security-audit-admission-token".getBytes(StandardCharsets.UTF_8);
@@ -157,6 +160,7 @@ public final class SecurityAuditAdmissionMain {
 
       LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
       SecurityAuditLog audit = openAudit(auditDirectory, true);
+      validityFence = openValidityFence();
       require(
           LoopbackRiverServer.startAuthenticated(
               database,
@@ -165,6 +169,7 @@ public final class SecurityAuditAdmissionMain {
               tls.serverContext,
               authenticator,
               audit,
+              validityFence,
               limits(configuration),
               serverResult),
           "start authenticated loopback server");
@@ -210,6 +215,7 @@ public final class SecurityAuditAdmissionMain {
       server = null;
       LoopbackServerOpenResult restartResult = new LoopbackServerOpenResult();
       SecurityAuditLog reopenedAudit = openAudit(auditDirectory, false);
+      validityFence = openValidityFence();
       require(
           LoopbackRiverServer.startAuthenticated(
               database,
@@ -218,6 +224,7 @@ public final class SecurityAuditAdmissionMain {
               tls.serverContext,
               authenticator,
               reopenedAudit,
+              validityFence,
               limits(configuration),
               restartResult),
           "restart authenticated loopback server");
@@ -279,9 +286,19 @@ public final class SecurityAuditAdmissionMain {
           if (cleanupFailure == null) cleanupFailure = new RunFailure("TLS cleanup failed: " + failure);
         }
       }
+      if (validityFence != null) validityFence.close();
       Arrays.fill(token, (byte) 0);
       if (cleanupFailure != null) throw cleanupFailure;
     }
+  }
+
+  private static CredentialValidityFence openValidityFence() throws RunFailure {
+    CredentialValidityFenceOpenResult result = new CredentialValidityFenceOpenResult();
+    long now = System.currentTimeMillis();
+    require(
+        CredentialValidityFence.create(now - 1_000L, now + 86_400_000L, result),
+        "create credential validity fence");
+    return result.fence();
   }
 
   private static void runFixed(Arguments configuration, Worker[] workers) throws InterruptedException {

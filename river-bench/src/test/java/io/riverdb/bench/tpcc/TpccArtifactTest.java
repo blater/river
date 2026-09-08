@@ -16,7 +16,7 @@ final class TpccArtifactTest {
   void streamsEvidenceLargerThanFormerWholeFileLimit(@TempDir Path root) throws Exception {
     Path artifact = root.resolve("nested/tpcc.properties");
     TpccConfig config = TpccConfig.parse(new String[] {
-        "--url=jdbc:river://localhost:9", "--tiny", "--terminals=20000",
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny", "--terminals=20000",
         "--retry-maximum-millis=" + Long.MAX_VALUE,
         "--artifact=" + artifact
     });

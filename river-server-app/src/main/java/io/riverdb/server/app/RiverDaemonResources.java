@@ -3,6 +3,7 @@ package io.riverdb.server.app;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.runtime.DatabaseResourcePlan;
 import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
+import io.riverdb.format.page.PageCodec;
 import io.riverdb.protocol.ProtocolMemoryBudget;
 
 /**
@@ -10,7 +11,10 @@ import io.riverdb.protocol.ProtocolMemoryBudget;
  *
  * <p>The profile admits the database plan and protocol retention before identity or database
  * mutation.  Connection admission is bounded by the explicit protocol budget, rather than by a
- * convenience connection constant.
+ * convenience connection constant.  Before compiling the plan it also requires
+ * {@code 256_000_000 + ProtocolMemoryBudget.forServer(connections).maximumBytes()
+ * + 128_000_000 <= Runtime.maxMemory()}; the final term is the lifecycle/provider reserve and is
+ * not available to database or protocol accounting.
  */
 public final class RiverDaemonResources {
   private static final long DATABASE_BYTES = 256_000_000L;
@@ -19,9 +23,13 @@ public final class RiverDaemonResources {
   private static final long VERSION_WORKSPACE_BYTES = 8_000_000L;
   private static final long PAGE_CACHE_BYTES = 32_000_000L;
   private static final long STAGING_BYTES = 8_000_000L;
-  private static final long STAGED_PAGES = 800L;
+  // The delivery bound is expressed in the owning format's fixed page geometry, not a
+  // benchmark-shaped page count.  The compiler still checks the resulting metadata capacity.
+  private static final long STAGED_PAGES = DELIVERY_BYTES / PageCodec.PAGE_BYTES;
   /** Explicit process budget for protocol retention; the engine profile remains 256 MB. */
   private static final long MAXIMUM_PROTOCOL_BYTES = 512_000_000L;
+  /** Heap reserve retained for lifecycle objects and native/provider bookkeeping. */
+  private static final long HEAP_RESERVE_BYTES = 128_000_000L;
 
   private RiverDaemonResources() {
   }
@@ -37,6 +45,10 @@ public final class RiverDaemonResources {
     }
     ProtocolMemoryBudget protocol = ProtocolMemoryBudget.forServer(maximumConnections);
     if (protocol.maximumBytes() > MAXIMUM_PROTOCOL_BYTES) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    long requiredHeap = DATABASE_BYTES + protocol.maximumBytes() + HEAP_RESERVE_BYTES;
+    if (requiredHeap < 0 || requiredHeap > Runtime.getRuntime().maxMemory()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     DatabaseResourcePlanRequest request = new DatabaseResourcePlanRequest()

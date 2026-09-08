@@ -95,58 +95,23 @@ if ! command -v "$jfr_bin" >/dev/null 2>&1; then
   exit 1
 fi
 
-trace_main_class="$river_root/river-bench/build/classes/java/main/io/riverdb/bench/tpcc/TpccUpdateTraceMain.class"
-required_classes=(
-  "$trace_main_class"
-  "$river_root/river-bench/build/classes/java/main/io/riverdb/bench/tpcc/TpccTraceRecording.class"
-  "$river_root/river-bench/build/classes/java/main/io/riverdb/bench/tpcc/TpccTraceStep.class"
-  "$river_root/river-bench/build/classes/java/main/io/riverdb/bench/tpcc/TpccServerMain.class"
-  "$river_root/river-engine/build/classes/java/main/io/riverdb/engine/EmbeddedRiver.class"
-  "$river_root/river-server/build/classes/java/main/io/riverdb/server/LoopbackRiverServer.class"
-  "$river_root/river-jdbc/build/classes/java/main/io/riverdb/jdbc/RiverDriver.class"
-)
-build_required=false
-for required_class in "${required_classes[@]}"; do
-  if [[ ! -f $required_class ]]; then
-    build_required=true
-    break
-  fi
-done
-if [[ $build_required == false ]]; then
-  for source in \
-      "$river_root/river-bench/src/main/java/io/riverdb/bench/tpcc/TpccUpdateTraceMain.java" \
-      "$river_root/river-bench/src/main/java/io/riverdb/bench/tpcc/TpccTraceRecording.java" \
-      "$river_root/river-bench/src/main/java/io/riverdb/bench/tpcc/TpccTraceStep.java" \
-      "$river_root/river-bench/src/main/java/io/riverdb/bench/tpcc/TpccServerMain.java"; do
-    if [[ $source -nt $trace_main_class ]]; then
-      build_required=true
-      break
-    fi
-  done
+gradle_bin=${RIVER_GRADLE:-$river_root/gradlew}
+gradle_log=$(mktemp "${TMPDIR:-/tmp}/river-update-trace-gradle.XXXXXX")
+if ! "$gradle_bin" --no-daemon --console=plain \
+    :river-bench:classes :river-bench:riverHarnessRuntimeClasspath \
+    >"$gradle_log" 2>&1; then
+  cat "$gradle_log" >&2
+  rm -f -- "$gradle_log"
+  exit 1
 fi
-if [[ $build_required == true ]]; then
-  if [[ ${RIVER_TPS_SKIP_BUILD:-false} == true ]]; then
-    echo "error: trace classes are missing/stale and RIVER_TPS_SKIP_BUILD=true" >&2
-    exit 1
-  fi
-  gradle_bin=${RIVER_GRADLE:-$river_root/gradlew}
-  echo "Building River update trace classes (required)"
-  "$gradle_bin" :river-bench:classes
+cat "$gradle_log"
+classpath_line=$(sed -n '/^RIVER_HARNESS_CLASSPATH=/p' "$gradle_log" | tail -n 1)
+rm -f -- "$gradle_log"
+classpath=${classpath_line#RIVER_HARNESS_CLASSPATH=}
+if [[ -z $classpath || $classpath == "$classpath_line" ]]; then
+  echo "error: Gradle did not publish RIVER_HARNESS_CLASSPATH" >&2
+  exit 1
 fi
-
-class_path=("$river_root/river-bench/build/classes/java/main")
-for module in \
-    river-base river-observability-api river-platform river-format river-tx-api river-wal \
-    river-buffer river-storage river-tx river-recovery river-backup river-catalog river-sql \
-    river-planner river-exec river-engine-api river-engine river-protocol river-client \
-    river-server river-jdbc; do
-  class_dir="$river_root/$module/build/classes/java/main"
-  if [[ -d $class_dir ]]; then class_path+=("$class_dir"); fi
-  for jar in "$river_root/$module"/build/libs/*.jar; do
-    if [[ -f $jar && $jar != *-sources.jar ]]; then class_path+=("$jar"); fi
-  done
-done
-classpath=$(IFS=:; echo "${class_path[*]}")
 
 if [[ -z $output_dir ]]; then
   output_dir=$(mktemp -d "${TMPDIR:-/tmp}/river-update-trace.XXXXXX")
@@ -157,6 +122,8 @@ else
   fi
   mkdir -p -- "$output_dir"
 fi
+# Resolve the output path so both processes report the same trace location.
+output_dir=$(cd -- "$output_dir" && pwd -P)
 trace_settings="$output_dir/trace.jfc"
 
 "$jfr_bin" configure --output "$trace_settings" \
@@ -225,6 +192,11 @@ print_jdbc_trace_steps() {
     || true
 }
 
+# Keep the ephemeral server instance outside the retained trace tree. This directory is
+# created by this invocation, so cleanup cannot remove a caller-owned output/database path.
+server_directory=$(mktemp -d "${TMPDIR:-/tmp}/river-update-server.XXXXXX")
+server_directory=$(cd -- "$server_directory" && pwd -P)
+
 stop_server() {
   if [[ -n ${server_pid} ]]; then
     if [[ ! -f $server_stop ]]; then : >"$server_stop"; fi
@@ -241,11 +213,17 @@ stop_server() {
     server_pid=
   fi
 }
-trap stop_server EXIT
+cleanup_owned_server() {
+  stop_server
+  if [[ -n ${server_directory:-} && -d $server_directory ]]; then
+    rm -rf -- "$server_directory"
+  fi
+}
+trap cleanup_owned_server EXIT
 
-"$java_bin" -cp "$classpath" \
+"$java_bin" --enable-native-access=ALL-UNNAMED -cp "$classpath" \
   io.riverdb.bench.tpcc.TpccServerMain \
-  "--directory=$output_dir/database" \
+  "--directory=$server_directory" \
   "--port=$port" \
   "--maximum-connections=$maximum_connections" \
   "--resource-maximum-bytes=$resource_maximum_bytes" \
@@ -277,17 +255,22 @@ if [[ ! -f $server_ready ]]; then
   exit 1
 fi
 managed_port=$(<"$server_ready")
-url="jdbc:river://localhost:$managed_port"
-echo "managed_server=started port=$managed_port"
+client_file=$(sed -n 's/^server_client_config=//p' "$server_log")
+if [[ -z $client_file || ! -f $client_file ]]; then
+  echo "error: managed trace server did not publish an authenticated client configuration" >&2
+  sed -n '1,160p' "$server_log" >&2
+  exit 1
+fi
+echo "managed_server=started port=$managed_port client_file=$client_file"
 echo "managed_server_resources=explicit maximum_connections=$maximum_connections maximum_bytes=$resource_maximum_bytes delivery_bytes=$resource_delivery_bytes lock_provider_bytes=$resource_lock_provider_bytes version_workspace_bytes=$resource_version_workspace_bytes page_cache_bytes=$resource_page_cache_bytes staging_frame_bytes=$resource_staging_frame_bytes staged_page_capacity=$resource_staged_page_capacity"
 echo "trace_directory=$output_dir"
 
 set +e
-"$java_bin" \
+"$java_bin" --enable-native-access=ALL-UNNAMED \
   "-XX:StartFlightRecording=filename=$client_jfr,settings=$trace_settings,dumponexit=true" \
   -cp "$classpath" \
   io.riverdb.bench.tpcc.TpccUpdateTraceMain \
-  "--url=$url" \
+  "--url=jdbc:river:client-file:$client_file" \
   "--jfr=$client_jfr" \
   "--external-jfr=true" \
   "--server-start-file=$server_start" \
@@ -303,7 +286,7 @@ else
   echo
   echo "=== trace interpretation ==="
   echo "protocol_note=execute_update includes lazy BEGIN plus EXECUTE_PREPARED"
-  echo "request_mapping=connect:HELLO+OPEN_SESSION; prepare:PREPARE; execute_update:BEGIN+EXECUTE_PREPARED; commit:COMMIT; close_statement:CLOSE_PREPARED; close_connection:CLOSE_SESSION"
+  echo "request_mapping=connect:HELLO+AUTHENTICATE+OPEN_SESSION; prepare:PREPARE; execute_update:BEGIN+EXECUTE_PREPARED; commit:COMMIT; close_statement:CLOSE_PREPARED; close_connection:CLOSE_SESSION"
   echo "wait_note=non_cpu_ms is wall time minus client-thread CPU; JFR socket views show network wait"
   echo "allocation_note=step_allocated_bytes is direct thread allocation; JFR allocation views include recorder overhead"
   echo "cpu_note=JFR CPUTimeSample is platform-dependent; exact step CPU uses ThreadMXBean and where uses ExecutionSample"

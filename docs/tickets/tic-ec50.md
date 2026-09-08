@@ -123,3 +123,79 @@ ownership after a nonterminal database close, complete resource admission,
 remove all River-owned plain connection paths, validate installed lifecycle
 failure boundaries and required platforms, and complete the existing workload
 and independent-review gates. The ticket remains open until those pass.
+
+### Adjacent transport-migration baseline
+
+Before further production edits, pushed checkpoint `75775e20` passed two
+identical River-specific TPS samples. Both used `tools/tps-test.sh
+--profile=tiny --mix=standard --terminals=4 --warehouses=1 --warmup-seconds=2
+--measured-seconds=10 --seed=42`, with default serializable isolation,
+no-wait-stress scheduling and the tool's unchanged explicit database resource
+profile. The preceding `./make.sh` used `--no-daemon`; no build or other workload
+overlapped either run.
+
+Samples: 162.4 and 163.4 committed TPS; zero retries and errors; checkpoint,
+deadlock reconciliation and performance capture all `OK`. Artifacts:
+`/private/tmp/riverd-delivery-evidence/launcher-tps-before-1` and
+`launcher-tps-before-2`; build log `launcher-tps-baseline-build-1.log`.
+These are diagnostic baselines before plain-transport removal, not a performance
+acceptance or comparison with the external harness or audit-admission workload.
+
+### Authenticated lifecycle integration
+
+The candidate now passes 39 app tests with no failures or skips
+(`launcher-auth-app-tests-1.log`) and a repeat of the installed macOS sequence
+(`launcher-installed-auth-fork-1/summary.json`). Both processes committed/read
+through the generated JDBC client file, removed their matching runtime records
+on SIGTERM, and produced no stderr errors. The installed test removes its
+owned credential directory after collecting non-secret results.
+
+The shared credential fence, resource admission derived from page geometry and
+available heap, and retention of identity after a nonterminal database close
+are integrated. Independent bounded review found no concrete shutdown/expiry
+ownership defect; the app test exercises a busy database retaining its identity
+until its session closes. The CLI document now distinguishes normal exits from
+OS signal exits, and the distribution includes a short JDBC getting-started guide.
+
+Production compilation passes (`launcher-auth-compile-3.log`). Client/server
+fixture migration and wider tests remain in progress; failed diagnostic build
+logs are retained. No new TPS acceptance or platform-completion claim is made.
+
+
+Latest affected tests passed: engine 1,009, backup 1, server 42, client 16,
+JDBC 46, CLI 2, app 39, and benchmark 94 active tests (two explicitly opt-in
+larger runs skipped). Logs: `launcher-auth-engine-tests-1.log`,
+`launcher-auth-tests-5.log`, `launcher-auth-jdbc-client-tests-5.log`,
+`launcher-auth-bench-cli-tests-1.log`, and `launcher-auth-app-tests-1.log`.
+
+Installed Linux validation passed as UID 1000 on actual ext4 and XFS using the
+pinned Temurin 25 distribution image. Each filesystem passed authenticated JDBC
+commit, SIGTERM cleanup, restart and committed-data read. Evidence:
+`launcher-installed-linux-5.log`; earlier wrapper/setup failures remain as
+`launcher-installed-linux-{1,2,3,4}.log`. The task-owned VM was stopped afterward.
+Windows/NTFS execution is still awaiting hosted-run approval.
+
+The authenticated TPS pair dropped to 8.5 and 8.1 from 162.4 and 163.4.
+See `docs/performance-checkpoints.md` for the unchanged workload, artifacts,
+slopmark review and pending decision about mandatory durable statement auditing.
+This feature remains unpromoted and the ticket open.
+
+
+### Final candidate integration checks (2026-09-08)
+
+The clean `--no-daemon --no-parallel clean test` integration run executed
+1,879 tests successfully, with 18 skips and no failures or errors (1,897 total).
+The accompanying policy tasks left the overall command red: the module ledger
+was corrected and `verifyModuleGraph` then passed; pre-existing source-policy
+and SQL-shape violations remain. No release-check pass is claimed. Evidence:
+`/private/tmp/riverd-delivery-evidence/launcher-clean-integration-1.log` and
+`launcher-policy-check-2.log` in the same directory.
+
+The migrated UPDATE trace tool built with `--no-daemon`, used generated TLS
+client configuration, and completed its UPDATE/COMMIT trace successfully.
+Evidence: `/private/tmp/riverd-delivery-evidence/launcher-update-trace-1.log`
+and the adjacent `launcher-update-trace-1/` artifacts.
+
+This is a feature checkpoint only. Windows execution evidence and the decision
+on synchronous SQL auditing remain outstanding; do not promote or close the
+standalone milestone from these results.
