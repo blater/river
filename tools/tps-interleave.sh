@@ -23,9 +23,11 @@ Options:
   --dry-run                     Print the interleaved argv without executing
   -h, --help                    Show this help
 
-The helper records an immutable interleave-result.tsv and stops on the first
-failed sample. The per-sample run-metadata.properties and acceptance artifact
-remain the source of truth for configuration, provenance, and hashes.
+The helper records an interleave-result.tsv and stops on the first failed
+sample. Labels are part of each sample identity, so give every variation a
+meaningful label when comparing several versions on one branch. The per-sample
+run-metadata.properties and acceptance artifact record the workload settings
+and outcome.
 EOF
 }
 
@@ -83,7 +85,7 @@ safe_label "$b_label"
 
 for option in "${common_options[@]}" "${a_options[@]}" "${b_options[@]}"; do
   case $option in
-    --output-dir=*|--artifact=*|--metadata=*|--sample-id=*)
+    --output-dir=*|--artifact=*|--metadata=*|--sample-id=*|--version=*)
       fail "per-run output/identity options are owned by this helper: $option" ;;
   esac
 done
@@ -99,7 +101,7 @@ for pair in $(seq 1 "$sample_count"); do
     sample_id="$label-$(printf '%02d' "$pair")"
     sample_dir="$output_dir/$sample_id"
     args=( "$tps_test" "${common_options[@]}" "${variant_options[@]}"
-      "--output-dir=$sample_dir" "--sample-id=$sample_id" )
+      "--output-dir=$sample_dir" "--sample-id=$sample_id" "--version=$label" )
     echo "interleave_order=$order pair=$pair variant=$variant sample_id=$sample_id"
     if [[ $dry_run == true ]]; then
       printf 'dry_run_argv='

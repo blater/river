@@ -199,3 +199,15 @@ and the adjacent `launcher-update-trace-1/` artifacts.
 This is a feature checkpoint only. Windows execution evidence and the decision
 on synchronous SQL auditing remain outstanding; do not promote or close the
 standalone milestone from these results.
+
+
+### TPS tooling simplification (2026-09-08)
+
+Merged the accepted `tic-0b7e` descriptor/provenance removal into this
+candidate. `./make.sh` builds ordinary runner JARs with `--no-daemon`.
+The authenticated one-second smoke completed with zero errors, passing
+deadlock reconciliation and performance capture, using
+`--version=riverd-without-descriptors`. Evidence:
+`/private/tmp/tps-simple-riverd-smoke/` and
+`/private/tmp/tps-simple-riverd-build.log`. This is a wiring check, not a
+performance claim or acceptance of the outstanding audit regression.
