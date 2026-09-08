@@ -26,6 +26,35 @@ final class RiverClientConnector {
       byte[] token,
       int tokenBytes,
       RiverClientOpenResult result) {
+    return connect("localhost", port, context, token, tokenBytes, result);
+  }
+
+  static StatusCode connect(RiverClientConfiguration configuration, RiverClientOpenResult result) {
+    if (configuration == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    result.reset();
+    RiverClientConfiguration.ContextResult contextResult =
+        new RiverClientConfiguration.ContextResult();
+    StatusCode status = configuration.createPinnedContext(contextResult);
+    if (!status.isOk()) return status;
+    RiverClientConfiguration.BytesResult tokenResult =
+        new RiverClientConfiguration.BytesResult();
+    try {
+      status = configuration.readToken(tokenResult);
+      if (!status.isOk()) return status;
+      return connect(configuration.host(), configuration.port(), contextResult.context,
+          tokenResult.value, tokenResult.value.length, result);
+    } finally {
+      tokenResult.clear();
+    }
+  }
+
+  private static StatusCode connect(
+      String host,
+      int port,
+      SSLContext context,
+      byte[] token,
+      int tokenBytes,
+      RiverClientOpenResult result) {
     if (port <= 0 || port > 65535 || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -36,7 +65,7 @@ final class RiverClientConnector {
     try {
       socket = context == null
           ? new Socket() : context.getSocketFactory().createSocket();
-      socket.connect(new InetSocketAddress("localhost", port), CONNECT_TIMEOUT_MILLIS);
+      socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
       socket.setSoTimeout(READ_TIMEOUT_MILLIS);
       if (socket instanceof SSLSocket secure) {
         secure.setEnabledProtocols(new String[] {"TLSv1.3"});

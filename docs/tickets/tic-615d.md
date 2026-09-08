@@ -1,10 +1,12 @@
 ---
 id: tic-615d
-status: open
+status: in_progress
 type: story
 assignee: blater
 parent: tic-bf0b
 delivery: code
+base-commit: 9ef72534f347728e76bb5a38e93c13a246cda7e6
+branch: ticket/tic-615d-riverd-credentials
 tags:
     - riverd
     - security
@@ -48,3 +50,25 @@ registry, service manager, new filesystem framework, or performance tooling.
 Do not regenerate accepted missing credentials or add compatibility paths.
 A missing platform operation goes to its adapter owner. Stop when creation and
 restart can supply the validated instance and client settings to `tic-ec50`.
+
+## Validation in progress (2026-09-08)
+
+The credential generation, persistence/reload and generated client configuration
+tests pass on APFS: six tests, no failures or skips. The affected client and
+protocol suites also pass: 16 and 62 tests respectively, no failures or skips.
+All Gradle invocations used `--no-daemon` and ran serially.
+
+Evidence: `/private/tmp/riverd-delivery-evidence/credentials-tests-7.log` and
+`/private/tmp/riverd-delivery-evidence/credentials-affected-tests-1.log`.
+The combined credential and identity suite now passes 15 tests, including eight
+APFS recovery cases and strict record encoding checks. Evidence is
+`/private/tmp/riverd-delivery-evidence/credentials-tests-10.log`. Recovery
+preserves unexpected state, refuses a live prior owner, and delays repair until
+the component owners have validated their contents. The record codec is separate
+from lifecycle handling; no generic recovery or record framework was added.
+
+Slopmark flagged the growing lifecycle owner (655.753 before the codec extraction,
+622.968 afterward; codec 21.3352). Review focused on mutation ordering and handle
+ownership, not reducing the score mechanically. Strict-restart owner handoff,
+pre-bootstrap recovery and committed bootstrap residue cleanup remain open.
+This checkpoint does not close the ticket or establish the installed lifecycle.

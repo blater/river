@@ -113,6 +113,18 @@ final class TokenAuthenticatorTest {
     Arrays.fill(token, (byte) 0);
   }
 
+  @Test
+  void destroyIsIdempotentAndClosesVerification() {
+    byte[] token = new byte[TokenProof.MINIMUM_TOKEN_BYTES];
+    TokenAuthenticatorOpenResult opened = new TokenAuthenticatorOpenResult();
+    assertEquals(StatusCode.OK, TokenAuthenticator.create(token, token.length, opened));
+    TokenAuthenticator authenticator = opened.authenticator();
+    assertEquals(StatusCode.OK, authenticator.destroy());
+    assertEquals(StatusCode.OK, authenticator.destroy());
+    assertEquals(StatusCode.CLOSED, authenticator.verify(null, 1, 2, new byte[] {1}));
+    Arrays.fill(token, (byte) 0);
+  }
+
   private static void assertPayloadErased(ByteBuffer bytes, int length) {
     for (int index = 0; index < length; index++) {
       assertEquals(0, bytes.get(ProtocolFrameCodec.HEADER_BYTES + index));

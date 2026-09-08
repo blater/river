@@ -35,6 +35,7 @@ include(
   "river-protocol",
   "river-client",
   "river-server",
+  "river-server-app",
   "river-jdbc",
   "river-cli",
   "river-admin",

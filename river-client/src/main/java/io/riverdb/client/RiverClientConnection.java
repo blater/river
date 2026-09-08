@@ -100,6 +100,12 @@ public final class RiverClientConnection implements RiverDatabase {
     return connect(port, context, token, tokenBytes, result);
   }
 
+  /** Opens an authenticated connection using the launcher-generated client configuration. */
+  public static StatusCode connect(
+      RiverClientConfiguration configuration, RiverClientOpenResult result) {
+    return RiverClientConnector.connect(configuration, result);
+  }
+
   private static StatusCode connect(
       int port,
       SSLContext context,
