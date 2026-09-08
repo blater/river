@@ -147,7 +147,11 @@ final class RiverDaemonCredentialsTest {
 
       RiverDaemonIdentity.IdentityResult reopened = new RiverDaemonIdentity.IdentityResult();
       try {
-        assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(datadir, filesystem, reopened));
+        ProcessHandle current = ProcessHandle.current();
+        assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(
+            datadir, filesystem, new SecureRandom(), current.pid(),
+            current.info().startInstant().orElseThrow().toEpochMilli(),
+            current.info().command().orElseThrow(), reopened));
         RiverDirectoryResult securityResult = new RiverDirectoryResult();
         assertEquals(StatusCode.OK, reopened.directory().openDirectory(
             RiverDaemonIdentity.SECURITY_NAME, securityResult));

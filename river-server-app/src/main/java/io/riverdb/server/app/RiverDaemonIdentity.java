@@ -12,6 +12,7 @@ import io.riverdb.platform.riverd.RiverDirectory;
 import io.riverdb.platform.riverd.RiverDirectoryResult;
 import io.riverdb.platform.riverd.RiverFile;
 import io.riverdb.platform.riverd.RiverFileResult;
+import io.riverdb.platform.riverd.FileIdentity;
 import io.riverdb.platform.riverd.RiverLock;
 import io.riverdb.platform.riverd.RiverLockResult;
 import io.riverdb.platform.riverd.RiverOpenMode;
@@ -38,8 +39,13 @@ public final class RiverDaemonIdentity {
   public static StatusCode openExisting(
       Path datadir,
       RiverDaemonFileSystem filesystem,
+      SecureRandom random,
+      long pid,
+      long processStartEpochMillis,
+      String command,
       IdentityResult result) {
-    if (result == null || filesystem == null || !validDatadir(datadir)) {
+    if (result == null || filesystem == null || !validDatadir(datadir) || random == null
+        || pid <= 0 || processStartEpochMillis < 0 || !validCommand(command)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -113,12 +119,132 @@ public final class RiverDaemonIdentity {
         result.complete(directory, lockResult.lock(), acceptedInstance.incarnation,
             acceptedInstance.generation);
         result.setLockFile(lockFile);
+        result.prepareRestart(canonicalPath(datadir), owner, nonce(random), pid,
+            processStartEpochMillis, command);
       }
     }
     return status;
   }
 
-  /** Begins a first-create transaction, leaving database/security/audit initialization to owners. */
+  /**
+   * Removes only validated bootstrap residue after component owners have checked an instance.
+   * The caller must retain the lock returned by {@link #openExisting} while invoking this method;
+   * identity does not validate database, security, or audit contents.
+   */
+  static StatusCode cleanupCommittedResidue(IdentityResult result) {
+    if (result == null || result.directory == null || result.lock == null
+        || result.incarnation == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    RiverDirectory directory = result.directory;
+    DirectoryListResult entries = new DirectoryListResult(16);
+    StatusCode status = directory.list(entries);
+    if (!status.isOk()) return status;
+    if (!hasEntry(entries, INSTANCE_FILE)) return StatusCode.CONFLICT;
+    if (!hasEntry(entries, "bootstrap.properties")) {
+      for (int index = 0; index < entries.size(); index++) {
+        if (isIdentityResidueEntry(entries.name(index))) return StatusCode.CORRUPTION;
+      }
+      return StatusCode.OK;
+    }
+
+    RiverFileResult bootstrapResult = new RiverFileResult();
+    status = directory.openFile("bootstrap.properties", RiverOpenMode.EXISTING, bootstrapResult);
+    if (!status.isOk()) return status;
+    RiverFile bootstrapFile = bootstrapResult.file();
+    FileIdentity bootstrapIdentity = bootstrapFile.identity();
+    byte[] bootstrapBytes = new byte[MAX_RECORD_BYTES];
+    RiverDaemonIdentityRecords.BootstrapRecord bootstrap = null;
+    status = readRecord(bootstrapFile, bootstrapBytes, "bootstrap.properties");
+    if (status.isOk()) bootstrap = RiverDaemonIdentityRecords.parseBootstrap(bootstrapBytes);
+    Arrays.fill(bootstrapBytes, (byte) 0);
+    StatusCode closeStatus = bootstrapFile.close();
+    if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
+      status = closeStatus;
+    }
+    if (!status.isOk()) return status;
+    if (bootstrap == null || bootstrapIdentity == null
+        || bootstrap.high != result.incarnation.high()
+        || bootstrap.low != result.incarnation.low()
+        || !bootstrap.stagingName.equals(".riverd-bootstrap-" + bootstrap.nonce)
+        || !bootstrap.instanceStageName.equals(".instance-" + bootstrap.nonce + ".stage")) {
+      return StatusCode.CORRUPTION;
+    }
+
+    String stagingName = bootstrap.stagingName;
+    String instanceStageName = bootstrap.instanceStageName;
+    String[] allowed = {LOCK_FILE, INSTANCE_FILE, DATABASE_NAME, SECURITY_NAME, AUDIT_NAME,
+      "bootstrap.properties", stagingName, instanceStageName};
+    for (int index = 0; index < entries.size(); index++) {
+      boolean known = false;
+      for (String name : allowed) known |= name.equals(entries.name(index));
+      if (!known && !isLifecycleEntry(entries.name(index))) return StatusCode.CORRUPTION;
+    }
+
+    FileIdentity stagingIdentity = null;
+    if (hasEntry(entries, stagingName)) {
+      RiverDirectoryResult stagingResult = new RiverDirectoryResult();
+      status = directory.openDirectory(stagingName, stagingResult);
+      if (!status.isOk()) return status;
+      RiverDirectory staging = stagingResult.directory();
+      stagingIdentity = staging.identity();
+      DirectoryListResult stagingEntries = new DirectoryListResult(8);
+      status = staging.list(stagingEntries);
+      closeStatus = staging.close();
+      if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
+        status = closeStatus;
+      }
+      if (!status.isOk()) return status;
+      if (stagingIdentity == null || stagingEntries.size() != 0) return StatusCode.CORRUPTION;
+    }
+
+    FileIdentity instanceStageIdentity = null;
+    if (hasEntry(entries, instanceStageName)) {
+      RiverFileResult stageResult = new RiverFileResult();
+      status = directory.openFile(instanceStageName, RiverOpenMode.EXISTING, stageResult);
+      if (!status.isOk()) return status;
+      RiverFile stage = stageResult.file();
+      instanceStageIdentity = stage.identity();
+      byte[] instanceBytes = new byte[MAX_RECORD_BYTES];
+      RiverDaemonIdentityRecords.InstanceRecord instanceStage = null;
+      status = readRecord(stage, instanceBytes, instanceStageName);
+      if (status.isOk()) instanceStage = RiverDaemonIdentityRecords.parseInstance(instanceBytes);
+      Arrays.fill(instanceBytes, (byte) 0);
+      closeStatus = stage.close();
+      if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
+        status = closeStatus;
+      }
+      if (!status.isOk()) return status;
+      if (instanceStageIdentity == null || instanceStage == null
+          || instanceStage.incarnation.high() != result.incarnation.high()
+          || instanceStage.incarnation.low() != result.incarnation.low()) {
+        return StatusCode.CORRUPTION;
+      }
+    }
+
+    if (instanceStageIdentity != null) {
+      status = directory.removeOwned(
+          instanceStageName, instanceStageIdentity, new DirectoryOperationResult());
+    }
+    if (status.isOk() && stagingIdentity != null) {
+      status = directory.removeOwned(stagingName, stagingIdentity, new DirectoryOperationResult());
+    }
+    if (status.isOk() && (instanceStageIdentity != null || stagingIdentity != null)) {
+      status = forceDirectory(directory);
+    }
+    if (status.isOk()) {
+      status = directory.removeOwned("bootstrap.properties", bootstrapIdentity,
+          new DirectoryOperationResult());
+    }
+    if (status.isOk()) status = forceDirectory(directory);
+    return status;
+  }
+
+  /**
+   * Begins a first-create transaction, leaving database/security/audit initialization to owners.
+   * The proposed incarnation applies only to a new bootstrap; an existing bootstrap owns its
+   * recorded incarnation and is resumed unchanged.
+   */
   public static StatusCode beginCreate(
       Path datadir,
       RiverDaemonFileSystem filesystem,
@@ -144,24 +270,37 @@ public final class RiverDaemonIdentity {
       closeDirectory(directory, status.isOk() ? StatusCode.CONFLICT : status);
       return status.isOk() ? StatusCode.CONFLICT : status;
     }
+    boolean hasBootstrap = hasEntry(entries, "bootstrap.properties");
+    boolean hasLock = hasEntry(entries, LOCK_FILE);
+    String prebootstrapStage = prebootstrapStageName(entries, hasBootstrap, hasLock);
+    // Before bootstrap, mutation is limited to an empty tree, sole lock, or bound stage residue.
+    if (!hasBootstrap && entries.size() != 0
+        && !(entries.size() == 1 && hasLock) && prebootstrapStage == null) {
+      closeDirectory(directory, StatusCode.CORRUPTION);
+      return StatusCode.CORRUPTION;
+    }
+    if (prebootstrapStage != null) {
+      return recoverPrebootstrapStage(datadir, directory, filesystem, incarnation, random, pid,
+          processStartEpochMillis, command, prebootstrapStage, result);
+    }
     if (hasEntry(entries, INSTANCE_FILE) || hasEntry(entries, DATABASE_NAME)
         || hasEntry(entries, SECURITY_NAME) || hasEntry(entries, AUDIT_NAME)) {
-      if (hasEntry(entries, "bootstrap.properties")) {
-        return recoverCreate(datadir, directory, filesystem, incarnation, pid,
+      if (hasBootstrap) {
+        return recoverCreate(datadir, directory, filesystem, pid,
             processStartEpochMillis, command, entries, result);
       }
       closeDirectory(directory, StatusCode.CONFLICT);
       return StatusCode.CONFLICT;
     }
-    if (hasEntry(entries, "bootstrap.properties")) {
-      return recoverCreate(datadir, directory, filesystem, incarnation, pid,
+    if (hasBootstrap) {
+      return recoverCreate(datadir, directory, filesystem, pid,
           processStartEpochMillis, command, entries, result);
     }
 
     RiverFileResult lockFileResult = new RiverFileResult();
-    status = directory.openFile(LOCK_FILE, RiverOpenMode.CREATE_NEW, lockFileResult);
-    // An existing lock file is a recovery case and remains preserved for the
-    // lifecycle owner to inspect with its process proof.
+    status = directory.openFile(LOCK_FILE, hasLock ? RiverOpenMode.EXISTING : RiverOpenMode.CREATE_NEW,
+        lockFileResult);
+    // A sole prebootstrap lock is reopened and verified before its owner record is replaced.
     if (!status.isOk()) {
       closeDirectory(directory, status);
       return status;
@@ -174,8 +313,61 @@ public final class RiverDaemonIdentity {
       closeDirectory(directory, status);
       return status;
     }
+    RiverDaemonIdentityRecords.LockRecord priorOwner = null;
+    if (hasLock) {
+      DirectoryListResult heldEntries = new DirectoryListResult(16);
+      status = directory.list(heldEntries);
+      if (status.isOk() && (heldEntries.size() != 1 || !hasEntry(heldEntries, LOCK_FILE))) {
+        status = StatusCode.CONFLICT;
+      }
+      byte[] priorBytes = new byte[MAX_RECORD_BYTES];
+      if (status.isOk()) {
+        status = readRecord(lockFile, priorBytes, LOCK_FILE);
+        if (status == StatusCode.CORRUPTION) {
+          status = StatusCode.OK;
+        } else if (status.isOk()) {
+          priorOwner = RiverDaemonIdentityRecords.parseLock(priorBytes);
+          if (priorOwner != null) {
+            if (!canonicalPath(datadir).equals(priorOwner.datadir)) {
+              status = StatusCode.CORRUPTION;
+            } else {
+              status = proveOwnerAbsent(priorOwner);
+            }
+          }
+        }
+      }
+      Arrays.fill(priorBytes, (byte) 0);
+    }
+    if (!status.isOk()) {
+      lockResult.lock().close();
+      lockFile.close();
+      closeDirectory(directory, status);
+      return status;
+    }
+    return createBootstrap(datadir, directory, lockFile, lockResult.lock(), incarnation, random,
+        pid, processStartEpochMillis, command, result, priorOwner, hasLock);
+  }
+
+  private static StatusCode createBootstrap(
+      Path datadir,
+      RiverDirectory directory,
+      RiverFile lockFile,
+      RiverLock lock,
+      DatabaseIncarnation incarnation,
+      SecureRandom random,
+      long pid,
+      long processStartEpochMillis,
+      String command,
+      IdentityResult result,
+      RiverDaemonIdentityRecords.LockRecord priorOwner,
+      boolean replaceExistingLock) {
+    StatusCode status = StatusCode.OK;
+    if (replaceExistingLock) status = lockFile.truncate(0);
     String nonce = nonce(random);
-    status = writeLock(lockFile, datadir, incarnation, pid, processStartEpochMillis, command, nonce);
+    if (status.isOk()) {
+      status = writeLock(lockFile, datadir, incarnation, pid, processStartEpochMillis, command, nonce);
+    }
+    if (status.isOk() && replaceExistingLock) status = forceDirectory(directory);
     if (status.isOk()) {
       status = writeBootstrap(directory, incarnation, pid, processStartEpochMillis, command, nonce);
     }
@@ -208,29 +400,127 @@ public final class RiverDaemonIdentity {
       closeQuiet(security);
       closeQuiet(database);
       closeQuiet(staging);
-      lockResult.lock().close();
+      lock.close();
       lockFile.close();
       closeDirectory(directory, status);
       return status;
     }
-    result.complete(directory, lockResult.lock(), incarnation, 1L);
+    result.complete(directory, lock, incarnation, 1L);
     result.setBootstrap(nonce, staging, database, security, audit, lockFile,
         false, false, false, canonicalPath(datadir), pid, processStartEpochMillis, command, false,
         null, null);
+    result.setPriorOwner(priorOwner);
     return StatusCode.OK;
+  }
+
+  private static StatusCode recoverPrebootstrapStage(
+      Path datadir,
+      RiverDirectory directory,
+      RiverDaemonFileSystem filesystem,
+      DatabaseIncarnation incarnation,
+      SecureRandom random,
+      long pid,
+      long processStartEpochMillis,
+      String command,
+      String stageName,
+      IdentityResult result) {
+    RiverFileResult lockResult = new RiverFileResult();
+    StatusCode status = directory.openFile(LOCK_FILE, RiverOpenMode.EXISTING, lockResult);
+    if (!status.isOk()) {
+      closeDirectory(directory, status);
+      return status;
+    }
+    RiverFile lockFile = lockResult.file();
+    RiverLockResult heldResult = new RiverLockResult();
+    status = filesystem.acquireExclusive(lockFile, heldResult);
+    if (!status.isOk()) {
+      lockFile.close();
+      closeDirectory(directory, status);
+      return status;
+    }
+    RiverLock held = heldResult.lock();
+    DirectoryListResult heldEntries = new DirectoryListResult(16);
+    status = directory.list(heldEntries);
+    if (status.isOk() && (heldEntries.size() != 2 || !hasEntry(heldEntries, LOCK_FILE)
+        || !hasEntry(heldEntries, stageName))) {
+      status = StatusCode.CONFLICT;
+    }
+    RiverDaemonIdentityRecords.LockRecord priorOwner = null;
+    byte[] lockBytes = new byte[MAX_RECORD_BYTES];
+    if (status.isOk()) {
+      status = readRecord(lockFile, lockBytes, LOCK_FILE);
+      if (status == StatusCode.CORRUPTION) {
+        status = StatusCode.OK;
+      } else if (status.isOk()) {
+        priorOwner = RiverDaemonIdentityRecords.parseLock(lockBytes);
+        if (priorOwner != null) {
+          if (!canonicalPath(datadir).equals(priorOwner.datadir)) {
+            status = StatusCode.CORRUPTION;
+          } else {
+            status = proveOwnerAbsent(priorOwner);
+          }
+        }
+      }
+    }
+    Arrays.fill(lockBytes, (byte) 0);
+
+    RiverFileResult stageResult = new RiverFileResult();
+    FileIdentity stageIdentity = null;
+    RiverDaemonIdentityRecords.BootstrapRecord bootstrap = null;
+    if (status.isOk()) {
+      status = directory.openFile(stageName, RiverOpenMode.EXISTING, stageResult);
+      if (status.isOk()) {
+        RiverFile stage = stageResult.file();
+        stageIdentity = stage.identity();
+        byte[] stageBytes = new byte[MAX_RECORD_BYTES];
+        status = readRecord(stage, stageBytes, stageName);
+        if (status.isOk()) bootstrap = RiverDaemonIdentityRecords.parseBootstrap(stageBytes);
+        Arrays.fill(stageBytes, (byte) 0);
+        StatusCode closeStatus = stage.close();
+        if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
+          status = closeStatus;
+        }
+      }
+    }
+    if (status.isOk() && (stageIdentity == null || bootstrap == null
+        || !stageName.equals(".bootstrap-" + bootstrap.nonce + ".stage")
+        || !bootstrap.stagingName.equals(".riverd-bootstrap-" + bootstrap.nonce)
+        || !bootstrap.instanceStageName.equals(".instance-" + bootstrap.nonce + ".stage"))) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk() && priorOwner != null
+        && (priorOwner.high != bootstrap.high || priorOwner.low != bootstrap.low
+        || priorOwner.pid != bootstrap.pid || priorOwner.start != bootstrap.start
+        || !priorOwner.command.equals(bootstrap.command)
+        || !priorOwner.nonce.equals(bootstrap.nonce))) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk()) status = proveOwnerAbsent(bootstrapOwner(datadir, bootstrap));
+    if (status.isOk()) {
+      status = directory.removeOwned(stageName, stageIdentity, new DirectoryOperationResult());
+    }
+    if (status.isOk()) status = forceDirectory(directory);
+    if (!status.isOk()) {
+      held.close();
+      lockFile.close();
+      closeDirectory(directory, status);
+      return status;
+    }
+    return createBootstrap(datadir, directory, lockFile, held, incarnation, random, pid,
+        processStartEpochMillis, command, result, priorOwner, true);
   }
 
   /**
    * Reopens a valid bootstrap transaction and resumes only its fixed, recorded namespace.
    *
    * <p>The caller has already opened {@code datadir}; every child operation below is relative to
-   * that capability. A new identity, nonce, path, or child name is never inferred during recovery.
+   * that capability. The recorded bootstrap identity, nonce, path, and child names remain
+   * authoritative; a new proposal is never inferred during recovery.
    */
   private static StatusCode recoverCreate(
       Path datadir,
       RiverDirectory directory,
       RiverDaemonFileSystem filesystem,
-      DatabaseIncarnation requestedIncarnation,
       long pid,
       long processStartEpochMillis,
       String command,
@@ -381,6 +671,7 @@ public final class RiverDaemonIdentity {
     result.setBootstrap(bootstrap.nonce, staging, database, security, audit, lockFile,
         databasePublished, securityPublished, auditPublished, canonicalPath(datadir), pid,
         processStartEpochMillis, command, true, stageRepair.name, stageRepair.identity);
+    result.setPriorOwner(lock);
     return StatusCode.OK;
   }
 
@@ -437,13 +728,18 @@ public final class RiverDaemonIdentity {
    * Fresh creates are already owned and return {@link StatusCode#OK}.
    */
   static StatusCode handoffOwner(IdentityResult result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (!result.needsOwnerHandoff) return StatusCode.OK;
+    if (result.lockFile == null || result.datadir == null || result.incarnation == null
+        || result.ownerNonce == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     StatusCode status = validateCurrentOwner(result.ownerPid, result.ownerStart, result.ownerCommand);
     if (!status.isOk()) return status;
     status = result.lockFile.truncate(0);
     if (status.isOk()) {
       status = writeLockCanonical(result.lockFile, result.datadir, result.incarnation,
-          result.ownerPid, result.ownerStart, result.ownerCommand, result.nonce);
+          result.ownerPid, result.ownerStart, result.ownerCommand, result.ownerNonce);
     }
     if (status.isOk()) result.needsOwnerHandoff = false;
     return status;
@@ -551,8 +847,12 @@ public final class RiverDaemonIdentity {
     }
     if (status.isOk()) {
       String stageName = ".instance-" + result.nonce + ".stage";
-      boolean stageExisted = hasEntryForStage(directory, stageName);
-      status = directory.openFile(stageName, RiverOpenMode.CREATE_NEW, stageResult);
+      DirectoryListResult stageEntries = new DirectoryListResult(16);
+      status = directory.list(stageEntries);
+      boolean stageExisted = status.isOk() && hasEntry(stageEntries, stageName);
+      if (status.isOk()) {
+        status = directory.openFile(stageName, RiverOpenMode.CREATE_NEW, stageResult);
+      }
       if (status == StatusCode.CONFLICT) {
         status = directory.openFile(stageName, RiverOpenMode.EXISTING, stageResult);
         if (status.isOk()) {
@@ -588,6 +888,8 @@ public final class RiverDaemonIdentity {
         }
       }
     }
+    // Namespace commit must be durable before bootstrap evidence is removed.
+    if (status.isOk()) status = forceDirectory(directory);
     if (!status.isOk() && stageResult.file() != null) {
       StatusCode closeStatus = stageResult.file().close();
       if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
@@ -595,22 +897,19 @@ public final class RiverDaemonIdentity {
       }
     }
     if (status.isOk()) {
-      status = removeOwned(directory, "bootstrap.properties", null);
-    }
-    if (status.isOk()) {
       status = removeOwned(directory, ".riverd-bootstrap-" + result.nonce,
           result.staging.identity());
     }
     if (status.isOk()) {
-      DirectoryOperationResult forced = new DirectoryOperationResult();
-      status = directory.force(forced);
+      status = forceDirectory(directory);
+    }
+    if (status.isOk()) {
+      status = removeOwned(directory, "bootstrap.properties", null);
+    }
+    if (status.isOk()) {
+      status = forceDirectory(directory);
     }
     return status;
-  }
-
-  private static boolean hasEntryForStage(RiverDirectory directory, String wanted) {
-    DirectoryListResult entries = new DirectoryListResult(16);
-    return directory.list(entries).isOk() && hasEntry(entries, wanted);
   }
 
   private static StatusCode publishDirectory(
@@ -804,6 +1103,52 @@ public final class RiverDaemonIdentity {
     return false;
   }
 
+  private static boolean isLifecycleEntry(String name) {
+    if ("runtime.properties".equals(name) || "stop.request".equals(name)) return true;
+    if (name.startsWith(".stop-request-") && name.endsWith(".stage")) {
+      String nonce = name.substring(".stop-request-".length(), name.length() - ".stage".length());
+      return nonce.matches("[0-9a-f]{32}");
+    }
+    if (name.startsWith(".stop-accepted-")) {
+      String nonce = name.substring(".stop-accepted-".length());
+      return nonce.matches("[0-9a-f]{32}");
+    }
+    return false;
+  }
+
+  private static boolean isIdentityResidueEntry(String name) {
+    if (name.startsWith(".bootstrap-") && name.endsWith(".stage")) {
+      String nonce = name.substring(".bootstrap-".length(), name.length() - ".stage".length());
+      return nonce.matches("[0-9a-f]{32}");
+    }
+    if (name.startsWith(".riverd-bootstrap-")) {
+      String nonce = name.substring(".riverd-bootstrap-".length());
+      return nonce.matches("[0-9a-f]{32}");
+    }
+    if (name.startsWith(".instance-") && name.endsWith(".stage")) {
+      String nonce = name.substring(".instance-".length(), name.length() - ".stage".length());
+      return nonce.matches("[0-9a-f]{32}");
+    }
+    return false;
+  }
+
+  private static String prebootstrapStageName(
+      DirectoryListResult entries, boolean hasBootstrap, boolean hasLock) {
+    if (hasBootstrap || !hasLock || entries.size() != 2) return null;
+    String stage = null;
+    for (int index = 0; index < entries.size(); index++) {
+      String name = entries.name(index);
+      if (LOCK_FILE.equals(name)) continue;
+      if (stage != null || !name.startsWith(".bootstrap-") || !name.endsWith(".stage")) {
+        return null;
+      }
+      String value = name.substring(".bootstrap-".length(), name.length() - ".stage".length());
+      if (!value.matches("[0-9a-f]{32}")) return null;
+      stage = name;
+    }
+    return stage;
+  }
+
   private static String nonce(SecureRandom random) {
     byte[] bytes = new byte[16];
     random.nextBytes(bytes);
@@ -817,18 +1162,11 @@ public final class RiverDaemonIdentity {
   }
 
   private static boolean validDatadir(Path path) {
-    return path != null && path.isAbsolute() && path.equals(path.normalize())
-        && path.getFileName() != null && path.getFileName().toString().indexOf('=') < 0;
+    return path != null && RiverDaemonIdentityRecords.validDatadir(path.toString());
   }
 
   private static boolean validCommand(String command) {
-    if (command == null || command.isBlank() || !command.equals(command.trim())) return false;
-    try {
-      Path path = Path.of(command);
-      return path.isAbsolute() && path.normalize().equals(path);
-    } catch (RuntimeException failure) {
-      return false;
-    }
+    return RiverDaemonIdentityRecords.validCommand(command);
   }
 
   private static void closeQuiet(RiverDirectory directory) {
@@ -867,6 +1205,8 @@ public final class RiverDaemonIdentity {
     private long ownerPid;
     private long ownerStart;
     private String ownerCommand;
+    private String ownerNonce;
+    private RiverDaemonIdentityRecords.LockRecord priorOwner;
     private boolean needsOwnerHandoff;
     private String stageRepairName;
     private io.riverdb.platform.riverd.FileIdentity stageRepairIdentity;
@@ -889,6 +1229,8 @@ public final class RiverDaemonIdentity {
       ownerPid = 0;
       ownerStart = 0;
       ownerCommand = null;
+      ownerNonce = null;
+      priorOwner = null;
       needsOwnerHandoff = false;
       stageRepairName = null;
       stageRepairIdentity = null;
@@ -935,6 +1277,7 @@ public final class RiverDaemonIdentity {
       ownerPid = openedOwnerPid;
       ownerStart = openedOwnerStart;
       ownerCommand = openedOwnerCommand;
+      ownerNonce = openedNonce;
       needsOwnerHandoff = openedNeedsOwnerHandoff;
       stageRepairName = openedStageRepairName;
       stageRepairIdentity = openedStageRepairIdentity;
@@ -942,6 +1285,26 @@ public final class RiverDaemonIdentity {
 
     void setLockFile(RiverFile openedLockFile) {
       lockFile = openedLockFile;
+    }
+
+    void setPriorOwner(RiverDaemonIdentityRecords.LockRecord openedPriorOwner) {
+      priorOwner = openedPriorOwner;
+    }
+
+    void prepareRestart(
+        String openedDatadir,
+        RiverDaemonIdentityRecords.LockRecord openedPriorOwner,
+        String openedOwnerNonce,
+        long openedOwnerPid,
+        long openedOwnerStart,
+        String openedOwnerCommand) {
+      datadir = openedDatadir;
+      priorOwner = openedPriorOwner;
+      ownerNonce = openedOwnerNonce;
+      ownerPid = openedOwnerPid;
+      ownerStart = openedOwnerStart;
+      ownerCommand = openedOwnerCommand;
+      needsOwnerHandoff = true;
     }
 
     public RiverDirectory directory() { return directory; }
@@ -964,6 +1327,9 @@ public final class RiverDaemonIdentity {
     boolean auditPublished() { return auditPublished; }
     String nonce() { return nonce; }
     RiverFile lockFile() { return lockFile; }
+    RiverDaemonIdentityRecords.LockRecord priorOwner() { return priorOwner; }
+    String ownerNonce() { return ownerNonce; }
+    boolean needsOwnerHandoff() { return needsOwnerHandoff; }
 
     /** Closes retained capabilities in reverse creation order, preserving the first failure. */
     public synchronized StatusCode close() {

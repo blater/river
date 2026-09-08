@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
@@ -52,7 +53,8 @@ final class RiverDaemonIdentityRecords {
       String command = value(fields[6], "command=");
       String nonce = value(fields[7], "owner-nonce=");
       if (!DatabaseIncarnation.of(high, low).isValid() || pid <= 0 || start < 0
-          || !validCommand(command) || !nonce.matches("[0-9a-f]{32}")) return null;
+          || !validDatadir(datadir) || !validCommand(command)
+          || !nonce.matches("[0-9a-f]{32}")) return null;
       return new LockRecord(datadir, high, low, pid, start, command, nonce);
     } catch (RuntimeException failure) {
       return null;
@@ -134,11 +136,29 @@ final class RiverDaemonIdentityRecords {
     return parsed;
   }
 
-  private static boolean validCommand(String command) {
-    if (command == null || command.isBlank() || !command.equals(command.trim())) return false;
+  static boolean validDatadir(String value) {
+    if (!validAbsoluteNormalizedPath(value)) return false;
     try {
-      java.nio.file.Path path = java.nio.file.Path.of(command);
-      return path.isAbsolute() && path.normalize().equals(path);
+      Path path = Path.of(value);
+      return path.getFileName() != null && path.getFileName().toString().indexOf('=') < 0;
+    } catch (RuntimeException failure) {
+      return false;
+    }
+  }
+
+  static boolean validCommand(String command) {
+    return command != null && !command.isBlank() && command.equals(command.trim())
+        && validAbsoluteNormalizedPath(command);
+  }
+
+  private static boolean validAbsoluteNormalizedPath(String value) {
+    if (value == null || value.isEmpty()) return false;
+    for (int index = 0; index < value.length(); index++) {
+      if (Character.isISOControl(value.charAt(index))) return false;
+    }
+    try {
+      Path path = Path.of(value);
+      return path.isAbsolute() && path.normalize().toString().equals(value);
     } catch (RuntimeException failure) {
       return false;
     }

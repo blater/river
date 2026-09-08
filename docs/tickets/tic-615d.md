@@ -72,3 +72,30 @@ Slopmark flagged the growing lifecycle owner (655.753 before the codec extractio
 ownership, not reducing the score mechanically. Strict-restart owner handoff,
 pre-bootstrap recovery and committed bootstrap residue cleanup remain open.
 This checkpoint does not close the ticket or establish the installed lifecycle.
+
+## Restart recovery checkpoint (2026-09-08)
+
+Strict restart now retains the prior owner record and publishes a new owner
+nonce only after caller component validation. Creation handles an empty or sole
+lock directory and a bound pre-authority bootstrap stage. A canonical stage and
+prior lock must agree before removal. A fresh proposed incarnation never
+overrides a committed bootstrap identity.
+
+Instance publication forces the data directory before cleanup. Committed
+residue cleanup validates every matching object before mutation, removes and
+forces stage residue first, then removes bootstrap evidence last. Directory
+listing failures propagate rather than masquerading as absence. Record-safe
+absolute path/command validation is shared by producers and parsers.
+
+The combined APFS suite passes 23 tests (six credential, 17 identity), with no
+failures or skips: `/private/tmp/riverd-delivery-evidence/credentials-tests-16.log`.
+Independent review and integrator review covered ownership, retryable cleanup
+and durable ordering. Slopmark rose with the required recovery paths: identity
+988.965, credentials 385.589, record codec 114.59 (`credentials-slopmark-5.txt`).
+Review kept one identity/lock lifecycle owner and one canonical record codec;
+no second recovery authority, registry owner or generic recovery framework was
+introduced. Further launcher responsibilities must remain outside this owner.
+
+This feature checkpoint is not installed lifecycle acceptance. The staged
+component owners still need to supply validated create/reopen or bounded
+partial-child recovery before launcher composition can complete.
