@@ -52,8 +52,6 @@ final class RiverdCommandParserTest {
 
     assertEquals(renderFull("help"), renderFull("--help"));
     assertEquals(renderFull("help", "start"), renderFull("start", "--help"));
-    assertEquals(renderFull("help", "audit", "archive"),
-        renderFull("audit", "archive", "--help"));
   }
 
   @Test
@@ -66,7 +64,7 @@ final class RiverdCommandParserTest {
     assertEquals(FEATURE_NOT_SUPPORTED, parseStatus("stop", "--timeout=1s"));
     assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("stop", "--timeout=0s"));
     assertEquals(FEATURE_NOT_SUPPORTED, parseStatus("credentials", "renew"));
-    assertEquals("audit archive", parse("help", "audit", "archive").helpTopic());
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("help", "audit"));
   }
 
   private static RiverdCommandResult parse(String... arguments) {

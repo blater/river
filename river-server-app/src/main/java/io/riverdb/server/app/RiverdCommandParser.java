@@ -38,7 +38,6 @@ public final class RiverdCommandParser {
         arguments, result, RiverdCommand.STOP_UNAVAILABLE, "stop");
     if ("ps".equals(command)) return parseUnavailable(
         arguments, result, RiverdCommand.PS_UNAVAILABLE, "ps");
-    if ("audit".equals(command)) return parseAudit(arguments, result);
     if ("credentials".equals(command)) return parseCredentials(arguments, result);
     return fail(result, "unknown command: " + command);
   }
@@ -53,8 +52,7 @@ public final class RiverdCommandParser {
     String topic = arguments[1];
     if (!validHelpTopic(topic)) return fail(result, "unknown help topic: " + topic);
     if (arguments.length == 3) {
-      if (!("credentials".equals(topic) && "renew".equals(arguments[2]))
-          && !("audit".equals(topic) && "archive".equals(arguments[2]))) {
+      if (!("credentials".equals(topic) && "renew".equals(arguments[2]))) {
         return fail(result, "unknown help topic: " + arguments[2]);
       }
       topic += " " + arguments[2];
@@ -163,19 +161,6 @@ public final class RiverdCommandParser {
     return StatusCode.FEATURE_NOT_SUPPORTED;
   }
 
-  private static StatusCode parseAudit(String[] arguments, RiverdCommandResult result) {
-    if (arguments.length == 2 && isHelp(arguments[1])) {
-      result.complete("-h".equals(arguments[1]) ? RiverdCommand.BRIEF_HELP : RiverdCommand.FULL_HELP);
-      result.setHelpTopic("audit");
-      return StatusCode.OK;
-    }
-    if (arguments.length < 2 || !"archive".equals(arguments[1])) {
-      return fail(result, "audit requires the archive subcommand");
-    }
-    return parseUnavailable(tail(arguments, 1), result,
-        RiverdCommand.AUDIT_ARCHIVE_UNAVAILABLE, "audit archive");
-  }
-
   private static StatusCode parseCredentials(String[] arguments, RiverdCommandResult result) {
     if (arguments.length == 2 && isHelp(arguments[1])) {
       result.complete("-h".equals(arguments[1]) ? RiverdCommand.BRIEF_HELP : RiverdCommand.FULL_HELP);
@@ -213,7 +198,7 @@ public final class RiverdCommandParser {
 
   private static boolean validHelpTopic(String value) {
     return "start".equals(value) || "stop".equals(value) || "ps".equals(value)
-        || "audit".equals(value) || "credentials".equals(value) || "version".equals(value);
+        || "credentials".equals(value) || "version".equals(value);
   }
 
   private static Path path(String value) {

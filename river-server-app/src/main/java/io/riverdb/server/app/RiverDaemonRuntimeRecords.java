@@ -40,7 +40,7 @@ public final class RiverDaemonRuntimeRecords {
 
   /**
    * Removes stale runtime, registry, and ready records after the identity owner has validated the
-   * database, credential, and audit contents. The identity lock must remain held throughout.
+   * database and credential contents. The identity lock must remain held throughout.
    */
   public static StatusCode recoverStale(
       Path datadir,

@@ -14,7 +14,7 @@ import java.util.List;
 final class RiverDaemonIdentityRecords {
   static final int MAX_RECORD_BYTES = 4096;
   static final String INSTANCE_FORMAT = "riverd-instance-v1";
-  static final String BOOTSTRAP_FORMAT = "riverd-bootstrap-v1";
+  static final String BOOTSTRAP_FORMAT = "riverd-bootstrap-v2";
   static final String LOCK_FORMAT = "riverd-lock-v1";
 
   private RiverDaemonIdentityRecords() {
@@ -62,7 +62,7 @@ final class RiverDaemonIdentityRecords {
   }
 
   static BootstrapRecord parseBootstrap(byte[] bytes) {
-    String[] fields = envelope(bytes, 12, BOOTSTRAP_FORMAT);
+    String[] fields = envelope(bytes, 11, BOOTSTRAP_FORMAT);
     if (fields == null) return null;
     try {
       long high = canonicalLong(value(fields[1], "database-incarnation-high="));
@@ -73,14 +73,12 @@ final class RiverDaemonIdentityRecords {
       String nonce = value(fields[6], "attempt-nonce=");
       String database = value(fields[7], "database-name=");
       String security = value(fields[8], "security-name=");
-      String audit = value(fields[9], "audit-name=");
-      String staging = value(fields[10], "staging-name=");
-      String instanceStage = value(fields[11], "instance-stage-name=");
+      String staging = value(fields[9], "staging-name=");
+      String instanceStage = value(fields[10], "instance-stage-name=");
       if (!DatabaseIncarnation.of(high, low).isValid() || pid <= 0 || start < 0
           || !validCommand(command) || !nonce.matches("[0-9a-f]{32}")
           || !RiverDaemonIdentity.DATABASE_NAME.equals(database)
-          || !RiverDaemonIdentity.SECURITY_NAME.equals(security)
-          || !RiverDaemonIdentity.AUDIT_NAME.equals(audit)) return null;
+          || !RiverDaemonIdentity.SECURITY_NAME.equals(security)) return null;
       return new BootstrapRecord(DatabaseIncarnation.of(high, low), pid, start, command, nonce,
           staging, instanceStage);
     } catch (RuntimeException failure) {

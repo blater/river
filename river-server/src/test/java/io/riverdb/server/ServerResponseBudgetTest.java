@@ -237,11 +237,9 @@ final class ServerResponseBudgetTest {
     byte[] binding = new byte[] {1, 2, 3};
     SessionEndpoint endpoint = memory == null
         ? new SessionEndpoint(database, authenticator.authenticator(), fence.fence(), 11, 12,
-            binding, null, null, responses,
-            201, new MutableCancellationToken())
+            binding, null, responses, new MutableCancellationToken())
         : new SessionEndpoint(database, authenticator.authenticator(), fence.fence(), 11, 12,
-            binding, null, memory, responses,
-            202, new MutableCancellationToken());
+            binding, memory, responses, new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     assertEquals(StatusCode.OK, codec.encodeRequest(request, ProtocolMessageType.HELLO, 1));

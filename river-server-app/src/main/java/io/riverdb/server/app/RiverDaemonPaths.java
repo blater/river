@@ -63,11 +63,10 @@ final class RiverDaemonPaths {
     try {
       Target data = inspectDirectory(filesystem, paths.datadir);
       if (!data.status.isOk()) return data.status;
-      Target[] fixedChildren = new Target[3];
+      Target[] fixedChildren = new Target[2];
       String[] fixedNames = {
           RiverDaemonIdentity.DATABASE_NAME,
-          RiverDaemonIdentity.SECURITY_NAME,
-          RiverDaemonIdentity.AUDIT_NAME};
+          RiverDaemonIdentity.SECURITY_NAME};
       for (int index = 0; index < fixedNames.length; index++) {
         fixedChildren[index] = inspectDirectory(
             filesystem, paths.datadir.resolve(fixedNames[index]));

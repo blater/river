@@ -1103,3 +1103,36 @@ and the adjacent `launcher-update-trace-1/` artifacts.
 This is a feature checkpoint only. Windows execution evidence and the decision
 on synchronous SQL auditing remain outstanding; do not promote or close the
 standalone milestone from these results.
+
+
+## 2026-09-08 — Remove mandatory riverd SQL/security auditing
+
+The user removed auditing from the immediate roadmap. `tic-1c4d` deletes the
+subsystem rather than adding a disabled mode. Authentication, permissions,
+credential fencing, database/WAL durability, and workload SQL remain intact.
+Future consideration requires a concrete architecture supporting performance
+neutrality; no audit implementation or study is scheduled.
+
+Existing audited JARs (`23a1cb8e`) measured 8.2 and 8.2 TPS; the audit-free
+candidate measured 71.9 and 71.9 TPS. Commands used GraalVM 25, tiny/standard,
+four terminals, one warehouse, seed 42, two seconds warmup, ten measured.
+Successful samples had zero errors and passing reconciliation/capture.
+The user reported battery power; power was not independently controlled across
+the series. These diagnostics do not establish AC performance neutrality or
+justify comparison with the earlier 162–163 TPS result. The subsequent master
+control timed out in warmup and provides no TPS comparison. No further battery
+performance investigation is included in this removal.
+
+Evidence paths: `/private/tmp/riverd-noaudit-before-2/`, `before-3/`, `after-1/`,
+and `after-2/` (all share the `riverd-noaudit-` prefix). `before-1` is excluded
+because an agent built concurrently in the wrong checkout; those unintended
+source edits were restored. The invalid control is `riverd-noaudit-control-1/`.
+
+The clean test/distribution/module-graph build passed with 1,863 passed tests,
+18 skips, no failures/errors; unchanged tasks used Gradle cache results.
+Audit-only tests were deleted, while authentication/permission/expiry and
+cancellation checks remain. Installed lifecycle passed on macOS/APFS and
+Linux/ext4/XFS. Slopmark fell for identity (988.965→935.340), instance owner
+(245.744→221.793), and server (122.729→113.333). Full evidence and review are
+recorded in `docs/tickets/tic-1c4d.md`. Windows execution remains outstanding
+for the overall standalone milestone.

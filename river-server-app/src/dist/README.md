@@ -29,6 +29,6 @@ try (var connection = java.sql.DriverManager.getConnection(
 }
 ```
 
-`stop`, `ps`, audit archive and credential renewal are later deliveries. Their
+`stop`, `ps` and credential renewal are later deliveries. Their
 help is available, but the commands are not implemented in this candidate.
 PostgreSQL clients and remote addresses are not supported yet.

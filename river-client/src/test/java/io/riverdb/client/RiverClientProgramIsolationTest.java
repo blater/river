@@ -21,11 +21,8 @@ import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
-import io.riverdb.server.SecurityAuditLog;
-import io.riverdb.server.SecurityAuditLogFactory;
 import io.riverdb.protocol.auth.TokenAuthenticator;
 import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
-import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
@@ -49,10 +46,6 @@ final class RiverClientProgramIsolationTest {
     assertEquals(
         StatusCode.OK,
         io.riverdb.server.CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
-    SecurityAuditLog audit = SecurityAuditTestOwner.create(
-        root, DATABASE, 1,
-        SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-        SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
     LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -62,7 +55,6 @@ final class RiverClientProgramIsolationTest {
             0,
             TestTlsContexts.server(),
             authenticator.authenticator(),
-            audit,
             fence.fence(),
             LoopbackServerLimits.defaults(2),
             serverResult));

@@ -56,8 +56,8 @@ public final class SqlSession implements SqlRetainedBudget {
   }
 
   public StatusCode executePrepared(
-      SqlPreparedPlan plan, ParameterSet parameters, SqlExecutionResult result, int programStep) {
-    return deliver(coordinator.executePrepared(plan, parameters, result, programStep));
+      SqlPreparedPlan plan, ParameterSet parameters, SqlExecutionResult result) {
+    return deliver(coordinator.executePrepared(plan, parameters, result));
   }
 
   public StatusCode beginScan(String sql, SqlScanCursor cursor) {
@@ -70,8 +70,8 @@ public final class SqlSession implements SqlRetainedBudget {
   }
 
   public StatusCode beginPreparedScan(
-      SqlPreparedPlan plan, ParameterSet parameters, SqlScanCursor cursor, int programStep) {
-    return deliver(coordinator.beginPreparedScan(plan, parameters, cursor, programStep));
+      SqlPreparedPlan plan, ParameterSet parameters, SqlScanCursor cursor) {
+    return deliver(coordinator.beginPreparedScan(plan, parameters, cursor));
   }
 
   public StatusCode executePreparedSingleton(
@@ -79,10 +79,9 @@ public final class SqlSession implements SqlRetainedBudget {
       ParameterSet parameters,
       SqlScanCursor cursor,
       SqlExecutionResult result,
-      SqlPreparedQueryPath path,
-      int programStep) {
+      SqlPreparedQueryPath path) {
     return deliver(coordinator.executePreparedSingleton(
-        plan, parameters, cursor, result, path, programStep));
+        plan, parameters, cursor, result, path));
   }
 
   public StatusCode configureTransactionDiagnostics(

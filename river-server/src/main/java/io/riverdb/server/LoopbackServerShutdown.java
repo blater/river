@@ -3,7 +3,7 @@ package io.riverdb.server;
 import io.riverdb.base.error.StatusCode;
 import java.io.IOException;
 
-/** Bounded shutdown of the listener, workers, sockets, and audit log. */
+/** Bounded shutdown of the listener, workers, and sockets. */
 final class LoopbackServerShutdown {
   private static final int SHUTDOWN_TIMEOUT_MILLIS = 5_000;
 
@@ -12,7 +12,6 @@ final class LoopbackServerShutdown {
   static StatusCode close(LoopbackRiverServer server) {
     server.running = false;
     StatusCode status = closeListener(server);
-    if (server.audit != null) server.audit.beginClose();
     long deadline = System.nanoTime() + SHUTDOWN_TIMEOUT_MILLIS * 1_000_000L;
     status = joinUntil(server.acceptor, deadline, status);
     Thread[] workers = new Thread[server.slots.length];
@@ -21,9 +20,6 @@ final class LoopbackServerShutdown {
         LoopbackRiverServer.ConnectionSlot slot = server.slots[index];
         workers[index] = slot.worker;
         slot.cancellation.cancel();
-        if (server.audit != null) {
-          server.audit.cancelConnection(slot.connectionCorrelation);
-        }
         if (slot.socket != null) {
           try {
             slot.socket.close();
@@ -35,12 +31,6 @@ final class LoopbackServerShutdown {
     }
     for (Thread worker : workers) {
       status = joinUnbounded(worker, status);
-    }
-    if (server.audit != null) {
-      StatusCode auditStatus = server.audit.finishClose();
-      if (status.isOk() && auditStatus != StatusCode.CLOSED) {
-        status = auditStatus;
-      }
     }
     if (server.validityFence != null) {
       StatusCode fenceStatus = server.validityFence.close();

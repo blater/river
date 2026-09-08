@@ -15,7 +15,6 @@ dependencies {
   testImplementation(project(":river-protocol"))
   testImplementation(project(":river-server"))
   testImplementation(testFixtures(project(":river-client")))
-  testImplementation(testFixtures(project(":river-server")))
 }
 
 tasks.withType<Test>().configureEach {

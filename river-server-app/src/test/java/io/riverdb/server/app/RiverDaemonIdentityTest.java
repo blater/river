@@ -248,7 +248,6 @@ final class RiverDaemonIdentityTest {
             "attempt-nonce=" + nonce,
             "database-name=database",
             "security-name=security",
-            "audit-name=audit",
             "staging-name=.riverd-bootstrap-" + nonce,
             "instance-stage-name=.instance-" + nonce + ".stage")));
 
@@ -293,7 +292,6 @@ final class RiverDaemonIdentityTest {
             "attempt-nonce=" + stageNonce,
             "database-name=database",
             "security-name=security",
-            "audit-name=audit",
             "staging-name=.riverd-bootstrap-" + stageNonce,
             "instance-stage-name=.instance-" + stageNonce + ".stage")));
 
@@ -341,10 +339,9 @@ final class RiverDaemonIdentityTest {
         "/usr/bin/java", first));
     String nonce = first.nonce();
     for (String name : new String[] {RiverDaemonIdentity.DATABASE_NAME,
-        RiverDaemonIdentity.SECURITY_NAME, RiverDaemonIdentity.AUDIT_NAME}) {
+        RiverDaemonIdentity.SECURITY_NAME}) {
       RiverDirectory child = name.equals(RiverDaemonIdentity.DATABASE_NAME)
-          ? first.database() : name.equals(RiverDaemonIdentity.SECURITY_NAME)
-          ? first.security() : first.audit();
+          ? first.database() : first.security();
       assertEquals(StatusCode.OK, first.directory().publishDirectoryExclusive(
           first.staging(), child, name, name, new DirectoryOperationResult()));
     }
@@ -368,7 +365,7 @@ final class RiverDaemonIdentityTest {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(
           datadir, filesystem, new SecureRandom(), currentPid(), currentStart(), currentCommand(),
           reopened));
-      // The owning component consumers have validated database, security, and audit here.
+      // The owning component consumers have validated database and security here.
       assertEquals(StatusCode.OK, RiverDaemonIdentity.cleanupCommittedResidue(reopened));
       assertFalse(Files.exists(datadir.resolve("bootstrap.properties")));
       assertFalse(Files.exists(datadir.resolve(".riverd-bootstrap-" + nonce)));
@@ -513,10 +510,10 @@ final class RiverDaemonIdentityTest {
         "/usr/bin/java", first));
     String nonce = first.nonce();
     for (String name : new String[] {RiverDaemonIdentity.DATABASE_NAME,
-        RiverDaemonIdentity.SECURITY_NAME, RiverDaemonIdentity.AUDIT_NAME}) {
+        RiverDaemonIdentity.SECURITY_NAME}) {
       assertEquals(StatusCode.OK, first.directory().publishDirectoryExclusive(
           first.staging(), name.equals(RiverDaemonIdentity.DATABASE_NAME) ? first.database()
-              : name.equals(RiverDaemonIdentity.SECURITY_NAME) ? first.security() : first.audit(),
+              : first.security(),
           name, name, new DirectoryOperationResult()));
       assertEquals(StatusCode.OK, first.directory().force(new DirectoryOperationResult()));
     }
@@ -559,10 +556,10 @@ final class RiverDaemonIdentityTest {
         "/usr/bin/java", first));
     String nonce = first.nonce();
     for (String name : new String[] {RiverDaemonIdentity.DATABASE_NAME,
-        RiverDaemonIdentity.SECURITY_NAME, RiverDaemonIdentity.AUDIT_NAME}) {
+        RiverDaemonIdentity.SECURITY_NAME}) {
       assertEquals(StatusCode.OK, first.directory().publishDirectoryExclusive(
           first.staging(), name.equals(RiverDaemonIdentity.DATABASE_NAME) ? first.database()
-              : name.equals(RiverDaemonIdentity.SECURITY_NAME) ? first.security() : first.audit(),
+              : first.security(),
           name, name, new DirectoryOperationResult()));
       assertEquals(StatusCode.OK, first.directory().force(new DirectoryOperationResult()));
     }

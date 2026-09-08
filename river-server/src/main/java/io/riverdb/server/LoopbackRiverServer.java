@@ -34,7 +34,6 @@ public final class LoopbackRiverServer {
   final ServerSocket listener;
   private final TokenAuthenticator authenticator;
   private final SecureRandom random;
-  final SecurityAuditLog audit;
   final CredentialValidityFence validityFence;
   private final ProtocolMemoryBudget bufferBudget;
   private final int authenticationTimeoutMillis;
@@ -43,7 +42,6 @@ public final class LoopbackRiverServer {
   final ConnectionSlot[] slots;
   private final AtomicInteger activeConnections = new AtomicInteger();
   private final AtomicLong acceptedConnections = new AtomicLong();
-  private final AtomicLong nextConnectionCorrelation = new AtomicLong(1);
   private final AtomicLong completedRequests = new AtomicLong();
   private final AtomicLong rejectedConnections = new AtomicLong();
   private final AtomicLong rejectedFrames = new AtomicLong();
@@ -58,12 +56,10 @@ public final class LoopbackRiverServer {
       ServerSocket serverSocket,
       TokenAuthenticator tokenAuthenticator,
       LoopbackServerLimits limits,
-      SecurityAuditLog securityAudit,
       CredentialValidityFence credentialValidityFence) {
     database = engineDatabase;
     listener = serverSocket;
     authenticator = tokenAuthenticator;
-    audit = securityAudit;
     validityFence = credentialValidityFence;
     authenticationTimeoutMillis = limits.authenticationTimeoutMillis();
     idleTimeoutMillis = limits.idleTimeoutMillis();
@@ -81,7 +77,6 @@ public final class LoopbackRiverServer {
       int port,
       SSLContext context,
       TokenAuthenticator authenticator,
-      SecurityAuditLog audit,
       CredentialValidityFence validityFence,
       LoopbackServerLimits limits,
       LoopbackServerOpenResult result) {
@@ -91,8 +86,7 @@ public final class LoopbackRiverServer {
         || !limits.isValid()
         || !validStart(database, port, limits.maximumConnections(), result)
         || context == null
-        || authenticator == null
-        || audit == null) {
+        || authenticator == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -105,10 +99,8 @@ public final class LoopbackRiverServer {
       socket.bind(
           new InetSocketAddress(bindAddress, port),
           limits.maximumConnections());
-      return startBound(database, socket, authenticator, limits, audit, validityFence, result);
+      return startBound(database, socket, authenticator, limits, validityFence, result);
     } catch (IOException failure) {
-      audit.beginClose();
-      audit.finishClose();
       validityFence.close();
       if (socket != null) {
         try {
@@ -168,19 +160,6 @@ public final class LoopbackRiverServer {
   public long retainedProtocolBufferBytes() { return bufferBudget.retainedBytes(); }
   public long maximumProtocolBufferBytes() { return bufferBudget.maximumBytes(); }
 
-  public long auditRecordCount() {
-    return audit == null ? 0 : audit.recordCount();
-  }
-
-  /** Returns a point-in-time copy of the audit persistence counters. */
-  public SecurityAuditSnapshot auditSnapshot() {
-    return audit == null ? SecurityAuditSnapshot.empty() : audit.snapshot();
-  }
-
-  public boolean isDurablyAudited() {
-    return audit != null;
-  }
-
   public boolean isAuthenticatedTransport() {
     return authenticator != null;
   }
@@ -223,13 +202,9 @@ public final class LoopbackRiverServer {
     if (!running) {
       return null;
     }
-    long connectionCorrelation = nextConnectionCorrelation.get();
-    if (connectionCorrelation <= 0 || connectionCorrelation == Long.MAX_VALUE) return null;
     for (ConnectionSlot slot : slots) {
       if (slot.socket == null && slot.worker == null) {
         slot.socket = connection;
-        slot.connectionCorrelation = connectionCorrelation;
-        nextConnectionCorrelation.set(connectionCorrelation + 1);
         activeConnections.incrementAndGet();
         return slot;
       }
@@ -264,11 +239,9 @@ public final class LoopbackRiverServer {
           authenticator,
           validityFence,
           random,
-          audit,
           authenticationTimeoutMillis,
           slot.memory,
           slot.responses,
-          slot.connectionCorrelation,
           slot.cancellation,
           opened);
       if (!opened.status().isOk()) {
@@ -391,7 +364,6 @@ public final class LoopbackRiverServer {
       ServerSocket socket,
       TokenAuthenticator authenticator,
       LoopbackServerLimits limits,
-      SecurityAuditLog audit,
       CredentialValidityFence validityFence,
       LoopbackServerOpenResult result) throws IOException {
     LoopbackRiverServer server;
@@ -401,20 +373,15 @@ public final class LoopbackRiverServer {
           socket,
           authenticator,
           limits,
-          audit,
           validityFence);
     } catch (OutOfMemoryError failure) {
       socket.close();
-      closeAudit(audit);
       closeFence(validityFence);
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode completed = result.complete(server);
     if (!completed.isOk()) {
       socket.close();
-      if (audit != null) {
-        closeAudit(audit);
-      }
       closeFence(validityFence);
       return completed;
     }
@@ -423,13 +390,6 @@ public final class LoopbackRiverServer {
         .name("river-loopback-acceptor")
         .start(server::runAccepts);
     return StatusCode.OK;
-  }
-
-  private static void closeAudit(SecurityAuditLog audit) {
-    if (audit != null) {
-      audit.beginClose();
-      audit.finishClose();
-    }
   }
 
   private static void closeFence(CredentialValidityFence fence) {
@@ -464,7 +424,6 @@ public final class LoopbackRiverServer {
 
   final class ConnectionSlot implements Runnable {
     final int index;
-    long connectionCorrelation;
     final MutableCancellationToken cancellation = new MutableCancellationToken();
     private final ServerConnectionMemory memory = new ServerConnectionMemory(bufferBudget);
     private final ProtocolFrameHeader requestHeader = new ProtocolFrameHeader();

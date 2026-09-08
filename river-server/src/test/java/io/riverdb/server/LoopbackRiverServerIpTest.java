@@ -14,7 +14,6 @@ import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.protocol.auth.TokenAuthenticator;
 import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
-import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.net.InetAddress;
 import java.nio.file.Path;
@@ -34,7 +33,7 @@ final class LoopbackRiverServerIpTest {
       LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
       StatusCode status = LoopbackRiverServer.startAuthenticated(
           fixture.database, address, 0, TestTlsContexts.server(), fixture.authenticator,
-          fixture.audit, validityFence(), LoopbackServerLimits.defaults(2), opened);
+          validityFence(), LoopbackServerLimits.defaults(2), opened);
       assertEquals(StatusCode.OK, status);
       LoopbackRiverServer server = opened.server();
       fixture.server = server;
@@ -52,7 +51,7 @@ final class LoopbackRiverServerIpTest {
       LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
       StatusCode status = LoopbackRiverServer.startAuthenticated(
           fixture.database, address, 0, TestTlsContexts.server(), fixture.authenticator,
-          fixture.audit, validityFence(), LoopbackServerLimits.defaults(2), opened);
+          validityFence(), LoopbackServerLimits.defaults(2), opened);
       assertEquals(StatusCode.OK, status);
       LoopbackRiverServer server = opened.server();
       fixture.server = server;
@@ -71,7 +70,7 @@ final class LoopbackRiverServerIpTest {
       LoopbackServerOpenResult opened = new LoopbackServerOpenResult();
       assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, LoopbackRiverServer.startAuthenticated(
           fixture.database, InetAddress.getByName("192.0.2.1"), 0,
-          TestTlsContexts.server(), fixture.authenticator, fixture.audit,
+          TestTlsContexts.server(), fixture.authenticator,
           fence, LoopbackServerLimits.defaults(2), opened));
       assertNull(opened.server());
     } finally {
@@ -99,8 +98,7 @@ final class LoopbackRiverServerIpTest {
     assertEquals(StatusCode.OK, TokenAuthenticator.create(
         token, token.length, authenticatorResult));
     Arrays.fill(token, (byte) 0);
-    return new Fixture(databaseResult.database(), authenticatorResult.authenticator(),
-        SecurityAuditTestOwner.create(root, DATABASE, 1, 64L * 1024L * 1024L, 256L * 1024L));
+    return new Fixture(databaseResult.database(), authenticatorResult.authenticator());
   }
 
   private static DatabaseResourcePlanRequest databaseRequest() {
@@ -116,17 +114,15 @@ final class LoopbackRiverServerIpTest {
   private static final class Fixture {
     private final RiverDatabase database;
     private final TokenAuthenticator authenticator;
-    private final SecurityAuditLog audit;
     private LoopbackRiverServer server;
 
-    Fixture(RiverDatabase database, TokenAuthenticator authenticator, SecurityAuditLog audit) {
+    Fixture(RiverDatabase database, TokenAuthenticator authenticator) {
       this.database = database;
       this.authenticator = authenticator;
-      this.audit = audit;
     }
 
     StatusCode close() {
-      StatusCode status = server == null ? audit.finishClose() : server.close();
+      StatusCode status = server == null ? StatusCode.OK : server.close();
       StatusCode databaseStatus = database.close();
       if (status.isOk() && databaseStatus != StatusCode.CLOSED) status = databaseStatus;
       StatusCode authenticatorStatus = authenticator.destroy();

@@ -73,9 +73,9 @@ generated file through
 Endpoint, certificate, and token values are not accepted as separate JDBC
 configuration fields.
 
-The audited server path binds that token to a configured service-principal
-permission mask. Authorization denial is reported as SQLSTATE `42501`; audit
-capacity exhaustion is `53000`. `Statement.cancel()` deliberately fences and
+The authenticated server path binds that token to a configured service-principal
+permission mask. Authorization denial is reported as SQLSTATE `42501`.
+`Statement.cancel()` deliberately fences and
 closes the ordered connection so a blocked request unwinds on both peers, and
 `Connection.abort(Executor)` uses the same transport cancellation. Any open
 remote transaction is rolled back when the server observes the disconnect.

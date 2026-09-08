@@ -5,10 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.riverdb.base.concurrent.CancellationToken;
 import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.api.RiverSession;
 import io.riverdb.engine.api.SessionAuthorizer;
@@ -20,22 +18,12 @@ import io.riverdb.protocol.ProtocolResponse;
 import io.riverdb.protocol.auth.TokenAuthenticator;
 import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.protocol.auth.TokenProof;
-import io.riverdb.engine.api.SessionAuthorizationPhase;
-import io.riverdb.engine.api.SessionPermissions;
-import io.riverdb.testsupport.SecurityAuditTestOwner;
 import java.nio.ByteBuffer;
-import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 final class CredentialValidityFenceTest {
-  private static final DatabaseIncarnation DATABASE =
-      DatabaseIncarnation.of(0x4558504952593031L, 0x46454e4345303031L);
-  private static final long ACTIVE_BYTES = 64L + 108L * 8L;
-  private static final long PENDING_BYTES = 256L * 4L;
-
   @Test
   void validatesExclusiveWindow() {
     CredentialValidityFenceOpenResult result = new CredentialValidityFenceOpenResult();
@@ -64,8 +52,7 @@ final class CredentialValidityFenceTest {
   }
 
   @Test
-  void openSessionAfterFenceClosureIsAuditedAndDoesNotCreateEngineState(
-      @TempDir Path root) throws Exception {
+  void openSessionAfterFenceClosureDoesNotCreateEngineState() {
     byte[] token = new byte[TokenProof.MINIMUM_TOKEN_BYTES];
     Arrays.fill(token, (byte) 7);
     TokenAuthenticatorOpenResult authenticatorResult = new TokenAuthenticatorOpenResult();
@@ -75,13 +62,11 @@ final class CredentialValidityFenceTest {
     long now = System.currentTimeMillis();
     assertEquals(StatusCode.OK,
         CredentialValidityFence.create(now - 2_000L, now + 60_000L, fenceResult));
-    SecurityAuditLog audit = SecurityAuditTestOwner.create(
-        root, DATABASE, 1, ACTIVE_BYTES, PENDING_BYTES);
     CountingDatabase database = new CountingDatabase();
     byte[] binding = new byte[] {1, 2, 3};
     SessionEndpoint endpoint = new SessionEndpoint(
         database, authenticatorResult.authenticator(), fenceResult.fence(),
-        11, 12, binding, audit, null, null, 101, new MutableCancellationToken());
+        11, 12, binding, null, null, new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ProtocolFrame frame = new ProtocolFrame();
     ProtocolResponse decoded = new ProtocolResponse();
@@ -111,13 +96,8 @@ final class CredentialValidityFenceTest {
       assertEquals(StatusCode.OK, codec.decodeResponse(response, frame, decoded));
       assertEquals(StatusCode.ACCESS_DENIED, decoded.status());
       assertEquals(0, database.createCalls.get());
-      SecurityAuditSnapshot snapshot = audit.snapshot();
-      assertEquals(2, snapshot.decisions());
-      assertEquals(2, snapshot.forceCalls());
-      assertEquals(2, snapshot.durableFrontier());
     } finally {
       endpoint.close();
-      assertEquals(StatusCode.OK, audit.finishClose());
       assertEquals(StatusCode.OK, authenticatorResult.authenticator().destroy());
       Arrays.fill(token, (byte) 0);
       Arrays.fill(binding, (byte) 0);
@@ -125,26 +105,16 @@ final class CredentialValidityFenceTest {
   }
 
   @Test
-  void expiredStatementIsAuditedBeforeAccessDenied(@TempDir Path root) throws Exception {
-    SecurityAuditLog audit = SecurityAuditTestOwner.create(
-        root, DATABASE, 1, ACTIVE_BYTES, PENDING_BYTES);
-    CredentialValidityFenceOpenResult fenceResult = new CredentialValidityFenceOpenResult();
+  void expiredStatementIsDenied() {
+    CredentialValidityFenceOpenResult result = new CredentialValidityFenceOpenResult();
     long now = System.currentTimeMillis();
     assertEquals(StatusCode.OK,
-        CredentialValidityFence.create(now - 2_000L, now - 1L, fenceResult));
+        CredentialValidityFence.create(now - 2_000L, now - 1L, result));
     RemoteSessionAuthorizer authorizer = new RemoteSessionAuthorizer(
-        7, SessionPermissions.READ, audit, fenceResult.fence());
-    authorizer.bindRequest(11, 13, 17, CancellationToken.NONE, 0);
-    try {
-      assertEquals(StatusCode.ACCESS_DENIED, authorizer.authorize(
-          SessionPermissions.READ, SessionAuthorizationPhase.EXECUTE, 0));
-      SecurityAuditSnapshot snapshot = audit.snapshot();
-      assertEquals(1, snapshot.decisions());
-      assertEquals(1, snapshot.forceCalls());
-      assertEquals(1, snapshot.durableFrontier());
-    } finally {
-      assertEquals(StatusCode.OK, audit.finishClose());
-    }
+        io.riverdb.engine.api.SessionPermissions.READ, result.fence());
+    assertEquals(StatusCode.ACCESS_DENIED,
+        authorizer.authorize(io.riverdb.engine.api.SessionPermissions.READ));
+    assertEquals(1, authorizer.denials());
   }
 
   private static final class CountingDatabase implements RiverDatabase {

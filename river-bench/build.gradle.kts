@@ -83,13 +83,6 @@ tasks.register<JavaExec>("tpccAcceptance") {
   if (riverUrl.isPresent) args("--url=${riverUrl.get()}")
 }
 
-tasks.register<JavaExec>("securityAuditAdmission") {
-  group = "verification"
-  description = "Runs the authenticated security-audit admission measurement."
-  classpath = sourceSets.main.get().runtimeClasspath
-  mainClass.set("io.riverdb.bench.security.SecurityAuditAdmissionMain")
-}
-
 tasks.withType<Test>().configureEach {
   systemProperty("river.test.classpath", sourceSets.test.get().runtimeClasspath.asPath)
   maxHeapSize = "1g"

@@ -80,8 +80,9 @@ The main sources for these limits are
 ## What remains unfinished
 
 The current `riverd start` candidate workflow has been validated on
-macOS/APFS and Linux/ext4/XFS. Windows/NTFS validation and the final audit
-acceptance decision remain pending. The foreground server creates or reopens
+macOS/APFS and Linux/ext4/XFS. Windows/NTFS validation remains pending. SQL/
+security audit collection is deferred pending a concrete performance-neutral
+design. The foreground server creates or reopens
 the database, publishes `security/client.properties`, and accepts only
 authenticated TLS 1.3 connections. Backup and restore are offline; replication,
 failover, and online schema migration are not available.

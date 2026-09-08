@@ -68,10 +68,6 @@ public final class SessionEndpoint {
   private long pendingRequestId;
   private boolean pendingQueryActive;
   private long rowsReturned;
-  private final long connectionCorrelation;
-  private long sessionCorrelation;
-  private long nextSessionOrdinal = 1;
-  private long activeRequestId;
   private final MutableCancellationToken connectionCancellation;
 
   SessionEndpoint(
@@ -81,10 +77,8 @@ public final class SessionEndpoint {
       long nonceHigh,
       long nonceLow,
       byte[] binding,
-      SecurityAuditLog audit,
       ServerConnectionMemory connectionMemory,
       ServerResponseBuffer responseProvider,
-      long suppliedConnectionCorrelation,
       MutableCancellationToken suppliedCancellation) {
     database = engineDatabase;
     memory = connectionMemory;
@@ -98,14 +92,11 @@ public final class SessionEndpoint {
     authenticator = tokenAuthenticator;
     validityFence = credentialValidityFence;
     sessionAuthorizer = new RemoteSessionAuthorizer(
-        tokenAuthenticator.principalId(),
         tokenAuthenticator.permissions(),
-        audit,
         credentialValidityFence);
     challengeHigh = nonceHigh;
     challengeLow = nonceLow;
     channelBinding = binding;
-    connectionCorrelation = suppliedConnectionCorrelation;
     connectionCancellation = suppliedCancellation;
   }
 
@@ -134,14 +125,7 @@ public final class SessionEndpoint {
       return codec.encodeStatusResponse(
           response, type, frame.requestId(), StatusCode.INVALID_EXTERNAL_INPUT, state == QUERY);
     }
-    activeRequestId = frame.requestId();
-    if (sessionAuthorizer != null) {
-      sessionAuthorizer.bindRequest(
-          connectionCorrelation, sessionCorrelation, activeRequestId,
-          connectionCancellation, 0);
-    }
-    try {
-      return switch (type) {
+    return switch (type) {
       case HELLO -> hello(response);
       case AUTHENTICATE -> authenticate(response);
       case OPEN_SESSION -> openSession(response);
@@ -157,11 +141,7 @@ public final class SessionEndpoint {
       case PREPARE_PROGRAM -> prepareProgram(response);
       case EXECUTE_PROGRAM -> executeProgram(response);
       case CLOSE_PROGRAM -> closeProgram(response);
-      };
-    } finally {
-      if (sessionAuthorizer != null) sessionAuthorizer.clearRequest();
-      activeRequestId = 0;
-    }
+    };
   }
 
   StatusCode retryResponse(ByteBuffer response) {
@@ -180,7 +160,6 @@ public final class SessionEndpoint {
 
   public StatusCode close() {
     connectionCancellation.cancel();
-    if (sessionAuthorizer != null) sessionAuthorizer.cancelActiveRequest();
     if (state == CLOSED) {
       return StatusCode.CLOSED;
     }
@@ -285,12 +264,7 @@ public final class SessionEndpoint {
         StatusCode erased = frame.erasePayload();
         if (!erased.isOk()) status = erased;
       }
-      StatusCode audited = sessionAuthorizer.auditAuthentication(status);
-      if (!audited.isOk()) {
-        state = CLOSED;
-        status = audited;
-        clearChannelBinding();
-      } else if (status.isOk()) {
+      if (status.isOk()) {
         state = READY;
         clearChannelBinding();
       } else if (validityDenied) {
@@ -329,15 +303,10 @@ public final class SessionEndpoint {
         status = StatusCode.RESOURCE_EXHAUSTED;
       }
     }
-    if (status.isOk()
-        && (nextSessionOrdinal <= 0 || nextSessionOrdinal == Long.MAX_VALUE)) {
-      status = StatusCode.RESOURCE_EXHAUSTED;
-    }
     if (status.isOk()) {
       StatusCode validity = validityFence.checkNow();
       if (!validity.isOk()) {
-        StatusCode audited = sessionAuthorizer.auditValidityDenial(validity);
-        status = audited.isOk() ? validity : audited;
+        status = validity;
       }
     }
     if (status.isOk()) {
@@ -345,7 +314,6 @@ public final class SessionEndpoint {
     }
     if (status.isOk()) {
       session = openedSession.session();
-      sessionCorrelation = nextSessionOrdinal++;
       sqlRequest = decoder;
       state = SESSION;
     }

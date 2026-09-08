@@ -54,7 +54,7 @@ final class TransactionProgramSteps {
       TransactionProgram program, int step,
       SqlPreparedPlan plan, TransactionProgramResult result) {
     status = session.executePrepared(
-        plan, values.parameters(), execution, step + 1);
+        plan, values.parameters(), execution);
     if (status.isOk() && (execution.affectedRows() < program.minimumAffectedRows(step)
         || execution.affectedRows() > program.maximumAffectedRows(step))) {
       status = StatusCode.CARDINALITY_VIOLATION;
@@ -80,10 +80,10 @@ final class TransactionProgramSteps {
     queryPath.reset();
     if (status.isOk() && program.action(step) == TransactionProgramAction.ROW_SET) {
       status = session.beginPreparedScan(
-          plan, values.parameters(), scan, step + 1);
+          plan, values.parameters(), scan);
     } else if (status.isOk()) {
       status = session.executePreparedSingleton(
-          plan, values.parameters(), scan, execution, queryPath, step + 1);
+          plan, values.parameters(), scan, execution, queryPath);
     }
     if (queryPath.point()) return executePointSingleton(program, step, result);
     if (!status.isOk()) return Integer.MIN_VALUE;

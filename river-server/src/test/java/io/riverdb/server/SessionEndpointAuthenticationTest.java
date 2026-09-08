@@ -38,8 +38,6 @@ final class SessionEndpointAuthenticationTest {
         new byte[] {1, 2, 3},
         null,
         null,
-        null,
-        101,
         new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ProtocolFrame frame = new ProtocolFrame();
@@ -180,8 +178,7 @@ final class SessionEndpointAuthenticationTest {
     assertEquals(StatusCode.OK,
         CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
     return new SessionEndpoint(database, authenticator.authenticator(), fence.fence(),
-        11, 12, new byte[] {1, 2, 3}, null, null, null,
-        connection, new MutableCancellationToken());
+        11, 12, new byte[] {1, 2, 3}, null, null, new MutableCancellationToken());
   }
 
   private static void assertStatus(

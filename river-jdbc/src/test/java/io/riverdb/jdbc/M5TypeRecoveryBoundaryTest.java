@@ -32,9 +32,6 @@ import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
-import io.riverdb.server.SecurityAuditLog;
-import io.riverdb.server.SecurityAuditLogFactory;
-import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -74,14 +71,14 @@ final class M5TypeRecoveryBoundaryTest {
   void preservesOneAuthenticatedTypedLineageThroughRecoveryAndFault(
       @TempDir Path root) throws Exception {
     Path source = Files.createDirectory(root.resolve("source"));
-    Path sourceAudit = Files.createDirectory(root.resolve("audit-source"));
+    Path sourceClients = Files.createDirectory(root.resolve("clients-source"));
     Path backupDirectory = Files.createDirectory(root.resolve("backup"));
     Path restored = Files.createDirectory(root.resolve("restored"));
-    Path restoredAudit = Files.createDirectory(root.resolve("audit-restored"));
+    Path restoredClients = Files.createDirectory(root.resolve("clients-restored"));
     Path failedRestore = Files.createDirectory(root.resolve("failed-restore"));
     byte[] token = token("m5-useful-sql-boundary-token");
 
-    createAuthenticatedCheckpointLineage(source, sourceAudit, token);
+    createAuthenticatedCheckpointLineage(source, sourceClients, token);
     assertEmbeddedReopen(source);
 
     OfflineDatabaseBackup backup = new OfflineDatabaseBackup();
@@ -102,7 +99,7 @@ final class M5TypeRecoveryBoundaryTest {
     assertTrue(restoreResult.isComplete());
     assertEquals(backupResult.fileCount(), restoreResult.fileCount());
     assertEquals(backupResult.totalBytes(), restoreResult.totalBytes());
-    assertAuthenticatedRestoredBoundary(restored, restoredAudit, token);
+    assertAuthenticatedRestoredBoundary(restored, restoredClients, token);
 
     Path pages = backupDirectory.resolve("river.indexed.pages");
     byte[] pageBytes = Files.readAllBytes(pages);
@@ -117,14 +114,14 @@ final class M5TypeRecoveryBoundaryTest {
   }
 
   private static void createAuthenticatedCheckpointLineage(
-      Path source, Path audit, byte[] token) throws Exception {
+      Path source, Path clients, byte[] token) throws Exception {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), source, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = startAuthenticated(database, audit, token);
-    RiverDataSource dataSource = dataSource(audit, server, token);
+    LoopbackRiverServer server = startAuthenticated(database, token);
+    RiverDataSource dataSource = dataSource(clients, server, token);
     try (Connection connection = dataSource.getConnection()) {
       createSchema(connection);
       insertRows(connection);
@@ -269,7 +266,7 @@ final class M5TypeRecoveryBoundaryTest {
   }
 
   private static void assertAuthenticatedRestoredBoundary(
-      Path restored, Path audit, byte[] token) throws Exception {
+      Path restored, Path clients, byte[] token) throws Exception {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -277,8 +274,8 @@ final class M5TypeRecoveryBoundaryTest {
             databaseRequest(8), restored, DATABASE, GENERATION, 8,
             EmbeddedLockDiagnosticsConfig.disabled(), opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = startAuthenticated(database, audit, token);
-    RiverDataSource dataSource = dataSource(audit, server, token);
+    LoopbackRiverServer server = startAuthenticated(database, token);
+    RiverDataSource dataSource = dataSource(clients, server, token);
     try (Connection connection = dataSource.getConnection();
         Statement statement = connection.createStatement();
         ResultSet rows = statement.executeQuery(
@@ -304,13 +301,13 @@ final class M5TypeRecoveryBoundaryTest {
       assertFalse(rows.next());
     }
     awaitConnections(server, 0);
-    assertCliRows(audit, server, token);
+    assertCliRows(clients, server, token);
     awaitConnections(server, 0);
     assertDisconnectRollsBackTypedMutation(server, dataSource);
     dataSource.close();
 
-    server = startAuthenticated(database, audit, token);
-    RiverDataSource reopened = dataSource(audit, server, token);
+    server = startAuthenticated(database, token);
+    RiverDataSource reopened = dataSource(clients, server, token);
     assertTypedMutationWasNotPublished(reopened);
     reopened.close();
     awaitConnections(server, 0);
@@ -409,18 +406,11 @@ final class M5TypeRecoveryBoundaryTest {
   }
 
   private static LoopbackRiverServer startAuthenticated(
-      RiverDatabase database, Path audit, byte[] token) throws Exception {
+      RiverDatabase database, byte[] token) throws Exception {
     TokenAuthenticatorOpenResult authenticated = new TokenAuthenticatorOpenResult();
     assertEquals(
         StatusCode.OK,
         TokenAuthenticator.create(token, token.length, authenticated));
-    SecurityAuditLog auditOwner = Files.exists(audit.resolve("audit/audit-1.log"))
-        ? SecurityAuditTestOwner.reopen(audit, DATABASE, 1,
-            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES)
-        : SecurityAuditTestOwner.create(audit, DATABASE, 1,
-            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
     LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -430,7 +420,6 @@ final class M5TypeRecoveryBoundaryTest {
             0,
             TestTlsContexts.server(),
             authenticated.authenticator(),
-            auditOwner,
             validityFence(),
             LoopbackServerLimits.defaults(8),
             listener));

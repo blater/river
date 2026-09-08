@@ -29,7 +29,6 @@ public final class RiverDaemonIdentity {
   public static final String LOCK_FILE = "instance.lock";
   public static final String DATABASE_NAME = "database";
   public static final String SECURITY_NAME = "security";
-  public static final String AUDIT_NAME = "audit";
   private static final int MAX_RECORD_BYTES = RiverDaemonIdentityRecords.MAX_RECORD_BYTES;
 
   private RiverDaemonIdentity() {
@@ -129,7 +128,7 @@ public final class RiverDaemonIdentity {
   /**
    * Removes only validated bootstrap residue after component owners have checked an instance.
    * The caller must retain the lock returned by {@link #openExisting} while invoking this method;
-   * identity does not validate database, security, or audit contents.
+   * identity does not validate database or credential contents.
    */
   static StatusCode cleanupCommittedResidue(IdentityResult result) {
     if (result == null || result.directory == null || result.lock == null
@@ -173,7 +172,7 @@ public final class RiverDaemonIdentity {
 
     String stagingName = bootstrap.stagingName;
     String instanceStageName = bootstrap.instanceStageName;
-    String[] allowed = {LOCK_FILE, INSTANCE_FILE, DATABASE_NAME, SECURITY_NAME, AUDIT_NAME,
+    String[] allowed = {LOCK_FILE, INSTANCE_FILE, DATABASE_NAME, SECURITY_NAME,
       "bootstrap.properties", stagingName, instanceStageName};
     for (int index = 0; index < entries.size(); index++) {
       boolean known = false;
@@ -241,7 +240,7 @@ public final class RiverDaemonIdentity {
   }
 
   /**
-   * Begins a first-create transaction, leaving database/security/audit initialization to owners.
+   * Begins a first-create transaction, leaving database and credential initialization to owners.
    * The proposed incarnation applies only to a new bootstrap; an existing bootstrap owns its
    * recorded incarnation and is resumed unchanged.
    */
@@ -284,7 +283,7 @@ public final class RiverDaemonIdentity {
           processStartEpochMillis, command, prebootstrapStage, result);
     }
     if (hasEntry(entries, INSTANCE_FILE) || hasEntry(entries, DATABASE_NAME)
-        || hasEntry(entries, SECURITY_NAME) || hasEntry(entries, AUDIT_NAME)) {
+        || hasEntry(entries, SECURITY_NAME)) {
       if (hasBootstrap) {
         return recoverCreate(datadir, directory, filesystem, pid,
             processStartEpochMillis, command, entries, result);
@@ -374,7 +373,6 @@ public final class RiverDaemonIdentity {
     RiverDirectory staging = null;
     RiverDirectory database = null;
     RiverDirectory security = null;
-    RiverDirectory audit = null;
     if (status.isOk()) {
       RiverDirectoryResult stagingResult = new RiverDirectoryResult();
       status = directory.createDirectory(".riverd-bootstrap-" + nonce, stagingResult);
@@ -389,14 +387,8 @@ public final class RiverDaemonIdentity {
         status = staging.createDirectory(SECURITY_NAME, child);
         security = child.directory();
       }
-      if (status.isOk()) {
-        RiverDirectoryResult child = new RiverDirectoryResult();
-        status = staging.createDirectory(AUDIT_NAME, child);
-        audit = child.directory();
-      }
     }
     if (!status.isOk()) {
-      closeQuiet(audit);
       closeQuiet(security);
       closeQuiet(database);
       closeQuiet(staging);
@@ -406,8 +398,8 @@ public final class RiverDaemonIdentity {
       return status;
     }
     result.complete(directory, lock, incarnation, 1L);
-    result.setBootstrap(nonce, staging, database, security, audit, lockFile,
-        false, false, false, canonicalPath(datadir), pid, processStartEpochMillis, command, false,
+    result.setBootstrap(nonce, staging, database, security, lockFile,
+        false, false, canonicalPath(datadir), pid, processStartEpochMillis, command, false,
         null, null);
     result.setPriorOwner(priorOwner);
     return StatusCode.OK;
@@ -597,7 +589,7 @@ public final class RiverDaemonIdentity {
       return StatusCode.CORRUPTION;
     }
     String[] allowed = {LOCK_FILE, "bootstrap.properties", INSTANCE_FILE,
-      DATABASE_NAME, SECURITY_NAME, AUDIT_NAME, stagingName, instanceStageName};
+      DATABASE_NAME, SECURITY_NAME, stagingName, instanceStageName};
     for (int index = 0; index < entries.size(); index++) {
       boolean known = false;
       for (String name : allowed) known |= name.equals(entries.name(index));
@@ -611,8 +603,7 @@ public final class RiverDaemonIdentity {
 
     boolean databasePublished = hasEntry(entries, DATABASE_NAME);
     boolean securityPublished = hasEntry(entries, SECURITY_NAME);
-    boolean auditPublished = hasEntry(entries, AUDIT_NAME);
-    if ((securityPublished && !databasePublished) || (auditPublished && !securityPublished)) {
+    if (securityPublished && !databasePublished) {
       held.close();
       lockFile.close();
       closeDirectory(directory, StatusCode.CORRUPTION);
@@ -622,14 +613,13 @@ public final class RiverDaemonIdentity {
     RiverDirectory staging = null;
     RiverDirectory database = null;
     RiverDirectory security = null;
-    RiverDirectory audit = null;
     RiverDirectoryResult opened = new RiverDirectoryResult();
     StageRepairResult stageRepair = new StageRepairResult();
     if (hasEntry(entries, instanceStageName)) {
       status = inspectInstanceStage(directory, instanceStageName, bootstrap.incarnation,
           stageRepair);
       if (status.isOk() && stageRepair.identity != null
-          && !(databasePublished && securityPublished && auditPublished)) {
+          && !(databasePublished && securityPublished)) {
         status = StatusCode.CORRUPTION;
       }
     }
@@ -639,10 +629,10 @@ public final class RiverDaemonIdentity {
         staging = opened.directory();
       }
       if (status.isOk()) status = validateStagingNames(staging, databasePublished,
-          securityPublished, auditPublished);
+          securityPublished);
     }
     if (status.isOk()) status = validateExistingComponents(
-        directory, staging, databasePublished, securityPublished, auditPublished);
+        directory, staging, databasePublished, securityPublished);
     if (status.isOk() && staging == null) {
       status = directory.createDirectory(stagingName, opened);
       staging = opened.directory();
@@ -654,11 +644,7 @@ public final class RiverDaemonIdentity {
     if (status.isOk()) status = openOrCreateRecoveryChild(
         directory, staging, SECURITY_NAME, securityPublished, opened);
     if (status.isOk()) security = opened.directory();
-    if (status.isOk()) status = openOrCreateRecoveryChild(
-        directory, staging, AUDIT_NAME, auditPublished, opened);
-    if (status.isOk()) audit = opened.directory();
     if (!status.isOk()) {
-      closeQuiet(audit);
       closeQuiet(security);
       closeQuiet(database);
       closeQuiet(staging);
@@ -668,8 +654,8 @@ public final class RiverDaemonIdentity {
       return status;
     }
     result.complete(directory, held, bootstrap.incarnation, 1L);
-    result.setBootstrap(bootstrap.nonce, staging, database, security, audit, lockFile,
-        databasePublished, securityPublished, auditPublished, canonicalPath(datadir), pid,
+    result.setBootstrap(bootstrap.nonce, staging, database, security, lockFile,
+        databasePublished, securityPublished, canonicalPath(datadir), pid,
         processStartEpochMillis, command, true, stageRepair.name, stageRepair.identity);
     result.setPriorOwner(lock);
     return StatusCode.OK;
@@ -696,10 +682,9 @@ public final class RiverDaemonIdentity {
       RiverDirectory directory,
       RiverDirectory staging,
       boolean databasePublished,
-      boolean securityPublished,
-      boolean auditPublished) {
-    String[] names = {DATABASE_NAME, SECURITY_NAME, AUDIT_NAME};
-    boolean[] published = {databasePublished, securityPublished, auditPublished};
+      boolean securityPublished) {
+    String[] names = {DATABASE_NAME, SECURITY_NAME};
+    boolean[] published = {databasePublished, securityPublished};
     for (int index = 0; index < names.length; index++) {
       RiverDirectoryResult result = new RiverDirectoryResult();
       StatusCode status;
@@ -757,16 +742,14 @@ public final class RiverDaemonIdentity {
   }
 
   private static StatusCode validateStagingNames(
-      RiverDirectory staging, boolean databasePublished, boolean securityPublished,
-      boolean auditPublished) {
+      RiverDirectory staging, boolean databasePublished, boolean securityPublished) {
     DirectoryListResult entries = new DirectoryListResult(8);
     StatusCode status = staging.list(entries);
     if (!status.isOk()) return status;
     for (int index = 0; index < entries.size(); index++) {
       String name = entries.name(index);
       boolean allowed = (!databasePublished && DATABASE_NAME.equals(name))
-          || (!securityPublished && SECURITY_NAME.equals(name))
-          || (!auditPublished && AUDIT_NAME.equals(name));
+          || (!securityPublished && SECURITY_NAME.equals(name));
       if (!allowed) return StatusCode.CORRUPTION;
     }
     return StatusCode.OK;
@@ -814,12 +797,12 @@ public final class RiverDaemonIdentity {
    *
    * <p>Callers must validate each component's durable contents through its owning consumer before
    * calling this method. Identity validates only capability, type, ownership, and namespace
-   * binding; it does not interpret database, credential, or audit formats.
+   * binding; it does not interpret database or credential formats.
    */
   public static StatusCode completeCreate(IdentityResult result) {
     if (result == null || result.directory == null || result.lock == null
         || result.staging == null || result.database == null || result.security == null
-        || result.audit == null || result.nonce == null || result.lockFile == null) {
+        || result.nonce == null || result.lockFile == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     RiverDirectory directory = result.directory;
@@ -840,10 +823,6 @@ public final class RiverDaemonIdentity {
     if (status.isOk() && !result.securityPublished) {
       status = publishDirectory(directory, result.staging, result.security, SECURITY_NAME);
       if (status.isOk()) result.securityPublished = true;
-    }
-    if (status.isOk() && !result.auditPublished) {
-      status = publishDirectory(directory, result.staging, result.audit, AUDIT_NAME);
-      if (status.isOk()) result.auditPublished = true;
     }
     if (status.isOk()) {
       String stageName = ".instance-" + result.nonce + ".stage";
@@ -1009,7 +988,6 @@ public final class RiverDaemonIdentity {
         "attempt-nonce=" + nonce,
         "database-name=" + DATABASE_NAME,
         "security-name=" + SECURITY_NAME,
-        "audit-name=" + AUDIT_NAME,
         "staging-name=.riverd-bootstrap-" + nonce,
         "instance-stage-name=.instance-" + nonce + ".stage"));
     RiverFileResult stageResult = new RiverFileResult();
@@ -1196,11 +1174,9 @@ public final class RiverDaemonIdentity {
     private RiverDirectory staging;
     private RiverDirectory database;
     private RiverDirectory security;
-    private RiverDirectory audit;
     private RiverFile lockFile;
     private boolean databasePublished;
     private boolean securityPublished;
-    private boolean auditPublished;
     private String datadir;
     private long ownerPid;
     private long ownerStart;
@@ -1220,11 +1196,9 @@ public final class RiverDaemonIdentity {
       staging = null;
       database = null;
       security = null;
-      audit = null;
       lockFile = null;
       databasePublished = false;
       securityPublished = false;
-      auditPublished = false;
       datadir = null;
       ownerPid = 0;
       ownerStart = 0;
@@ -1252,11 +1226,9 @@ public final class RiverDaemonIdentity {
         RiverDirectory openedStaging,
         RiverDirectory openedDatabase,
         RiverDirectory openedSecurity,
-        RiverDirectory openedAudit,
         RiverFile openedLockFile,
         boolean openedDatabasePublished,
         boolean openedSecurityPublished,
-        boolean openedAuditPublished,
         String openedDatadir,
         long openedOwnerPid,
         long openedOwnerStart,
@@ -1268,11 +1240,9 @@ public final class RiverDaemonIdentity {
       staging = openedStaging;
       database = openedDatabase;
       security = openedSecurity;
-      audit = openedAudit;
       lockFile = openedLockFile;
       databasePublished = openedDatabasePublished;
       securityPublished = openedSecurityPublished;
-      auditPublished = openedAuditPublished;
       datadir = openedDatadir;
       ownerPid = openedOwnerPid;
       ownerStart = openedOwnerStart;
@@ -1319,12 +1289,8 @@ public final class RiverDaemonIdentity {
     /** Verified private component capability; its owner must initialize and validate its contents. */
     RiverDirectory security() { return security; }
 
-    /** Verified private component capability; its owner must initialize and validate its contents. */
-    RiverDirectory audit() { return audit; }
-
     boolean databasePublished() { return databasePublished; }
     boolean securityPublished() { return securityPublished; }
-    boolean auditPublished() { return auditPublished; }
     String nonce() { return nonce; }
     RiverFile lockFile() { return lockFile; }
     RiverDaemonIdentityRecords.LockRecord priorOwner() { return priorOwner; }
@@ -1340,14 +1306,12 @@ public final class RiverDaemonIdentity {
     /** Closes retained capabilities in reverse creation order, preserving the first failure. */
     public synchronized StatusCode close() {
       StatusCode status = StatusCode.OK;
-      status = combine(status, closeDirectory(audit));
       status = combine(status, closeDirectory(security));
       status = combine(status, closeDirectory(database));
       status = combine(status, closeDirectory(staging));
       status = combine(status, lock == null ? StatusCode.OK : lock.close());
       status = combine(status, lockFile == null ? StatusCode.OK : lockFile.close());
       status = combine(status, closeDirectory(directory));
-      audit = null;
       security = null;
       database = null;
       staging = null;

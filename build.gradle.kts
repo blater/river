@@ -132,7 +132,7 @@ val declaredDependencies = mapOf(
   "river-protocol" to setOf("river-base", "river-engine-api"),
   "river-client" to setOf("river-base", "river-engine-api", "river-protocol", "river-platform"),
   "river-server" to setOf(
-    "river-base", "river-platform", "river-engine-api", "river-protocol"
+    "river-base", "river-engine-api", "river-protocol"
   ),
   "river-server-app" to setOf(
     "river-base", "river-platform", "river-engine-api", "river-protocol", "river-client",

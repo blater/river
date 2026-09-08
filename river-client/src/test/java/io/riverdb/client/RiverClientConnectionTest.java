@@ -39,9 +39,6 @@ import io.riverdb.protocol.auth.TlsChannelBinding;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
-import io.riverdb.server.SecurityAuditLog;
-import io.riverdb.server.SecurityAuditLogFactory;
-import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.io.IOException;
 import java.io.InputStream;
@@ -51,7 +48,6 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
-import java.nio.file.Files;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import javax.net.ssl.SSLSocket;
@@ -81,7 +77,7 @@ final class RiverClientConnectionTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database, root);
+    LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, client.createSession(sessionResult));
@@ -137,7 +133,7 @@ final class RiverClientConnectionTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database, root);
+    LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, client.createSession(sessionResult));
@@ -197,7 +193,7 @@ final class RiverClientConnectionTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database, root);
+    LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, client.createSession(sessionResult));
@@ -247,7 +243,7 @@ final class RiverClientConnectionTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database, root);
+    LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, client.createSession(sessionResult));
@@ -299,7 +295,7 @@ final class RiverClientConnectionTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database, root);
+    LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, client.createSession(sessionResult));
@@ -364,7 +360,7 @@ final class RiverClientConnectionTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, engineResult));
     RiverDatabase engine = engineResult.database();
-    LoopbackRiverServer server = start(engine, root);
+    LoopbackRiverServer server = start(engine);
     RiverClientConnection client = connect(server);
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, client.createSession(sessionResult));
@@ -511,7 +507,7 @@ final class RiverClientConnectionTest {
         EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
             io.riverdb.engine.EmbeddedLockDiagnosticsConfig.disabled(), engineResult));
     engine = engineResult.database();
-    server = start(engine, root);
+    server = start(engine);
     client = connect(server);
     assertEquals(StatusCode.OK, client.createSession(sessionResult));
     session = sessionResult.session();
@@ -547,7 +543,7 @@ final class RiverClientConnectionTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
     RiverDatabase engine = engineResult.database();
-    LoopbackRiverServer server = start(engine, root);
+    LoopbackRiverServer server = start(engine);
     RiverClientConnection client = connect(server);
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, client.createSession(sessionResult));
@@ -568,7 +564,7 @@ final class RiverClientConnectionTest {
     assertEquals(StatusCode.CLOSED, session.execute("COMMIT", command));
     assertEquals(StatusCode.CLOSED, client.close());
 
-    server = start(engine, root);
+    server = start(engine);
     client = connect(server);
     assertEquals(StatusCode.OK, client.createSession(sessionResult));
     session = sessionResult.session();
@@ -588,7 +584,7 @@ final class RiverClientConnectionTest {
         StatusCode.OK,
         EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, engineResult));
     RiverDatabase engine = engineResult.database();
-    LoopbackRiverServer server = start(engine, root, 2);
+    LoopbackRiverServer server = start(engine, 2);
     RiverClientConnection first = connect(server);
     RiverClientConnection second = connect(server);
     SessionOpenResult firstResult = new SessionOpenResult();
@@ -972,13 +968,12 @@ final class RiverClientConnectionTest {
     }
   }
 
-  private static LoopbackRiverServer start(RiverDatabase database, Path root) {
-    return start(database, root, LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS);
+  private static LoopbackRiverServer start(RiverDatabase database) {
+    return start(database, LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS);
   }
 
   private static LoopbackRiverServer start(
       RiverDatabase database,
-      Path root,
       int maximumConnections) {
     TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
     assertEquals(StatusCode.OK, TokenAuthenticator.create(TOKEN, TOKEN.length, authenticator));
@@ -988,20 +983,6 @@ final class RiverClientConnectionTest {
     assertEquals(
         StatusCode.OK,
         io.riverdb.server.CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
-    SecurityAuditLog audit;
-    try {
-      audit = Files.exists(root.resolve("audit/audit-1.log"))
-          ? SecurityAuditTestOwner.reopen(
-              root, DATABASE, 1,
-              SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-              SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES)
-          : SecurityAuditTestOwner.create(
-              root, DATABASE, 1,
-              SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-              SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
-    } catch (IOException failure) {
-      throw new AssertionError(failure);
-    }
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -1011,7 +992,6 @@ final class RiverClientConnectionTest {
             0,
             serverContext(),
             authenticator.authenticator(),
-            audit,
             fence.fence(),
             LoopbackServerLimits.defaults(maximumConnections),
             result));

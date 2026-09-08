@@ -1,7 +1,8 @@
 ---
 id: tic-72ea
-status: in_progress
+status: open
 type: story
+priority: 4
 assignee: blater
 parent: tic-bf0b
 delivery: code
@@ -11,32 +12,47 @@ tags:
     - riverd
     - security
     - audit
+    - deferred
     - wal
 deps:
     - tic-11a5
 created: 2026-09-04T15:23:11.086718Z
 ---
-# Implement resource-accounted durable security audit
+# Deferred: implement resource-accounted durable security audit
+
+This ticket is deferred and must not start or remain an active `riverd`
+prerequisite. The candidate measurements below are historical evidence and
+remain unchanged.
+
+Reconsider only after a concrete architecture demonstrates neutral TPS,
+latency, and resource impact and its design supports that performance property.
+No placeholder implementation or near-term audit study is planned.
+
+The remaining design, acceptance, and checkpoint text records the superseded
+candidate and its historical evidence. It is not an active implementation
+contract.
 
 Replace per-operation synchronous audit forcing with the mechanism accepted in
 the `tic-a221` evidence merged at
 `e592addff67ac6016ae6e9e37e3bf374a6511f0d`, while retaining fail-closed
 semantics.
 
-## Design
+## Historical candidate design (superseded)
 
 Keep audit policy in one `river-server` security owner; implement the exact
 event, byte-reservation, group-force, exhaustion, archive-control, and recovery
 state machines ratified by ADR 0014. Change every `SessionAuthorizer` caller
 together; no transitional authorization wrapper remains.
 
-## Acceptance Criteria
+## Historical candidate acceptance (superseded)
 
 Authentication and statement admission, group force, crash, corruption, exhaustion, cancellation, archive, allocation, and secret-erasure tests pass; matched authenticated TPS shows the removed force mechanism without an unexplained regression.
 
-## Stop boundary
+## Historical candidate stop boundary (superseded)
 
-Own only audit admission, byte accounting, group forcing, and recovery under the accepted audit design. No launcher, platform adapter, archival CLI, credentials, new audit format for convenience, or benchmark framework. `tic-b901` owns the archive command. Stop after focused failure tests and matched authenticated TPS validate this mechanism.
+The former scope owned audit admission, byte accounting, group forcing, and
+recovery under the accepted audit design. It is superseded; `tic-b901` no
+longer owns an audit archive command, and no audit work is active.
 
 ## Control checkpoint (2026-09-07)
 

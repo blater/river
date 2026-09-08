@@ -16,9 +16,6 @@ import io.riverdb.server.CredentialValidityFenceOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
-import io.riverdb.server.SecurityAuditLog;
-import io.riverdb.server.SecurityAuditLogFactory;
-import io.riverdb.server.SecurityAuditOpenResult;
 import java.net.InetAddress;
 import java.nio.file.Path;
 import java.security.SecureRandom;
@@ -35,7 +32,6 @@ public final class RiverDaemonInstance {
   protected Path datadir;
   protected RiverDatabase database;
   protected RiverDaemonCredentials.Material material;
-  protected SecurityAuditLog audit;
   protected LoopbackRiverServer server;
   protected CredentialValidityFence validityFence;
   protected RiverDaemonTlsContext.TlsContextResult tls;
@@ -170,7 +166,6 @@ public final class RiverDaemonInstance {
     DatabaseIncarnation incarnation = identity.incarnation();
     boolean securityPublished = identity.securityPublished();
     boolean databasePublished = identity.databasePublished();
-    boolean auditPublished = identity.auditPublished();
 
     boolean recovering = identity.needsOwnerHandoff();
     if (securityPublished || recovering) {
@@ -220,10 +215,6 @@ public final class RiverDaemonInstance {
       if (!status.isOk()) return status;
     }
 
-    status = openAuditForCreate(state, auditPublished, recovering);
-    if (!status.isOk()) return status;
-    status = state.closeAudit();
-    if (!status.isOk()) return status;
     status = RiverDaemonIdentity.completeCreate(identity);
     if (!status.isOk()) return status;
 
@@ -259,12 +250,6 @@ public final class RiverDaemonInstance {
     if (!status.isOk()) return status;
     state.material = credentials.material();
 
-    RiverDirectoryResult auditResult = new RiverDirectoryResult();
-    status = identity.directory().openDirectory(RiverDaemonIdentity.AUDIT_NAME, auditResult);
-    if (!status.isOk()) return status;
-    status = openAudit(state, auditResult.directory(), false);
-    if (!status.isOk()) return status;
-
     DatabaseOpenResult databaseOpen = new DatabaseOpenResult();
     status = EmbeddedRiver.openExisting(
         resourcePlan,
@@ -298,38 +283,7 @@ public final class RiverDaemonInstance {
     if (!status.isOk()) return status;
     state.database = databaseResult.database();
 
-    RiverDirectoryResult auditResult = new RiverDirectoryResult();
-    status = identity.directory().openDirectory(RiverDaemonIdentity.AUDIT_NAME, auditResult);
-    if (!status.isOk()) return status;
-    status = openAudit(state, auditResult.directory(), false);
-    if (!status.isOk()) return status;
     return openListener(state, random, host, bindAddress, port, limits);
-  }
-
-  private static StatusCode openAuditForCreate(
-      RiverDaemonInstance state, boolean published, boolean recovering) {
-    RiverDaemonIdentity.IdentityResult identity = state.identity;
-    RiverDirectory parent = published ? identity.directory() : identity.staging();
-    RiverDirectoryResult auditResult = new RiverDirectoryResult();
-    StatusCode status = parent.openDirectory(RiverDaemonIdentity.AUDIT_NAME, auditResult);
-    if (!status.isOk()) return status;
-    return openAudit(state, auditResult.directory(), !published && !recovering);
-  }
-
-  private static StatusCode openAudit(
-      RiverDaemonInstance state, RiverDirectory directory, boolean create) {
-    SecurityAuditOpenResult auditResult = new SecurityAuditOpenResult();
-    StatusCode status = create
-        ? SecurityAuditLogFactory.create(
-            directory, state.identity.incarnation(), state.material.generation(),
-            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES, auditResult)
-        : SecurityAuditLogFactory.open(
-            directory, state.identity.incarnation(), state.material.generation(),
-            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES, auditResult);
-    if (status.isOk()) state.audit = auditResult.audit();
-    return status;
   }
 
   private static StatusCode openValidityFence(RiverDaemonInstance state) {
@@ -363,7 +317,7 @@ public final class RiverDaemonInstance {
     LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
     status = LoopbackRiverServer.startAuthenticated(
         state.database, bindAddress, port, tls.context(), state.material.authenticator(),
-        state.audit, state.validityFence, limits, serverResult);
+        state.validityFence, limits, serverResult);
     if (!status.isOk()) return status;
     state.server = serverResult.server();
     state.clientConfiguration = state.datadir.resolve(RiverDaemonIdentity.SECURITY_NAME)
@@ -417,11 +371,6 @@ public final class RiverDaemonInstance {
       status = firstFailure(status, closedFence);
       if (terminal(closedFence)) validityFence = null;
     }
-    if (audit != null) {
-      StatusCode closedAudit = closeAuditValue(audit);
-      status = firstFailure(status, closedAudit);
-      if (terminal(closedAudit)) audit = null;
-    }
     if (tls != null) {
       StatusCode cleanedTls = RiverDaemonTlsContext.cleanup(tls);
       status = firstFailure(status, cleanedTls);
@@ -470,13 +419,6 @@ public final class RiverDaemonInstance {
     return status == StatusCode.OK || status == StatusCode.CLOSED;
   }
 
-  private static StatusCode closeAuditValue(SecurityAuditLog value) {
-    if (value == null) return StatusCode.OK;
-    value.beginClose();
-    StatusCode status = value.finishClose();
-    return status == StatusCode.CLOSED ? StatusCode.OK : status;
-  }
-
   private static StatusCode closeDatabaseValue(RiverDatabase value) {
     if (value == null) return StatusCode.OK;
     StatusCode status = value.close();
@@ -487,13 +429,6 @@ public final class RiverDaemonInstance {
     RiverDatabase value = database;
     StatusCode status = closeDatabaseValue(value);
     if (terminal(status)) database = null;
-    return status;
-  }
-
-  private StatusCode closeAudit() {
-    SecurityAuditLog value = audit;
-    StatusCode status = closeAuditValue(value);
-    if (terminal(status)) audit = null;
     return status;
   }
 

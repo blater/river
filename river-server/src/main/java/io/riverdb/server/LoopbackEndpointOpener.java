@@ -20,15 +20,13 @@ final class LoopbackEndpointOpener {
       TokenAuthenticator authenticator,
       CredentialValidityFence validityFence,
       SecureRandom random,
-      SecurityAuditLog audit,
       int authenticationTimeoutMillis,
       ServerConnectionMemory memory,
       ServerResponseBuffer responses,
-      long connectionCorrelation,
       MutableCancellationToken cancellation,
       LoopbackEndpointOpenResult result) throws IOException {
     result.reset();
-    if (authenticator == null || validityFence == null || audit == null || random == null
+    if (authenticator == null || validityFence == null || random == null
         || !(connection instanceof SSLSocket secure)) {
       result.fail(StatusCode.INVARIANT_BROKEN);
       return;
@@ -55,10 +53,8 @@ final class LoopbackEndpointOpener {
             challengeHigh,
             challengeLow,
             binding,
-            audit,
             memory,
             responses,
-            connectionCorrelation,
             cancellation),
         System.nanoTime() + authenticationTimeoutMillis * 1_000_000L);
   }

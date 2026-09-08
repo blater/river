@@ -9,7 +9,7 @@ public final class RiverdCommandHelp {
   public static String brief() {
     return "Usage: riverd <command> [options]\n"
         + "Commands: start (run server), stop (unavailable), ps (unavailable),\n"
-        + "          audit archive (unavailable), credentials renew (unavailable), version\n"
+        + "          credentials renew (unavailable), version\n"
         + "Start example: riverd start --port=9191\n"
         + "Default data directory: .river/default under the user's home; default port: 9191\n"
         + "Use `riverd --help` for full help.\n";
@@ -23,10 +23,6 @@ public final class RiverdCommandHelp {
     }
     if ("stop".equals(topic)) return "Usage: riverd stop [options]\nStop is not yet available.\n";
     if ("ps".equals(topic)) return "Usage: riverd ps\nListing instances is not yet available.\n";
-    if ("audit".equals(topic) || "audit archive".equals(topic)) {
-      return "Usage: riverd audit archive [-D PATH|--datadir=PATH]\n"
-          + "Audit archive is not yet available.\n";
-    }
     if ("credentials".equals(topic) || "credentials renew".equals(topic)) {
       return "Usage: riverd credentials renew [-D PATH|--datadir=PATH]\n"
           + "Credential renewal is not yet available.\n";
@@ -45,7 +41,6 @@ public final class RiverdCommandHelp {
           + "               [--maximum-connections=N] [--ready-file=PATH]\n"
           + "  riverd stop [-D PATH|--datadir=PATH] [--timeout=DURATION]  (not yet available)\n"
           + "  riverd ps  (not yet available)\n"
-          + "  riverd audit archive [-D PATH|--datadir=PATH]  (not yet available)\n"
           + "  riverd credentials renew [-D PATH|--datadir=PATH]  (not yet available)\n"
           + "  riverd version\n\n"
           + "Start runs in the foreground, creates or reopens persistent identity, and uses TLS plus\n"
@@ -68,8 +63,6 @@ public final class RiverdCommandHelp {
     if ("stop".equals(topic)) return "Usage: riverd stop [-D PATH|--datadir=PATH] [--timeout=DURATION]\n"
         + "Stop is not yet available in this milestone.\n";
     if ("ps".equals(topic)) return "Usage: riverd ps\nListing instances is not yet available in this milestone.\n";
-    if ("audit".equals(topic) || "audit archive".equals(topic)) return "Usage: riverd audit archive [-D PATH|--datadir=PATH]\n"
-        + "Audit archive is not yet available in this milestone.\n";
     if ("credentials".equals(topic) || "credentials renew".equals(topic)) {
       return "Usage: riverd credentials renew [-D PATH|--datadir=PATH]\n"
           + "Credential renewal is not yet available in this milestone.\n";

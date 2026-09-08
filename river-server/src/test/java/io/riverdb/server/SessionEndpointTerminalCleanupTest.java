@@ -39,8 +39,7 @@ final class SessionEndpointTerminalCleanupTest {
         CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
     byte[] binding = new byte[] {1, 2, 3};
     SessionEndpoint endpoint = new SessionEndpoint(database, authenticator.authenticator(),
-        fence.fence(), 11, 12, binding, null, null, null,
-        301, new MutableCancellationToken());
+        fence.fence(), 11, 12, binding, null, null, new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);

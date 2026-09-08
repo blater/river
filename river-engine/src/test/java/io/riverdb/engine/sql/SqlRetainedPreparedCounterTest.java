@@ -37,19 +37,19 @@ final class SqlRetainedPreparedCounterTest {
     assertEquals(StatusCode.OK, parameters.appendInteger(7));
     assertEquals(StatusCode.OK, parameters.appendInteger(1));
     assertEquals(StatusCode.OK,
-        session.executePrepared(validation.plan(), parameters, execution, 0));
+        session.executePrepared(validation.plan(), parameters, execution));
     assertEquals(StatusCode.OK,
         session.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)", execution));
     parameters.reset();
     assertEquals(StatusCode.OK, parameters.appendInteger(8));
     assertEquals(StatusCode.OK, parameters.appendInteger(1));
     assertEquals(StatusCode.OK,
-        session.executePrepared(validation.plan(), parameters, execution, 0));
+        session.executePrepared(validation.plan(), parameters, execution));
     parameters.reset();
     assertEquals(StatusCode.OK, parameters.appendInteger(9));
     assertEquals(StatusCode.OK, parameters.appendInteger(1));
     assertEquals(StatusCode.OK,
-        session.executePrepared(validation.plan(), parameters, execution, 0));
+        session.executePrepared(validation.plan(), parameters, execution));
 
     assertEquals(1, session.preparedCompiles());
     assertEquals(3, session.preparedExecutions());

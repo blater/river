@@ -12,10 +12,11 @@ tags:
     - distribution
 created: 2026-09-04T15:23:11.26945Z
 deps:
-    - tic-72ea
     - tic-615d
     - tic-867d
     - tic-b75d
+links:
+    - tic-1c4d
 ---
 # Deliver the installed authenticated riverd start and restart path
 
@@ -27,7 +28,7 @@ Linux/ext4 and XFS, and Windows/NTFS.
 
 ## Scope
 
-Compose the delivered instance, filesystem, audit, database, and transport
+Compose the delivered instance, filesystem, database, and transport
 owners in `river-server-app`. Own argument/resource configuration, installed
 packaging, readiness, and ordered shutdown. Follow the
 [CLI contract](../riverd-cli.md) for user-facing behavior and
@@ -79,7 +80,8 @@ ceremony. Keep reviews scoped to changed behavior and reuse existing evidence.
 
 No filesystem adapter implementation, new credential/audit mechanism, PostgreSQL
 wire protocol, remote binding, service-manager integration, installer, stop/ps
-command, renewal/archive command, or benchmark comparison policy. Missing
+command, audit archive command, or benchmark comparison policy. Credential
+renewal remains a separate lifecycle concern. Missing
 prerequisites return to their existing owners. Stop when the installed start,
 JDBC, shutdown, and restart path works; no additional admin commands join it.
 
@@ -87,8 +89,8 @@ JDBC, shutdown, and restart path works; no additional admin commands join it.
 
 Work continues on `ticket/tic-ec50-riverd-launcher`. Its prerequisite feature
 branches are composed here for integration testing; they are not promoted by
-this checkpoint. Windows/NTFS qualification and audit performance acceptance
-remain open.
+this checkpoint. Windows/NTFS qualification remains open. SQL/security audit
+work is deferred and is not an acceptance gate for this delivery.
 
 The built `river-server-app/build/install/riverd` distribution now runs without
 Gradle or a source-tree classpath. On macOS/APFS, the installed script passed
@@ -177,8 +179,9 @@ Windows/NTFS execution is still awaiting hosted-run approval.
 
 The authenticated TPS pair dropped to 8.5 and 8.1 from 162.4 and 163.4.
 See `docs/performance-checkpoints.md` for the unchanged workload, artifacts,
-slopmark review and pending decision about mandatory durable statement auditing.
-This feature remains unpromoted and the ticket open.
+and slopmark review. Those measurements are historical evidence of the
+superseded audit candidate, not a current acceptance gate. This feature remains
+unpromoted and the ticket open.
 
 
 ### Final candidate integration checks (2026-09-08)
@@ -196,9 +199,10 @@ client configuration, and completed its UPDATE/COMMIT trace successfully.
 Evidence: `/private/tmp/riverd-delivery-evidence/launcher-update-trace-1.log`
 and the adjacent `launcher-update-trace-1/` artifacts.
 
-This is a feature checkpoint only. Windows execution evidence and the decision
-on synchronous SQL auditing remain outstanding; do not promote or close the
-standalone milestone from these results.
+This is a feature checkpoint only. Windows execution evidence remains
+outstanding; the synchronous SQL-audit candidate is historical and superseded,
+not a current promotion gate. Do not promote or close the standalone milestone
+from these results.
 
 
 ### TPS tooling simplification (2026-09-08)
@@ -210,4 +214,17 @@ deadlock reconciliation and performance capture, using
 `--version=riverd-without-descriptors`. Evidence:
 `/private/tmp/tps-simple-riverd-smoke/` and
 `/private/tmp/tps-simple-riverd-build.log`. This is a wiring check, not a
-performance claim or acceptance of the outstanding audit regression.
+performance claim or acceptance of the superseded audit candidate.
+
+
+### Audit removal completed (2026-09-08)
+
+`tic-1c4d` removes the security-audit subsystem, lifecycle state, archive CLI,
+and audit-only metadata. Authentication, permission checks, credential expiry,
+WAL durability and restart remain required and tested. Auditing is deferred
+outside the immediate roadmap until a design credibly supports performance
+neutrality. Clean test/module-graph build passed (1,863 passed, 18 skipped),
+and installed macOS/APFS plus Linux/ext4/XFS create/commit/restart/read passed.
+See `tic-1c4d` for commands and evidence. Battery-condition TPS diagnostics are
+not an AC performance-neutrality claim. Windows execution remains outstanding;
+this feature is not promoted by closing the audit removal.

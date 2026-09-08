@@ -21,9 +21,6 @@ import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
 import io.riverdb.server.CredentialValidityFence;
 import io.riverdb.server.CredentialValidityFenceOpenResult;
-import io.riverdb.server.SecurityAuditLog;
-import io.riverdb.server.SecurityAuditLogFactory;
-import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.server.app.GeneratedClientFileTestFixture;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.net.InetAddress;
@@ -2707,11 +2704,6 @@ final class RiverDriverTest {
 
   private static LoopbackRiverServer start(Path root, RiverDatabase database) {
     try {
-      Path auditDirectory = Files.createTempDirectory(root, "driver-audit-");
-      SecurityAuditLog audit = SecurityAuditTestOwner.create(
-          auditDirectory, DATABASE, 1,
-          SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-          SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
       byte[] token = testToken();
       TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
       assertEquals(StatusCode.OK, TokenAuthenticator.create(
@@ -2719,7 +2711,7 @@ final class RiverDriverTest {
       LoopbackServerOpenResult result = new LoopbackServerOpenResult();
       assertEquals(StatusCode.OK, LoopbackRiverServer.startAuthenticated(
           database, InetAddress.getLoopbackAddress(), 0, TestTlsContexts.server(),
-          authenticator.authenticator(), audit, validityFence(),
+          authenticator.authenticator(), validityFence(),
           LoopbackServerLimits.defaults(8), result));
       LoopbackRiverServer server = result.server();
       Path clientFile = TestTlsContexts.writeClientProperties(

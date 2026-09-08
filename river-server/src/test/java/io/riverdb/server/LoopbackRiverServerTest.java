@@ -15,7 +15,6 @@ import io.riverdb.protocol.auth.TokenAuthenticator;
 import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.protocol.auth.TokenProof;
 import io.riverdb.protocol.auth.TlsChannelBinding;
-import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
 import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
@@ -31,7 +30,6 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
-import java.nio.file.Files;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import javax.net.ssl.SSLSocket;
@@ -410,20 +408,6 @@ final class LoopbackRiverServerTest {
     assertEquals(
         StatusCode.OK,
         CredentialValidityFence.create(now - 1_000L, now + 60_000L, fence));
-    SecurityAuditLog audit;
-    try {
-      audit = Files.exists(root.resolve("audit/audit-1.log"))
-          ? SecurityAuditTestOwner.reopen(
-              root, DATABASE, 1,
-              SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-              SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES)
-          : SecurityAuditTestOwner.create(
-              root, DATABASE, 1,
-              SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
-              SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
-    } catch (IOException failure) {
-      throw new AssertionError(failure);
-    }
     LoopbackServerOpenResult started = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -433,7 +417,6 @@ final class LoopbackRiverServerTest {
             0,
             serverContext(),
             authenticator.authenticator(),
-            audit,
             fence.fence(),
             LoopbackServerLimits.defaults(maximumConnections),
             started));
