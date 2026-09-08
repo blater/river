@@ -3,6 +3,7 @@ package io.riverdb.server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.IsolationLevel;
@@ -25,7 +26,8 @@ final class SessionEndpointTerminalCleanupTest {
   @Test
   void disconnectTransfersRetryableCloseExactlyOnce() {
     RetryDatabase database = new RetryDatabase();
-    SessionEndpoint endpoint = new SessionEndpoint(database);
+    SessionEndpoint endpoint = new SessionEndpoint(database, null, 0, 0, null, null, null, null,
+        301, new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);

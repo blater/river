@@ -19,8 +19,12 @@ import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.SecurityAuditLog;
+import io.riverdb.server.SecurityAuditLogFactory;
+import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import javax.net.ssl.SSLContext;
@@ -177,6 +181,9 @@ final class AuthenticatedRiverClientTest {
     assertEquals(StatusCode.OK, localResult.session().close());
 
     LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
+    SecurityAuditLog audit = SecurityAuditTestOwner.create(
+        root, DATABASE, 4, SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+        SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
     assertEquals(
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
@@ -184,8 +191,8 @@ final class AuthenticatedRiverClientTest {
             0,
             TestTlsContexts.server(),
             authResult.authenticator(),
-            root,
-            new LoopbackServerLimits(1, 5_000, 200, 64),
+            audit,
+            new LoopbackServerLimits(1, 5_000, 200),
             serverResult));
     LoopbackRiverServer server = serverResult.server();
     RiverClientOpenResult clientResult = new RiverClientOpenResult();
@@ -226,7 +233,14 @@ final class AuthenticatedRiverClientTest {
       RiverDatabase database,
       Path auditDirectory,
       SSLContext context,
-      TokenAuthenticator authenticator) {
+      TokenAuthenticator authenticator) throws Exception {
+    SecurityAuditLog audit = Files.exists(auditDirectory.resolve("audit/audit-1.log"))
+        ? SecurityAuditTestOwner.reopen(auditDirectory, DATABASE, 4,
+            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES)
+        : SecurityAuditTestOwner.create(auditDirectory, DATABASE, 4,
+            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES);
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -235,7 +249,7 @@ final class AuthenticatedRiverClientTest {
             0,
             context,
             authenticator,
-            auditDirectory,
+            audit,
             LoopbackServerLimits.defaults(
                 LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS),
             result));

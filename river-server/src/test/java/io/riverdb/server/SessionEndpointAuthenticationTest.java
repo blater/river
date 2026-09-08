@@ -3,6 +3,7 @@ package io.riverdb.server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.api.SessionOpenResult;
 import io.riverdb.protocol.ProtocolFrame;
@@ -28,7 +29,12 @@ final class SessionEndpointAuthenticationTest {
         opened.authenticator(),
         11,
         12,
-        new byte[] {1, 2, 3});
+        new byte[] {1, 2, 3},
+        null,
+        null,
+        null,
+        101,
+        new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ProtocolFrame frame = new ProtocolFrame();
     ProtocolResponse decoded = new ProtocolResponse();
@@ -96,7 +102,7 @@ final class SessionEndpointAuthenticationTest {
 
   @Test
   void rejectsReadOnlyRequestsBeforeAdmission() {
-    SessionEndpoint endpoint = new SessionEndpoint(new UnusedDatabase());
+    SessionEndpoint endpoint = endpoint(new UnusedDatabase(), 102);
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
@@ -110,7 +116,7 @@ final class SessionEndpointAuthenticationTest {
 
   @Test
   void erasesSqlPayloadBeforeSessionStateResponses() {
-    SessionEndpoint endpoint = new SessionEndpoint(new UnusedDatabase());
+    SessionEndpoint endpoint = endpoint(new UnusedDatabase(), 103);
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ProtocolFrame frame = new ProtocolFrame();
     ProtocolResponse decoded = new ProtocolResponse();
@@ -139,7 +145,7 @@ final class SessionEndpointAuthenticationTest {
 
   @Test
   void erasesSqlPayloadWhenOuterFrameLengthIsMalformed() {
-    SessionEndpoint endpoint = new SessionEndpoint(new UnusedDatabase());
+    SessionEndpoint endpoint = endpoint(new UnusedDatabase(), 104);
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
@@ -155,6 +161,11 @@ final class SessionEndpointAuthenticationTest {
     for (int index = ProtocolFrameCodec.HEADER_BYTES; index < request.limit(); index++) {
       assertEquals(0, request.get(index));
     }
+  }
+
+  private static SessionEndpoint endpoint(RiverDatabase database, long connection) {
+    return new SessionEndpoint(database, null, 0, 0, null, null, null, null,
+        connection, new MutableCancellationToken());
   }
 
   private static void assertStatus(

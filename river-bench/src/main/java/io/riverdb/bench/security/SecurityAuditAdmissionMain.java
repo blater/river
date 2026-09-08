@@ -28,11 +28,18 @@ import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.client.RiverClientConnection;
 import io.riverdb.client.RiverClientOpenResult;
+import io.riverdb.platform.riverd.RiverDirectory;
+import io.riverdb.platform.riverd.RiverDirectoryResult;
+import io.riverdb.platform.riverd.apfs.ApfsRiverDaemonFileSystem;
+import io.riverdb.platform.riverd.linux.LinuxRiverDaemonFileSystem;
 import io.riverdb.protocol.auth.TokenAuthenticator;
 import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
+import io.riverdb.server.SecurityAuditLog;
+import io.riverdb.server.SecurityAuditLogFactory;
+import io.riverdb.server.SecurityAuditOpenResult;
 import io.riverdb.server.SecurityAuditSnapshot;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -41,6 +48,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
@@ -67,7 +75,6 @@ public final class SecurityAuditAdmissionMain {
   private static final long DATABASE_HIGH = 0x41554449544c4f47L;
   private static final long DATABASE_LOW = 0x41444d495353494fL;
   private static final int MAX_DECISIONS_PER_REQUEST = 2;
-  private static final int MAX_AUDIT_RECORDS_PER_CLIENT_SECOND = 100_000;
 
   private SecurityAuditAdmissionMain() { }
 
@@ -103,6 +110,9 @@ public final class SecurityAuditAdmissionMain {
     Path auditDirectory = configuration.outputDirectory.resolve("audit");
     Files.createDirectories(databaseDirectory);
     Files.createDirectories(auditDirectory);
+    Files.setPosixFilePermissions(auditDirectory, java.util.Set.of(
+        PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE,
+        PosixFilePermission.OWNER_EXECUTE));
 
     RiverDatabase database = null;
     LoopbackRiverServer server = null;
@@ -145,13 +155,14 @@ public final class SecurityAuditAdmissionMain {
       authenticator = authenticatorResult.authenticator();
 
       LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
+      SecurityAuditLog audit = openAudit(auditDirectory, true);
       require(
           LoopbackRiverServer.startAuthenticated(
               database,
               0,
               tls.serverContext,
               authenticator,
-              auditDirectory,
+              audit,
               limits(configuration),
               serverResult),
           "start authenticated loopback server");
@@ -192,17 +203,18 @@ public final class SecurityAuditAdmissionMain {
       for (Worker worker : workers) require(worker.close(), "close client " + worker.clientId);
       deniedWriteEffectVerified = verifyDeniedWriteDidNotMutate(database);
 
-      int recordsBeforeRestart = server.auditRecordCount();
+      long recordsBeforeRestart = server.auditRecordCount();
       require(server.close(), "close first authenticated server");
       server = null;
       LoopbackServerOpenResult restartResult = new LoopbackServerOpenResult();
+      SecurityAuditLog reopenedAudit = openAudit(auditDirectory, false);
       require(
           LoopbackRiverServer.startAuthenticated(
               database,
               0,
               tls.serverContext,
               authenticator,
-              auditDirectory,
+              reopenedAudit,
               limits(configuration),
               restartResult),
           "restart authenticated loopback server");
@@ -388,18 +400,31 @@ public final class SecurityAuditAdmissionMain {
   }
 
   private static LoopbackServerLimits limits(Arguments configuration) {
-    long seconds = configuration.mode == Mode.PERFORMANCE
-        ? (long) configuration.warmupSeconds + configuration.measuredSeconds : 1;
-    long requests = configuration.mode == Mode.CORRECTNESS
-        ? configuration.clients * (long) configuration.requestsPerClient : 0;
-    long budget = Math.max(requests * MAX_DECISIONS_PER_REQUEST + configuration.clients * 16L,
-        (long) configuration.clients * seconds * MAX_AUDIT_RECORDS_PER_CLIENT_SECOND);
-    int records = (int) Math.min(Integer.MAX_VALUE, Math.max(65_536L, budget));
-    return new LoopbackServerLimits(
-        configuration.clients,
-        5_000,
-        30_000,
-        records);
+    return new LoopbackServerLimits(configuration.clients, 5_000, 30_000);
+  }
+
+  private static SecurityAuditLog openAudit(Path path, boolean create) {
+    RiverDirectoryResult directoryResult = new RiverDirectoryResult();
+    require(provider().openDirectory(path, directoryResult),
+        "open verified audit directory");
+    RiverDirectory directory = directoryResult.directory();
+    SecurityAuditOpenResult auditResult = new SecurityAuditOpenResult();
+    StatusCode status = create
+        ? SecurityAuditLogFactory.create(
+            directory, DatabaseIncarnation.of(DATABASE_HIGH, DATABASE_LOW), 1,
+            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES, auditResult)
+        : SecurityAuditLogFactory.open(
+            directory, DatabaseIncarnation.of(DATABASE_HIGH, DATABASE_LOW), 1,
+            SecurityAuditLogFactory.DEFAULT_ACTIVE_MAXIMUM_BYTES,
+            SecurityAuditLogFactory.DEFAULT_PENDING_MAXIMUM_BYTES, auditResult);
+    require(status, create ? "create security audit" : "open security audit");
+    return auditResult.audit();
+  }
+
+  private static io.riverdb.platform.riverd.RiverDaemonFileSystem provider() {
+    return "Mac OS X".equals(System.getProperty("os.name"))
+        ? new ApfsRiverDaemonFileSystem() : new LinuxRiverDaemonFileSystem();
   }
 
   private static void writeArtifact(
@@ -410,7 +435,7 @@ public final class SecurityAuditAdmissionMain {
       long issued,
       long completed,
       long expectedDecisions,
-      int records,
+      long records,
       boolean deniedWriteEffectVerified,
       JvmMeasurement jvmBefore,
       JvmMeasurement jvmAfter) throws IOException, NoSuchAlgorithmException {
@@ -428,7 +453,8 @@ public final class SecurityAuditAdmissionMain {
     root.put("expected_decisions", expectedDecisions);
     root.put("audit_records_after_restart", records);
     root.put("denied_write_effect_verified", deniedWriteEffectVerified);
-    root.put("request_correlation", "synthetic_request_id; legacy_audit_has_aggregate_only");
+    root.put("request_correlation",
+        "workload synthetic request ids; audit telemetry aggregate only (record correlations not independently inspected)");
     root.put("legacy_authenticator_cleanup", "unavailable; caller_token_zeroed");
     root.put("java_runtime", System.getProperty("java.runtime.version"));
     root.put("os", System.getProperty("os.name") + " " + System.getProperty("os.version"));

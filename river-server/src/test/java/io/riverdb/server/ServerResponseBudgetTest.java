@@ -3,6 +3,7 @@ package io.riverdb.server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
+import io.riverdb.base.concurrent.MutableCancellationToken;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
@@ -222,8 +223,11 @@ final class ServerResponseBudgetTest {
 
   private static SessionEndpoint openedEndpoint(
       WideDatabase database, ServerResponseBuffer responses, ServerConnectionMemory memory) {
-    SessionEndpoint endpoint = memory == null ? new SessionEndpoint(database)
-        : new SessionEndpoint(database, null, 0, 0, null, null, memory, responses);
+    SessionEndpoint endpoint = memory == null
+        ? new SessionEndpoint(database, null, 0, 0, null, null, null, responses,
+            201, new MutableCancellationToken())
+        : new SessionEndpoint(database, null, 0, 0, null, null, memory, responses,
+            202, new MutableCancellationToken());
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     assertEquals(StatusCode.OK, codec.encodeRequest(request, ProtocolMessageType.HELLO, 1));

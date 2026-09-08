@@ -6,6 +6,7 @@ import java.util.HexFormat
 // Module policy and production dependencies are declared by the root build.
 
 dependencies {
+  implementation(project(":river-platform"))
   implementation(project(":river-engine"))
   implementation(project(":river-engine-api"))
   implementation(project(":river-client"))

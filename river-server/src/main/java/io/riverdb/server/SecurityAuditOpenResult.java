@@ -1,18 +1,18 @@
 package io.riverdb.server;
 
-/** Caller-owned result for the bounded durable security audit. */
-final class SecurityAuditOpenResult {
+/** Caller-owned transfer result for a successfully opened audit owner. */
+public final class SecurityAuditOpenResult {
   private SecurityAuditLog audit;
 
-  void reset() {
+  public SecurityAuditLog audit() {
+    return audit;
+  }
+
+  public void reset() {
     audit = null;
   }
 
-  void set(SecurityAuditLog opened) {
-    audit = opened;
-  }
-
-  SecurityAuditLog audit() {
-    return audit;
+  void set(SecurityAuditLog value) {
+    audit = value;
   }
 }

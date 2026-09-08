@@ -77,3 +77,54 @@ label it unavailable; CPU is process-wide and allocation uses the total JVM
 counter. Separate matched JFR recordings must supply monitor-wait evidence.
 No mechanism change was present during these samples. Wider interleaved
 acceptance measurements remain outstanding.
+
+## Implementation checkpoint (2026-09-08)
+
+The audit owner, durable-prefix group force, recovery controls and real
+connection/session/request/phase correlation are now assembled on the feature
+branch. Engine, server and all affected client/JDBC/benchmark setup callers
+change together. SQL and workload semantics are unchanged.
+
+GraalVM/JDK 25 compilation covered all engine/API production sources. The
+separately assembled candidate passed 56 focused tests plus the changed retained
+prepared execution test. The production Gradle server, client and JDBC suites
+pass 35, 16 and 44 tests respectively, with no failures or skips; benchmark
+compilation passes. All Gradle commands used `--no-daemon` and ran serially.
+Evidence: `audit-full-candidate-compile-5.log`,
+`audit-full-candidate-tests-4.log`, `audit-engine-caller-tests-1.log` and
+`audit-gradle-integration-3.log` under `/private/tmp/riverd-delivery-evidence/`.
+
+The four-client correctness smoke completed 400 requests, validated expected
+denials and reopened the audit successfully. Its immutable artifact is
+`/private/tmp/riverd-delivery-evidence/audit-candidate-c4-smoke-4/artifact.json`.
+It proves aggregate reconciliation, not independently decoded per-request
+correlation or a TPS result. Reviewed candidate sources were archived outside
+the repository at `/private/tmp/riverd-delivery-evidence/audit-source-candidate/`.
+
+Independent review and system review found and fixed program-step phase routing,
+terminal-generation predecessor recovery and I/O error classification. The
+terminal test now checks recovery as well as force-before-result ordering.
+Slopmark: audit owner 198.026 (control 78.5429), bootstrap 307.372, control
+recovery 265.068. Format/recovery and force coordination remain separate owners;
+no benchmark policy entered production.
+
+This remains an implementation checkpoint. Matched authenticated performance,
+allocation evidence and the accepted wider correctness gates remain outstanding;
+the ticket is not closed or promoted.
+
+`verifySourcePolicy` is red on existing Unicode literals, verification-metadata
+indentation, Darwin indentation and engine/transaction identifier checks.
+Comparison against master found no new production violation from this patch.
+The additional copied candidate violation was removed by archiving scratch
+sources outside the checkout. Evidence: `audit-engine-policy-1.log`; engine
+tests run separately because the combined invocation stopped on policy failure.
+No policy rule or unrelated baseline source was changed.
+
+The separate engine suite passed all 1,009 tests with no failures or skips in
+4m53s (`audit-engine-tests-1.log`), bringing affected-module coverage to 1,104
+passing tests. Independent decoding of the smoke audit found 540 checksummed
+records with gap-free sequences 1–540, four authentication decisions and 536
+statement decisions. All statement correlations were nonzero and 103 decisions
+had positive program steps. The 540 records comprise 12 setup and 528 workload
+decisions; reopening preserved that count. This does not map synthetic workload
+IDs to individual wire requests.
