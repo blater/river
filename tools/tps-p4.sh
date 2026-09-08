@@ -10,10 +10,9 @@ Usage:
   tools/tps-p4.sh --run --output-dir=PATH [options]
   tools/tps-p4.sh --calculate=PATH
 
-Run or validate the partial River P4 point calculation. A run executes exactly
-ten independent standard-scale River samples using alpha3 workload settings.
-This remains a non-normative local calculator; it is not an Alpha3 promotion
-claim or a complete capacity gate.
+Run or calculate the partial River P4 point. A run executes ten independent
+standard-scale River samples using alpha3 workload settings. This is a local
+calculator, not an Alpha3 promotion claim or a complete capacity gate.
 
 Run options:
   --output-dir=PATH             New empty evidence directory (required for run)
@@ -22,7 +21,7 @@ Run options:
   --warehouses=N                 Default: 1
   --terminals=N                  Default: 10
   --batch-rows=N                 Default: 32
-  --maximum-attempts=N           Default: 4
+  --maximum-attempts=N            Default: 4
   --seed=N                       Default: 123456789
   --isolation=serializable|repeatable-read
                                   Common isolation contract (default: serializable)
@@ -31,6 +30,7 @@ Run options:
                                   Default: 30
   --server-stop-timeout-seconds=N
                                   Default: 20
+  --version=NAME                Optional experiment label (default: Git branch)
   --client-java-option=OPTION    Repeatable
   --server-java-option=OPTION    Repeatable
   --samples=10                   Any value other than 10 is rejected
@@ -38,11 +38,10 @@ Run options:
   --run                          Run samples (default)
   -h, --help                     Show this help
 
-The partial point requires exactly ten current provenance and host-qualified terminal receipts,
->=100000 completed transactions in each sample, no failed or retry-exhausted
-family outcome, identical persisted configuration/provenance, and a one-sided
-95% lower confidence bound for committed TPS of at least 1000. The calculator
-uses t(0.95,9)=1.8331129.
+The partial point requires ten completed samples, at least 100000 completed
+transactions per sample, no failed or retry-exhausted family outcome, equal
+workload configuration, and a one-sided 95% lower confidence bound for
+committed TPS of at least 1000. The calculator uses t(0.95,9)=1.8331129.
 EOF
 }
 
@@ -63,12 +62,8 @@ require_positive() {
 property() {
   local key=$1
   local file=$2
-  provenance_property_once "$key" "$file" 2>/dev/null || true
-}
-
-hash_file() {
-  [[ -f $1 ]] || { printf '%s\n' unavailable; return; }
-  shasum -a 256 "$1" | awk '{print $1}'
+  [[ -f $file ]] || return 0
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$file"
 }
 
 absolute_path() {
@@ -81,7 +76,6 @@ absolute_path() {
 tool_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 tps_test="$tool_dir/tps-test.sh"
 [[ -x $tps_test ]] || fail "tps-test.sh is not executable"
-source "$tool_dir/tps-provenance.sh"
 
 mode=run
 calculate_dir=
@@ -98,6 +92,7 @@ isolation=serializable
 runner_timeout_seconds=
 server_start_timeout_seconds=30
 server_stop_timeout_seconds=20
+version_override=
 client_java_options=()
 server_java_options=()
 
@@ -118,6 +113,7 @@ while (($# > 0)); do
     --runner-timeout-seconds=*) runner_timeout_seconds=${1#*=} ;;
     --server-start-timeout-seconds=*) server_start_timeout_seconds=${1#*=} ;;
     --server-stop-timeout-seconds=*) server_stop_timeout_seconds=${1#*=} ;;
+    --version=*) version_override=${1#*=} ;;
     --client-java-option=*) client_java_options+=( "${1#*=}" ) ;;
     --server-java-option=*) server_java_options+=( "${1#*=}" ) ;;
     -h|--help) usage; exit 0 ;;
@@ -147,6 +143,8 @@ if [[ $mode == run ]]; then
   else runner_timeout_seconds=$((warmup_seconds + measured_seconds + 300)); fi
   require_positive server_start_timeout_seconds "$server_start_timeout_seconds"
   require_positive server_stop_timeout_seconds "$server_stop_timeout_seconds"
+  version_option=()
+  [[ -z $version_override ]] || version_option=("--version=$version_override")
   for index in $(seq 1 10); do
     label=$(printf '%02d' "$index")
     sample_dir="$output_dir/sample-$label"
@@ -162,6 +160,7 @@ if [[ $mode == run ]]; then
       --server-start-timeout-seconds="$server_start_timeout_seconds" \
       --server-stop-timeout-seconds="$server_stop_timeout_seconds" \
       --seed="$seed" --sample-id="p4-$label" --output-dir="$sample_dir" \
+      "${version_option[@]}" \
       "${client_java_options[@]/#/--client-java-option=}" \
       "${server_java_options[@]/#/--server-java-option=}"
     sample_status=$?
@@ -178,74 +177,40 @@ fi
 [[ -n $calculate_dir ]] || fail "--calculate=PATH is required"
 calculate_dir=$(absolute_path "$calculate_dir")
 [[ -d $calculate_dir ]] || fail "calculation directory does not exist: $calculate_dir"
-if [[ -n $output_dir ]]; then fail "--output-dir is valid only with --run"; fi
+[[ -z $output_dir ]] || fail "--output-dir is valid only with --run"
 
 metadata_keys=(
-  tool.schema run.result run.phase run.status run.exit_status
-  run.provisional_result run.provisional_phase run.provisional_status
-  run.provisional_exit_status run.sample_id evidence.run_id terminal.required terminal.path
-  terminal.commitment_sha256 publisher.pid publisher.start publisher.identity_sha256
-  provenance.source_manifest_sha256 provenance.classpath_sha256 environment.java_launcher_sha256
-  git.commit_sha git.dirty_state git.status_sha256 environment.java_version
-  environment.host configuration.fingerprint configuration.backend configuration.profile
-  configuration.mix configuration.isolation configuration.scheduling configuration.evidence configuration.fresh_load
+  run.result run.phase run.status run.exit_status run.version git.branch
+  configuration.backend configuration.profile configuration.mix configuration.isolation
+  configuration.scheduling configuration.evidence configuration.fresh_load
   configuration.warehouses configuration.terminals configuration.batch_rows
   configuration.maximum_attempts configuration.warmup_seconds configuration.measured_seconds
   configuration.runner_timeout_seconds configuration.server_start_timeout_seconds
   configuration.server_stop_timeout_seconds configuration.seed
-  artifact.run_id artifact.database_digest_sha256 artifact.sha256
-  output.stdout_sha256 output.stderr_sha256 output.combined_sha256
-  output.server_log_sha256 output.server_metrics_sha256
-  host.guarantee host.release_outcome host.lease.evidence_run_id
-  host.lease.owner_pid host.lease.owner_start host.lease.owner_identity_sha256
-  host.lease.nonce host.lease.terminal_commitment_sha256
-)
-common_metadata_keys=(
-  tool.schema run.result run.phase run.status run.exit_status
-  run.provisional_result run.provisional_phase run.provisional_status run.provisional_exit_status
-  provenance.source_manifest_sha256 provenance.classpath_sha256 environment.java_launcher_sha256
-  git.commit_sha git.dirty_state git.status_sha256 environment.java_version
-  environment.host configuration.fingerprint configuration.backend configuration.profile
-  configuration.mix configuration.scheduling configuration.evidence configuration.fresh_load
-  configuration.isolation
-  configuration.warehouses configuration.terminals configuration.batch_rows
-  configuration.maximum_attempts configuration.warmup_seconds configuration.measured_seconds
-  configuration.runner_timeout_seconds configuration.server_start_timeout_seconds
-  configuration.server_stop_timeout_seconds configuration.seed host.guarantee
-  host.release_outcome
 )
 artifact_keys=(
-  artifact.schema run.id database.digest.sha256 config.seed config.warehouses
-  config.standard_scale config.standard_one_warehouse config.districts
-  config.customers_per_district config.items config.orders_per_district
-  config.terminals config.terminal_homes config.scheduling config.mix
-  config.isolation_contract config.jdbc_isolation config.program_isolation config.evidence
-  config.warmup_seconds config.measured_seconds config.batch_rows
-  config.maximum_attempts config.retry_base_nanos config.retry_maximum_nanos
-)
-common_artifact_keys=(
   artifact.schema config.seed config.warehouses config.standard_scale
   config.standard_one_warehouse config.districts config.customers_per_district
   config.items config.orders_per_district config.terminals config.terminal_homes
   config.scheduling config.mix config.isolation_contract config.jdbc_isolation
   config.program_isolation config.evidence config.warmup_seconds config.measured_seconds
-  config.batch_rows config.maximum_attempts config.retry_base_nanos
-  config.retry_maximum_nanos
+  config.batch_rows config.maximum_attempts config.retry_base_nanos config.retry_maximum_nanos
 )
 families=(new_order payment order_status delivery stock_level)
 first_metadata=
 first_artifact=
+first_version=
+first_branch=
 sample_tsv=$(mktemp "${TMPDIR:-/tmp}/river-tps-p4.XXXXXX")
 cleanup_calculation() { rm -f -- "$sample_tsv"; }
 trap cleanup_calculation EXIT
-seen_run_ids=
 
 require_value() {
   local key=$1
   local file=$2
   local value
   value=$(property "$key" "$file")
-  [[ -n $value && $value != unavailable ]] || fail "$file missing usable $key"
+  [[ -n $value ]] || fail "$file missing usable $key"
   printf '%s\n' "$value"
 }
 
@@ -254,36 +219,21 @@ for index in $(seq 1 10); do
   sample_dir="$calculate_dir/sample-$label"
   artifact="$sample_dir/tpcc-acceptance.properties"
   metadata="$sample_dir/run-metadata.properties"
-  terminal="$metadata.terminal-receipt"
   [[ -f $artifact ]] || fail "missing sample artifact: $artifact"
   [[ -f $metadata ]] || fail "missing sample metadata: $metadata"
-  [[ -f $terminal ]] || fail "missing sample terminal receipt: $terminal"
   if [[ -z $first_metadata ]]; then first_metadata=$metadata; first_artifact=$artifact; fi
 
   for key in "${metadata_keys[@]}"; do require_value "$key" "$metadata" >/dev/null; done
-  [[ $(property tool.schema "$metadata") == river-tps-tool-v4 ]] || fail "$metadata has wrong tool schema"
-  [[ $(property run.result "$metadata") == provisional ]] || fail "$metadata is not provisional"
-  [[ $(property run.status "$metadata") == TERMINAL_RECEIPT_REQUIRED ]] ||
-    fail "$metadata does not require terminal validation"
-  [[ $(property run.provisional_result "$metadata") == completed ]] ||
-    fail "$metadata provisional run did not complete"
-  [[ $(property run.provisional_phase "$metadata") == checkpoint ]] ||
-    fail "$metadata provisional run did not reach checkpoint"
-  [[ $(property run.provisional_status "$metadata") == OK ]] ||
-    fail "$metadata provisional status is not OK"
-  [[ $(property run.provisional_exit_status "$metadata") == 0 ]] ||
-    fail "$metadata provisional exit status is not zero"
-  [[ $(property run.sample_id "$metadata") == p4-$label ]] || fail "$metadata has wrong sample identity"
-  run_id=$(property run.id "$artifact")
-  [[ -n $run_id ]] || fail "$artifact has no run.id"
-  [[ $seen_run_ids != *"|$run_id|"* ]] || fail "duplicate run.id: $run_id"
-  seen_run_ids="$seen_run_ids|$run_id|"
-  [[ $(property artifact.run_id "$metadata") == "$run_id" ]] || fail "$metadata does not bind artifact run.id"
-  [[ $(property artifact.database_digest_sha256 "$metadata") == "$(property database.digest.sha256 "$artifact")" ]] ||
-    fail "$metadata does not bind database identity"
-  [[ $(property artifact.sha256 "$metadata") == "$(hash_file "$artifact")" ]] || fail "$metadata artifact hash mismatch"
-  provenance_validate_terminal_receipt "$metadata" "$artifact" "$terminal" \
-    "$sample_dir" success || fail "$terminal is not an authoritative success receipt"
+  [[ $(property run.result "$metadata") == completed ]] || fail "$metadata did not complete"
+  [[ $(property run.phase "$metadata") == checkpoint ]] || fail "$metadata did not reach checkpoint"
+  [[ $(property run.status "$metadata") == OK ]] || fail "$metadata status is not OK"
+  [[ $(property run.exit_status "$metadata") == 0 ]] || fail "$metadata exit status is not zero"
+  version=$(property run.version "$metadata")
+  branch=$(property git.branch "$metadata")
+  [[ -n $first_version ]] || first_version=$version
+  [[ -n $first_branch ]] || first_branch=$branch
+  [[ $version == "$first_version" ]] || fail "run.version differs between samples"
+  [[ $branch == "$first_branch" ]] || fail "git.branch differs between samples"
 
   for key in "${artifact_keys[@]}"; do require_value "$key" "$artifact" >/dev/null; done
   [[ $(property artifact.schema "$artifact") == river-tpcc-acceptance-v2 ]] || fail "$artifact has wrong schema"
@@ -313,20 +263,18 @@ for index in $(seq 1 10); do
   echo "p4_sample=$label completed=$completed committed=$committed committed_tps=$sample_tps"
 done
 
-for key in "${common_metadata_keys[@]}"; do
+for key in "${metadata_keys[@]}"; do
   reference=$(property "$key" "$first_metadata")
   for index in $(seq 2 10); do
     metadata="$calculate_dir/sample-$(printf '%02d' "$index")/run-metadata.properties"
-    [[ $(property "$key" "$metadata") == "$reference" ]] ||
-      fail "metadata configuration/provenance mismatch for $key"
+    [[ $(property "$key" "$metadata") == "$reference" ]] || fail "metadata workload mismatch for $key"
   done
 done
-for key in "${common_artifact_keys[@]}"; do
+for key in "${artifact_keys[@]}"; do
   reference=$(property "$key" "$first_artifact")
   for index in $(seq 2 10); do
     artifact="$calculate_dir/sample-$(printf '%02d' "$index")/tpcc-acceptance.properties"
-    [[ $(property "$key" "$artifact") == "$reference" ]] ||
-      fail "artifact configuration mismatch for $key"
+    [[ $(property "$key" "$artifact") == "$reference" ]] || fail "artifact workload mismatch for $key"
   done
 done
 
@@ -343,13 +291,6 @@ stats=$(awk '
   }
 ' "$sample_tsv") || fail "unable to calculate ten-sample confidence interval"
 read -r mean standard_deviation lower_bound <<<"$stats"
-for index in $(seq 1 10); do
-  sample_dir="$calculate_dir/sample-$(printf '%02d' "$index")"
-  metadata="$sample_dir/run-metadata.properties"
-  provenance_validate_terminal_receipt "$metadata" "$sample_dir/tpcc-acceptance.properties" \
-    "$metadata.terminal-receipt" "$sample_dir" success promotion ||
-    fail "$metadata lacks required provenance or host guarantees"
-done
 echo "p4_samples_observed=10"
 echo "p4_completed_minimum=100000"
 echo "p4_mean_committed_tps=$mean"
@@ -364,12 +305,12 @@ else
   echo "p4_point=failed reason=95ci_lower_bound_below_1000" >&2
   exit_code=1
 fi
+
 result_file="$calculate_dir/p4-result.properties"
 [[ ! -e $result_file ]] || fail "refusing to overwrite $result_file"
-staged=$(mktemp "$calculate_dir/.river-tps-p4.XXXXXX") ||
-  fail "unable to stage the partial point result"
+staged=$(mktemp "$calculate_dir/.river-tps-p4.XXXXXX") || fail "unable to stage the partial point result"
 {
-  printf 'tool.schema=river-tps-p4-v4\n'
+  printf 'tool.schema=river-tps-p4-v5\n'
   printf 'p4.scope=partial-river-point-calculator\n'
   printf 'p4.result=%s\n' "$p4_result"
   printf 'p4.samples_expected=10\n'
@@ -380,24 +321,13 @@ staged=$(mktemp "$calculate_dir/.river-tps-p4.XXXXXX") ||
   printf 'p4.mean_committed_tps=%s\n' "$mean"
   printf 'p4.sample_standard_deviation_tps=%s\n' "$standard_deviation"
   printf 'p4.lower_bound_committed_tps=%s\n' "$lower_bound"
-  printf 'p4.git_commit_sha=%s\n' "$(property git.commit_sha "$first_metadata")"
-  printf 'p4.configuration_fingerprint=%s\n' "$(property configuration.fingerprint "$first_metadata")"
+  printf 'p4.run_version=%s\n' "$first_version"
+  printf 'p4.git_branch=%s\n' "$first_branch"
   for index in $(seq 1 10); do
     label=$(printf '%02d' "$index")
-    artifact="$calculate_dir/sample-$label/tpcc-acceptance.properties"
-    metadata="$calculate_dir/sample-$label/run-metadata.properties"
-    printf 'p4.sample.%s.artifact=%s\n' "$label" "$artifact"
-    printf 'p4.sample.%s.artifact_sha256=%s\n' "$label" "$(hash_file "$artifact")"
-    printf 'p4.sample.%s.metadata=%s\n' "$label" "$metadata"
-    printf 'p4.sample.%s.metadata_sha256=%s\n' "$label" "$(hash_file "$metadata")"
-    printf 'p4.sample.%s.terminal=%s\n' "$label" "$metadata.terminal-receipt"
-    printf 'p4.sample.%s.terminal_sha256=%s\n' "$label" \
-      "$(hash_file "$metadata.terminal-receipt")"
+    printf 'p4.sample.%s.artifact=%s\n' "$label" "$calculate_dir/sample-$label/tpcc-acceptance.properties"
+    printf 'p4.sample.%s.metadata=%s\n' "$label" "$calculate_dir/sample-$label/run-metadata.properties"
   done
 } >"$staged"
-provenance_publish_file "$staged" "$result_file" || {
-  rm -f -- "$staged"
-  fail "refusing to overwrite $result_file"
-}
-rm -f -- "$staged"
+mv -- "$staged" "$result_file"
 exit "$exit_code"

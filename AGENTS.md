@@ -214,9 +214,16 @@ sidecar. Performance claims require multiple longer interleaved samples because
 short local runs exhibit substantial host variability.
 
 Use `tools/tps-test.sh` only for River-specific isolation, retry/deadlock,
-protocol, lock-wait, WAL, JFR, and workspace-fingerprint evidence. Never compare
-one of its TPS figures directly with a river-harness target artifact because the
-workload implementation, profile, and isolation contract differ.
+protocol, lock-wait, WAL, and JFR evidence. It consumes the runnable benchmark
+distribution produced by `./make.sh`; it does not invoke Gradle, inspect source
+files, or require a runtime descriptor, source/workspace hash, host lease, or
+terminal receipt. Never compare one of its TPS figures directly with a
+river-harness target artifact because the workload implementation, profile, and
+isolation contract differ.
+
+The default TPS test version is the current Git branch name. If several
+variants are tested from one branch, pass `--version=<meaningful-variation>`
+for each variant and record that exact value in the TPS log or artifact. Record the workload configuration alongside that label.
 
 A current `--river-home` River harness invocation is also a Gradle build and
 must obey the one-build-at-a-time rule. After the `riverd` migration it must not
@@ -249,8 +256,8 @@ Keep performance work bisectable and recoverable:
   investigation trigger. Interleave longer control/candidate samples and inspect
   mechanism telemetry before attributing or accepting it. Do not invent a fixed
   percentage threshold to dismiss a surprising result.
-- Record the commit, command/configuration, clean-build result, individual
-  samples, correctness outcomes, and decision in
+- Record the branch/version, commit, command/configuration, clean-build result,
+  individual samples, correctness outcomes, and decision in
   [`docs/performance-checkpoints.md`](docs/performance-checkpoints.md). Keep bulky
   run artifacts outside Git and record their immutable paths or identifiers.
 - Merge an accepted feature with a merge commit, create an annotated
@@ -263,35 +270,15 @@ failed invariant, incomplete cleanup, retry-accounting gap, or invalid evidence
 capture. An inconclusive performance result may still be merged only when the
 feature is required for correctness or observability and is labelled as such.
 
-## Provenance review economy
+## Measurement evidence
 
-Spend materially more time on database behavior and its measurements. Target
-50–75% less provenance overhead than the September 2026 review loop.
-
-- Reuse accepted provenance tools and validators. An ordinary database change
-  does not reopen unchanged evidence formats, ownership mechanisms, or consumers.
-- Use one reviewer and one bounded pass over the changed evidence path. The
-  lead reconciles findings once. Re-review only the fix for a concrete blocker;
-  do not restart a whole-system provenance audit after each edit.
-- Budget eight minutes of provenance overhead for an ordinary database slice,
-  or fifteen minutes of review when provenance tooling itself is the requested
-  change. Count agent review, lead reconciliation, and provenance-specific
-  fixture/evidence rework; report automated waiting separately. Record actual
-  time briefly in the existing checkpoint entry, without a new tracking system.
-- A blocker must demonstrate possible acceptance of invalid measurements,
-  changed executed bytes, unsafe ownership/cleanup, or another violated explicit
-  correctness requirement. Speculative hardening, redundant metadata, cosmetic
-  completeness, and extra artifact layers do not block the database task.
-- At the budget, stop expanding provenance work. Fix demonstrated blockers in
-  the existing owner and report any necessary overrun with its concrete cause.
-  Simplify or remove redundant evidence machinery before adding checks. Do not
-  manufacture a new prerequisite or review round to keep investigating.
-- Run the existing focused validator tests and the real build/workload path.
-  Add a fixture only for a demonstrated failure or changed contract. Once these
-  pass, return to the database task and its TPS measurements.
-
-These limits reduce review breadth and repetition; they do not permit accepting
-known invalid evidence or bypassing independent database correctness review.
+Keep measurement review focused on the real workload and its correctness
+boundaries. A TPS run must retain its branch/version, workload and
+resource configuration, result, and relevant correctness and cleanup outcomes.
+The test runner must clean up its owned database, server, temporary files, and
+JFR processes on success, failure, and interruption. Do not add runtime
+descriptors, source/workspace fingerprints, host leases, terminal receipts, or
+parallel provenance validators to make a diagnostic run admissible.
 
 ## Hot-path engineering
 

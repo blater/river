@@ -9,12 +9,13 @@ usage() {
 Usage: tools/tps-test.sh [options]
 
 Run one River JDBC TPC-C engineering sample. Run ./make.sh first to compile
-River and prepare its runtime classpath. This tool never builds. It owns a
+the runner and its dependencies. This tool never builds. It owns a
 temporary database and loopback server,
 keeps output safe on every exit path, and reports load, preflight, warmup,
 measured, drain, and checkpoint failures distinctly.
 
 Options:
+  --version=NAME                Run label (default: current Git branch); name each experiment
   --backend=river|mariadb       Backend (current Java path: river only)
   --profile=tiny|standard       Workload scale (default: tiny)
   --mix=standard|new-order|payment|new-order-payment-50-50|new-order-delivery-50-50|new-order-stock-level-50-50
@@ -108,28 +109,10 @@ absolute_path() {
   esac
 }
 
-hash_file() {
-  if [[ -f $1 ]]; then
-    provenance_sha256_file "$1"
-  else
-    printf '%s\n' unavailable
-  fi
-}
-
-hash_text() {
-  provenance_sha256_text "$1"
-}
-
-property() {
-  local key=$1
-  local file=$2
-  [[ -f $file ]] || return 0
-  sed -n "s/^$key=//p" "$file" | head -1
-}
-
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 river_root=$(cd -- "$script_dir/.." && pwd)
-source "$script_dir/tps-provenance.sh"
+branch=$(git -C "$river_root" symbolic-ref --quiet --short HEAD || printf detached)
+version=$branch
 
 backend=river
 profile=tiny
@@ -181,6 +164,7 @@ done
 
 while (($# > 0)); do
   case $1 in
+    --version=*) version=${1#*=} ;;
     --backend=*) backend=${1#*=} ;;
     --profile=*) profile=${1#*=} ;;
     --mix=*) mix=${1#*=} ;;
@@ -229,6 +213,8 @@ while (($# > 0)); do
   shift
 done
 
+[[ -n $version ]] || die "version must not be empty"
+
 case $backend in river) ;; *) die "backend=$backend is unsupported; only backend=river is available" ;; esac
 case $profile in tiny|standard) ;; *) die "profile must be tiny or standard" ;; esac
 case $mix in
@@ -272,8 +258,6 @@ if [[ -n $seed ]]; then require_uint seed "$seed"; fi
 
 java_bin=${RIVER_JAVA:-java}
 command -v "$java_bin" >/dev/null 2>&1 || die "Java launcher not found: $java_bin"
-java_launcher_path=$(command -v "$java_bin")
-java_launcher_sha256=$(hash_file "$java_launcher_path")
 java_runtime_home=$(
   "$java_bin" -XshowSettings:properties -version 2>&1 |
     sed -n 's/^[[:space:]]*java\.home = //p' | head -1
@@ -299,13 +283,18 @@ if [[ -n $output_dir ]]; then
     die "output-dir must be empty to prevent overwriting evidence: $output_dir"
 fi
 
+classpath="$river_root/river-bench/build/install/river-tps/lib/*"
+[[ -d $river_root/river-bench/build/install/river-tps/lib ]] ||
+  die "TPS runner is not built; run ./make.sh first"
+echo "version=$version"
+echo "branch=$branch"
+
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/river-tps-test.XXXXXX")
-lease_dir=$(provenance_canonical_lease_dir)
+trap 'rm -rf -- "$temp_dir"' EXIT
+temp_dir=$(cd -- "$temp_dir" && pwd -P)
 server_pid=
 runner_pid=
 owned_process_cleanup_valid=true
-lease_acquired=false
-release_outcome=pending
 server_stop=
 runner_status=125
 runner_timed_out=false
@@ -314,20 +303,8 @@ run_phase=startup
 run_status=NOT_STARTED
 run_exit_status=1
 started_epoch=$(date +%s)
-source_stable=true
-host_exclusion_valid=false
-build_valid=false
-build_id=unavailable
-build_record=
-publication_valid=true
 persistence_valid=true
 artifact_published=false
-temp_cleanup_valid=true
-terminal_publication_valid=false
-workspace_start_sha256=unavailable
-workspace_finish_sha256=unavailable
-evidence_run_id=$(provenance_random_hex) || die "unable to generate evidence run identity"
-terminal_nonce=$(provenance_random_hex) || die "unable to generate terminal commitment nonce"
 if [[ -z $artifact ]]; then
   if [[ -n $output_dir ]]; then artifact_destination="$output_dir/tpcc-acceptance.properties";
   else artifact_destination="$temp_dir/tpcc-acceptance.properties"; fi
@@ -337,21 +314,11 @@ if [[ -z $metadata ]]; then
   if [[ -n $output_dir ]]; then metadata="$output_dir/run-metadata.properties";
   else metadata="$temp_dir/run-metadata.properties"; fi
 else metadata=$(absolute_path "$metadata"); fi
-terminal_receipt_destination="${metadata}.terminal-receipt"
-if [[ -n $output_dir ]]; then
-  invalid_status_destination="$output_dir/evidence-invalid.status"
-else
-  invalid_status_destination="${metadata}.evidence-invalid.status"
-fi
 case $artifact_destination in "$river_root"/*) die "artifact must be outside the source workspace" ;; esac
 case $metadata in "$river_root"/*) die "metadata must be outside the source workspace" ;; esac
-case $terminal_receipt_destination in "$river_root"/*) die "terminal receipt must be outside the source workspace" ;; esac
 [[ ! -e $artifact_destination ]] || die "refusing to overwrite acceptance artifact: $artifact_destination"
 [[ ! -e $metadata ]] || die "refusing to overwrite tool metadata: $metadata"
-[[ ! -e $terminal_receipt_destination ]] ||
-  die "refusing to overwrite terminal receipt: $terminal_receipt_destination"
-[[ ! -e $invalid_status_destination ]] ||
-  die "refusing to overwrite evidence status: $invalid_status_destination"
+[[ $metadata != "$artifact_destination" ]] || die "artifact and metadata destinations must differ"
 
 stdout_log="$temp_dir/tpcc.stdout.log"
 stderr_log="$temp_dir/tpcc.stderr.log"
@@ -364,47 +331,19 @@ metrics_stop="$temp_dir/performance-capture-stop"
 metrics_stopped="$temp_dir/performance-capture-stopped"
 server_ready="$temp_dir/server.ready"
 server_stop="$temp_dir/server.stop"
-runtime_descriptor="$river_root/river-bench/build/tps-runtime-classpath.properties"
-source_manifest_start="$temp_dir/source-manifest.start.tsv"
-source_manifest_check="$temp_dir/source-manifest.check.tsv"
-git_status_start="$temp_dir/git-status.start.txt"
-git_status_check="$temp_dir/git-status.check.txt"
-git_commit_start="$temp_dir/git-commit.txt"
-host_evidence_dir="$temp_dir/host-exclusion"
-provenance_checkpoints="$host_evidence_dir/provenance-checkpoints.tsv"
-build_capture="$host_evidence_dir/build-record"
-mkdir -p "$host_evidence_dir"
-: >"$provenance_checkpoints"
-
 persist_file() {
-  local source=$1
-  local destination=$2
-  [[ -f $source ]] || {
-    echo "warning: required retained evidence is missing: $source" >&2
-    publication_valid=false
+  local source=$1 destination=$2
+  if ! mkdir -p -- "$(dirname -- "$destination")" ||
+      [[ ! -f $source || -e $destination ]] ||
+      ! (set -o noclobber; cat -- "$source" >"$destination"); then
     persistence_valid=false
+    echo "error: unable to retain $source at $destination" >&2
     return 1
-  }
-  [[ ! -e $destination ]] || {
-    echo "warning: refusing to overwrite retained evidence $destination" >&2
-    publication_valid=false
-    persistence_valid=false
-    return 1
-  }
-  provenance_publish_file "$source" "$destination" 2>/dev/null
-  local status=$?
-  if ((status != 0)); then
-    publication_valid=false
-    persistence_valid=false
-    echo "warning: unable to preserve $source at $destination" >&2
   fi
-  return "$status"
 }
 
 persist_if_present() {
-  local source=$1
-  local destination=$2
-  [[ ! -e $source ]] || persist_file "$source" "$destination"
+  [[ ! -e $1 ]] || persist_file "$1" "$2"
 }
 
 redacted_command_line() {
@@ -421,142 +360,24 @@ redacted_command_line() {
   printf '%s\n' "$result"
 }
 
-persist_checkpoint_files() {
-  local destination=$1
-  local source_file checkpoint_list="$temp_dir/checkpoint-files.list"
-  [[ ! -e $destination ]] || {
-    echo "warning: refusing to overwrite checkpoint evidence $destination" >&2
-    publication_valid=false
-    persistence_valid=false
-    return 1
-  }
-  mkdir "$destination" || { publication_valid=false; persistence_valid=false; return 1; }
-  if ! find "$temp_dir" -maxdepth 1 -type f \
-      \( -name 'source-manifest.*.tsv' -o -name 'git-status.*.txt' \
-        -o -name 'classpath.*.tsv' -o -name 'runtime.*.properties' \) -print | LC_ALL=C sort \
-      >"$checkpoint_list"; then
-    publication_valid=false
-    persistence_valid=false
-    return 1
-  fi
-  while IFS= read -r source_file; do
-    persist_file "$source_file" "$destination/$(basename -- "$source_file")" || return 1
-  done <"$checkpoint_list"
-  rm -f -- "$checkpoint_list" || {
-    publication_valid=false; persistence_valid=false; return 1;
-  }
-}
-
-verify_provenance_checkpoint() {
-  local stage=$1
-  local source_check="$temp_dir/source-manifest.$stage.tsv"
-  local status_check="$temp_dir/git-status.$stage.txt"
-  local checkpoint_valid=true source_hash=unavailable status_hash=unavailable
-  local classpath_check="$temp_dir/classpath.$stage.tsv"
-  local descriptor_check="$temp_dir/runtime.$stage.properties"
-  local classpath_hash=unavailable descriptor_hash=unavailable
-  if [[ ${lease_acquired:-false} == true ]] &&
-      ! provenance_validate_current_lease "$lease_dir" "$evidence_run_id" "$terminal_nonce"; then
-    checkpoint_valid=false
-  fi
-  if ! provenance_write_source_manifest "$river_root" "$source_check" ||
-      ! provenance_write_git_status "$river_root" "$status_check"; then
-    source_stable=false
-    checkpoint_valid=false
-  else
-    source_hash=$(hash_file "$source_check")
-    status_hash=$(hash_file "$status_check")
-  fi
-  if [[ $checkpoint_valid == true ]] && {
-      ! cmp -s "$source_manifest_start" "$source_check" ||
-      ! cmp -s "$git_status_start" "$status_check"
-    }; then
-    source_stable=false
-    checkpoint_valid=false
-  fi
-  if [[ $build_valid != true ]] ||
-      ! provenance_validate_build_record "$build_record" "$build_id" ||
-      ! cmp -s "$build_record/completion.properties" "$build_capture/completion.properties" ||
-      ! cp -- "$runtime_descriptor" "$descriptor_check" ||
-      ! cmp -s "$descriptor_check" "$build_capture/runtime.properties" ||
-      ! provenance_write_classpath_manifest "$descriptor_check" "$classpath_check" ||
-      ! cmp -s "$classpath_check" "$build_capture/classpath.tsv" ||
-      ! cmp -s "$source_check" "$build_capture/source.before.tsv" ||
-      ! cmp -s "$status_check" "$build_capture/git-status.before.txt"; then
-    build_valid=false
-    checkpoint_valid=false
-  else
-    classpath_hash=$(hash_file "$classpath_check")
-    descriptor_hash=$(hash_file "$descriptor_check")
-  fi
-  if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$stage" "$(date +%s)" \
-      "$source_hash" "$status_hash" "$classpath_hash" "$descriptor_hash" \
-      >>"$provenance_checkpoints"; then
-    publication_valid=false
-    persistence_valid=false
-    checkpoint_valid=false
-  fi
-  [[ $checkpoint_valid == true ]] || publication_valid=false
-  [[ $checkpoint_valid == true ]]
-}
-
 write_metadata() {
-  local destination=$metadata
-  local parent=$(dirname -- "$destination")
-  mkdir -p "$parent" 2>/dev/null || {
-    publication_valid=false
-    persistence_valid=false
-    echo "warning: cannot create metadata parent $parent" >&2
-    return 1
-  }
   local staged="$temp_dir/run-metadata.staged.properties"
-  local git_commit=unavailable git_dirty=unknown
-  local final_status_file="$temp_dir/git-status.metadata.txt"
-  local final_source_file="$temp_dir/source-manifest.metadata.tsv"
-  local workspace_stable
-  local java_version=unavailable run_id=unavailable database_digest=unavailable
-  [[ -f $git_commit_start ]] && git_commit=$(tr -d '\r\n' <"$git_commit_start")
-  [[ -s $final_status_file ]] && git_dirty=dirty || git_dirty=clean
-  workspace_finish_sha256=$(hash_file "$final_source_file")
-  workspace_stable=$source_stable
-  java_version=$("$java_bin" -version 2>&1 | head -1 || true)
-  local artifact_evidence=$artifact
-  [[ $artifact_published == true ]] && artifact_evidence=$artifact_destination
-  if [[ -f $artifact_evidence ]]; then
-    run_id=$(property run.id "$artifact_evidence"); database_digest=$(property database.digest.sha256 "$artifact_evidence")
-    [[ -n $run_id ]] || run_id=unavailable; [[ -n $database_digest ]] || database_digest=unavailable
-  fi
-  local command_line
-  command_line=$(redacted_command_line)
   {
-    printf 'tool.schema=river-tps-tool-v4\n'
-    printf 'run.result=provisional\n'
-    printf 'run.phase=terminal_pending\n'
-    printf 'run.status=TERMINAL_RECEIPT_REQUIRED\n'
-    printf 'run.exit_status=1\n'
-    printf 'run.provisional_result=%s\n' "$run_result"
-    printf 'run.provisional_phase=%s\n' "$run_phase"
-    printf 'run.provisional_status=%s\n' "$run_status"
-    printf 'run.provisional_exit_status=%s\n' "$run_exit_status"
+    printf 'tool.schema=river-tps-tool-v5\n'
+    printf 'run.version=%s\n' "$version"
+    printf 'git.branch=%s\n' "$branch"
+    printf 'run.result=%s\n' "$run_result"
+    printf 'run.phase=%s\n' "$run_phase"
+    printf 'run.status=%s\n' "$run_status"
+    printf 'run.exit_status=%s\n' "$run_exit_status"
     printf 'run.sample_id=%s\n' "$sample_id"
     printf 'run.started_epoch=%s\n' "$started_epoch"
     printf 'run.finished_epoch=%s\n' "$(date +%s)"
-    printf 'run.command_line=%s\n' "$command_line"
-    printf 'run.command_sha256=%s\n' "$(hash_text "$command_line")"
-    printf 'git.commit_sha=%s\n' "$git_commit"
-    printf 'git.dirty_state=%s\n' "$git_dirty"
-    printf 'git.status_sha256=%s\n' "$(hash_file "$final_status_file")"
-    printf 'git.workspace_start_sha256=%s\n' "$workspace_start_sha256"
-    printf 'git.workspace_finish_sha256=%s\n' "$workspace_finish_sha256"
-    printf 'git.workspace_stable_during_run=%s\n' "$workspace_stable"
+    printf 'run.command_line=%s\n' "$(redacted_command_line)"
     printf 'environment.java_launcher=%s\n' "$java_bin"
-    printf 'environment.java_launcher_path=%s\n' "$java_launcher_path"
-    printf 'environment.java_launcher_sha256=%s\n' "$java_launcher_sha256"
     printf 'environment.java_home=%s\n' "${java_runtime_home:-unavailable}"
-    printf 'environment.java_version=%s\n' "$java_version"
-    printf 'environment.os=%s\n' "$(uname -srm 2>/dev/null || printf unavailable)"
-    printf 'environment.host=%s\n' "$(hostname 2>/dev/null || printf unavailable)"
-    printf 'environment.java_tool_options=%s\n' "$([[ -n ${JAVA_TOOL_OPTIONS:-} ]] && printf redacted || printf unset)"
+    printf 'environment.java_version=%s\n' "$("$java_bin" -version 2>&1 | head -1 || true)"
+    printf 'environment.os=%s\n' "$(uname -srm)"
     printf 'configuration.backend=%s\n' "$backend"
     printf 'configuration.profile=%s\n' "$profile"
     printf 'configuration.mix=%s\n' "$mix"
@@ -594,55 +415,10 @@ write_metadata() {
     printf 'configuration.server_jfr=%s\n' "${server_jfr:-disabled}"
     printf 'configuration.client_java_option_count=%s\n' "${#client_java_options[@]}"
     printf 'configuration.server_java_option_count=%s\n' "${#server_java_options[@]}"
-    printf 'configuration.fingerprint=%s\n' "$(hash_text "$backend|$profile|$mix|$isolation|$scheduling|$evidence|$fresh_load|$warehouses|$terminals|$batch_rows|$maximum_attempts|$warmup_seconds|$measured_seconds|${seed:-java_default}|${retry_base_micros:-java_default}|${retry_maximum_millis:-java_default}|$resource_maximum_bytes|$resource_delivery_bytes|$resource_lock_provider_bytes|$resource_version_workspace_bytes|$resource_page_cache_bytes|$resource_staging_frame_bytes|$resource_staged_page_capacity|$deadlock_diagnostics_bytes|$deadlock_diagnostics_epochs|$deadlock_diagnostics_signatures_per_epoch|$deadlock_diagnostics_events_per_epoch|$deadlock_diagnostics_exemplars_per_signature|$deadlock_diagnostics_maximum_cycle_edges")"
     printf 'artifact.path=%s\n' "$artifact_destination"
     printf 'artifact.published=%s\n' "$artifact_published"
-    printf 'artifact.run_id=%s\n' "$run_id"
-    printf 'artifact.database_digest_sha256=%s\n' "$database_digest"
-    printf 'artifact.sha256=%s\n' "$(hash_file "$artifact_evidence")"
-    printf 'output.stdout_sha256=%s\n' "$(hash_file "$stdout_log")"
-    printf 'output.stderr_sha256=%s\n' "$(hash_file "$stderr_log")"
-    printf 'output.combined_sha256=%s\n' "$(hash_file "$combined_log")"
-    printf 'output.server_log_sha256=%s\n' "$(hash_file "$server_log")"
-    printf 'output.server_metrics_sha256=%s\n' "$(hash_file "$server_metrics")"
-    printf 'provenance.source_manifest_sha256=%s\n' "$workspace_start_sha256"
-    printf 'provenance.source_stable=%s\n' "$source_stable"
-    printf 'provenance.host_exclusion_valid=%s\n' "$host_exclusion_valid"
-    printf 'host.guarantee=%s\n' "$([[ $host_exclusion_valid == true ]] && printf qualified || printf unqualified)"
-    printf 'host.release_outcome=%s\n' "${release_outcome:-pending}"
-    printf 'host.lease.evidence_run_id=%s\n' "${PROVENANCE_LEASE_RUN_ID:-unavailable}"
-    printf 'host.lease.owner_pid=%s\n' "${PROVENANCE_LEASE_OWNER_PID:-unavailable}"
-    printf 'host.lease.owner_start=%s\n' "${PROVENANCE_LEASE_OWNER_START:-unavailable}"
-    printf 'host.lease.owner_identity_sha256=%s\n' "${PROVENANCE_LEASE_OWNER_IDENTITY_SHA256:-unavailable}"
-    printf 'host.lease.nonce=%s\n' "${PROVENANCE_LEASE_NONCE:-unavailable}"
-    printf 'host.lease.terminal_commitment_sha256=%s\n' "${PROVENANCE_TERMINAL_COMMITMENT_SHA256:-unavailable}"
-    printf 'provenance.build_id=%s\n' "$build_id"
-    printf 'provenance.build_valid=%s\n' "$build_valid"
-    printf 'provenance.classpath_sha256=%s\n' "$(hash_file "$build_capture/classpath.tsv")"
-    printf 'provenance.publication_valid=%s\n' "$publication_valid"
-    printf 'provenance.persistence_valid=%s\n' "$persistence_valid"
-    printf 'evidence.run_id=%s\n' "$evidence_run_id"
-    printf 'publisher.pid=%s\n' "${PROVENANCE_PUBLISHER_PID:-unavailable}"
-    printf 'publisher.start=%s\n' "${PROVENANCE_PUBLISHER_START:-unavailable}"
-    printf 'publisher.identity_sha256=%s\n' "${PROVENANCE_PUBLISHER_IDENTITY_SHA256:-unavailable}"
-    printf 'terminal.required=true\n'
-    printf 'terminal.path=%s\n' "$terminal_receipt_destination"
-    printf 'terminal.commitment_sha256=%s\n' "${PROVENANCE_TERMINAL_COMMITMENT_SHA256:-unavailable}"
-    printf 'tool.tps_test_sha256=%s\n' "$(hash_file "$script_dir/tps-test.sh")"
-    printf 'tool.provenance_sha256=%s\n' "$(hash_file "$script_dir/tps-provenance.sh")"
-  } >"$staged" 2>/dev/null || {
-    publication_valid=false
-    persistence_valid=false
-    echo "warning: unable to write metadata: $destination" >&2
-    return 1
-  }
-  if ! provenance_publish_file "$staged" "$destination" 2>/dev/null; then
-    publication_valid=false
-    persistence_valid=false
-    echo "warning: refusing to overwrite tool metadata: $destination" >&2
-    return 1
-  fi
-  rm -f -- "$staged"
+  } >"$staged" || return 1
+  persist_file "$staged" "$metadata"
 }
 
 stop_server() {
@@ -690,286 +466,46 @@ stop_runner() {
 }
 
 cleanup() {
-  local requested_status=$?
-  local metadata_hash=unavailable artifact_run_id=unavailable release_outcome=pending
-  local receipt_result=evidence_invalid receipt_status=NOT_STARTED
-  local receipt_evidence_dir=$host_evidence_dir receipt_parent receipt_staged
+  local status=$?
+  trap - EXIT INT TERM
   set +e
   stop_runner
   stop_server
+  if ((status != 0)) && [[ $run_status == NOT_STARTED ]]; then
+    run_result=tool_failed; run_phase=startup
+    run_status=TOOL_FAILED; run_exit_status=$status
+  fi
   if [[ $owned_process_cleanup_valid != true ]]; then
-    run_result=evidence_invalid
-    run_phase=provenance
-    run_status=OWNED_PROCESS_LEAK
-    run_exit_status=1
-  fi
-  if ! provenance_inventory_boundary "$host_evidence_dir" "$$" post-cleanup \
-      "$river_root/gradlew" "${gradle_home:-}" 16777216 5 true; then
-    host_exclusion_valid=false
-    run_result=evidence_invalid
-    run_phase=provenance
-    run_status=HOST_INVENTORY_FAILED
-    run_exit_status=1
-  fi
-  verify_provenance_checkpoint publication || true
-  if [[ $source_stable != true || $build_valid != true || $publication_valid != true ]]; then
-    if [[ $run_result != evidence_invalid ]]; then
-      run_result=evidence_invalid
-      run_phase=provenance
-      run_status=PROVENANCE_CHANGED
-      run_exit_status=1
-    fi
+    run_result=cleanup_failed; run_phase=cleanup
+    run_status=OWNED_PROCESS_LEAK; run_exit_status=1; status=1
   fi
   if [[ -f $artifact ]]; then
-    if ! mkdir -p "$(dirname -- "$artifact_destination")"; then
-      publication_valid=false
-      persistence_valid=false
-    elif persist_file "$artifact" "$artifact_destination"; then
-      artifact_published=true
-    fi
+    if persist_file "$artifact" "$artifact_destination"; then artifact_published=true; fi
   fi
-  if [[ -n ${output_dir:-} ]]; then
+  if [[ -n $output_dir ]]; then
     persist_if_present "$stdout_log" "$output_dir/tpcc.stdout.log"
     persist_if_present "$stderr_log" "$output_dir/tpcc.stderr.log"
     persist_if_present "$combined_log" "$output_dir/tpcc-output.log"
     persist_if_present "$server_log" "$output_dir/server.log"
     persist_if_present "$server_metrics" "$output_dir/server-metrics.log"
-    persist_if_present "$runtime_descriptor" "$output_dir/runtime-classpath.properties"
-    persist_if_present "$source_manifest_start" "$output_dir/source-manifest.tsv"
-    persist_if_present "$git_status_start" "$output_dir/git-status.txt"
   fi
-  verify_provenance_checkpoint metadata || true
-  if [[ $publication_valid != true ]]; then
-    if [[ $run_result != evidence_invalid ]]; then
-      run_result=evidence_invalid
-      run_phase=provenance
-      run_status=EVIDENCE_PUBLICATION_FAILED
-      run_exit_status=1
-    fi
+  if [[ $persistence_valid != true ]]; then
+    run_result=output_failed; run_phase=output
+    run_status=OUTPUT_WRITE_FAILED; run_exit_status=1; status=1
   fi
-  if ! provenance_inventory_boundary "$host_evidence_dir" "$$" pre-publication \
-      "$river_root/gradlew" "${gradle_home:-}" 16777216 5 true; then
-    host_exclusion_valid=false
-    run_result=evidence_invalid
-    run_phase=provenance
-    run_status=HOST_INVENTORY_FAILED
-    run_exit_status=1
-  fi
-  if ! write_metadata; then
-    run_result=evidence_invalid
-    run_phase=provenance
-    run_status=EVIDENCE_PUBLICATION_FAILED
-    run_exit_status=1
-  fi
-  [[ -f $metadata ]] && metadata_hash=$(hash_file "$metadata")
-  verify_provenance_checkpoint terminal || true
-  if [[ -n ${output_dir:-} ]]; then
-    persist_if_present "$host_evidence_dir/host-observations.tsv" "$output_dir/host-observations.tsv"
-    persist_if_present "$host_evidence_dir/host-processes.tsv" "$output_dir/host-processes.tsv"
-    persist_if_present "$host_evidence_dir/host-classifications.tsv" "$output_dir/host-classifications.tsv"
-    persist_if_present "$host_evidence_dir/host-violations.tsv" "$output_dir/host-violations.tsv"
-    persist_file "$provenance_checkpoints" "$output_dir/provenance-checkpoints.tsv"
-    persist_checkpoint_files "$output_dir/checkpoints"
-    if [[ -d $build_capture ]]; then
-      provenance_copy_build_record "$build_capture" "$output_dir/build-record" "$build_id" || {
-        publication_valid=false
-        persistence_valid=false
-      }
-    fi
-    receipt_evidence_dir=$output_dir
-  fi
-
-  if [[ $source_stable != true || $build_valid != true || $publication_valid != true ]]; then
-    if [[ $run_result != evidence_invalid ]]; then
-      run_result=evidence_invalid
-      run_phase=provenance
-      run_status=PROVENANCE_CHANGED
-      run_exit_status=1
-    fi
-  fi
-  if [[ $publication_valid != true ]]; then
-    if [[ $run_result != evidence_invalid ]]; then
-      run_result=evidence_invalid
-      run_phase=provenance
-      run_status=EVIDENCE_PUBLICATION_FAILED
-      run_exit_status=1
-    fi
-    echo "evidence_status=evidence_invalid reason=publication_failed" >&2
-  fi
-  if [[ $run_result == evidence_invalid ]]; then
-    {
-      printf 'schema=river-tps-evidence-status-v1\n'
-      printf 'result=evidence_invalid\n'
-      printf 'status=%s\n' "$run_status"
-    } >"$temp_dir/evidence-invalid.status" || publication_valid=false
-    if [[ $invalid_status_destination != "$temp_dir/evidence-invalid.status" ]]; then
-      persist_file "$temp_dir/evidence-invalid.status" "$invalid_status_destination" || true
-    fi
-  fi
-  if [[ -n $output_dir && $persistence_valid == true ]]; then
-    if rm -rf -- "$temp_dir"; then
-      temp_cleanup_valid=true
-    else
-      temp_cleanup_valid=false
-      run_result=evidence_invalid
-      run_phase=provenance
-      run_status=TEMPORARY_CLEANUP_FAILED
-      run_exit_status=1
-    fi
-  fi
-  if [[ $lease_acquired == true ]]; then
-    if provenance_release_lease "$lease_dir"; then
-      release_outcome=released
-      lease_acquired=false
-    else
-      release_outcome=release_failed
-      run_result=evidence_invalid
-      run_phase=provenance
-      run_status=LEASE_RELEASE_FAILED
-      run_exit_status=1
-    fi
+  write_metadata || { persistence_valid=false; status=1; }
+  # Retain logs when requested or needed to explain a failure, never the owned database.
+  rm -rf -- "$temp_dir/database" || status=1
+  if [[ $keep_output == true || $persistence_valid != true || ($status != 0 && -z $output_dir) ]]; then
+    echo "temporary_run_dir=$temp_dir" >&2
   else
-    release_outcome=not_acquired
+    rm -rf -- "$temp_dir" || status=1
   fi
-  [[ -f $artifact_destination ]] && artifact_run_id=$(property run.id "$artifact_destination")
-  [[ -n $artifact_run_id ]] || artifact_run_id=unavailable
-  receipt_status=$run_status
-  if [[ $requested_status -eq 0 && $run_result == completed &&
-      $source_stable == true &&
-      $publication_valid == true && $persistence_valid == true &&
-      $temp_cleanup_valid == true && $build_valid == true &&
-      $owned_process_cleanup_valid == true && $host_exclusion_valid == true &&
-      $release_outcome == released ]]; then
-    receipt_result=success
-    receipt_status=OK
-  fi
-  if [[ $metadata_hash != unavailable && -d $receipt_evidence_dir ]]; then
-    receipt_parent=$(dirname -- "$terminal_receipt_destination")
-    mkdir -p "$receipt_parent" 2>/dev/null || terminal_publication_valid=false
-    receipt_staged=$(mktemp "$receipt_parent/.river-tps-terminal.XXXXXX" 2>/dev/null)
-    if [[ -n $receipt_staged ]] && provenance_write_terminal_receipt "$receipt_staged" \
-        "$receipt_result" "$receipt_status" "$evidence_run_id" "$artifact_run_id" \
-        "$metadata_hash" "${PROVENANCE_PUBLISHER_PID:-unavailable}" \
-        "${PROVENANCE_PUBLISHER_START:-unavailable}" \
-        "${PROVENANCE_PUBLISHER_IDENTITY_SHA256:-unavailable}" \
-        "${PROVENANCE_LEASE_NONCE:-unavailable}" \
-        "${PROVENANCE_TERMINAL_COMMITMENT_SHA256:-unavailable}" "$receipt_evidence_dir" \
-        "$release_outcome" "${PROVENANCE_LEASE_RUN_ID:-unavailable}" \
-        "${PROVENANCE_LEASE_OWNER_PID:-unavailable}" \
-        "${PROVENANCE_LEASE_OWNER_START:-unavailable}" \
-        "${PROVENANCE_LEASE_OWNER_IDENTITY_SHA256:-unavailable}" \
-        "${PROVENANCE_TERMINAL_COMMITMENT_SHA256:-unavailable}" \
-        "$([[ $host_exclusion_valid == true ]] && printf qualified || printf unqualified)" &&
-        provenance_publish_file "$receipt_staged" "$terminal_receipt_destination"; then
-      if provenance_validate_terminal_receipt "$metadata" "$artifact_destination" \
-          "$terminal_receipt_destination" "$receipt_evidence_dir" "$receipt_result"; then
-        terminal_publication_valid=true
-      fi
-    fi
-    [[ -z $receipt_staged ]] || rm -f -- "$receipt_staged"
-  fi
-  if [[ $terminal_publication_valid != true ]]; then
-    publication_valid=false
-    receipt_result=evidence_invalid
-    run_result=evidence_invalid
-    run_phase=provenance
-    run_status=TERMINAL_RECEIPT_PUBLICATION_FAILED
-    run_exit_status=1
-    echo "evidence_status=evidence_invalid reason=terminal_receipt_publication_failed" >&2
-    if [[ ! -e $invalid_status_destination ]]; then
-      receipt_staged=$(mktemp "$(dirname -- "$invalid_status_destination")/.river-tps-status.XXXXXX" 2>/dev/null)
-      if [[ -n $receipt_staged ]]; then
-        {
-          printf 'schema=river-tps-evidence-status-v1\n'
-          printf 'result=evidence_invalid\n'
-          printf 'status=TERMINAL_RECEIPT_PUBLICATION_FAILED\n'
-        } >"$receipt_staged" &&
-          provenance_publish_file "$receipt_staged" "$invalid_status_destination" || true
-        rm -f -- "$receipt_staged"
-      fi
-    fi
-  fi
-  if [[ -d $temp_dir ]]; then
-    if [[ $keep_output == true ]]; then
-      echo "temporary_run_dir=$temp_dir" >&2
-    elif [[ -z $output_dir || ($persistence_valid == true &&
-        $terminal_publication_valid == true) ]]; then
-      rm -rf -- "$temp_dir" || temp_cleanup_valid=false
-    else
-      echo "temporary_run_dir=$temp_dir" >&2
-    fi
-  fi
-  if [[ $receipt_result != success || $terminal_publication_valid != true ||
-      $source_stable != true || $build_valid != true ||
-      $publication_valid != true || $temp_cleanup_valid != true ]]; then
-    trap - EXIT
-    ((requested_status != 0)) && exit "$requested_status"
-    exit 1
-  fi
-  return "$requested_status"
+  exit "$status"
 }
 trap cleanup EXIT
 trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run_exit_status=130; exit 130' INT
 trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run_exit_status=143; exit 143' TERM
-
-: >"$host_evidence_dir/host-observations.tsv"
-: >"$host_evidence_dir/host-processes.tsv"
-: >"$host_evidence_dir/host-classifications.tsv"
-: >"$host_evidence_dir/host-violations.tsv"
-if ! provenance_acquire_lease "$lease_dir" "$evidence_run_id" "$terminal_nonce"; then
-  run_result=evidence_invalid
-  run_phase=provenance
-  run_status=HOST_LEASE_UNAVAILABLE
-  run_exit_status=1
-  exit 1
-fi
-lease_acquired=true
-PROVENANCE_PUBLISHER_PID=$PROVENANCE_LEASE_OWNER_PID
-PROVENANCE_PUBLISHER_START=$PROVENANCE_LEASE_OWNER_START
-PROVENANCE_PUBLISHER_IDENTITY_SHA256=$PROVENANCE_LEASE_OWNER_IDENTITY_SHA256
-pre_source_gradle_home=
-if [[ -f $runtime_descriptor ]]; then
-  pre_source_gradle_home=$(provenance_property_once gradle.user.home "$runtime_descriptor" || true)
-fi
-if [[ -z $pre_source_gradle_home ]]; then
-  run_result=evidence_invalid
-  run_phase=provenance
-  run_status=RUNTIME_DESCRIPTOR_UNAVAILABLE
-  run_exit_status=1
-  exit 1
-fi
-if ! provenance_inventory_boundary "$host_evidence_dir" "$$" pre-source \
-    "$river_root/gradlew" "$pre_source_gradle_home" 16777216 5 false; then
-  run_result=evidence_invalid
-  run_phase=provenance
-  run_status=HOST_INVENTORY_FAILED
-  run_exit_status=1
-  exit 1
-fi
-host_exclusion_valid=true
-provenance_write_source_manifest "$river_root" "$source_manifest_start" ||
-  die "unable to capture source manifest"
-provenance_write_git_status "$river_root" "$git_status_start" ||
-  die "unable to capture Git status"
-git -C "$river_root" rev-parse HEAD >"$git_commit_start" ||
-  die "unable to capture Git commit"
-workspace_start_sha256=$(hash_file "$source_manifest_start")
-
-[[ -f $runtime_descriptor ]] || die "runtime classpath is missing; run ./make.sh first"
-[[ $(property schema "$runtime_descriptor") == river-tps-runtime-v3 ]] ||
-  die "runtime classpath descriptor has an unsupported schema; run ./make.sh"
-build_id=$(provenance_property_once build.id "$runtime_descriptor") ||
-  die "runtime classpath has no unique build identity"
-[[ $build_id =~ ^[0-9a-f]{64}$ ]] || die "runtime build identity is invalid"
-build_record="$river_root/river-bench/build/tps-build/$build_id"
-provenance_copy_build_record "$build_record" "$build_capture" "$build_id" ||
-  die "prebuilt runtime evidence is incomplete or invalid; run ./make.sh"
-build_valid=true
-classpath=$(provenance_classpath_value "$build_capture/runtime.properties") ||
-  die "runtime classpath descriptor has no entries"
-gradle_home=$(provenance_property_once gradle.user.home "$build_capture/runtime.properties") ||
-  die "runtime descriptor has no Gradle user home"
-verify_provenance_checkpoint startup || die "prebuilt runtime or source changed before the workload"
 
 ((terminals <= 2147483643)) || die "terminals leave no addressable server control slots"
 server_connections=$((terminals + 4))
@@ -1026,11 +562,6 @@ require_uint managed_port "$managed_port"
 ((managed_port > 0 && managed_port <= 65535)) || die "managed server returned invalid port: $managed_port"
 url="jdbc:river://localhost:$managed_port"
 echo "managed_server=started port=$managed_port"
-verify_provenance_checkpoint server || {
-  run_result=evidence_invalid; run_phase=server
-  run_status=PROVENANCE_CHANGED; run_exit_status=1
-  exit 1
-}
 echo "managed_server_resources=explicit maximum_bytes=$resource_maximum_bytes delivery_bytes=$resource_delivery_bytes lock_provider_bytes=$resource_lock_provider_bytes version_workspace_bytes=$resource_version_workspace_bytes page_cache_bytes=$resource_page_cache_bytes staging_frame_bytes=$resource_staging_frame_bytes staged_page_capacity=$resource_staged_page_capacity"
 [[ -n $server_jfr ]] && echo "managed_server_jfr=$server_jfr"
 if [[ $deadlock_diagnostics_bytes =~ ^0+$ ]]; then
@@ -1055,18 +586,6 @@ runner_args=( "--url=$url" "--fresh-load=$fresh_load" "--warmup-seconds=$warmup_
 echo "Running $measured_seconds seconds of River TPS testing against $url"
 echo "profile=$profile mix=$mix warmup_seconds=$warmup_seconds measured_seconds=$measured_seconds scheduling=$scheduling evidence=$evidence"
 
-verify_provenance_checkpoint client_start || {
-  run_result=evidence_invalid; run_phase=client
-  run_status=PROVENANCE_CHANGED; run_exit_status=1
-  exit 1
-}
-provenance_inventory_boundary "$host_evidence_dir" "$$" pre-client \
-  "$river_root/gradlew" "$gradle_home" 16777216 5 false || {
-  run_result=evidence_invalid; run_phase=provenance
-  run_status=HOST_INVENTORY_FAILED; run_exit_status=1
-  exit 1
-}
-
 "$java_bin" "${client_java_options[@]}" -cp "$classpath" io.riverdb.bench.tpcc.TpccAcceptanceMain \
   "${runner_args[@]}" >"$stdout_log" 2>"$stderr_log" &
 runner_pid=$!
@@ -1084,10 +603,7 @@ if [[ -n $runner_pid ]]; then
   set +e; wait "$runner_pid"; runner_status=$?; set -e
   runner_pid=
 fi
-verify_provenance_checkpoint client_finish || {
-  source_stable=${source_stable:-false}
-}
-{ cat "$stdout_log"; if [[ -s $stderr_log ]]; then echo "=== runner stderr ==="; cat "$stderr_log"; fi; } >"$combined_log"
+{ echo "version=$version"; echo "branch=$branch"; cat "$stdout_log"; if [[ -s $stderr_log ]]; then echo "=== runner stderr ==="; cat "$stderr_log"; fi; } >"$combined_log"
 echo "=== TPS runner output ==="; cat "$stdout_log"
 if [[ -s $stderr_log ]]; then echo "=== runner stderr ===" >&2; cat "$stderr_log" >&2; fi
 
@@ -1231,13 +747,6 @@ elif ((errors > 0)); then
   run_phase=measured; run_result=measured_failed; run_status=TRANSACTION_ERRORS; run_exit_status=1
 else
   run_phase=checkpoint; run_result=completed; run_status=OK; run_exit_status=0
-fi
-
-if ! verify_provenance_checkpoint result; then
-  run_result=evidence_invalid
-  run_phase=provenance
-  run_status=PROVENANCE_CHANGED
-  run_exit_status=1
 fi
 
 echo; echo "=== TPS result ==="
