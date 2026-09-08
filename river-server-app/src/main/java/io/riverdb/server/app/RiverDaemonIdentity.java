@@ -1329,6 +1329,12 @@ public final class RiverDaemonIdentity {
     RiverFile lockFile() { return lockFile; }
     RiverDaemonIdentityRecords.LockRecord priorOwner() { return priorOwner; }
     String ownerNonce() { return ownerNonce; }
+
+    RiverDaemonIdentityRecords.LockRecord currentOwner() {
+      return new RiverDaemonIdentityRecords.LockRecord(
+          datadir, incarnation.high(), incarnation.low(), ownerPid, ownerStart,
+          ownerCommand, ownerNonce);
+    }
     boolean needsOwnerHandoff() { return needsOwnerHandoff; }
 
     /** Closes retained capabilities in reverse creation order, preserving the first failure. */

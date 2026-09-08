@@ -24,6 +24,7 @@ import io.riverdb.server.LoopbackServerOpenResult;
 import io.riverdb.server.SecurityAuditLog;
 import io.riverdb.server.SecurityAuditLogFactory;
 import io.riverdb.testsupport.SecurityAuditTestOwner;
+import java.net.InetAddress;
 import java.io.IOException;
 import io.riverdb.testsupport.TestTlsContexts;
 import java.nio.charset.StandardCharsets;
@@ -332,6 +333,7 @@ final class SecureRemoteJdbcGateTest {
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
             database,
+            InetAddress.getByName("127.0.0.1"),
             0,
             context,
             authenticator,

@@ -8,4 +8,5 @@ dependencies {
   testFixturesImplementation(project(":river-base"))
   testFixturesImplementation(project(":river-platform"))
   testImplementation(project(":river-engine"))
+  testImplementation(testFixtures(project(":river-client")))
 }

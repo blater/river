@@ -1,6 +1,8 @@
 package io.riverdb.jdbc;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.client.RiverClientConfiguration;
+import io.riverdb.client.RiverClientConfigurationResult;
 import io.riverdb.client.RiverClientConnection;
 import io.riverdb.client.RiverClientOpenResult;
 import io.riverdb.engine.api.RiverSession;
@@ -11,6 +13,8 @@ import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.Properties;
 import java.util.logging.Logger;
 import javax.net.ssl.SSLContext;
@@ -18,6 +22,7 @@ import javax.net.ssl.SSLContext;
 /** Driver for the pre-V1 loopback URL {@code jdbc:river://localhost:PORT}. */
 public final class RiverDriver implements Driver {
   public static final String URL_PREFIX = "jdbc:river://localhost:";
+  public static final String CLIENT_FILE_PREFIX = "jdbc:river:client-file:";
 
   static {
     try {
@@ -35,11 +40,46 @@ public final class RiverDriver implements Driver {
     if (properties != null && !properties.isEmpty()) {
       throw JdbcExceptions.unsupported();
     }
+    if (url.startsWith(CLIENT_FILE_PREFIX)) {
+      return openClientFile(url);
+    }
     int port = parsePort(url);
     if (port <= 0) {
       throw JdbcExceptions.invalid("River JDBC URL must end with a valid port");
     }
     return openLoopback(port, null, null, 0);
+  }
+
+  private static Connection openClientFile(String url) throws SQLException {
+    String pathText = url.substring(CLIENT_FILE_PREFIX.length());
+    if (pathText.isEmpty() || !pathText.equals(pathText.strip())) {
+      throw JdbcExceptions.invalid("River client-file URL requires an absolute path");
+    }
+    final Path path;
+    try {
+      path = Path.of(pathText);
+    } catch (InvalidPathException failure) {
+      throw JdbcExceptions.invalid("River client-file URL has an invalid path");
+    }
+    if (!path.isAbsolute() || !path.equals(path.normalize())) {
+      throw JdbcExceptions.invalid("River client-file URL requires an absolute normalized path");
+    }
+
+    RiverClientConfigurationResult configurationResult =
+        new RiverClientConfigurationResult();
+    StatusCode status = RiverClientConfiguration.load(path, configurationResult);
+    JdbcExceptions.require(status, "load River client configuration");
+    RiverClientOpenResult connected = new RiverClientOpenResult();
+    status = configurationResult.configuration().connect(connected);
+    JdbcExceptions.require(status, "connect using River client configuration");
+    RiverClientConnection client = connected.connection();
+    SessionOpenResult opened = new SessionOpenResult();
+    status = client.createSession(opened);
+    if (!status.isOk()) {
+      client.close();
+      throw JdbcExceptions.failure(status, "open session");
+    }
+    return new RiverJdbcConnection(client, opened.session(), url);
   }
 
   static Connection openLoopback(
@@ -78,7 +118,7 @@ public final class RiverDriver implements Driver {
 
   @Override
   public boolean acceptsURL(String url) {
-    return url != null && url.startsWith(URL_PREFIX);
+    return url != null && (url.startsWith(URL_PREFIX) || url.startsWith(CLIENT_FILE_PREFIX));
   }
 
   @Override

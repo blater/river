@@ -1,6 +1,6 @@
 ---
 id: tic-ec50
-status: open
+status: in_progress
 type: story
 assignee: blater
 parent: tic-bf0b
@@ -82,3 +82,44 @@ wire protocol, remote binding, service-manager integration, installer, stop/ps
 command, renewal/archive command, or benchmark comparison policy. Missing
 prerequisites return to their existing owners. Stop when the installed start,
 JDBC, shutdown, and restart path works; no additional admin commands join it.
+
+## Installed launcher checkpoint — 2026-09-08
+
+Work continues on `ticket/tic-ec50-riverd-launcher`. Its prerequisite feature
+branches are composed here for integration testing; they are not promoted by
+this checkpoint. Windows/NTFS qualification and audit performance acceptance
+remain open.
+
+The built `river-server-app/build/install/riverd` distribution now runs without
+Gradle or a source-tree classpath. On macOS/APFS, the installed script passed
+help/version and invalid-port exits, first start on port zero, generated
+`jdbc:river:client-file:` configuration, SQL create/insert/commit, SIGTERM,
+restart and reading the committed row. Both processes removed their matching
+ready/runtime/registry records and produced no stderr errors. SIGTERM produced
+the JVM's conventional process exit code 143; the ordinary command exit classes
+are tested separately. This signal-exit distinction still needs reconciliation
+with the CLI document before acceptance.
+
+Validation artifacts are outside Git under
+`/private/tmp/riverd-delivery-evidence`:
+
+- `launcher-gradle-5.log`: `--no-daemon :river-server-app:test
+  :river-server-app:installDist`, 38 tests passed, no skips.
+- `launcher-affected-tests-2.log`: affected server, client, JDBC and CLI tests
+  passed after declaring the reused TLS fixture dependency.
+- `launcher-installed-fork-4/summary.json`: two installed processes, committed
+  JDBC data preserved across restart, matching runtime cleanup passed.
+- `launcher-installed-fork-{1,2,3}`: failed diagnostic runs retained for context.
+  They exposed an eight-entry directory scan in ready-file cleanup. Cleanup now
+  opens the exact filename; the regression test keeps 32 unrelated files in the
+  parent and proves they survive.
+- `launcher-slopmark-1.txt`: composition review snapshot. Runtime record handling
+  scores 552.142; identity remains 988.965. These are review triggers, not quality
+  or performance claims. Runtime parsing/publication/cleanup remains with one
+  record owner; launcher lifecycle and path policy are separate consumers.
+
+Still required: integrate and validate the shared expiry fence, preserve
+ownership after a nonterminal database close, complete resource admission,
+remove all River-owned plain connection paths, validate installed lifecycle
+failure boundaries and required platforms, and complete the existing workload
+and independent-review gates. The ticket remains open until those pass.

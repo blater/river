@@ -19,6 +19,7 @@ import io.riverdb.server.SecurityAuditLog;
 import io.riverdb.server.SecurityAuditLogFactory;
 import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
+import java.net.InetAddress;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -150,6 +151,7 @@ final class RiverSqlMainTest {
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
             database,
+            InetAddress.getByName("127.0.0.1"),
             0,
             TestTlsContexts.server(),
             authenticated.authenticator(),

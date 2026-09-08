@@ -101,13 +101,15 @@ public final class LoopbackRiverServer {
 
   public static StatusCode startAuthenticated(
       RiverDatabase database,
+      InetAddress bindAddress,
       int port,
       SSLContext context,
       TokenAuthenticator authenticator,
       SecurityAuditLog audit,
       LoopbackServerLimits limits,
       LoopbackServerOpenResult result) {
-    if (limits == null
+    if (bindAddress == null || !bindAddress.isLoopbackAddress()
+        || limits == null
         || !limits.isValid()
         || !validStart(database, port, limits.maximumConnections(), result)
         || context == null
@@ -122,7 +124,7 @@ public final class LoopbackRiverServer {
           .createServerSocket();
       socket.setEnabledProtocols(new String[] {"TLSv1.3"});
       socket.bind(
-          new InetSocketAddress(InetAddress.getLoopbackAddress(), port),
+          new InetSocketAddress(bindAddress, port),
           limits.maximumConnections());
       return startBound(database, socket, authenticator, limits, audit, result);
     } catch (IOException failure) {

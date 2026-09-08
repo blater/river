@@ -23,6 +23,7 @@ import io.riverdb.server.SecurityAuditLog;
 import io.riverdb.server.SecurityAuditLogFactory;
 import io.riverdb.testsupport.SecurityAuditTestOwner;
 import io.riverdb.testsupport.TestTlsContexts;
+import java.net.InetAddress;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -70,6 +71,7 @@ final class RiverTypedParameterJdbcTest {
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
             database,
+            InetAddress.getByName("127.0.0.1"),
             0,
             TestTlsContexts.server(),
             authenticated.authenticator(),

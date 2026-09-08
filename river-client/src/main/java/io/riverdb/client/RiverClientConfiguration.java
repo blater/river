@@ -5,6 +5,8 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.riverd.RiverDaemonFileSystem;
+import io.riverdb.platform.riverd.RiverDaemonFileSystemResult;
+import io.riverdb.platform.riverd.RiverDaemonFileSystems;
 import io.riverdb.platform.riverd.RiverDirectory;
 import io.riverdb.platform.riverd.RiverDirectoryResult;
 import io.riverdb.platform.riverd.RiverFile;
@@ -133,6 +135,18 @@ public final class RiverClientConfiguration {
     } finally {
       bytes.clear();
     }
+  }
+
+  /** Loads a generated client file using the selected platform filesystem owner. */
+  public static StatusCode load(Path path, RiverClientConfigurationResult result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    RiverDaemonFileSystemResult selected = new RiverDaemonFileSystemResult();
+    StatusCode status = RiverDaemonFileSystems.current(selected);
+    if (!status.isOk()) {
+      result.reset();
+      return status;
+    }
+    return load(path, selected.fileSystem(), result);
   }
 
   public DatabaseIncarnation incarnation() {

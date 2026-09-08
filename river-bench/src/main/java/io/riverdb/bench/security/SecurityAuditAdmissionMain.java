@@ -41,6 +41,7 @@ import io.riverdb.server.SecurityAuditLog;
 import io.riverdb.server.SecurityAuditLogFactory;
 import io.riverdb.server.SecurityAuditOpenResult;
 import io.riverdb.server.SecurityAuditSnapshot;
+import java.net.InetAddress;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -159,6 +160,7 @@ public final class SecurityAuditAdmissionMain {
       require(
           LoopbackRiverServer.startAuthenticated(
               database,
+              InetAddress.getByName("127.0.0.1"),
               0,
               tls.serverContext,
               authenticator,
@@ -211,6 +213,7 @@ public final class SecurityAuditAdmissionMain {
       require(
           LoopbackRiverServer.startAuthenticated(
               database,
+              InetAddress.getByName("127.0.0.1"),
               0,
               tls.serverContext,
               authenticator,
