@@ -8,6 +8,7 @@ import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
@@ -25,7 +26,7 @@ final class CheckpointManifestStore {
   StatusCode read(
       DurableDirectory directory, CheckpointState state, CheckpointManifestVersion versions,
       CheckpointLogicalRowIdManifestReference logicalRowIds) {
-    StatusCode status = directory.reopen(FILE_NAME, operation);
+    StatusCode status = directory.reopen(FILE_NAME, FileIoMode.POSITIONAL, operation);
     if (!status.isOk()) return status;
     DurableFile file = operation.file();
     status = file.size(size);

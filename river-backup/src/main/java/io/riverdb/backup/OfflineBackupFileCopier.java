@@ -7,6 +7,7 @@ import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.security.DigestException;
 import java.security.MessageDigest;
@@ -42,7 +43,7 @@ final class OfflineBackupFileCopier {
       OfflineBackupCatalog catalog,
       int index,
       boolean verifyExpected) {
-    StatusCode status = source.reopen(catalog.fileName(index), sourceOperation);
+    StatusCode status = source.reopen(catalog.fileName(index), FileIoMode.POSITIONAL, sourceOperation);
     DurableFile input = status.isOk() ? sourceOperation.file() : null;
     if (status.isOk()) {
       status = input.size(fileSize);
@@ -52,7 +53,7 @@ final class OfflineBackupFileCopier {
       status = catalog.validateFileSize(index, bytes, verifyExpected);
     }
     if (status.isOk()) {
-      status = target.createFile(catalog.fileName(index), targetOperation);
+      status = target.createFile(catalog.fileName(index), FileIoMode.POSITIONAL, targetOperation);
     }
     DurableFile output = status.isOk() ? targetOperation.file() : null;
     if (status.isOk()) {

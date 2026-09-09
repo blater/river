@@ -7,6 +7,7 @@ import io.riverdb.platform.file.DirectoryEntryType;
 import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
+import io.riverdb.platform.file.FileIoMode;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -146,15 +147,16 @@ public final class NioDurableDirectory implements DurableDirectory {
   }
 
   @Override
-  public synchronized StatusCode createFile(String fileName, DirectoryOperationResult result) {
-    return createPhysicalFile(fileName, result);
+  public synchronized StatusCode createFile(
+      String fileName, FileIoMode mode, DirectoryOperationResult result) {
+    return createPhysicalFile(fileName, mode, result);
   }
 
   @Override
   public synchronized StatusCode createTemporary(
       String temporaryFileName,
       DirectoryOperationResult result) {
-    return createPhysicalFile(temporaryFileName, result);
+    return createPhysicalFile(temporaryFileName, FileIoMode.POSITIONAL, result);
   }
 
   @Override
@@ -292,7 +294,11 @@ public final class NioDurableDirectory implements DurableDirectory {
       return typeStatus;
     }
     StatusCode openStatus = openHandle(
-        path, REOPEN_OPTIONS, DirectoryDurability.NOT_APPLIED, result);
+        path,
+        FileIoMode.POSITIONAL,
+        REOPEN_OPTIONS,
+        DirectoryDurability.NOT_APPLIED,
+        result);
     if (!openStatus.isOk()) {
       return openStatus;
     }
@@ -328,17 +334,22 @@ public final class NioDurableDirectory implements DurableDirectory {
   }
 
   @Override
-  public synchronized StatusCode reopen(String fileName, DirectoryOperationResult result) {
+  public synchronized StatusCode reopen(
+      String fileName, FileIoMode mode, DirectoryOperationResult result) {
     StatusCode admission = begin(fileName, result);
     if (!admission.isOk()) {
       return admission;
+    }
+    if (mode == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     Path path = root.resolve(fileName);
     StatusCode typeStatus = regularFileStatus(path);
     if (!typeStatus.isOk()) {
       return typeStatus;
     }
-    return openHandle(path, REOPEN_OPTIONS, DirectoryDurability.NOT_APPLIED, result);
+    return openHandle(
+        path, mode, REOPEN_OPTIONS, DirectoryDurability.NOT_APPLIED, result);
   }
 
   synchronized StatusCode admit(
@@ -386,13 +397,18 @@ public final class NioDurableDirectory implements DurableDirectory {
     }
   }
 
-  private StatusCode createPhysicalFile(String fileName, DirectoryOperationResult result) {
+  private StatusCode createPhysicalFile(
+      String fileName, FileIoMode mode, DirectoryOperationResult result) {
     StatusCode admission = begin(fileName, result);
     if (!admission.isOk()) {
       return admission;
     }
+    if (mode == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     return openHandle(
         root.resolve(fileName),
+        mode,
         CREATE_OPTIONS,
         DirectoryDurability.VISIBLE_NOT_DURABLE,
         result);
@@ -400,6 +416,7 @@ public final class NioDurableDirectory implements DurableDirectory {
 
   private StatusCode openHandle(
       Path path,
+      FileIoMode mode,
       OpenOption[] options,
       DirectoryDurability durability,
       DirectoryOperationResult result) {
@@ -413,7 +430,8 @@ public final class NioDurableDirectory implements DurableDirectory {
       if (epoch == 0) {
         epoch = nextSlotEpoch++;
       }
-      NioDurableFile handle = new NioDurableFile(this, channel, generation, slot, epoch);
+      NioDurableFile handle = new NioDurableFile(
+          this, channel, generation, slot, epoch, mode);
       handles[slot] = handle;
       slotEpochs[slot] = epoch;
       counters.recordHandleOpened();

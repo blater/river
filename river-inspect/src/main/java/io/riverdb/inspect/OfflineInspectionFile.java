@@ -6,6 +6,7 @@ import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 
 /** Reusable exact-read state for one currently inspected file. */
@@ -19,7 +20,7 @@ final class OfflineInspectionFile {
   StatusCode open(NioDurableDirectory directory, String name) {
     file = null;
     operation.reset();
-    StatusCode status = directory.reopen(name, operation);
+    StatusCode status = directory.reopen(name, FileIoMode.POSITIONAL, operation);
     if (status == StatusCode.CONFLICT) {
       return StatusCode.CORRUPTION;
     }

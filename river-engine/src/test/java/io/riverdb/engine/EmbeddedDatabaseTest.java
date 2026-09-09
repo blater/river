@@ -179,12 +179,11 @@ final class EmbeddedDatabaseTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.RETRY, database.checkpoint(checkpoint));
     assertEquals(StatusCode.OK, session.abort(outcome));
-    long previousWalBytes = Files.size(root.resolve(LocalWal.FILE_NAME));
     assertEquals(StatusCode.OK, database.checkpoint(checkpoint));
     assertEquals(1, checkpoint.checkpointId());
     assertEquals(1, checkpoint.previousWalGeneration());
     assertEquals(2, checkpoint.walGeneration());
-    assertEquals(true, checkpoint.previousWalBytes() > previousWalBytes);
+    assertEquals(true, checkpoint.previousWalBytes() > WalFileHeaderCodec.HEADER_BYTES);
     assertEquals(WalFileHeaderCodec.HEADER_BYTES, checkpoint.walBytes());
     assertEquals(2, checkpoint.rowsReclaimed());
     assertEquals(false, checkpoint.obsoleteFilesRetained());

@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
+import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.IoResult;
 import java.nio.ByteBuffer;
@@ -30,7 +31,9 @@ final class CheckpointLogicalRowIdGenerationReader {
     StatusCode status = validateReference(directory, state, reference, result);
     if (!status.isOk()) return status;
     status = directory.reopen(
-        CheckpointLogicalRowIdGenerationWriter.fileName(reference.slot()), operation);
+        CheckpointLogicalRowIdGenerationWriter.fileName(reference.slot()),
+        FileIoMode.POSITIONAL,
+        operation);
     if (!status.isOk()) return status == StatusCode.CONFLICT ? StatusCode.CORRUPTION : status;
     DurableFile file = operation.file();
     status = readHeader(file, state, reference);

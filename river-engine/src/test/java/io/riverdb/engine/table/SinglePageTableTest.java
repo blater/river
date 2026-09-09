@@ -102,7 +102,7 @@ final class SinglePageTableTest {
   }
 
   private static LocalWalReadResult lastWalRecord(LocalWal wal) {
-    long offset = 64;
+    long offset = io.riverdb.format.wal.WalFileHeaderCodec.HEADER_BYTES;
     LocalWalReadResult read = new LocalWalReadResult();
     while (offset < wal.tailEnd()) {
       assertEquals(StatusCode.OK, wal.read(offset, read));

@@ -10,6 +10,7 @@ import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 
 /** Creates and opens the durable control record for one database directory. */
@@ -77,7 +78,7 @@ public final class DatabaseControlStore {
     result.reset();
 
     DirectoryOperationResult operation = new DirectoryOperationResult();
-    StatusCode status = directory.reopen(CONTROL_FILE_NAME, operation);
+    StatusCode status = directory.reopen(CONTROL_FILE_NAME, FileIoMode.POSITIONAL, operation);
     if (!status.isOk()) {
       return status;
     }

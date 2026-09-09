@@ -25,6 +25,7 @@ import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
@@ -249,7 +250,7 @@ final class CheckpointControlStoreTest {
     DirectoryOperationResult operation = new DirectoryOperationResult();
     IoResult io = new IoResult();
     assertEquals(
-        StatusCode.OK, directory.reopen("river.checkpoint.versions.0", operation));
+        StatusCode.OK, directory.reopen("river.checkpoint.versions.0", FileIoMode.POSITIONAL, operation));
     DurableFile file = operation.file();
     ByteBuffer header = ByteBuffer.allocate(96).order(ByteOrder.LITTLE_ENDIAN);
     assertEquals(StatusCode.OK, file.read(0, header, io));
@@ -335,7 +336,7 @@ final class CheckpointControlStoreTest {
     NioDurableDirectory directory = openDirectory(root);
     DirectoryOperationResult operation = new DirectoryOperationResult();
     IoResult io = new IoResult();
-    assertEquals(StatusCode.OK, directory.createFile(CheckpointControlStore.FILE_NAME, operation));
+    assertEquals(StatusCode.OK, directory.createFile(CheckpointControlStore.FILE_NAME, FileIoMode.POSITIONAL, operation));
     DurableFile file = operation.file();
     assertEquals(StatusCode.OK, file.write(0, ByteBuffer.allocate(512), io));
     assertEquals(StatusCode.OK, file.force(ForceMode.CONTENT_AND_METADATA));
@@ -833,7 +834,7 @@ final class CheckpointControlStoreTest {
     }
 
     private void createDurable(String name, byte[] content) {
-      assertEquals(StatusCode.OK, directory.createFile(name, operation));
+      assertEquals(StatusCode.OK, directory.createFile(name, FileIoMode.POSITIONAL, operation));
       DurableFile file = operation.file();
       assertEquals(StatusCode.OK, file.write(0, ByteBuffer.wrap(content), io));
       assertEquals(content.length, io.bytesTransferred());

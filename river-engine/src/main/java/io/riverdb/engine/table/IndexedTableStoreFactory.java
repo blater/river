@@ -9,6 +9,7 @@ import io.riverdb.engine.runtime.DatabaseStoreLease;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.wal.local.LocalWal;
+import io.riverdb.platform.file.FileIoMode;
 
 /** Owns indexed-store file acquisition, checkpoint bootstrap, and recovery admission. */
 final class IndexedTableStoreFactory {
@@ -53,15 +54,15 @@ final class IndexedTableStoreFactory {
     } catch (OutOfMemoryError error) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = directory.createFile(IndexedTableStore.FILE_NAME, operation);
+    StatusCode status = directory.createFile(IndexedTableStore.FILE_NAME, FileIoMode.POSITIONAL, operation);
     if (!status.isOk()) {
       return status;
     }
-    status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, rows);
+    status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, rows);
     if (!status.isOk()) {
       return cleanup(status, null, operation.file());
     }
-    status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, versions);
+    status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, versions);
     if (!status.isOk()) {
       return cleanup(status, rows.file(), operation.file());
     }
@@ -112,9 +113,9 @@ final class IndexedTableStoreFactory {
     } catch (OutOfMemoryError error) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = directory.reopen(IndexedTableStore.FILE_NAME, operation);
+    StatusCode status = directory.reopen(IndexedTableStore.FILE_NAME, FileIoMode.POSITIONAL, operation);
     if (status == StatusCode.CONFLICT && createWhenMissing) {
-      status = directory.createFile(IndexedTableStore.FILE_NAME, operation);
+      status = directory.createFile(IndexedTableStore.FILE_NAME, FileIoMode.POSITIONAL, operation);
     }
     if (!status.isOk()) {
       return status;
@@ -176,7 +177,7 @@ final class IndexedTableStoreFactory {
     } catch (OutOfMemoryError error) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = directory.reopen(IndexedTableStore.FILE_NAME, operation);
+    StatusCode status = directory.reopen(IndexedTableStore.FILE_NAME, FileIoMode.POSITIONAL, operation);
     if (!status.isOk()) {
       return status == StatusCode.CONFLICT ? StatusCode.CORRUPTION : status;
     }
@@ -213,9 +214,9 @@ final class IndexedTableStoreFactory {
       DurableDirectory directory,
       DirectoryOperationResult result) {
     StatusCode status = directory.reopen(
-        IndexedTableStore.ROW_DIRECTORY_FILE_NAME, result);
+        IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
     if (status == StatusCode.CONFLICT) {
-      status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, result);
+      status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
     }
     return status;
   }
@@ -224,9 +225,9 @@ final class IndexedTableStoreFactory {
       DurableDirectory directory,
       DirectoryOperationResult result) {
     StatusCode status = directory.reopen(
-        IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, result);
+        IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
     if (status == StatusCode.CONFLICT) {
-      status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, result);
+      status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
     }
     return status;
   }

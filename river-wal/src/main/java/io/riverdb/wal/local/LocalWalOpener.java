@@ -5,6 +5,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
+import io.riverdb.platform.file.FileIoMode;
 
 /** Opens, creates, and recovers a local WAL file. */
 final class LocalWalOpener {
@@ -34,11 +35,11 @@ final class LocalWalOpener {
     result.reset();
     DirectoryOperationResult operation = new DirectoryOperationResult();
     StatusCode status = requireCreate
-        ? directory.createFile(fileName, operation)
-        : directory.reopen(fileName, operation);
+        ? directory.createFile(fileName, FileIoMode.MAPPED, operation)
+        : directory.reopen(fileName, FileIoMode.MAPPED, operation);
     boolean created = requireCreate && status.isOk();
     if (!created && status == StatusCode.CONFLICT && createWhenMissing) {
-      status = directory.createFile(fileName, operation);
+      status = directory.createFile(fileName, FileIoMode.MAPPED, operation);
       created = status.isOk();
     }
     if (!status.isOk()) {

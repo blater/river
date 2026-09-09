@@ -159,7 +159,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           empty, filesystem, INCARNATION, new SecureRandom(), currentPid(), currentStart(),
-           emptyResult));
+          emptyResult));
       assertTrue(Files.exists(empty.resolve("bootstrap.properties")));
     } finally {
       emptyResult.close();
@@ -469,7 +469,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult owner = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), currentPid(), currentStart(),
-         owner));
+        owner));
     assertEquals(StatusCode.OK, owner.close());
     RiverDaemonIdentity.IdentityResult competing = new RiverDaemonIdentity.IdentityResult();
     try {

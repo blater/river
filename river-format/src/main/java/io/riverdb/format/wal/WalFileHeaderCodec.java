@@ -7,10 +7,10 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.zip.CRC32C;
 
-/** Fixed-size identity header for a v1 local WAL file. */
+/** Fixed-size identity header and logical-tail area for a local WAL file. */
 public final class WalFileHeaderCodec {
-  public static final int HEADER_BYTES = 64;
-  public static final int VERSION = 1;
+  public static final int HEADER_BYTES = 128;
+  public static final int VERSION = 2;
 
   private static final long MAGIC = 0x524956455257464cL; // RIVERWFL
   private static final int CHECKSUM_OFFSET = 56;
@@ -40,6 +40,14 @@ public final class WalFileHeaderCodec {
     encoded.putLong(start + 32, header.walGeneration().value());
     encoded.putLong(start + 40, 0L);
     encoded.putLong(start + 48, 0L);
+    encoded.putLong(start + 64, 0L);
+    encoded.putLong(start + 72, 0L);
+    encoded.putLong(start + 80, 0L);
+    encoded.putLong(start + 88, 0L);
+    encoded.putLong(start + 96, 0L);
+    encoded.putLong(start + 104, 0L);
+    encoded.putLong(start + 112, 0L);
+    encoded.putLong(start + 120, 0L);
     int checksum = checksum(encoded, start);
     encoded.putInt(start + CHECKSUM_OFFSET, checksum);
     encoded.putInt(start + COMPLEMENT_OFFSET, ~checksum);

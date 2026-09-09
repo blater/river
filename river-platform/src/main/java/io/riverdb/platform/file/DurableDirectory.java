@@ -19,7 +19,8 @@ import io.riverdb.base.error.StatusCode;
 public interface DurableDirectory {
   StatusCode createDirectory(String childDirectoryName, DirectoryOperationResult result);
 
-  StatusCode createFile(String fileName, DirectoryOperationResult result);
+  StatusCode createFile(
+      String fileName, FileIoMode mode, DirectoryOperationResult result);
 
   StatusCode createTemporary(String temporaryFileName, DirectoryOperationResult result);
 
@@ -47,5 +48,5 @@ public interface DurableDirectory {
   StatusCode force(DirectoryOperationResult result);
 
   /** Missing names and directory entries return the routine lookup outcome {@code CONFLICT}. */
-  StatusCode reopen(String fileName, DirectoryOperationResult result);
+  StatusCode reopen(String fileName, FileIoMode mode, DirectoryOperationResult result);
 }

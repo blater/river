@@ -38,6 +38,9 @@ final class LocalWalRecovery {
         || !wal.walGeneration().equals(header.walGeneration())) {
       return StatusCode.FENCED;
     }
+    status = wal.loadMappedTail();
+    if (!status.isOk()) return status;
+    fileBytes = wal.logicalFileSizeBytes();
     long offset = WalFileHeaderCodec.HEADER_BYTES;
     long expectedSequence = 1;
     while (offset < fileBytes) {

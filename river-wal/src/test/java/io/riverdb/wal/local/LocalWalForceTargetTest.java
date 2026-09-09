@@ -10,6 +10,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.platform.file.DirectoryOperationResult;
+import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
@@ -199,7 +200,7 @@ final class LocalWalForceTargetTest {
     assertEquals(StatusCode.OK, fixture.wal.releaseForcedBatch(target, target.token()));
     append(fixture.wal, 2);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, fixture.wal.forcePending(target));
-    assertEquals(1, fixture.file.forces);
+    assertEquals(2, fixture.file.forces);
     assertEquals(1, fixture.wal.currentCommitSequence());
     assertEquals(StatusCode.OK, fixture.wal.fencePendingBatch());
     fixture.close();
@@ -228,7 +229,7 @@ final class LocalWalForceTargetTest {
       assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, created));
       assertEquals(StatusCode.OK, created.wal().close());
       DirectoryOperationResult operation = new DirectoryOperationResult();
-      assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, operation));
+      assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, FileIoMode.MAPPED, operation));
       file = new ObservedFile(operation.file());
       wal = new LocalWal(file, DATABASE, GENERATION, LocalWal.FILE_NAME);
       assertEquals(StatusCode.OK, wal.recoverValidTailForOpen());
@@ -256,7 +257,7 @@ final class LocalWalForceTargetTest {
     }
     public StatusCode force(ForceMode mode) {
       forces++;
-      if (duringForce != null) duringForce.run();
+      if (duringForce != null && forces == 1) duringForce.run();
       return forceStatus.isOk() ? delegate.force(mode) : forceStatus;
     }
     public StatusCode truncate(long size) { return delegate.truncate(size); }

@@ -22,6 +22,100 @@ Use `git revert -m 1 <merge-commit>` to undo an accepted feature on a shared
 integration branch. Do not rewrite the shared branch. Checking out the tag is
 appropriate for reproduction and bisection, not for erasing later history.
 
+## 2026-09-09 — mapped WAL (`tic-6a91`)
+
+Branch: `ticket/tic-6a91-mapped-wal`, based on `da7a8794` (including the completed
+local server-discovery fixes). This is a direct, user-requested WAL replacement.
+The workload, SQL transaction boundaries, isolation and group-commit policy are
+unchanged. WAL format v2 separates logical end from mapped capacity; old WAL
+files require a fresh database directory.
+
+Adjacent JVM diagnostic samples on the same Apple M1/macOS host, GraalVM JDK 25:
+
+| Implementation / version suffix | Committed TPS | p99 (ms) | Retries | Run ID suffix |
+| --- | ---: | ---: | ---: | --- |
+| channel-baseline-1 | 169.71 | 85.07 | 606 | 211655_1b9ab61e |
+| channel-baseline-2 | 168.47 | 88.93 | 598 | 211752_527875c1 |
+| mapped-candidate-1 | 238.29 | 71.11 | 998 | 213910_783532a8 |
+| mapped-candidate-2 | 246.12 | 68.16 | 1014 | 214001_e171026b |
+
+All four report passed, zero failed/unknown outcomes, successful invariants and
+four measured-phase cancellations at the deadline. Retries per commit increased
+from about 0.119 to 0.139 as throughput increased. These short sequential samples
+show a 43% higher mean; they are diagnostic evidence, not a qualified performance
+claim or a durability-equivalent comparison with MariaDB.
+
+Command for each sample (substitute the table's suffix):
+
+```sh
+~/src/ingres/river-harness/benchmark run river tpcc sample all \
+  --river-executable=/private/tmp/river-tpcc-jvm-profile-20260909/river-jvm \
+  --river-version=tic-6a91-SUFFIX --warmup=15s --duration=30s \
+  --workers=4 --warehouses=1 --seed=42 --max-retries=20
+```
+
+Artifacts: `~/src/ingres/river-harness/runs/river_harness_20260909_` plus the run
+suffix above; command logs in `/private/tmp/river-mapped-wal`.
+
+The focused prepared INSERT probe commits each row separately. With the same
+method tracing, the channel run returned 255.21 inserts/s and the mapped run
+2,230.57 inserts/s (30s warmup, 10s measurement). The mean server commit call fell
+from about 3.53 ms to 0.218 ms. Mapped force calls averaged 0.071 ms, with two
+calls per commit (data then logical-end publication); the old channel force
+averaged 3.34 ms. The mapped run verified all 107,772 rows. Traces and scripts:
+`/private/tmp/river-commit-trace-20260909/traced` and
+`/private/tmp/river-mapped-wal/insert-trace`.
+
+Ordinary mapped commits use `msync(MS_SYNC)` on this JVM instead of the channel
+path's `F_FULLFSYNC`. File growth still forces metadata. The measured gain does
+not establish equivalent hardware power-loss guarantees. The ordering and
+mapping-lifetime changes received an independent recovery review.
+
+Validation: the clean build exposed old header/force-count/physical-size test
+assumptions and two existing indentation errors. After those repairs, full
+`check :river-bench:installTps` passed; no new skips or test removals. Logs:
+`/private/tmp/river-mapped-wal/clean-check.log` and `check-repaired.log`.
+
+Slopmark: LocalWal 147.523 → 148.722; NioDurableDirectory 89.7973 → 91.1306.
+Final NioDurableFile 43.287, new NioMappedWindow 15.3519 and LocalWalMappedTail
+25.6366. Review found no added unrelated responsibility or duplicate commit path.
+Scores: `/private/tmp/river-mapped-wal-slopmark-before.txt` and
+`/private/tmp/river-mapped-wal/slopmark-final.txt`.
+
+Native completion: a standalone cursor reproducer isolated the O3 shared-arena
+compiler failure to direct exits from `IndexedVacuumRowCursor.next()`'s loop.
+A controlled loop exit preserves its statuses and pin lifetimes and passes the
+actual clean O3/PGO build, with no optimizer exclusions. The cursor's Slopmark
+score remains 25.76. Diagnosis and reproduction:
+`/private/tmp/river-mapped-wal/compiler-root-cause.md` and `reproducer/`.
+
+Full `check :river-bench:installTps` passed after the cursor change
+(`check-cursor-refactor.log`). The rebuilt native executable committed and
+verified 100 rows, survived SIGKILL recovery with all values intact, then passed
+public `river stop` and readiness cleanup (`native-wal-smoke-public-stop.log`).
+
+The final River-specific check used `tools/tps-test.sh --terminals=4
+--warmup-seconds=2 --measured-seconds=10 --version=tic-6a91-mapped-cursor-final`.
+It reported status OK, zero retries/errors, no retained transactions/locks,
+and 172.5 TPS. This is a different workload from the external harness and its
+TPS is not compared with the samples above. Evidence: `tps-final.log` and
+`tps-final/` in the same artifact directory.
+
+Final native harness samples use the earlier native baseline configuration:
+5s warmup, 30s measured, sample all, four workers, one warehouse, seed 42,
+20 retries. Versions `tic-6a91-mapped-native-final-{1,2}` returned 168.04/167.76
+TPS, p99 104.53/108.99 ms, retries 795/778, zero failed/unknown outcomes and
+successful invariants. Run IDs `river_harness_20260909_230444_0be985f4` and
+`river_harness_20260909_230554_c1c5f1fa`. These remain within the earlier native
+173.42/161.00 TPS range: native throughput is unchanged in these samples, but p99 and retries are higher
+than the older controls (84.61/88.15 ms and 624/572 retries). Attribution is
+unresolved because those native controls are not adjacent. On 2026-09-10 the user approved tag/merge/push with this attribution question
+retained for follow-up. Faster commit completion increasing contention is
+plausible but unproven. Checkpoint: `perf-checkpoint-20260910-mapped-wal`. Both owned
+servers stopped; final `river ps` showed no running servers. The branch contains a
+validated implementation with diagnostic performance evidence, not a qualified
+cross-runtime or hardware-durability performance claim.
+
 ## Entry template
 
 ```text

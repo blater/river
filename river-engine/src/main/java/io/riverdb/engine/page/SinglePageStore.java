@@ -15,6 +15,7 @@ import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalAppendResult;
 import io.riverdb.wal.local.LocalWalReadResult;
 import io.riverdb.wal.local.LocalWalReservation;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32C;
 
@@ -71,7 +72,7 @@ public final class SinglePageStore {
     }
     result.reset();
     DirectoryOperationResult operation = new DirectoryOperationResult();
-    StatusCode status = directory.createFile(FILE_NAME, operation);
+    StatusCode status = directory.createFile(FILE_NAME, FileIoMode.POSITIONAL, operation);
     if (!status.isOk()) {
       return status;
     }
@@ -108,10 +109,10 @@ public final class SinglePageStore {
     }
     result.reset();
     DirectoryOperationResult operation = new DirectoryOperationResult();
-    StatusCode status = directory.reopen(FILE_NAME, operation);
+    StatusCode status = directory.reopen(FILE_NAME, FileIoMode.POSITIONAL, operation);
     boolean created = false;
     if (status == StatusCode.CONFLICT) {
-      status = directory.createFile(FILE_NAME, operation);
+      status = directory.createFile(FILE_NAME, FileIoMode.POSITIONAL, operation);
       created = status.isOk();
     }
     if (!status.isOk()) {

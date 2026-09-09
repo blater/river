@@ -2,10 +2,12 @@ package io.riverdb.platform.file.nio;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.file.DurableFile;
+import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 
@@ -18,19 +20,25 @@ final class NioDurableFile implements DurableFile {
   private final int slot;
   private final long slotEpoch;
   private final ByteBuffer extensionByte = ByteBuffer.allocate(1);
-  private boolean closed;
+  private volatile boolean closed;
+  private final NioMappedWindow mappedHeader;
+  private final NioMappedWindow mappedData;
+  private boolean mappedMetadataDirty;
 
   NioDurableFile(
       NioDurableDirectory owner,
       FileChannel channel,
       long generation,
       int slot,
-      long slotEpoch) {
+      long slotEpoch,
+      FileIoMode mode) {
     this.owner = owner;
     this.channel = channel;
     this.generation = generation;
     this.slot = slot;
     this.slotEpoch = slotEpoch;
+    mappedHeader = mode == FileIoMode.MAPPED ? new NioMappedWindow(channel, 4096) : null;
+    mappedData = mode == FileIoMode.MAPPED ? new NioMappedWindow(channel, NioMappedWindow.BYTES) : null;
   }
 
   @Override
@@ -46,6 +54,7 @@ final class NioDurableFile implements DurableFile {
     if (position < 0 || target.isReadOnly()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (mappedData != null) return transferMapped(position, target, result, false);
     int transferred = 0;
     int zeroProgress = 0;
     try {
@@ -88,6 +97,8 @@ final class NioDurableFile implements DurableFile {
     if (position < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (position > Long.MAX_VALUE - source.remaining()) return StatusCode.RESOURCE_EXHAUSTED;
+    if (mappedData != null) return transferMapped(position, source, result, true);
     int transferred = 0;
     int initialPosition = source.position();
     int zeroProgress = 0;
@@ -127,9 +138,25 @@ final class NioDurableFile implements DurableFile {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     try {
-      channel.force(mode == ForceMode.CONTENT_AND_METADATA);
+      if (mappedData == null) {
+        channel.force(mode == ForceMode.CONTENT_AND_METADATA);
+      } else {
+        synchronized (mappedData) {
+          mappedData.force();
+          mappedHeader.force();
+          if (mode == ForceMode.CONTENT_AND_METADATA
+              && (mappedMetadataDirty || mappedData.metadataDirty() || mappedHeader.metadataDirty())) {
+            channel.force(true);
+            mappedMetadataDirty = false;
+            mappedData.metadataForced();
+            mappedHeader.metadataForced();
+          }
+        }
+      }
       owner.counters().recordForce();
       return StatusCode.OK;
+    } catch (UncheckedIOException failure) {
+      return NioStatusMapper.known(failure.getCause());
     } catch (IOException failure) {
       return NioStatusMapper.known(failure);
     }
@@ -144,6 +171,20 @@ final class NioDurableFile implements DurableFile {
     if (sizeBytes < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (mappedData == null) return resize(sizeBytes);
+    synchronized (mappedData) {
+      try {
+        try { mappedData.release(); }
+        finally { mappedHeader.release(); }
+        mappedMetadataDirty = true;
+        return resize(sizeBytes);
+      } catch (UncheckedIOException failure) {
+        return NioStatusMapper.known(failure.getCause());
+      }
+    }
+  }
+
+  private StatusCode resize(long sizeBytes) {
     try {
       long currentSize = channel.size();
       if (sizeBytes < currentSize) {
@@ -153,9 +194,7 @@ final class NioDurableFile implements DurableFile {
         int zeroProgress = 0;
         while (extensionByte.hasRemaining()) {
           int written = channel.write(extensionByte, sizeBytes - 1);
-          if (written == 0 && ++zeroProgress == MAX_ZERO_PROGRESS) {
-            return StatusCode.RETRY;
-          }
+          if (written == 0 && ++zeroProgress == MAX_ZERO_PROGRESS) return StatusCode.RETRY;
         }
         owner.counters().recordWrite(1);
       }
@@ -188,14 +227,60 @@ final class NioDurableFile implements DurableFile {
       return StatusCode.CLOSED;
     }
     closed = true;
-    return owner.closeHandle(this, channel, generation, slot, slotEpoch);
+    StatusCode mappedStatus = closeMappings();
+    StatusCode channelStatus = owner.closeHandle(this, channel, generation, slot, slotEpoch);
+    return mappedStatus.isOk() ? channelStatus : mappedStatus;
+  }
+
+  private StatusCode transferMapped(long position, ByteBuffer buffer, IoResult result, boolean write) {
+    int initial = buffer.position();
+    StatusCode status = StatusCode.OK;
+    try {
+      synchronized (mappedData) {
+        long end = write ? Long.MAX_VALUE : channel.size();
+        while (buffer.hasRemaining() && position < end) {
+          NioMappedWindow window = position < 4096 ? mappedHeader : mappedData;
+          window.map(position, write);
+          int count = (int) Math.min(buffer.remaining(), Math.min(window.remaining(position), end - position));
+          if (position < 4096) count = (int) Math.min(count, 4096 - position);
+          if (write) window.write(position, buffer, count);
+          else window.read(position, buffer, count);
+          position += count;
+        }
+      }
+    } catch (UncheckedIOException failure) {
+      status = NioStatusMapper.known(failure.getCause());
+    } catch (IOException failure) {
+      status = NioStatusMapper.known(failure);
+    } catch (OutOfMemoryError failure) {
+      status = StatusCode.RESOURCE_EXHAUSTED;
+    }
+    int transferred = buffer.position() - initial;
+    result.setBytesTransferred(transferred);
+    if (write) owner.counters().recordWrite(transferred);
+    else owner.counters().recordRead(transferred);
+    return status;
+  }
+
+  private StatusCode closeMappings() {
+    if (mappedData == null) return StatusCode.OK;
+    try {
+      synchronized (mappedData) {
+        try { mappedData.close(); }
+        finally { mappedHeader.close(); }
+      }
+      return StatusCode.OK;
+    } catch (UncheckedIOException failure) {
+      return NioStatusMapper.known(failure.getCause());
+    }
   }
 
   StatusCode closeForGenerationChange() {
     closed = true;
+    StatusCode mappedStatus = closeMappings();
     try {
       channel.close();
-      return StatusCode.OK;
+      return mappedStatus;
     } catch (IOException failure) {
       return NioStatusMapper.known(failure);
     }

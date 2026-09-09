@@ -9,6 +9,7 @@ import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
+import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.ForceMode;
 
 /** Loads and repairs the immutable page base selected by a checkpoint. */
@@ -45,7 +46,9 @@ final class IndexedCheckpointLoader {
     }
     operation.reset();
     StatusCode status = directory.reopen(
-        IndexedTableStore.checkpointFileName(checkpoint.walGeneration()), operation);
+        IndexedTableStore.checkpointFileName(checkpoint.walGeneration()),
+        FileIoMode.POSITIONAL,
+        operation);
     if (status == StatusCode.CONFLICT) {
       return StatusCode.CORRUPTION;
     }

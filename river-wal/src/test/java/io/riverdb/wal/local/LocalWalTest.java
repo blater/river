@@ -10,6 +10,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
+import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
@@ -34,7 +35,7 @@ final class LocalWalTest {
     LocalWalReservation reservation = reserve(wal, expected);
     assertEquals(StatusCode.OK, wal.publish(reservation, 41, 43, 1, 7, 1, appended));
     assertEquals(1, appended.journalSequence());
-    assertEquals(64, appended.startOffset());
+    assertEquals(WalFileHeaderCodec.HEADER_BYTES, appended.startOffset());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
 
@@ -128,7 +129,7 @@ final class LocalWalTest {
     assertEquals(StatusCode.OK, wal.close());
 
     DirectoryOperationResult operation = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, operation));
+    assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, FileIoMode.MAPPED, operation));
     DurableFile raw = operation.file();
     IoResult io = new IoResult();
     assertEquals(
@@ -147,7 +148,7 @@ final class LocalWalTest {
     assertEquals(2, second.journalSequence());
     assertEquals(StatusCode.OK, wal.close());
 
-    assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, operation));
+    assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, FileIoMode.MAPPED, operation));
     raw = operation.file();
     assertEquals(
         StatusCode.OK,
@@ -216,7 +217,7 @@ final class LocalWalTest {
     assertEquals(3, forced.commitSequence());
     assertEquals(appended.endOffset(), wal.durableEnd());
     assertEquals(3, wal.currentCommitSequence());
-    assertEquals(initialForces + 1, counters.forceCalls());
+    assertEquals(initialForces + 2, counters.forceCalls());
 
     LocalWalReadResult forcedRead = new LocalWalReadResult();
     LocalWalForcedCursor cursor = new LocalWalForcedCursor();
@@ -317,7 +318,7 @@ final class LocalWalTest {
     long forces = counters.forceCalls();
     LocalWalForceTarget forced = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
-    assertEquals(forces + 1, counters.forceCalls());
+    assertEquals(forces + 2, counters.forceCalls());
     assertEquals(6, forced.recordCount());
     LocalWalReadResult read = new LocalWalReadResult();
     LocalWalForcedCursor cursor = new LocalWalForcedCursor();
