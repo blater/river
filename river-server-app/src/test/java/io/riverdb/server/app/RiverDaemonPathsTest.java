@@ -28,7 +28,7 @@ final class RiverDaemonPathsTest {
     Files.setPosixFilePermissions(root, PRIVATE);
     RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
     paths.datadir = root.resolve("instance");
-    paths.registry = root.resolve("registry");
+    paths.runtimeRoot = root.resolve("runtimeRoot");
     paths.ready = root.resolve("ready").resolve("riverd.ready");
     RiverDaemonFileSystem filesystem = new ApfsRiverDaemonFileSystem();
     assertEquals(StatusCode.OK, RiverDaemonPaths.verify(filesystem, paths));
@@ -43,7 +43,7 @@ final class RiverDaemonPathsTest {
     Files.setPosixFilePermissions(ready, PRIVATE);
     RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
     paths.datadir = root.resolve("instance");
-    paths.registry = root.resolve("registry");
+    paths.runtimeRoot = root.resolve("runtimeRoot");
     paths.ready = ready;
     RiverDaemonFileSystem filesystem = new ApfsRiverDaemonFileSystem();
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, RiverDaemonPaths.verify(filesystem, paths));
@@ -62,7 +62,7 @@ final class RiverDaemonPathsTest {
     Files.createSymbolicLink(ready, target.getFileName());
     RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
     paths.datadir = root.resolve("instance");
-    paths.registry = root.resolve("registry");
+    paths.runtimeRoot = root.resolve("runtimeRoot");
     paths.ready = ready;
     RiverDaemonFileSystem filesystem = new ApfsRiverDaemonFileSystem();
     assertNotEquals(StatusCode.OK, RiverDaemonPaths.verify(filesystem, paths));

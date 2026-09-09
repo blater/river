@@ -21,23 +21,23 @@ final class RiverDaemonPaths {
 
   static StatusCode resolve(Path requestedData, Path requestedReady, Path home, Result result) {
     result.datadir = null;
-    result.registry = null;
+    result.runtimeRoot = null;
     result.ready = null;
     if (home == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     try {
       Path canonicalHome = home.toRealPath();
       Path datadir = canonical(requestedData == null
           ? canonicalHome.resolve(".river/default") : requestedData);
-      Path registry = canonical(canonicalHome.resolve(".river/run/instances"));
+      Path runtimeRoot = canonical(canonicalHome.resolve(".river/run"));
       Path ready = requestedReady == null ? null : canonical(requestedReady);
-      if (!recordPath(datadir) || !recordPath(registry)
+      if (!recordPath(datadir) || !recordPath(runtimeRoot)
           || ready != null && !recordPath(ready)
-          || overlaps(datadir, registry)
-          || ready != null && (overlaps(ready, datadir) || overlaps(ready, registry))) {
+          || overlaps(datadir, runtimeRoot)
+          || ready != null && (overlaps(ready, datadir) || overlaps(ready, runtimeRoot))) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       result.datadir = datadir;
-      result.registry = registry;
+      result.runtimeRoot = runtimeRoot;
       result.ready = ready;
       return StatusCode.OK;
     } catch (IOException failure) {
@@ -52,12 +52,12 @@ final class RiverDaemonPaths {
    * immediately before creating missing parents and again before publishing runtime records.
    */
   static StatusCode verify(RiverDaemonFileSystem filesystem, Result paths) {
-    if (filesystem == null || paths == null || paths.datadir == null || paths.registry == null
-        || !recordPath(paths.datadir) || !recordPath(paths.registry)
+    if (filesystem == null || paths == null || paths.datadir == null || paths.runtimeRoot == null
+        || !recordPath(paths.datadir) || !recordPath(paths.runtimeRoot)
         || paths.ready != null && !recordPath(paths.ready)
-        || overlaps(paths.datadir, paths.registry)
+        || overlaps(paths.datadir, paths.runtimeRoot)
         || paths.ready != null
-        && (overlaps(paths.ready, paths.datadir) || overlaps(paths.ready, paths.registry))) {
+        && (overlaps(paths.ready, paths.datadir) || overlaps(paths.ready, paths.runtimeRoot))) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     try {
@@ -72,19 +72,19 @@ final class RiverDaemonPaths {
             filesystem, paths.datadir.resolve(fixedNames[index]));
         if (!fixedChildren[index].status.isOk()) return fixedChildren[index].status;
       }
-      Target registry = inspectDirectory(filesystem, paths.registry);
-      if (!registry.status.isOk()) return registry.status;
+      Target runtimeRoot = inspectDirectory(filesystem, paths.runtimeRoot);
+      if (!runtimeRoot.status.isOk()) return runtimeRoot.status;
       Target ready = paths.ready == null ? Target.missing() : inspectFile(filesystem, paths.ready);
       if (!ready.status.isOk()) return ready.status;
-      if (collides(data, registry) || collides(data, ready) || collides(registry, ready)) {
+      if (collides(data, runtimeRoot) || collides(data, ready) || collides(runtimeRoot, ready)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       for (int index = 0; index < fixedChildren.length; index++) {
         FileIdentity identity = fixedChildren[index].identity;
-        if (same(identity, data.identity) || same(identity, registry.identity)
+        if (same(identity, data.identity) || same(identity, runtimeRoot.identity)
             || same(identity, ready.identity)
             || same(identity, data.parentIdentity)
-            || same(identity, registry.parentIdentity)
+            || same(identity, runtimeRoot.parentIdentity)
             || same(identity, ready.parentIdentity)) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
@@ -296,7 +296,7 @@ final class RiverDaemonPaths {
 
   static final class Result {
     Path datadir;
-    Path registry;
+    Path runtimeRoot;
     Path ready;
   }
 }

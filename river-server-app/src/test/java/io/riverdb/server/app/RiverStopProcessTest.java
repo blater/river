@@ -31,20 +31,23 @@ final class RiverStopProcessTest {
     home = home.toRealPath();
     Path defaultData = home.resolve(".river/default");
     Path otherData = home.resolve("other");
-    Path registry = home.resolve(".river/run/instances");
+    Path runtimeRoot = home.resolve(".river/run");
     String staleName;
     byte[] staleBytes;
     try (Server first = start(home); Server second = start(home, "--datadir=" + otherData)) {
       Result sql = invoke(home, "CREATE TABLE stop_test (id BIGINT PRIMARY KEY);"
           + "INSERT INTO stop_test VALUES (7);", defaultData.resolve("security/client.properties").toString());
       assertEquals(0, sql.exit, sql.text);
-      try (var records = Files.list(registry)) {
+      try (var records = Files.list(runtimeRoot)) {
         Path record = records.filter(path -> {
           try { return Files.readString(path).contains("datadir=" + otherData + "\n"); }
           catch (IOException failure) { throw new java.io.UncheckedIOException(failure); }
         }).findFirst().orElseThrow();
         staleName = record.getFileName().toString();
         staleBytes = Files.readAllBytes(record);
+      }
+      try (var records = Files.list(runtimeRoot)) {
+        assertEquals(2, records.count());
       }
       Result listing = invoke(home, "", "ps");
       assertEquals(0, listing.exit, listing.text);
@@ -63,7 +66,7 @@ final class RiverStopProcessTest {
       assertEquals(0, stopped.exit, stopped.text);
       second.assertExited();
       assertTrue(first.process.isAlive());
-      assertFalse(Files.exists(otherData.resolve("runtime.properties")));
+      assertFalse(Files.exists(RiverDaemonRuntimeRecords.runtimePath(runtimeRoot, otherData.toString())));
       assertTrue(Files.exists(otherData.resolve("instance.properties")));
 
       Result defaultStop = invoke(home, "", "stop");
@@ -79,14 +82,14 @@ final class RiverStopProcessTest {
       assertEquals(0, stop.exit, stop.text);
       restarted.assertExited();
     }
-    // A crashed benchmark can leave a valid registration for a removed directory.
+    // A crashed benchmark can leave a runtime record for a removed directory.
     try (var paths = Files.walk(otherData)) {
       for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.delete(path);
     }
     RiverDaemonFileSystemResult filesystem = new RiverDaemonFileSystemResult();
     assertEquals(StatusCode.OK, RiverDaemonFileSystems.current(filesystem));
     RiverDirectoryResult directory = new RiverDirectoryResult();
-    assertEquals(StatusCode.OK, filesystem.fileSystem().openDirectory(registry, directory));
+    assertEquals(StatusCode.OK, filesystem.fileSystem().openDirectory(runtimeRoot, directory));
     RiverFileResult record = new RiverFileResult();
     try {
       assertEquals(StatusCode.OK, directory.directory().openFile(staleName,
@@ -142,7 +145,7 @@ final class RiverStopProcessTest {
     try (Server server = start(home)) {
       Path datadir = home.resolve(".river/default").toRealPath();
       Properties runtime = new Properties();
-      try (var input = Files.newInputStream(datadir.resolve("runtime.properties"))) {
+      try (var input = Files.newInputStream(RiverDaemonRuntimeRecords.runtimePath(home.resolve(".river/run"), datadir.toString()))) {
         runtime.load(input);
       }
       String wrongOwner = "0".repeat(32);

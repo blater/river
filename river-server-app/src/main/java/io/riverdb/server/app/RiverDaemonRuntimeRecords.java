@@ -2,7 +2,6 @@ package io.riverdb.server.app;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
@@ -25,89 +24,61 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 
-/** Runtime and registry records; readiness output publication remains launcher-owned. */
+/** Runtime records; readiness output publication remains launcher-owned. */
 public final class RiverDaemonRuntimeRecords {
   // Process/runtime records use the accepted process-record framing bound, which is larger
   // than the identity lock-record bound.
   private static final int MAX_RECORD_BYTES = 8192;
-  static final String RUNTIME_NAME = "runtime.properties";
   private static final String RUNTIME_FORMAT = "riverd-runtime-v2";
-  private static final String REGISTRY_FORMAT = "riverd-registry-v2";
-  private static final String READY_FORMAT = "riverd-ready-v1";
+  private static final String READY_FORMAT = "riverd-ready-v2";
 
   private RiverDaemonRuntimeRecords() {
   }
 
   /**
-   * Removes stale runtime, registry, and ready records after the identity owner has validated the
-   * database and credential contents. The identity lock must remain held throughout.
+   * Removes stale runtime and ready records after the identity owner has validated the database
+   * and credential contents. The identity lock must remain held throughout.
    */
   public static StatusCode recoverStale(
       Path datadir,
       RiverDaemonFileSystem filesystem,
       RiverDaemonIdentity.IdentityResult identity,
-      Path registryRoot) {
+      Path runtimeRoot) {
     if (filesystem == null || identity == null || identity.directory() == null
         || identity.lock() == null || identity.priorOwner() == null
-        || datadir == null || registryRoot == null
+        || datadir == null || runtimeRoot == null
         || !validDirectoryPath(datadir.toString())
-        || !validDirectoryPath(registryRoot.toString())) {
+        || !validDirectoryPath(runtimeRoot.toString())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     String canonicalDatadir = datadir.toString();
     if (!canonicalDatadir.equals(identity.priorOwner().datadir)) {
       return StatusCode.CORRUPTION;
     }
-    RiverDirectory directory = identity.directory();
-    DirectoryListResult directEntries = new DirectoryListResult(16);
-    StatusCode status = directory.list(directEntries);
+    RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
+    StatusCode status = filesystem.openDirectory(runtimeRoot, runtimeRootResult);
     if (!status.isOk()) return status;
-    boolean runtimePresent = hasEntry(directEntries, RUNTIME_NAME);
-
-    RiverDirectoryResult registryResult = new RiverDirectoryResult();
-    status = filesystem.openDirectory(registryRoot, registryResult);
-    if (!status.isOk()) return status;
-    RiverDirectory registry = registryResult.directory();
-    String registryName = registryName(canonicalDatadir);
-    status = recoverStaleWithRegistry(
-        directory, registry, filesystem, canonicalDatadir, identity, registryRoot,
-        runtimePresent, registryName);
-    StatusCode closeStatus = registry.close();
+    RiverDirectory runtimeDirectory = runtimeRootResult.directory();
+    status = recoverStaleWithRuntimeRoot(runtimeDirectory, runtimeRoot, filesystem,
+        canonicalDatadir, identity);
+    StatusCode closeStatus = runtimeDirectory.close();
     if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
       return closeStatus;
     }
     return status;
   }
 
-  private static StatusCode recoverStaleWithRegistry(
-      RiverDirectory directory,
-      RiverDirectory registry,
+  private static StatusCode recoverStaleWithRuntimeRoot(
+      RiverDirectory runtimeRoot,
+      Path runtimeRootPath,
       RiverDaemonFileSystem filesystem,
       String canonicalDatadir,
-      RiverDaemonIdentity.IdentityResult identity,
-      Path registryRoot,
-      boolean runtimePresent,
-      String registryName) {
-    RiverFileResult registryProbe = new RiverFileResult();
-    StatusCode status = registry.openFile(registryName, RiverOpenMode.EXISTING, registryProbe);
-    boolean registryPresent;
-    if (status == StatusCode.CONFLICT) {
-      // A missing exact registry record is an allowed stale state.  Probe only the
-      // hash-derived record; do not enumerate the registry namespace into a fixed buffer.
-      registryPresent = false;
-      status = StatusCode.OK;
-    } else if (!status.isOk()) {
-      return status;
-    } else {
-      registryPresent = true;
-      StatusCode probeClose = registryProbe.file().close();
-      if (!probeClose.isOk() && probeClose != StatusCode.CLOSED) return probeClose;
-    }
-    if (!runtimePresent && !registryPresent) return StatusCode.OK;
-    if (!runtimePresent) return StatusCode.CORRUPTION;
+      RiverDaemonIdentity.IdentityResult identity) {
+    String runtimeName = runtimeName(canonicalDatadir);
 
     RiverFileResult runtimeResult = new RiverFileResult();
-    status = directory.openFile(RUNTIME_NAME, RiverOpenMode.EXISTING, runtimeResult);
+    StatusCode status = runtimeRoot.openFile(runtimeName, RiverOpenMode.EXISTING, runtimeResult);
+    if (status == StatusCode.CONFLICT) return StatusCode.OK;
     if (!status.isOk()) return status;
     RiverFile runtimeFile = runtimeResult.file();
     FileIdentity runtimeIdentity = runtimeFile.identity();
@@ -124,32 +95,9 @@ public final class RiverDaemonRuntimeRecords {
     }
     if (!status.isOk()) return status;
 
-    RegistryRecord registryRecord = null;
-    FileIdentity registryIdentity = null;
-    if (registryPresent) {
-      RiverFileResult registryFileResult = new RiverFileResult();
-      status = registry.openFile(registryName, RiverOpenMode.EXISTING, registryFileResult);
-      if (!status.isOk()) return status;
-      RiverFile registryFile = registryFileResult.file();
-      registryIdentity = registryFile.identity();
-      ReadResult registryRead = read(registryFile);
-      closeStatus = registryFile.close();
-      if (!registryRead.status.isOk()) status = registryRead.status;
-      if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
-        status = closeStatus;
-      }
-      registryRecord = status.isOk() ? parseRegistry(registryRead.bytes) : null;
-      if (status.isOk() && (registryRecord == null || registryIdentity == null
-          || !registryRecord.matches(canonicalDatadir, identity.incarnation(),
-              identity.priorOwner(), runtimePath(canonicalDatadir)))) {
-        status = StatusCode.CORRUPTION;
-      }
-    }
-    if (!status.isOk()) return status;
-
     ReadyTarget ready = null;
     if (!"none".equals(runtime.readyFile)) {
-      ready = openReady(filesystem, runtime, canonicalDatadir, registryRoot, registryName);
+      ready = openReady(filesystem, runtime, canonicalDatadir, runtimeRootPath);
       if (!ready.status.isOk()) return ready.status;
     }
 
@@ -158,15 +106,10 @@ public final class RiverDaemonRuntimeRecords {
           new DirectoryOperationResult());
       if (status.isOk()) status = force(ready.parent);
     }
-    if (status.isOk() && registryIdentity != null) {
-      status = registry.removeOwned(registryName, registryIdentity,
-          new DirectoryOperationResult());
-      if (status.isOk()) status = force(registry);
-    }
     if (status.isOk()) {
-      status = directory.removeOwned(RUNTIME_NAME, runtimeIdentity,
+      status = runtimeRoot.removeOwned(runtimeName, runtimeIdentity,
           new DirectoryOperationResult());
-      if (status.isOk()) status = force(directory);
+      if (status.isOk()) status = force(runtimeRoot);
     }
     if (ready != null) {
       closeStatus = ready.parent.close();
@@ -184,39 +127,37 @@ public final class RiverDaemonRuntimeRecords {
   static StatusCode cleanupCurrent(
       RiverDaemonFileSystem filesystem,
       RiverDaemonIdentity.IdentityResult identity,
-      Path registryRoot,
+      Path runtimeRoot,
       Metadata metadata) {
     if (filesystem == null || identity == null || identity.directory() == null
         || identity.lock() == null || metadata == null || !metadata.valid()
-        || registryRoot == null || !validDirectoryPath(registryRoot.toString())
+        || runtimeRoot == null || !validDirectoryPath(runtimeRoot.toString())
+        || !runtimeRoot.equals(metadata.runtimeRoot)
         || !metadata.incarnation.equals(identity.incarnation())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    RiverDirectoryResult registryResult = new RiverDirectoryResult();
-    StatusCode status = filesystem.openDirectory(registryRoot, registryResult);
+    RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
+    StatusCode status = filesystem.openDirectory(runtimeRoot, runtimeRootResult);
     if (!status.isOk()) return status;
-    RiverDirectory registry = registryResult.directory();
-    String registryName = registryName(metadata.datadir);
-    status = cleanupCurrentWithRegistry(
-        filesystem, identity.directory(), registry, registryRoot, metadata, registryName);
-    StatusCode closeStatus = registry.close();
+    RiverDirectory runtimeDirectory = runtimeRootResult.directory();
+    status = cleanupCurrentWithRuntimeRoot(
+        filesystem, runtimeDirectory, metadata);
+    StatusCode closeStatus = runtimeDirectory.close();
     if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
       return closeStatus;
     }
     return status;
   }
 
-  private static StatusCode cleanupCurrentWithRegistry(
+  private static StatusCode cleanupCurrentWithRuntimeRoot(
       RiverDaemonFileSystem filesystem,
-      RiverDirectory directory,
-      RiverDirectory registry,
-      Path registryRoot,
-      Metadata metadata,
-      String registryName) {
+      RiverDirectory runtimeRoot,
+      Metadata metadata) {
     RuntimeRecord runtime = null;
     FileIdentity runtimeIdentity = null;
     RiverFileResult runtimeResult = new RiverFileResult();
-    StatusCode status = directory.openFile(RUNTIME_NAME, RiverOpenMode.EXISTING, runtimeResult);
+    StatusCode status = runtimeRoot.openFile(runtimeName(metadata.datadir),
+        RiverOpenMode.EXISTING, runtimeResult);
     if (status != StatusCode.CONFLICT) {
       if (!status.isOk()) return status;
       RiverFile runtimeFile = runtimeResult.file();
@@ -238,34 +179,10 @@ public final class RiverDaemonRuntimeRecords {
       status = StatusCode.OK;
     }
     RuntimeRecord expectedRuntime = runtime == null ? expectedRuntime(metadata) : runtime;
-
-    FileIdentity registryIdentity = null;
-    RiverFileResult registryResult = new RiverFileResult();
-    status = registry.openFile(registryName, RiverOpenMode.EXISTING, registryResult);
-    if (status != StatusCode.CONFLICT) {
-      if (!status.isOk()) return status;
-      RiverFile registryFile = registryResult.file();
-      registryIdentity = registryFile.identity();
-      ReadResult registryRead = read(registryFile);
-      StatusCode closeStatus = registryFile.close();
-      status = registryRead.status;
-      if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
-        status = closeStatus;
-      }
-      RegistryRecord record = status.isOk() ? parseRegistry(registryRead.bytes) : null;
-      if (status.isOk() && (record == null || registryIdentity == null
-          || !record.matches(metadata.datadir, metadata.incarnation, metadata.owner,
-              runtimePath(metadata.datadir)))) {
-        status = StatusCode.CORRUPTION;
-      }
-      if (!status.isOk()) return status;
-    } else {
-      status = StatusCode.OK;
-    }
-
     ReadyTarget ready = null;
     if (!"none".equals(metadata.readyFile)) {
-      ready = openReady(filesystem, expectedRuntime, metadata.datadir, registryRoot, registryName);
+      ready = openReady(filesystem, expectedRuntime, metadata.datadir,
+          metadata.runtimeRoot);
       if (!ready.status.isOk()) return ready.status;
     }
 
@@ -274,15 +191,10 @@ public final class RiverDaemonRuntimeRecords {
           new DirectoryOperationResult());
       if (status.isOk()) status = force(ready.parent);
     }
-    if (status.isOk() && registryIdentity != null) {
-      status = registry.removeOwned(registryName, registryIdentity,
-          new DirectoryOperationResult());
-      if (status.isOk()) status = force(registry);
-    }
     if (status.isOk() && runtimeIdentity != null) {
-      status = directory.removeOwned(RUNTIME_NAME, runtimeIdentity,
+      status = runtimeRoot.removeOwned(runtimeName(metadata.datadir), runtimeIdentity,
           new DirectoryOperationResult());
-      if (status.isOk()) status = force(directory);
+      if (status.isOk()) status = force(runtimeRoot);
     }
     if (ready != null) {
       StatusCode closeStatus = ready.parent.close();
@@ -293,37 +205,27 @@ public final class RiverDaemonRuntimeRecords {
     return status;
   }
 
-  static StatusCode publishRuntime(RiverDirectory directory, Metadata metadata) {
-    if (directory == null || metadata == null || !metadata.valid()) {
+  static StatusCode publishRuntime(RiverDirectory runtimeRoot, Metadata metadata) {
+    if (runtimeRoot == null || metadata == null || !metadata.valid()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     String stageName = ".runtime-" + metadata.owner.nonce + ".stage";
     String body = runtimeBody(metadata);
-    return publish(directory, stageName, RUNTIME_NAME, body);
-  }
-
-  static StatusCode publishRegistry(RiverDirectory registry, Metadata metadata) {
-    if (registry == null || metadata == null || !metadata.valid()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    String target = registryName(metadata.datadir);
-    String stageName = ".registry-" + metadata.owner.nonce + ".stage";
-    return publish(registry, stageName, target, registryBody(metadata));
+    return publish(runtimeRoot, stageName, runtimeName(metadata.datadir), body);
   }
 
   /** Publishes the optional canonical ready-file record through its verified parent. */
   static StatusCode publishReady(
       RiverDaemonFileSystem filesystem,
-      Path registryRoot,
       Metadata metadata,
       Path readyPath,
       String serverCertificateSha256) {
-    if (filesystem == null || registryRoot == null || metadata == null || !metadata.valid()
+    if (filesystem == null || metadata == null || !metadata.valid()
         || readyPath == null || serverCertificateSha256 == null
         || !serverCertificateSha256.matches("[0-9a-f]{64}")
         || !metadata.readyFile.equals(readyPath.toString())
         || "none".equals(metadata.readyFile)
-        || !validDirectoryPath(registryRoot.toString())) {
+        || !validDirectoryPath(metadata.runtimeRoot.toString())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     Path parentPath = readyPath.getParent();
@@ -336,7 +238,7 @@ public final class RiverDaemonRuntimeRecords {
     String targetName = targetPath.getFileName().toString();
     String stageName = "." + targetName + ".riverd-ready-" + metadata.owner.nonce + ".stage";
     status = publish(parent, stageName, targetName,
-        readyBody(metadata, registryRoot, serverCertificateSha256));
+        readyBody(metadata, serverCertificateSha256));
     StatusCode closeStatus = parent.close();
     if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
       status = closeStatus;
@@ -354,6 +256,7 @@ public final class RiverDaemonRuntimeRecords {
     final String riverVersion;
     final String clientConfig;
     final String readyFile;
+    final Path runtimeRoot;
 
     Metadata(
         String datadir,
@@ -364,7 +267,8 @@ public final class RiverDaemonRuntimeRecords {
         long credentialGeneration,
         String riverVersion,
         String clientConfig,
-        Path readyFile) {
+        Path readyFile,
+        Path runtimeRoot) {
       this.datadir = datadir;
       this.incarnation = incarnation;
       this.owner = owner;
@@ -374,10 +278,13 @@ public final class RiverDaemonRuntimeRecords {
       this.riverVersion = riverVersion;
       this.clientConfig = clientConfig;
       this.readyFile = readyFile == null ? "none" : readyFile.toString();
+      this.runtimeRoot = runtimeRoot;
     }
 
     private boolean valid() {
-      return validDirectoryPath(datadir) && incarnation != null && incarnation.isValid()
+      return validDirectoryPath(datadir) && runtimeRoot != null
+          && validDirectoryPath(runtimeRoot.toString())
+          && incarnation != null && incarnation.isValid()
           && owner != null && owner.datadir.equals(datadir)
           && owner.high == incarnation.high() && owner.low == incarnation.low()
           && owner.pid > 0 && owner.start >= 0
@@ -423,25 +330,7 @@ public final class RiverDaemonRuntimeRecords {
         "owner-nonce=" + metadata.owner.nonce));
   }
 
-  private static String registryBody(Metadata metadata) {
-    return RiverDaemonIdentityRecords.record(List.of(
-        "format=" + REGISTRY_FORMAT,
-        "datadir=" + metadata.datadir,
-        "database-incarnation-high=" + metadata.incarnation.high(),
-        "database-incarnation-low=" + metadata.incarnation.low(),
-        "pid=" + metadata.owner.pid,
-        "process-start-epoch-millis=" + metadata.owner.start,
-        "listen-address=" + metadata.listenAddress,
-        "listen-port=" + metadata.listenPort,
-        "river-version=" + metadata.riverVersion,
-        "launcher-contract=riverd-v1",
-        "protocol=" + protocolTag(),
-        "runtime-file=" + runtimePath(metadata.datadir),
-        "owner-nonce=" + metadata.owner.nonce));
-  }
-
-  private static String readyBody(
-      Metadata metadata, Path registryRoot, String serverCertificateSha256) {
+  private static String readyBody(Metadata metadata, String serverCertificateSha256) {
     Path datadir = Path.of(metadata.datadir);
     return RiverDaemonIdentityRecords.record(List.of(
         "format=" + READY_FORMAT,
@@ -450,8 +339,7 @@ public final class RiverDaemonRuntimeRecords {
         "database-incarnation-low=" + metadata.incarnation.low(),
         "data=" + datadir.resolve(RiverDaemonIdentity.DATABASE_NAME),
         "identity=" + datadir.resolve(RiverDaemonIdentity.INSTANCE_FILE),
-        "runtime-file=" + runtimePath(metadata.datadir),
-        "registry-record=" + registryRoot.resolve(registryName(metadata.datadir)),
+        "runtime-file=" + runtimePath(metadata.runtimeRoot, metadata.datadir),
         "listen-address=" + metadata.listenAddress,
         "listen-port=" + metadata.listenPort,
         "pid=" + metadata.owner.pid,
@@ -464,11 +352,8 @@ public final class RiverDaemonRuntimeRecords {
   }
 
   private static ReadyTarget openReady(
-      RiverDaemonFileSystem filesystem,
-      RuntimeRecord runtime,
-      String datadir,
-      Path registryRoot,
-      String registryName) {
+      RiverDaemonFileSystem filesystem, RuntimeRecord runtime, String datadir,
+      Path runtimeRoot) {
     Path path = Path.of(runtime.readyFile);
     Path parentPath = path.getParent();
     if (parentPath == null) return ReadyTarget.failure(StatusCode.INVALID_EXTERNAL_INPUT);
@@ -497,7 +382,7 @@ public final class RiverDaemonRuntimeRecords {
     }
     ReadyRecord ready = parseReady(readResult.bytes);
     if (ready == null || objectIdentity == null
-        || !ready.matches(runtime, datadir, registryRoot.resolve(registryName).toString())) {
+        || !ready.matches(runtime, datadir, runtimePath(runtimeRoot, datadir).toString())) {
       return closeReadyParent(parent, StatusCode.CORRUPTION);
     }
     return new ReadyTarget(parent, name, objectIdentity, true, StatusCode.OK);
@@ -554,19 +439,35 @@ public final class RiverDaemonRuntimeRecords {
     return directory.force(new DirectoryOperationResult());
   }
 
-  private static boolean hasEntry(DirectoryListResult entries, String name) {
-    for (int index = 0; index < entries.size(); index++) {
-      if (name.equals(entries.name(index))) return true;
+  static String runtimeName(String datadir) {
+    return HexFormat.of().formatHex(digest(datadir.getBytes(StandardCharsets.UTF_8)))
+        + ".properties";
+  }
+
+  static Path runtimePath(Path runtimeRoot, String datadir) {
+    return runtimeRoot.resolve(runtimeName(datadir));
+  }
+
+  /** Opens the one runtime record for a datadir and transfers only the file capability. */
+  static StatusCode openRuntime(
+      RiverDaemonFileSystem filesystem, Path runtimeRoot, String datadir, RiverFileResult result) {
+    if (filesystem == null || runtimeRoot == null || datadir == null || result == null
+        || !validDirectoryPath(runtimeRoot.toString()) || !validDirectoryPath(datadir)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return false;
-  }
-
-  static String registryName(String datadir) {
-    return HexFormat.of().formatHex(digest(datadir.getBytes(StandardCharsets.UTF_8)));
-  }
-
-  private static String runtimePath(String datadir) {
-    return Path.of(datadir).resolve(RUNTIME_NAME).toString();
+    result.reset();
+    RiverDirectoryResult rootResult = new RiverDirectoryResult();
+    StatusCode status = filesystem.openDirectory(runtimeRoot, rootResult);
+    if (!status.isOk()) return status;
+    RiverDirectory root = rootResult.directory();
+    status = root.openFile(runtimeName(datadir), RiverOpenMode.EXISTING, result);
+    StatusCode close = root.close();
+    if (status.isOk() && !close.isOk() && close != StatusCode.CLOSED) {
+      result.file().close();
+      result.reset();
+      return close;
+    }
+    return status;
   }
 
   private static RuntimeRecord expectedRuntime(Metadata metadata) {
@@ -677,28 +578,8 @@ public final class RiverDaemonRuntimeRecords {
     }
   }
 
-  static RegistryRecord parseRegistry(byte[] bytes) {
-    Envelope envelope = envelope(bytes, 13, REGISTRY_FORMAT);
-    if (envelope == null) return null;
-    String[] fields = envelope.fields;
-    try {
-      return new RegistryRecord(value(fields[1], "datadir="),
-          canonicalLong(value(fields[2], "database-incarnation-high=")),
-          canonicalLong(value(fields[3], "database-incarnation-low=")),
-          canonicalLong(value(fields[4], "pid=")),
-          canonicalLong(value(fields[5], "process-start-epoch-millis=")),
-          value(fields[6], "listen-address="),
-          canonicalPort(value(fields[7], "listen-port=")),
-          value(fields[8], "river-version="), value(fields[9], "launcher-contract="),
-          value(fields[10], "protocol="), value(fields[11], "runtime-file="),
-          value(fields[12], "owner-nonce="));
-    } catch (RuntimeException failure) {
-      return null;
-    }
-  }
-
   private static ReadyRecord parseReady(byte[] bytes) {
-    Envelope envelope = envelope(bytes, 17, READY_FORMAT);
+    Envelope envelope = envelope(bytes, 16, READY_FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
@@ -706,13 +587,12 @@ public final class RiverDaemonRuntimeRecords {
           canonicalLong(value(fields[2], "database-incarnation-high=")),
           canonicalLong(value(fields[3], "database-incarnation-low=")),
           value(fields[4], "data="), value(fields[5], "identity="),
-          value(fields[6], "runtime-file="), value(fields[7], "registry-record="),
-          value(fields[8], "listen-address="),
-          canonicalPort(value(fields[9], "listen-port=")),
-          canonicalLong(value(fields[10], "pid=")), value(fields[11], "protocol="),
-          value(fields[12], "transport="), value(fields[13], "client-config="),
-          value(fields[14], "server-certificate-sha256="),
-          value(fields[15], "owner-nonce="), value(fields[16], "status="));
+          value(fields[6], "runtime-file="), value(fields[7], "listen-address="),
+          canonicalPort(value(fields[8], "listen-port=")),
+          canonicalLong(value(fields[9], "pid=")), value(fields[10], "protocol="),
+          value(fields[11], "transport="), value(fields[12], "client-config="),
+          value(fields[13], "server-certificate-sha256="),
+          value(fields[14], "owner-nonce="), value(fields[15], "status="));
     } catch (RuntimeException failure) {
       return null;
     }
@@ -766,48 +646,6 @@ public final class RiverDaemonRuntimeRecords {
     }
   }
 
-  static final class RegistryRecord {
-    final String datadir;
-    final long high;
-    final long low;
-    final long pid;
-    final long start;
-    final String address;
-    final int port;
-    final String version;
-    final String launcher;
-    final String protocol;
-    final String runtimeFile;
-    final String nonce;
-
-    RegistryRecord(String datadir, long high, long low, long pid, long start,
-        String address, int port, String version, String launcher, String protocol,
-        String runtimeFile, String nonce) {
-      this.datadir = datadir;
-      this.high = high;
-      this.low = low;
-      this.pid = pid;
-      this.start = start;
-      this.address = address;
-      this.port = port;
-      this.version = version;
-      this.launcher = launcher;
-      this.protocol = protocol;
-      this.runtimeFile = runtimeFile;
-      this.nonce = nonce;
-    }
-
-    boolean matches(String expectedDatadir, DatabaseIncarnation incarnation,
-        RiverDaemonIdentityRecords.LockRecord owner, String expectedRuntime) {
-      return expectedDatadir.equals(datadir) && high == incarnation.high() && low == incarnation.low()
-          && pid == owner.pid && start == owner.start
-          && nonce.equals(owner.nonce) && validAddress(address)
-          && port >= 1 && port <= 65535 && validText(version)
-          && "riverd-v1".equals(launcher) && protocolTag().equals(protocol)
-          && expectedRuntime.equals(runtimeFile);
-    }
-  }
-
   private static final class ReadyRecord {
     final String datadir;
     final long high;
@@ -815,7 +653,6 @@ public final class RiverDaemonRuntimeRecords {
     final String data;
     final String identity;
     final String runtimeFile;
-    final String registry;
     final String address;
     final int port;
     final long pid;
@@ -827,7 +664,7 @@ public final class RiverDaemonRuntimeRecords {
     final String status;
 
     ReadyRecord(String datadir, long high, long low, String data, String identity,
-        String runtimeFile, String registry, String address, int port, long pid, String protocol,
+        String runtimeFile, String address, int port, long pid, String protocol,
         String transport, String clientConfig, String certificate, String nonce, String status) {
       this.datadir = datadir;
       this.high = high;
@@ -835,7 +672,6 @@ public final class RiverDaemonRuntimeRecords {
       this.data = data;
       this.identity = identity;
       this.runtimeFile = runtimeFile;
-      this.registry = registry;
       this.address = address;
       this.port = port;
       this.pid = pid;
@@ -847,12 +683,12 @@ public final class RiverDaemonRuntimeRecords {
       this.status = status;
     }
 
-    boolean matches(RuntimeRecord runtime, String expectedDatadir, String expectedRegistry) {
+    boolean matches(RuntimeRecord runtime, String expectedDatadir, String expectedRuntimePath) {
       return expectedDatadir.equals(datadir) && high == runtime.high && low == runtime.low
           && Path.of(expectedDatadir).resolve("database").toString().equals(data)
           && Path.of(expectedDatadir).resolve("instance.properties").toString().equals(identity)
-          && runtimePath(expectedDatadir).equals(runtimeFile)
-          && expectedRegistry.equals(registry) && address.equals(runtime.address)
+          && expectedRuntimePath.equals(runtimeFile)
+          && address.equals(runtime.address)
           && port == runtime.port && pid == runtime.pid && protocolTag().equals(protocol)
           && "tls-v1.3".equals(transport) && clientConfig.equals(runtime.clientConfig)
           && certificate.matches("[0-9a-f]{64}") && nonce.equals(runtime.nonce)

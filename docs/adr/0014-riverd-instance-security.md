@@ -93,7 +93,6 @@ DATADIR/
   .bootstrap-<nonce>.stage
   .instance-<nonce>.stage
   .riverd-bootstrap-<nonce>/
-  runtime.properties
   database/
   security/
     security.properties
@@ -111,12 +110,13 @@ DATADIR/
 
 The launcher resolves an absolute normalized path through the nearest existing
 ancestor and uses the real ancestor path as the base. Before mutation it proves
-that the prospective data directory, each fixed child, the registry tree, and
+that the prospective data directory, each fixed child, the per-user runtime
+directory, and
 an explicit ready target have only the declared containment relation of each
 fixed child directly beneath `DATADIR`. Every other equality,
 ancestor/descendant overlap, symbolic-link alias, and existing-file-key alias
 (including a hard link) is rejected as `INVALID_EXTERNAL_INPUT`. The ready
-target must be outside the data and registry trees. A missing leaf is compared as its verified
+target must be outside the data and runtime trees. A missing leaf is compared as its verified
 real parent plus one validated component; the comparison is repeated after
 creation and before publication.
 
@@ -172,7 +172,7 @@ validation and use; a path check followed by an unchecked path operation is
 insufficient. The scope of trusted same-account actors and privileged
 administrators is unchanged. Missing intermediate path components may be
 created only through validated parent ownership and identity. Ready-file,
-registry, and data trees retain the containment and collision rules above.
+runtime, and data trees retain the containment and collision rules above.
 
 The publication and recovery state machines below remain authoritative.
 Immutable stages belong beside their regular-file targets. Any platform
@@ -223,18 +223,19 @@ the changed path. There is no per-launcher-JAR qualification record or mandatory
 runtime match to a single machine's JDK/kernel/device tuple.
 
 Insufficient capability returns `FEATURE_NOT_SUPPORTED`; insecure ownership,
-access, or path redirection returns `ACCESS_DENIED`. Unintended data/registry/
+access, or path redirection returns `ACCESS_DENIED`. Unintended data/runtime/
 ready-path collisions return `INVALID_EXTERNAL_INPUT`. Required platforms must
 have implementations which pass, rather than permanently returning unsupported.
 No weaker-durability or no-authentication mode is introduced.
 
 `--ready-file` uses the same owner-only, verified-parent rules and is never
-overwritten. The per-user registry is `.river/run/instances` under the resolved
-user home, with owner-only directories and records. `$HOME` in this ADR denotes
+overwritten. The per-user runtime directory is `.river/run` under the resolved
+user home, with owner-only directories and records. Each live instance has one
+record at `.river/run/<sha256(normalized-datadir)>.properties`. `$HOME` in this ADR denotes
 that platform's user home, not a required environment variable. Path parsing,
 normalization, containment, and identity checks must cover Windows drive paths,
 separators, case aliases, and reparse points as well as Unix paths. Apart from
-the instance tree, registry, and explicit ready file, `riverd` writes nothing.
+the instance tree, runtime directory, and explicit ready file, `riverd` writes nothing.
 Paths containing NUL, CR, LF, `=`, or another Unicode control character are
 rejected; version 1 has no encoding alternative.
 
@@ -248,8 +249,8 @@ Every reader performs a bounded full read, canonical parse, and checksum
 validation before using any field, opening any referenced path, checking a
 process, or taking a lifecycle action. The checksum detects corruption; it is
 not authentication. `instance.properties` and `bootstrap.properties` are at
-most 4096 bytes; security, client, runtime, lock, stop-request, registry,
-ready-file, renewal-intent, and credential-public records are each at most
+most 4096 bytes; security, client, runtime, lock, stop-request, ready-file,
+renewal-intent, and credential-public records are each at most
 8192 bytes. Stdout is not a persistent-properties record and has no checksum.
 These are format framing bounds, not workload caps. Oversize external input is
 `INVALID_EXTERNAL_INPUT`; oversize, noncanonical, or checksum-invalid accepted
@@ -290,7 +291,7 @@ only after the bootstrap PID/start is proved absent and every staged or
 final entry validates against its incarnation and nonce. With an accepted
 instance authority, replacement instead requires that incarnation plus absent
 old-process proof; the acquired launcher retains the prior lock bytes until any
-matching stale ready/runtime/registry cleanup completes, then publishes its new
+matching stale ready/runtime cleanup completes, then publishes its new
 lock record. No lock-record recovery changes bootstrap, instance,
 database or credential authority.
 
@@ -445,7 +446,7 @@ before database/listener admission. The raw token, private key,
 `token-sha256`, complete `security.properties` bytes, and its parsed verifier
 are credential-equivalent; the digest is the HMAC key used by the current
 `TokenProof`, not a public password hash. All are owner-only, never copied to a
-public archive, and never enter argv, environment, URLs, readiness, registry,
+public archive, and never enter argv, environment, URLs, readiness, runtime,
 or logs.
 
 The launcher reads token and private-key bytes into fixed owned buffers and
@@ -484,7 +485,7 @@ deletion after directory force, never physical-media or provider-memory erasure.
 
 After listener bind selects the concrete port, `river-server-app` atomically
 replaces its own `security/client.properties` under the instance lock and
-forces the security directory before runtime/registry/readiness publication.
+forces the security directory before runtime/readiness publication.
 The file is derived discovery state, not credential or instance authority; it
 may be absent or stale while stopped and is never accepted as restart input.
 `river-client` owns its only parser/validator and the authenticated connector
@@ -559,18 +560,17 @@ The former design made audit mandatory for remote riverd. That decision is
 superseded; the current riverd path has no audit file, coordinator, queue,
 staging arena, audit thread, audit force, or per-row audit work.
 
-## Readiness, runtime record, and registry formats
+## Readiness and runtime record format
 
 After identity/security/database validation, listener bind, current
-client-configuration publication, runtime publication, and registry publication
-all succeed, start prepares these ordered UTF-8 records for standard output:
+client-configuration publication and runtime publication succeed, start prepares
+these ordered UTF-8 records for standard output:
 
 ```text
 riverd_datadir=<normalized-absolute-path>
 riverd_data=<normalized-absolute-path>/database
 riverd_identity=<normalized-absolute-path>/instance.properties
-riverd_runtime_file=<normalized-absolute-path>/runtime.properties
-riverd_registry_record=<normalized-absolute-path>
+riverd_runtime_file=<normalized-absolute-path>/.river/run/<sha256-datadir>.properties
 riverd_listen_address=<localhost|127.0.0.1|::1>
 riverd_listen_port=<1..65535>
 riverd_pid=<positive-decimal-long>
@@ -607,7 +607,7 @@ two readiness modes have one commit point each and never require both sinks:
   irrevocable even if the following flush reports failure. A prefix
   write/flush failure, or a final write known to have transferred fewer than
   the complete record, closes the listener, workers, database, and lock in
-  lifecycle order; removes only matching runtime/registry/client records and
+  lifecycle order; removes only matching runtime/client records and
   stages; emits no later readiness; and exits `IO_FAILURE`. If the final write
   or flush fails after a complete record may have become observable, the
   launcher cannot retract it: it sets terminal `IO_FAILURE`, performs ordered
@@ -619,14 +619,13 @@ The ready file contains no secret and has this exact schema; its status field is
 immediately before the universal final checksum:
 
 ```text
-format=riverd-ready-v1
+format=riverd-ready-v2
 datadir=<normalized-absolute-path>
 database-incarnation-high=<signed-decimal-long>
 database-incarnation-low=<signed-decimal-long>
 data=<normalized-absolute-path>/database
 identity=<normalized-absolute-path>/instance.properties
-runtime-file=<normalized-absolute-path>/runtime.properties
-registry-record=<normalized-absolute-path>
+runtime-file=<normalized-absolute-path>/.river/run/<sha256-datadir>.properties
 listen-address=<localhost|127.0.0.1|::1>
 listen-port=<1..65535>
 pid=<positive-decimal-long>
@@ -639,8 +638,9 @@ status=ready
 record-sha256=<64-lowercase-hex>
 ```
 
-`runtime.properties` is published atomically while the start process owns the
-lock. Its exact ordered schema is:
+The single runtime record is published atomically at
+`$HOME/.river/run/<sha256(normalized-datadir)>.properties` while the start
+process owns the lock. Its exact ordered schema is:
 
 ```text
 format=riverd-runtime-v2
@@ -674,34 +674,16 @@ record-sha256=<64-lowercase-hex>
 Process start instant must be available; otherwise start returns
 `FEATURE_NOT_SUPPORTED`.
 
-The registry filename is lowercase SHA-256 of the UTF-8 normalized datadir.
-Its exact ordered schema is:
-
-```text
-format=riverd-registry-v2
-datadir=<normalized-absolute-path>
-database-incarnation-high=<signed-decimal-long>
-database-incarnation-low=<signed-decimal-long>
-pid=<positive-decimal-long>
-process-start-epoch-millis=<nonnegative-decimal-long>
-listen-address=<localhost|127.0.0.1|::1>
-listen-port=<1..65535>
-river-version=<distribution-version>
-launcher-contract=riverd-v1
-protocol=river-v4
-runtime-file=<normalized-absolute-path>
-owner-nonce=<32-lowercase-hex>
-record-sha256=<64-lowercase-hex>
-```
-
-It is published after listener readiness and removed only when its full
-identity matches. `ps` validates every direct regular child, the runtime/lock
-identity, and the live process, prints verified instances sorted by datadir,
-warns without deleting invalid/stale records, never scans arbitrary processes,
-and never signals. Its empty output remains the exact guidance in the plan.
-Under the instance lock, a later `start` may replace only a canonical record
-whose filename/content identifies that same datadir and whose exact process is
-proved absent. Malformed or mismatched collisions are preserved and return
+The runtime filename is lowercase SHA-256 of the UTF-8 normalized datadir with
+`.properties` appended. It is published after listener readiness and removed
+only when its full identity matches. `ps` validates every direct regular child
+of `.river/run`, verifies each filename against the record's datadir and the
+corresponding held datadir lock. It prints verified instances sorted by
+datadir, ignores inactive records, warns only for malformed or unreadable
+records, never scans arbitrary processes, and never signals. Its empty output
+remains the exact guidance in the plan. Under the instance lock, a later `start` may
+replace only the canonical same-datadir record after the exact recorded process
+is proved absent. Malformed or mismatched collisions are preserved and return
 `CORRUPTION`/`CONFLICT`; `ps` itself never performs this recovery.
 
 An existing ready target is normally `CONFLICT` and is never overwritten. The
@@ -709,11 +691,11 @@ only stale-ready recovery occurs after `start` holds the instance lock: a
 canonical old runtime record and the pre-replacement lock record must bind the
 same incarnation, normalized datadir, owner nonce, PID/start, and
 canonical checksums to a process proved absent; the ready file must
-be a canonical `riverd-ready-v1` record with the same incarnation, owner nonce,
-PID, runtime path, and client path; and any registry record must match that same
-owner. After revalidating the external ready parent and target file key, start
+be a canonical `riverd-ready-v2` record with the same incarnation, owner nonce,
+PID, runtime path, and client path. After revalidating the external ready parent
+and target file key, start
 deletes that exact ready file through its verified parent handle and forces its parent, then removes
-and forces only the matching registry/runtime records. It may then publish a
+and forces only the matching runtime record. It may then publish a
 new runtime/ready generation. A missing binding, live/unverifiable process,
 checksum mismatch, different file key, different target contents, or unrelated
 existing ready file is preserved as `NOT_OWNER`, `CORRUPTION`, or `CONFLICT`
@@ -723,14 +705,14 @@ and receives no cleanup.
 
 Start owns resources in this order: secure directory handle, instance lock,
 validated identity/security, `RiverDatabase`, authenticated
-`LoopbackRiverServer`, current client configuration, runtime record, registry
-record, ready file or stdout commitment. The
+`LoopbackRiverServer`, current client configuration, runtime record, ready file
+or stdout commitment. The
 shutdown hook is installed after database ownership. Startup failure and
 shutdown release in reverse order except that the listener always closes
 before the database. One idempotent lifecycle owner serves normal close,
 Unix SIGINT/SIGTERM, Windows console shutdown, and the
 cooperative request below; it reports both close statuses, preserves the first
-fatal outcome, removes only matching readiness/runtime/registry/control
+fatal outcome, removes only matching readiness/runtime/control
 records, and never deletes database/identity/security data.
 
 `riverd stop` never signals a PID, calls `ProcessHandle.destroy`, acquires or
@@ -807,10 +789,10 @@ the next start validates old-owner absence and instance recovery, removes only
 that matching receipt, and forces `DATADIR` before readiness. During orderly
 shutdown the receipt is retained while the lifecycle closes listener, workers,
 public JSSE state, authenticator, and database; removes and forces the matching
-external ready target, registry record, and runtime record; then deletes and
+external ready target and runtime record; then deletes and
 forces the accepted receipt as the final filesystem control record immediately
 before releasing the lock. Stop reports `OK` only after the lock is free and
-matching runtime, registry, ready target, request, and accepted receipt are
+matching runtime, ready target, request, and accepted receipt are
 absent; otherwise it waits until timeout. A completed retry sees no live owner
 and returns `NOT_OWNER`.
 
@@ -1024,7 +1006,7 @@ interval and names this stopped-instance command.
 
 | Owner | Responsibility and delivery |
 | --- | --- |
-| `river-server-app` | Identity, credentials, filesystem-policy composition, command/lifecycle composition, resource plan, readiness, runtime/registry, and credential-renewal operations. `tic-615d` creates this non-empty module with identity/security/config production code; `tic-ec50` adds the installed application and complete composition. |
+| `river-server-app` | Identity, credentials, filesystem-policy composition, command/lifecycle composition, resource plan, readiness, runtime, and credential-renewal operations. `tic-615d` creates this non-empty module with identity/security/config production code; `tic-ec50` adds the installed application and complete composition. |
 | `river-server` | Authenticated TLS listener, authentication/authorization, connection and shutdown behavior; never concrete engine composition. |
 | `river-client` | One bounded client-configuration parser and pinned authenticated connector. |
 | `river-jdbc` / `river-cli` | Public adapters over `river-client`; no duplicate trust/config parser and no optional plain path. |

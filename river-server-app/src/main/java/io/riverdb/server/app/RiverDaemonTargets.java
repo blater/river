@@ -1,7 +1,6 @@
 package io.riverdb.server.app;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.platform.file.DirectoryEntryType;
 import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.riverd.RiverDaemonFileSystem;
@@ -41,9 +40,9 @@ final class RiverDaemonTargets {
     StatusCode status = RiverDaemonPaths.resolve(explicitDatadir, null, home, paths);
     if (!status.isOk()) return status;
     if (explicitDatadir != null || requested == null) {
-      return openExact(filesystem, paths.datadir, requested, result);
+      return openExact(filesystem, paths.datadir, paths.runtimeRoot, requested, result);
     }
-    return resolveEndpoint(filesystem, paths.registry, requested, result, errors);
+    return resolveEndpoint(filesystem, paths.runtimeRoot, requested, result, errors);
   }
 
   static StatusCode list(
@@ -54,8 +53,8 @@ final class RiverDaemonTargets {
     RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
     StatusCode status = RiverDaemonPaths.resolve(null, null, home, paths);
     if (!status.isOk()) return status;
-    RiverDirectoryResult registryResult = new RiverDirectoryResult();
-    status = filesystem.openDirectory(paths.registry, registryResult);
+    RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
+    status = filesystem.openDirectory(paths.runtimeRoot, runtimeRootResult);
     if (status == StatusCode.CONFLICT) {
       printHeader(out, serverColumnWidth(List.of()));
       out.println("No River servers are running.");
@@ -63,28 +62,29 @@ final class RiverDaemonTargets {
       return StatusCode.OK;
     }
     if (!status.isOk()) return status;
-    RiverDirectory registry = registryResult.directory();
+    RiverDirectory runtimeRoot = runtimeRootResult.directory();
     try {
-      EntryList listing = listEntries(registry);
+      EntryList listing = listEntries(runtimeRoot);
       if (!listing.status.isOk()) return listing.status;
       DirectoryListResult entries = listing.entries;
       List<Row> rows = new ArrayList<>();
       for (int index = 0; index < entries.size(); index++) {
         if (entries.type(index) != DirectoryEntryType.FILE
             || entries.name(index).startsWith(".")) continue;
-        RegistryValues values = readRegistry(registry, entries.name(index));
+        RuntimeValues values = readRuntime(runtimeRoot, entries.name(index));
         if (!values.status.isOk() || values.record == null) {
           warn(errors, entries.name(index), values.status.isOk()
               ? StatusCode.CORRUPTION : values.status);
           continue;
         }
-        if (!validRegistry(values.record)) {
+        if (!validRuntime(values.record)
+            || !RiverDaemonRuntimeRecords.runtimeName(values.record.datadir).equals(entries.name(index))) {
           warn(errors, entries.name(index), StatusCode.CORRUPTION);
           continue;
         }
         RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
         StatusCode targetStatus = openRunning(
-            filesystem, Path.of(values.record.datadir), targetResult);
+            filesystem, Path.of(values.record.datadir), paths.runtimeRoot, targetResult);
         if (targetStatus.isOk()) {
           RiverDaemonTarget target = targetResult.target();
           if (target == null) continue;
@@ -92,7 +92,7 @@ final class RiverDaemonTargets {
             target.close();
             continue;
           }
-          targetStatus = verifyRegistry(values.record, entries.name(index), target);
+          targetStatus = verifyRuntime(values.record, entries.name(index), target);
           if (targetStatus.isOk()) targetStatus = target.revalidate(true);
           if (targetStatus.isOk()) {
             rows.add(new Row(RiverDaemonEndpoint.of(target.runtime.address, target.runtime.port),
@@ -115,16 +115,17 @@ final class RiverDaemonTargets {
       }
       return StatusCode.OK;
     } finally {
-      registry.close();
+      runtimeRoot.close();
     }
   }
 
   private static StatusCode openExact(
       RiverDaemonFileSystem filesystem,
       Path datadir,
+      Path runtimeRootPath,
       RiverDaemonEndpoint requested,
       RiverDaemonTarget.Result result) {
-    StatusCode status = openRunning(filesystem, datadir, result);
+    StatusCode status = openRunning(filesystem, datadir, runtimeRootPath, result);
     if (!status.isOk() || result.target() == null) return status;
     RiverDaemonTarget target = result.target();
     // A local caller can still join an accepted stop after runtime cleanup.
@@ -142,37 +143,38 @@ final class RiverDaemonTargets {
 
   private static StatusCode resolveEndpoint(
       RiverDaemonFileSystem filesystem,
-      Path registryPath,
+      Path runtimeRootPath,
       RiverDaemonEndpoint requested,
       RiverDaemonTarget.Result result,
       PrintStream errors) {
-    RiverDirectoryResult registryResult = new RiverDirectoryResult();
-    StatusCode status = filesystem.openDirectory(registryPath, registryResult);
+    RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
+    StatusCode status = filesystem.openDirectory(runtimeRootPath, runtimeRootResult);
     if (status == StatusCode.CONFLICT) return StatusCode.OK;
     if (!status.isOk()) return status;
-    RiverDirectory registry = registryResult.directory();
+    RiverDirectory runtimeRoot = runtimeRootResult.directory();
     RiverDaemonTarget selected = null;
     try {
-      EntryList listing = listEntries(registry);
+      EntryList listing = listEntries(runtimeRoot);
       if (!listing.status.isOk()) return listing.status;
       DirectoryListResult entries = listing.entries;
       for (int index = 0; index < entries.size(); index++) {
         if (entries.type(index) != DirectoryEntryType.FILE
             || entries.name(index).startsWith(".")) continue;
-        RegistryValues values = readRegistry(registry, entries.name(index));
+        RuntimeValues values = readRuntime(runtimeRoot, entries.name(index));
         if (!values.status.isOk() || values.record == null) {
           warn(errors, entries.name(index), values.status.isOk()
               ? StatusCode.CORRUPTION : values.status);
           continue;
         }
-        if (!validRegistry(values.record)) {
+        if (!validRuntime(values.record)
+            || !RiverDaemonRuntimeRecords.runtimeName(values.record.datadir).equals(entries.name(index))) {
           warn(errors, entries.name(index), StatusCode.CORRUPTION);
           continue;
         }
         if (!requested.matches(values.record.address, values.record.port)) continue;
         RiverDaemonTarget.Result candidateResult = new RiverDaemonTarget.Result();
         status = openRunning(
-            filesystem, Path.of(values.record.datadir), candidateResult);
+            filesystem, Path.of(values.record.datadir), runtimeRootPath, candidateResult);
         if (!status.isOk()) {
           warn(errors, entries.name(index), status);
           continue;
@@ -183,7 +185,7 @@ final class RiverDaemonTargets {
           candidate.close();
           continue;
         }
-        status = verifyRegistry(values.record, entries.name(index), candidate);
+        status = verifyRuntime(values.record, entries.name(index), candidate);
         if (status.isOk()) status = candidate.revalidate(true);
         if (!status.isOk()) {
           warn(errors, entries.name(index), status);
@@ -201,15 +203,16 @@ final class RiverDaemonTargets {
       result.set(selected);
       return StatusCode.OK;
     } finally {
-      registry.close();
+      runtimeRoot.close();
       if (selected == null) result.reset();
     }
   }
 
   /** OK with no target means an absent directory or a released server lock. */
   private static StatusCode openRunning(
-      RiverDaemonFileSystem filesystem, Path datadir, RiverDaemonTarget.Result result) {
-    StatusCode status = RiverDaemonTarget.open(filesystem, datadir, result);
+      RiverDaemonFileSystem filesystem, Path datadir, Path runtimeRootPath,
+      RiverDaemonTarget.Result result) {
+    StatusCode status = RiverDaemonTarget.open(filesystem, datadir, runtimeRootPath, result);
     if (!status.isOk()) {
       return Files.notExists(datadir, LinkOption.NOFOLLOW_LINKS) ? StatusCode.OK : status;
     }
@@ -222,49 +225,39 @@ final class RiverDaemonTargets {
     return status == StatusCode.NOT_OWNER ? StatusCode.OK : status;
   }
 
-  private static StatusCode verifyRegistry(
-      RiverDaemonRuntimeRecords.RegistryRecord record,
-      String registryName,
+  private static StatusCode verifyRuntime(
+      RiverDaemonRuntimeRecords.RuntimeRecord record,
+      String name,
       RiverDaemonTarget target) {
-    if (target == null || target.runtime == null || target.owner == null
-        || !RiverDaemonRuntimeRecords.registryName(record.datadir).equals(registryName)
-        || !record.runtimeFile.equals(
-            Path.of(record.datadir).resolve(RiverDaemonRuntimeRecords.RUNTIME_NAME).toString())
-        || !record.matches(target.datadir.toString(),
-            DatabaseIncarnation.of(target.owner.high, target.owner.low), target.owner,
-            Path.of(record.datadir).resolve(RiverDaemonRuntimeRecords.RUNTIME_NAME).toString())
-        || !record.address.equals(target.runtime.address) || record.port != target.runtime.port) {
-      return StatusCode.CORRUPTION;
-    }
-    return StatusCode.OK;
+    return target.runtime != null
+        && RiverDaemonRuntimeRecords.runtimeName(record.datadir).equals(name)
+        && record.checksum.equals(target.runtime.checksum)
+        ? StatusCode.OK : StatusCode.NOT_OWNER;
   }
 
-  private static boolean validRegistry(RiverDaemonRuntimeRecords.RegistryRecord record) {
+  private static boolean validRuntime(RiverDaemonRuntimeRecords.RuntimeRecord record) {
     return RiverDaemonIdentityRecords.validDatadir(record.datadir)
         && RiverDaemonRuntimeRecords.validAddress(record.address)
         && record.port >= 1 && record.port <= 65535
-        && record.version != null && !record.version.isBlank()
-        && record.launcher.equals("riverd-v1")
-        && record.protocol.equals("river-v" + io.riverdb.protocol.ProtocolFrameCodec.VERSION)
-        && record.runtimeFile != null && record.nonce.matches("[0-9a-f]{32}");
+        && record.nonce != null && record.nonce.matches("[0-9a-f]{32}");
   }
 
-  private static RegistryValues readRegistry(RiverDirectory registry, String name) {
+  private static RuntimeValues readRuntime(RiverDirectory runtimeRoot, String name) {
     RiverFileResult result = new RiverFileResult();
-    StatusCode status = registry.openFile(name, RiverOpenMode.EXISTING, result);
-    if (!status.isOk()) return RegistryValues.failure(status);
+    StatusCode status = runtimeRoot.openFile(name, RiverOpenMode.EXISTING, result);
+    if (!status.isOk()) return RuntimeValues.failure(status);
     RiverFile file = result.file();
     RiverDaemonRuntimeRecords.ReadResult read = RiverDaemonRuntimeRecords.read(file);
     StatusCode closeStatus = file.close();
-    if (!read.status.isOk()) return RegistryValues.failure(read.status);
+    if (!read.status.isOk()) return RuntimeValues.failure(read.status);
     if (!closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
-      return RegistryValues.failure(closeStatus);
+      return RuntimeValues.failure(closeStatus);
     }
-    RiverDaemonRuntimeRecords.RegistryRecord record =
-        RiverDaemonRuntimeRecords.parseRegistry(read.bytes);
+    RiverDaemonRuntimeRecords.RuntimeRecord record =
+        RiverDaemonRuntimeRecords.parseRuntime(read.bytes);
     return record == null
-        ? RegistryValues.failure(StatusCode.CORRUPTION)
-        : new RegistryValues(StatusCode.OK, record);
+        ? RuntimeValues.failure(StatusCode.CORRUPTION)
+        : new RuntimeValues(StatusCode.OK, record);
   }
 
   private static EntryList listEntries(RiverDirectory directory) {
@@ -283,7 +276,7 @@ final class RiverDaemonTargets {
   }
 
   private static void warn(PrintStream errors, String name, StatusCode status) {
-    errors.println("warning: ignoring registry record " + name + " (" + status + ")");
+    errors.println("warning: ignoring runtime record " + name + " (" + status + ")");
   }
 
   private static int serverColumnWidth(List<Row> rows) {
@@ -308,17 +301,17 @@ final class RiverDaemonTargets {
     }
   }
 
-  private static final class RegistryValues {
+  private static final class RuntimeValues {
     final StatusCode status;
-    final RiverDaemonRuntimeRecords.RegistryRecord record;
+    final RiverDaemonRuntimeRecords.RuntimeRecord record;
 
-    RegistryValues(StatusCode status, RiverDaemonRuntimeRecords.RegistryRecord record) {
+    RuntimeValues(StatusCode status, RiverDaemonRuntimeRecords.RuntimeRecord record) {
       this.status = status;
       this.record = record;
     }
 
-    static RegistryValues failure(StatusCode status) {
-      return new RegistryValues(status, null);
+    static RuntimeValues failure(StatusCode status) {
+      return new RuntimeValues(status, null);
     }
   }
 }

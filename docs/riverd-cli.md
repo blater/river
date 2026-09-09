@@ -89,7 +89,7 @@ port, PID and client settings path, plus a copyable `river stop HOST:PORT` comma
 Its final readiness record is
 `riverd_status=ready`. Automation may use `--ready-file`; an existing target
 is never overwritten. The exact publication and failure rules remain in
-[ADR 0014](adr/0014-riverd-instance-security.md#readiness-runtime-record-and-registry-formats).
+[ADR 0014](adr/0014-riverd-instance-security.md#readiness-and-runtime-record-format).
 A later server failure cannot retract an already observed readiness record.
 
 ## Connect with JDBC
@@ -144,10 +144,11 @@ signal a process by PID. Ctrl-C and platform shutdown signals use the same
 shutdown path: close the listener before the database and preserve committed
 data for restart.
 
-`ps` lists verified instances registered by the current user, sorted by data
-directory, with the endpoint, default-instance marker and data directory. An empty list exits
-successfully and suggests `river server start`. Registrations for absent or stopped instances are skipped. Invalid or unreadable
-records produce a concise warning. Records are preserved.
+`ps` lists verified instances recorded under the current user's runtime
+directory, sorted by data directory, with the endpoint, default-instance marker
+and data directory. An empty list exits successfully and suggests `river server
+start`. Records for absent or stopped instances are skipped. Invalid or
+unreadable records produce a concise warning. Records are preserved.
 
 Successful stop prints a confirmation followed by status records:
 

@@ -168,7 +168,7 @@ final class RiverDaemonStop {
       return StatusCode.CANCELLED;
     }
 
-    /** Removes the accepted receipt after runtime and registry cleanup. */
+    /** Removes the accepted receipt after runtime cleanup. */
     synchronized StatusCode cleanup() {
       if (identity == null || identity.directory() == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -188,8 +188,8 @@ final class RiverDaemonStop {
       if (record.high != metadata.incarnation.high() || record.low != metadata.incarnation.low()
           || !record.ownerNonce.equals(metadata.owner.nonce)) return StatusCode.NOT_OWNER;
       RiverFileResult result = new RiverFileResult();
-      StatusCode status = identity.directory().openFile(
-          RiverDaemonRuntimeRecords.RUNTIME_NAME, RiverOpenMode.EXISTING, result);
+      StatusCode status = RiverDaemonRuntimeRecords.openRuntime(
+          filesystem, metadata.runtimeRoot, metadata.datadir, result);
       if (status != StatusCode.OK) return status == StatusCode.CONFLICT
           ? StatusCode.NOT_OWNER : status;
       RiverFile file = result.file();
@@ -267,8 +267,7 @@ final class RiverDaemonStop {
       return StatusCode.TIMEOUT;
     }
     RiverFileResult runtime = new RiverFileResult();
-    status = target.directory.openFile(RiverDaemonRuntimeRecords.RUNTIME_NAME,
-        RiverOpenMode.EXISTING, runtime);
+    status = target.openRuntime(runtime);
     if (status == StatusCode.OK) {
       runtime.file().close();
       return StatusCode.TIMEOUT;

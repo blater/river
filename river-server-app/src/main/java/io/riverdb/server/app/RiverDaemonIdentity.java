@@ -1069,7 +1069,7 @@ public final class RiverDaemonIdentity {
   }
 
   private static boolean isLifecycleEntry(String name) {
-    if ("runtime.properties".equals(name) || "stop.request".equals(name)) return true;
+    if ("stop.request".equals(name)) return true;
     if (name.startsWith(".stop-request-") && name.endsWith(".stage")) {
       String nonce = name.substring(".stop-request-".length(), name.length() - ".stage".length());
       return nonce.matches("[0-9a-f]{32}");

@@ -23,13 +23,14 @@ final class RiverDaemonTarget {
   FileIdentity runtimeIdentity;
   String runtimeChecksum;
   Path datadir;
+  private Path runtimeRoot;
 
   private RiverDaemonFileSystem filesystem;
   private FileIdentity lockIdentity;
   private boolean closed;
 
   static StatusCode open(
-      RiverDaemonFileSystem filesystem, Path datadir, Result result) {
+      RiverDaemonFileSystem filesystem, Path datadir, Path runtimeRoot, Result result) {
     if (result == null || filesystem == null || datadir == null
         || !RiverDaemonIdentityRecords.validDatadir(datadir.toString())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -57,7 +58,7 @@ final class RiverDaemonTarget {
     }
     if (!status.isOk()) return close(lockFile, directory, status);
 
-    RuntimeValues runtime = readRuntime(directory, datadir, owner);
+    RuntimeValues runtime = readRuntime(filesystem, runtimeRoot, datadir, owner);
     if (!runtime.status.isOk()) return close(lockFile, directory, runtime.status);
     RiverDaemonTarget target = new RiverDaemonTarget();
     target.filesystem = filesystem;
@@ -69,8 +70,13 @@ final class RiverDaemonTarget {
     target.runtimeIdentity = runtime.identity;
     target.runtimeChecksum = runtime.record == null ? null : runtime.record.checksum;
     target.datadir = datadir;
+    target.runtimeRoot = runtimeRoot;
     result.set(target);
     return StatusCode.OK;
+  }
+
+  StatusCode openRuntime(RiverFileResult result) {
+    return RiverDaemonRuntimeRecords.openRuntime(filesystem, runtimeRoot, datadir.toString(), result);
   }
 
   StatusCode revalidate(boolean requireRuntime) {
@@ -88,15 +94,14 @@ final class RiverDaemonTarget {
     StatusCode status = verifyInstance(directory, currentOwner);
     if (!status.isOk()) return status == StatusCode.CORRUPTION ? status : StatusCode.NOT_OWNER;
     if (requireRuntime) {
-      RuntimeValues current = readRuntime(directory, datadir, currentOwner);
+      RuntimeValues current = readRuntime(filesystem, runtimeRoot, datadir, currentOwner);
       if (!current.status.isOk()) {
         return current.status == StatusCode.CORRUPTION
             ? current.status : StatusCode.NOT_OWNER;
       }
       if (current.record == null || runtime == null || runtimeIdentity == null
           || current.identity == null || !runtimeIdentity.equals(current.identity)
-          || !Objects.equals(runtimeChecksum, current.record.checksum)
-          || !sameRuntime(runtime, current.record)) {
+          || !Objects.equals(runtimeChecksum, current.record.checksum)) {
         return StatusCode.NOT_OWNER;
       }
     }
@@ -146,11 +151,11 @@ final class RiverDaemonTarget {
   }
 
   private static RuntimeValues readRuntime(
-      RiverDirectory directory, Path datadir,
+      RiverDaemonFileSystem filesystem, Path runtimeRoot, Path datadir,
       RiverDaemonIdentityRecords.LockRecord owner) {
     RiverFileResult result = new RiverFileResult();
-    StatusCode status = directory.openFile(
-        RiverDaemonRuntimeRecords.RUNTIME_NAME, RiverOpenMode.EXISTING, result);
+    StatusCode status = RiverDaemonRuntimeRecords.openRuntime(
+        filesystem, runtimeRoot, datadir.toString(), result);
     if (status == StatusCode.CONFLICT) return RuntimeValues.missing();
     if (!status.isOk()) return RuntimeValues.failure(status);
     RiverFile file = result.file();
@@ -176,17 +181,6 @@ final class RiverDaemonTarget {
       RiverDaemonIdentityRecords.LockRecord second) {
     return first.datadir.equals(second.datadir) && first.high == second.high
         && first.low == second.low && first.pid == second.pid && first.start == second.start
-        && first.nonce.equals(second.nonce);
-  }
-
-  private static boolean sameRuntime(
-      RiverDaemonRuntimeRecords.RuntimeRecord first,
-      RiverDaemonRuntimeRecords.RuntimeRecord second) {
-    return first.datadir.equals(second.datadir) && first.high == second.high
-        && first.low == second.low && first.pid == second.pid && first.start == second.start
-        && first.address.equals(second.address)
-        && first.port == second.port && first.clientConfig.equals(second.clientConfig)
-        && first.generation == second.generation && first.readyFile.equals(second.readyFile)
         && first.nonce.equals(second.nonce);
   }
 

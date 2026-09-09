@@ -97,7 +97,7 @@ Gradle or a source-tree classpath. On macOS/APFS, the installed script passed
 help/version and invalid-port exits, first start on port zero, generated
 `jdbc:river:client-file:` configuration, SQL create/insert/commit, SIGTERM,
 restart and reading the committed row. Both processes removed their matching
-ready/runtime/registry records and produced no stderr errors. SIGTERM produced
+ready/runtime records and produced no stderr errors. SIGTERM produced
 the JVM's conventional process exit code 143; the ordinary command exit classes
 are tested separately. This signal-exit distinction still needs reconciliation
 with the CLI document before acceptance.
