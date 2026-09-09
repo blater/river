@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.id.DatabaseIncarnation;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -14,14 +16,41 @@ import org.junit.jupiter.api.io.TempDir;
 
 final class RiverDefaultClientTest {
   @Test
-  void missingDefaultClientNamesPathAndStartHint(@TempDir Path home) {
+  void missingDefaultClientWithEmptyStdinPrintsUsage(@TempDir Path home) {
     Invocation invocation = invoke(home);
 
+    assertEquals(0, invocation.exit);
+    assertTrue(invocation.output.contains("river < script.sql"));
+    assertTrue(invocation.output.contains("river server start"));
+    assertEquals("", invocation.error);
+  }
+
+  @Test
+  void missingDefaultClientWithPipedSqlFails(@TempDir Path home) {
+    Invocation invocation = invoke(home, "SELECT 1;");
+
     assertEquals(1, invocation.exit);
-    assertTrue(invocation.error.contains(
-        home.toAbsolutePath().normalize()
-            .resolve(".river/default/security/client.properties").toString()));
+    assertTrue(invocation.error.contains("SQL input was provided"));
     assertTrue(invocation.error.contains("river server start"));
+    assertEquals("", invocation.output);
+  }
+
+  @Test
+  void missingDefaultClientMapsStdinInspectionFailure(@TempDir Path home) {
+    ByteArrayOutputStream error = new ByteArrayOutputStream();
+    int exit = RiverDefaultClient.run(
+        new InputStream() {
+          @Override
+          public int read() throws IOException {
+            throw new IOException("stdin unavailable");
+          }
+        },
+        new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
+        new PrintStream(error, true, StandardCharsets.UTF_8), home);
+
+    assertEquals(1, exit);
+    assertTrue(error.toString(StandardCharsets.UTF_8)
+        .contains("could not inspect standard input"));
   }
 
   @Test
@@ -46,10 +75,14 @@ final class RiverDefaultClientTest {
   }
 
   private static Invocation invoke(Path home) {
+    return invoke(home, "");
+  }
+
+  private static Invocation invoke(Path home, String sql) {
     ByteArrayOutputStream output = new ByteArrayOutputStream();
     ByteArrayOutputStream error = new ByteArrayOutputStream();
     int exit = RiverDefaultClient.run(
-        new ByteArrayInputStream(new byte[0]),
+        new ByteArrayInputStream(sql.getBytes(StandardCharsets.UTF_8)),
         new PrintStream(output, true, StandardCharsets.UTF_8),
         new PrintStream(error, true, StandardCharsets.UTF_8),
         home);
