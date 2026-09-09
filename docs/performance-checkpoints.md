@@ -1406,3 +1406,84 @@ isolated feature commit. No merge/promotion is recorded here. Native packaging
 acceptance remains open under tic-a51d, including platform validation and the
 remaining native/JVM performance gap. The inherited source-policy check failures
 remain visible rather than being waived or folded into this optimization.
+
+
+### Native CPU target and PGO investigation — tic-a51d (2026-09-09)
+
+Branch `ticket/tic-a51d-native-compiler-tuning`, source `c05e3439`. This is a
+compiler-only experiment after fixed-width access; no database semantics,
+protocol, durability, heap, GC, or production build defaults change.
+Artifacts and temporary build/runner scripts: `/private/tmp/river-native-tuning/`.
+All native builds use GraalVM 25.0.4, `--no-daemon`, retained local symbols, and
+run serially without concurrent workloads. Native runtime keeps Serial GC and
+1GiB maximum heap. Every measurement uses the same diagnostic production-server
+runner described above, 5s warmup and 60s measurement, tiny data, serializable,
+ten terminals, one warehouse. TPS excludes drain commits.
+
+CPU-target interleaving, standard mix/seed42:
+
+| Variant | Sample 1 TPS | Sample 2 TPS | Mean TPS |
+| --- | ---: | ---: | ---: |
+| O3 armv8.1-a | 140.1 | 139.4 | 139.7 |
+| O3 native | 140.8 | 140.5 | 140.7 |
+
+This small observed difference does not establish a worthwhile general gain.
+Disassembly confirms hardware AES/PMULL in the native-target intrinsic stubs,
+where the generic image retains software AES/GHASH methods. CRC32 and LSE were
+already enabled in the generic target. Do not silently narrow distributed
+binary CPU compatibility on these measurements.
+Runs: `/private/tmp/cpu-tuning-{generic,native}-{1,2}/`, in that interleaved order.
+All passed workload checks and owned cleanup. Native sample1 had two Delivery
+deadlock retries, matched by server/client counters; neither exhausted. Other
+runs had no retries. No failed or drain-failed outcomes occurred.
+
+PGO training uses `--pgo-instrument -march=native`, the standard five-family mix,
+seed77, 5s warmup and 90s measurement. Graal reports its instrumentation build
+as O2, sampling+instrument; it is not a timed performance candidate. Training
+passed with zero retries/failures and successful cleanup, producing
+`/private/tmp/river-native-tuning/training.iprof`. Training run:
+`/private/tmp/pgo-tuning-training/`. The optimized candidate uses O3,
+`-march=native`, and that profile; build output confirms `PGO: user-provided`.
+
+
+PGO validation interleaves O3 native-target controls with the PGO candidate,
+keeping all other settings fixed. Standard mix uses seed42 (training used77).
+The held-out New Order/Stock Level 50/50 mix uses seed99.
+
+| Workload / variant | Sample 1 TPS | Sample 2 TPS | Mean TPS |
+| --- | ---: | ---: | ---: |
+| Standard / control | 143.3 | 139.5 | 141.4 |
+| Standard / PGO | 158.9 | 157.7 | 158.3 |
+| New Order/Stock Level / control | 88.2 | — | 88.2 |
+| New Order/Stock Level / PGO | 100.1 | — | 100.1 |
+
+Standard-mix mean improvement is 12.0%; the single held-out pair improves 13.5%.
+All six validation runs had zero retries, retry exhaustion, failed or drain-failed
+outcomes, passed workload checks and removed their owned servers/databases.
+Artifacts: `/private/tmp/pgo-tuning-{native,pgo}-standard-{1,2}/` and
+`/private/tmp/pgo-tuning-{native,pgo}-new-order-stock-level-50-50-1/`.
+The candidate code area fell from 46.70MB to 24.70MB. That verifies a substantial
+code-generation change but does not allocate the measured gain among inlining,
+branch decisions, instruction-cache effects or individual methods. Profiling
+and compiler logs are retained with the experiments. These local diagnostics
+do not establish performance across all workloads or platforms, and are not
+matched directly against earlier 30s JVM samples.
+
+The PGO executable passed the same copied-file native lifecycle smoke with no
+JAVA_HOME/GRAALVM_HOME: help aliases, version, invalid port, credential creation,
+wrong-token rejection, duplicate-instance rejection, SQL commit, shutdown and
+restart/read. Logs:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-2c3a7aa_/`.
+No production source/build change was made, so this compiler-only experiment
+needed no new source tests or slopmark run. The preceding source checkpoint's
+full test suite passed; its inherited source-policy check failures remain open.
+
+Decision: PGO is a promising packaging follow-up with a repeated local gain and
+a positive held-out check. CPU targeting alone shows only a small effect here;
+do not require the build host's CPU features in public binaries without choosing
+and validating a supported target. Keep both decisions separate. Production
+build defaults are unchanged. Experimental executables remain in
+`/private/tmp/river-native-tuning/river-o3-{generic,native,pgo}`; the working
+`bin/river` is restored to the starting generic O3 executable. No merge or native
+packaging acceptance is implied; tic-a51d remains open for supported-platform
+validation and a deliberate final build configuration.

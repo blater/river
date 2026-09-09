@@ -107,3 +107,20 @@ Acceptance remains open: matched native TPS is repeatedly lower than JVM TPS,
 and Linux/Windows native lifecycle validation has not run. See the performance
 checkpoint entry. Do not merge or label this native delivery complete on the
 strength of the credential fix alone.
+
+
+## CPU target and PGO experiments — 2026-09-09
+
+Source c05e3439; branch `ticket/tic-a51d-native-compiler-tuning`.
+O3 host CPU targeting averaged 140.7 versus 139.7 TPS in interleaved 60s samples.
+Hardware crypto instructions were enabled, but the throughput effect was small.
+User-trained PGO then averaged 158.3 versus 141.4 on adjacent native-target
+controls (+12.0%). A held-out New Order/Stock Level mix improved 88.2 to 100.1
+(+13.5%, one pair). Training used a different seed from both validation workloads.
+All PGO validation and standalone credential/restart checks passed. Two accounted
+Delivery deadlock retries occurred in one CPU-target sample; no failures occurred.
+
+See [performance checkpoints](../performance-checkpoints.md) for individual
+samples, exact configuration and retained artifacts. PGO is a supported next
+packaging choice to develop; CPU compatibility remains a separate decision.
+No production build defaults changed, and this does not close platform acceptance.
