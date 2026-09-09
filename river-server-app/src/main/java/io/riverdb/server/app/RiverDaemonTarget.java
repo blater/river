@@ -176,7 +176,7 @@ final class RiverDaemonTarget {
       RiverDaemonIdentityRecords.LockRecord second) {
     return first.datadir.equals(second.datadir) && first.high == second.high
         && first.low == second.low && first.pid == second.pid && first.start == second.start
-        && first.command.equals(second.command) && first.nonce.equals(second.nonce);
+        && first.nonce.equals(second.nonce);
   }
 
   private static boolean sameRuntime(
@@ -184,7 +184,7 @@ final class RiverDaemonTarget {
       RiverDaemonRuntimeRecords.RuntimeRecord second) {
     return first.datadir.equals(second.datadir) && first.high == second.high
         && first.low == second.low && first.pid == second.pid && first.start == second.start
-        && first.command.equals(second.command) && first.address.equals(second.address)
+        && first.address.equals(second.address)
         && first.port == second.port && first.clientConfig.equals(second.clientConfig)
         && first.generation == second.generation && first.readyFile.equals(second.readyFile)
         && first.nonce.equals(second.nonce);

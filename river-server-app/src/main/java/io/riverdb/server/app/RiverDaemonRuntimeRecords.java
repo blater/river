@@ -31,8 +31,8 @@ public final class RiverDaemonRuntimeRecords {
   // than the identity lock-record bound.
   private static final int MAX_RECORD_BYTES = 8192;
   static final String RUNTIME_NAME = "runtime.properties";
-  private static final String RUNTIME_FORMAT = "riverd-runtime-v1";
-  private static final String REGISTRY_FORMAT = "riverd-registry-v1";
+  private static final String RUNTIME_FORMAT = "riverd-runtime-v2";
+  private static final String REGISTRY_FORMAT = "riverd-registry-v2";
   private static final String READY_FORMAT = "riverd-ready-v1";
 
   private RiverDaemonRuntimeRecords() {
@@ -380,7 +380,7 @@ public final class RiverDaemonRuntimeRecords {
       return validDirectoryPath(datadir) && incarnation != null && incarnation.isValid()
           && owner != null && owner.datadir.equals(datadir)
           && owner.high == incarnation.high() && owner.low == incarnation.low()
-          && validCommand(owner.command) && owner.pid > 0 && owner.start >= 0
+          && owner.pid > 0 && owner.start >= 0
           && owner.nonce.matches("[0-9a-f]{32}") && validAddress(listenAddress)
           && listenPort >= 1 && listenPort <= 65535 && credentialGeneration > 0
           && validText(riverVersion) && validDirectoryPath(clientConfig)
@@ -415,7 +415,6 @@ public final class RiverDaemonRuntimeRecords {
         "database-incarnation-low=" + metadata.incarnation.low(),
         "pid=" + metadata.owner.pid,
         "process-start-epoch-millis=" + metadata.owner.start,
-        "command=" + metadata.owner.command,
         "listen-address=" + metadata.listenAddress,
         "listen-port=" + metadata.listenPort,
         "client-config=" + metadata.clientConfig,
@@ -432,7 +431,6 @@ public final class RiverDaemonRuntimeRecords {
         "database-incarnation-low=" + metadata.incarnation.low(),
         "pid=" + metadata.owner.pid,
         "process-start-epoch-millis=" + metadata.owner.start,
-        "command=" + metadata.owner.command,
         "listen-address=" + metadata.listenAddress,
         "listen-port=" + metadata.listenPort,
         "river-version=" + metadata.riverVersion,
@@ -578,7 +576,6 @@ public final class RiverDaemonRuntimeRecords {
         metadata.incarnation.low(),
         metadata.owner.pid,
         metadata.owner.start,
-        metadata.owner.command,
         metadata.listenAddress,
         metadata.listenPort,
         metadata.clientConfig,
@@ -593,10 +590,6 @@ public final class RiverDaemonRuntimeRecords {
 
   private static boolean validDirectoryPath(String value) {
     return RiverDaemonIdentityRecords.validDatadir(value);
-  }
-
-  private static boolean validCommand(String value) {
-    return RiverDaemonIdentityRecords.validCommand(value);
   }
 
   private static boolean validText(String value) {
@@ -664,7 +657,7 @@ public final class RiverDaemonRuntimeRecords {
   }
 
   static RuntimeRecord parseRuntime(byte[] bytes) {
-    Envelope envelope = envelope(bytes, 13, RUNTIME_FORMAT);
+    Envelope envelope = envelope(bytes, 12, RUNTIME_FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
@@ -674,18 +667,18 @@ public final class RiverDaemonRuntimeRecords {
           canonicalLong(value(fields[3], "database-incarnation-low=")),
           canonicalLong(value(fields[4], "pid=")),
           canonicalLong(value(fields[5], "process-start-epoch-millis=")),
-          value(fields[6], "command="), value(fields[7], "listen-address="),
-          canonicalPort(value(fields[8], "listen-port=")),
-          value(fields[9], "client-config="),
-          canonicalLong(value(fields[10], "credential-generation=")),
-          value(fields[11], "ready-file="), value(fields[12], "owner-nonce="), envelope.checksum);
+          value(fields[6], "listen-address="),
+          canonicalPort(value(fields[7], "listen-port=")),
+          value(fields[8], "client-config="),
+          canonicalLong(value(fields[9], "credential-generation=")),
+          value(fields[10], "ready-file="), value(fields[11], "owner-nonce="), envelope.checksum);
     } catch (RuntimeException failure) {
       return null;
     }
   }
 
   static RegistryRecord parseRegistry(byte[] bytes) {
-    Envelope envelope = envelope(bytes, 14, REGISTRY_FORMAT);
+    Envelope envelope = envelope(bytes, 13, REGISTRY_FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
@@ -694,11 +687,11 @@ public final class RiverDaemonRuntimeRecords {
           canonicalLong(value(fields[3], "database-incarnation-low=")),
           canonicalLong(value(fields[4], "pid=")),
           canonicalLong(value(fields[5], "process-start-epoch-millis=")),
-          value(fields[6], "command="), value(fields[7], "listen-address="),
-          canonicalPort(value(fields[8], "listen-port=")),
-          value(fields[9], "river-version="), value(fields[10], "launcher-contract="),
-          value(fields[11], "protocol="), value(fields[12], "runtime-file="),
-          value(fields[13], "owner-nonce="));
+          value(fields[6], "listen-address="),
+          canonicalPort(value(fields[7], "listen-port=")),
+          value(fields[8], "river-version="), value(fields[9], "launcher-contract="),
+          value(fields[10], "protocol="), value(fields[11], "runtime-file="),
+          value(fields[12], "owner-nonce="));
     } catch (RuntimeException failure) {
       return null;
     }
@@ -731,7 +724,6 @@ public final class RiverDaemonRuntimeRecords {
     final long low;
     final long pid;
     final long start;
-    final String command;
     final String address;
     final int port;
     final String clientConfig;
@@ -740,14 +732,14 @@ public final class RiverDaemonRuntimeRecords {
     final String nonce;
     final String checksum;
 
-    RuntimeRecord(String datadir, long high, long low, long pid, long start, String command,
+    RuntimeRecord(String datadir, long high, long low, long pid, long start,
         String address, int port, String clientConfig, long generation, String readyFile,
         String nonce) {
-      this(datadir, high, low, pid, start, command, address, port, clientConfig, generation,
+      this(datadir, high, low, pid, start, address, port, clientConfig, generation,
           readyFile, nonce, null);
     }
 
-    RuntimeRecord(String datadir, long high, long low, long pid, long start, String command,
+    RuntimeRecord(String datadir, long high, long low, long pid, long start,
         String address, int port, String clientConfig, long generation, String readyFile,
         String nonce, String checksum) {
       this.datadir = datadir;
@@ -755,7 +747,6 @@ public final class RiverDaemonRuntimeRecords {
       this.low = low;
       this.pid = pid;
       this.start = start;
-      this.command = command;
       this.address = address;
       this.port = port;
       this.clientConfig = clientConfig;
@@ -768,8 +759,8 @@ public final class RiverDaemonRuntimeRecords {
     boolean matches(String expectedDatadir, DatabaseIncarnation incarnation,
         RiverDaemonIdentityRecords.LockRecord owner) {
       return expectedDatadir.equals(datadir) && high == incarnation.high() && low == incarnation.low()
-          && pid == owner.pid && start == owner.start && command.equals(owner.command)
-          && nonce.equals(owner.nonce) && validCommand(command) && validAddress(address)
+          && pid == owner.pid && start == owner.start
+          && nonce.equals(owner.nonce) && validAddress(address)
           && port >= 1 && port <= 65535 && validDirectoryPath(clientConfig)
           && generation > 0 && ("none".equals(readyFile) || validDirectoryPath(readyFile));
     }
@@ -781,7 +772,6 @@ public final class RiverDaemonRuntimeRecords {
     final long low;
     final long pid;
     final long start;
-    final String command;
     final String address;
     final int port;
     final String version;
@@ -790,7 +780,7 @@ public final class RiverDaemonRuntimeRecords {
     final String runtimeFile;
     final String nonce;
 
-    RegistryRecord(String datadir, long high, long low, long pid, long start, String command,
+    RegistryRecord(String datadir, long high, long low, long pid, long start,
         String address, int port, String version, String launcher, String protocol,
         String runtimeFile, String nonce) {
       this.datadir = datadir;
@@ -798,7 +788,6 @@ public final class RiverDaemonRuntimeRecords {
       this.low = low;
       this.pid = pid;
       this.start = start;
-      this.command = command;
       this.address = address;
       this.port = port;
       this.version = version;
@@ -811,8 +800,8 @@ public final class RiverDaemonRuntimeRecords {
     boolean matches(String expectedDatadir, DatabaseIncarnation incarnation,
         RiverDaemonIdentityRecords.LockRecord owner, String expectedRuntime) {
       return expectedDatadir.equals(datadir) && high == incarnation.high() && low == incarnation.low()
-          && pid == owner.pid && start == owner.start && command.equals(owner.command)
-          && nonce.equals(owner.nonce) && validCommand(command) && validAddress(address)
+          && pid == owner.pid && start == owner.start
+          && nonce.equals(owner.nonce) && validAddress(address)
           && port >= 1 && port <= 65535 && validText(version)
           && "riverd-v1".equals(launcher) && protocolTag().equals(protocol)
           && expectedRuntime.equals(runtimeFile);

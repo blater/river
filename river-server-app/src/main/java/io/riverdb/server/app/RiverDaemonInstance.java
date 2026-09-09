@@ -80,7 +80,7 @@ public final class RiverDaemonInstance {
     }
     StatusCode status = RiverDaemonIdentity.beginCreate(
         datadir, filesystem, requestedIncarnation, random, process.pid,
-        process.startMillis, process.command, identity);
+        process.startMillis, identity);
     if (!status.isOk()) return status;
 
     RiverDaemonInstance state = new RiverDaemonInstance(identity, datadir);
@@ -111,7 +111,7 @@ public final class RiverDaemonInstance {
     if (process == null) return StatusCode.FEATURE_NOT_SUPPORTED;
     RiverDaemonIdentity.IdentityResult identity = new RiverDaemonIdentity.IdentityResult();
     StatusCode status = RiverDaemonIdentity.openExisting(
-        datadir, filesystem, random, process.pid, process.startMillis, process.command, identity);
+        datadir, filesystem, random, process.pid, process.startMillis, identity);
     if (status.isOk()) {
       RiverDaemonInstance state = new RiverDaemonInstance(identity, datadir);
       status = validateRestart(state, resourcePlan, lockDiagnostics, maximumActiveTransactions);
@@ -480,14 +480,12 @@ public final class RiverDaemonInstance {
     }
   }
 
-  private record ProcessMetadata(long pid, long startMillis, String command) {
+  private record ProcessMetadata(long pid, long startMillis) {
     static ProcessMetadata read() {
       ProcessHandle.Info info = ProcessHandle.current().info();
-      if (ProcessHandle.current().pid() <= 0 || info.startInstant().isEmpty()
-          || info.command().isEmpty()) return null;
+      if (ProcessHandle.current().pid() <= 0 || info.startInstant().isEmpty()) return null;
       return new ProcessMetadata(
-          ProcessHandle.current().pid(), info.startInstant().get().toEpochMilli(),
-          info.command().get());
+          ProcessHandle.current().pid(), info.startInstant().get().toEpochMilli());
     }
   }
 

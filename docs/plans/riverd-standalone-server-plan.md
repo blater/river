@@ -371,7 +371,7 @@ Ready instances publish one bounded record beneath the fixed per-user runtime
 directory `$HOME/.river/run/instances`. The record filename is a SHA-256 digest
 of the normalized absolute `-D` path, so a data-directory value never becomes
 an unchecked path component. Each record contains the data directory, PID,
-process start instant, resolved executable, listen endpoint, River version,
+process start instant, listen endpoint, River version,
 and launcher-record format.
 
 The record is published atomically after the listener is ready and before
@@ -383,7 +383,7 @@ whose full contents match the running instance.
 
 1. read only small regular files directly beneath the fixed registry directory;
 2. validate every bounded record;
-3. confirm that the PID, start instant, executable, and data directory still
+3. confirm that the PID, start instant, and data directory still
    describe the recorded live process;
 4. print live instances sorted by normalized data directory.
 
@@ -465,10 +465,10 @@ removal.
 
 After acquiring the instance lock, `riverd start` atomically writes
 `runtime.properties`. The bounded record contains the PID, process start
-instant, resolved `ProcessHandle` command, resolved data directory, endpoint,
+instant, resolved data directory, endpoint,
 client configuration, credential generation, explicit ready target or `none`,
 and a random nonzero 128-bit owner nonce. The forced lock record contains the same process identity,
-datadir, incarnation, and nonce. Unavailable process start/command evidence is
+datadir, incarnation, and nonce. Unavailable process start evidence is
 `FEATURE_NOT_SUPPORTED`.
 
 `riverd stop` never signals a PID, calls `ProcessHandle.destroy`, or acquires or
@@ -480,7 +480,7 @@ then force and atomically publish the ADR's incarnation-, runtime-checksum-, and
 owner-nonce-bound `stop.request`. The lock-owning
 server validates and atomically renames the request to its exact accepted
 receipt before invoking the same lifecycle owner as a directly delivered
-platform shutdown (Unix SIGINT/SIGTERM or Windows console shutdown). PID/start/command are evidence and display fields only.
+platform shutdown (Unix SIGINT/SIGTERM or Windows console shutdown). PID/start are evidence and display fields only.
 
 Exact retries and concurrent CLIs join the one valid pending/accepted request
 for the same owner/runtime; contenders remove only their own unpublished
@@ -851,7 +851,7 @@ After the installed command passes its real lifecycle test:
 3. Load the pinned certificate and token paths from that contract, establish
    TLS 1.3, export `EXPORTER-River-Authentication`, and complete protocol-v4
    `AUTHENTICATE` before opening a session. There is no plain fallback.
-4. Record the exact executable content fingerprint and child PID in evidence.
+4. Record the version label and child PID in evidence.
 5. Run `riverd stop -D` against the same data directory, wait for the recorded
    child, and require verified graceful shutdown.
 6. Delete the harness Gradle invocation, init script, classpath parsing and

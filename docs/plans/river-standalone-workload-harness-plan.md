@@ -497,7 +497,7 @@ termination, and reports a failure rather than killing an unverified PID. If
 admin authentication is required, a private run-owned `--defaults-file` is the
 first argument instead of `--no-defaults`; its contents are never logged or
 published. A bounded SIGTERM escalation is allowed only after matching the
-recorded PID, executable, data directory, and run identity. Forced termination
+recorded PID, data directory, and run identity. Forced termination
 is never normal cleanup. Start, readiness, and stop intervals are lifecycle
 metrics and are excluded from load or workload measurement.
 

@@ -275,7 +275,7 @@ value. River does not infer either value from database bytes.
 exclusive OS lock on the same verified file key, the launcher handles
 pre-bootstrap lock bytes as follows. A newly created zero-length file is filled
 with the new incarnation/owner record and forced before any bootstrap stage. A
-pre-existing canonical record may be replaced only when its PID/start/command
+pre-existing canonical record may be replaced only when its PID/start
 is proved absent. A torn, checksum-invalid, or otherwise unparsable record may
 be replaced only when `instance.properties`, `bootstrap.properties`, every
 bootstrap/stop stage, and every fixed child are absent and `DATADIR` contains
@@ -286,7 +286,7 @@ new canonical record is written through the locked channel, then the file and
 free lock, or any other entry exists, state is preserved as `CORRUPTION`.
 
 When a valid bootstrap authority exists, a torn/stale lock record is replaced
-only after the bootstrap PID/start/command is proved absent and every staged or
+only after the bootstrap PID/start is proved absent and every staged or
 final entry validates against its incarnation and nonce. With an accepted
 instance authority, replacement instead requires that incarnation plus absent
 old-process proof; the acquired launcher retains the prior lock bytes until any
@@ -302,7 +302,6 @@ database-incarnation-high=<signed-decimal-long>
 database-incarnation-low=<signed-decimal-long>
 pid=<positive-decimal-long>
 process-start-epoch-millis=<nonnegative-decimal-long>
-command=<normalized-absolute-ProcessHandle-command>
 attempt-nonce=<32-lowercase-hex>
 database-name=database
 security-name=security
@@ -644,13 +643,12 @@ record-sha256=<64-lowercase-hex>
 lock. Its exact ordered schema is:
 
 ```text
-format=riverd-runtime-v1
+format=riverd-runtime-v2
 datadir=<normalized-absolute-path>
 database-incarnation-high=<signed-decimal-long>
 database-incarnation-low=<signed-decimal-long>
 pid=<positive-decimal-long>
 process-start-epoch-millis=<nonnegative-decimal-long>
-command=<normalized-absolute-ProcessHandle-command>
 listen-address=<localhost|127.0.0.1|::1>
 listen-port=<1..65535>
 client-config=<normalized-absolute-path>
@@ -663,31 +661,29 @@ record-sha256=<64-lowercase-hex>
 The forced `instance.lock` record uses:
 
 ```text
-format=riverd-lock-v1
+format=riverd-lock-v2
 datadir=<normalized-absolute-path>
 database-incarnation-high=<signed-decimal-long>
 database-incarnation-low=<signed-decimal-long>
 pid=<positive-decimal-long>
 process-start-epoch-millis=<nonnegative-decimal-long>
-command=<normalized-absolute-ProcessHandle-command>
 owner-nonce=<32-lowercase-hex>
 record-sha256=<64-lowercase-hex>
 ```
 
-Process start instant and command must be available; otherwise start returns
+Process start instant must be available; otherwise start returns
 `FEATURE_NOT_SUPPORTED`.
 
 The registry filename is lowercase SHA-256 of the UTF-8 normalized datadir.
 Its exact ordered schema is:
 
 ```text
-format=riverd-registry-v1
+format=riverd-registry-v2
 datadir=<normalized-absolute-path>
 database-incarnation-high=<signed-decimal-long>
 database-incarnation-low=<signed-decimal-long>
 pid=<positive-decimal-long>
 process-start-epoch-millis=<nonnegative-decimal-long>
-command=<normalized-absolute-ProcessHandle-command>
 listen-address=<localhost|127.0.0.1|::1>
 listen-port=<1..65535>
 river-version=<distribution-version>
@@ -711,7 +707,7 @@ proved absent. Malformed or mismatched collisions are preserved and return
 An existing ready target is normally `CONFLICT` and is never overwritten. The
 only stale-ready recovery occurs after `start` holds the instance lock: a
 canonical old runtime record and the pre-replacement lock record must bind the
-same incarnation, normalized datadir, owner nonce, PID/start/command, and
+same incarnation, normalized datadir, owner nonce, PID/start, and
 canonical checksums to a process proved absent; the ready file must
 be a canonical `riverd-ready-v1` record with the same incarnation, owner nonce,
 PID, runtime path, and client path; and any registry record must match that same
@@ -751,8 +747,8 @@ unknown control names, bad name/content nonce, or malformed control bytes are
 
 Only when there is no pending or accepted request does the CLI securely
 validate the bounded runtime and lock records, requiring datadir, incarnation,
-PID, start instant, command, and owner nonce to match and an exclusive
-nonblocking lock attempt to remain contended. PID/start/command are evidence
+PID, start instant, and owner nonce to match and an exclusive
+nonblocking lock attempt to remain contended. PID/start are evidence
 and output only. It then publishes a cooperative request into the verified
 instance root with this exact schema:
 

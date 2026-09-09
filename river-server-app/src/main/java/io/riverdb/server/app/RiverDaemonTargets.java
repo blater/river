@@ -243,7 +243,6 @@ final class RiverDaemonTargets {
     return RiverDaemonIdentityRecords.validDatadir(record.datadir)
         && RiverDaemonRuntimeRecords.validAddress(record.address)
         && record.port >= 1 && record.port <= 65535
-        && RiverDaemonIdentityRecords.validCommand(record.command)
         && record.version != null && !record.version.isBlank()
         && record.launcher.equals("riverd-v1")
         && record.protocol.equals("river-v" + io.riverdb.protocol.ProtocolFrameCodec.VERSION)

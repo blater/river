@@ -27,7 +27,9 @@ river server credentials renew [-D PATH|--datadir=PATH]
 ```
 
 Start and offline maintenance select persistent data with `--datadir=PATH` or
-`-D PATH`. `river ps` shows the HOST:PORT identifier accepted by `river stop`.
+`-D PATH`. `river start`, `river stop`, and `river ps` are exact aliases of
+`river server start`, `river server stop`, and `river server ps`: the same options,
+defaults, help, output, and exit codes apply. `river ps` shows the HOST:PORT identifier accepted by `river stop`.
 The data directory remains the instance's persistent identity; the endpoint
 selects its current running process. There is no separate instance-name catalog.
 

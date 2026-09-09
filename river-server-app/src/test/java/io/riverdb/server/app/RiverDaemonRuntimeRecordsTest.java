@@ -178,7 +178,7 @@ final class RiverDaemonRuntimeRecordsTest {
 
   @Test
   void stalePendingStopIsReclaimedAfterRestartWithoutReplay(@TempDir Path root) throws Exception {
-    Fixture fixture = fixture(root, false, 999_999_999L, 0L, "/usr/bin/riverd");
+    Fixture fixture = fixture(root, false, 999_999_999L, 0L);
     RiverDaemonTarget target = null;
     RiverDaemonIdentity.IdentityResult restarted = null;
     try {
@@ -210,7 +210,7 @@ final class RiverDaemonRuntimeRecordsTest {
       restarted = new RiverDaemonIdentity.IdentityResult();
       assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(
           fixture.datadir, fixture.filesystem, new SecureRandom(), currentPid(), currentStart(),
-          currentCommand(), restarted));
+          restarted));
       assertEquals(StatusCode.OK, RiverDaemonStop.recoverStale(fixture.filesystem, restarted));
       assertFalse(Files.exists(fixture.datadir.resolve(RiverDaemonStopRequest.REQUEST_NAME)));
       assertFalse(Files.exists(fixture.datadir.resolve(
@@ -305,11 +305,10 @@ final class RiverDaemonRuntimeRecordsTest {
   }
 
   private static Fixture fixture(Path root, boolean withReady) throws Exception {
-    return fixture(root, withReady, currentPid(), currentStart(), currentCommand());
+    return fixture(root, withReady, currentPid(), currentStart());
   }
 
-  private static Fixture fixture(Path root, boolean withReady, long ownerPid, long ownerStart,
-      String ownerCommand) throws Exception {
+  private static Fixture fixture(Path root, boolean withReady, long ownerPid, long ownerStart) throws Exception {
     Path canonicalRoot = root.toRealPath();
     Files.setPosixFilePermissions(canonicalRoot, PRIVATE_DIRECTORY);
     Path datadir = canonicalRoot.resolve("instance");
@@ -324,7 +323,7 @@ final class RiverDaemonRuntimeRecordsTest {
     RiverDaemonFileSystem filesystem = new ApfsRiverDaemonFileSystem();
     RiverDaemonIdentity.IdentityResult identity = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
-        datadir, filesystem, INCARNATION, new SecureRandom(), ownerPid, ownerStart, ownerCommand,
+        datadir, filesystem, INCARNATION, new SecureRandom(), ownerPid, ownerStart,
         identity));
     assertEquals(StatusCode.OK, RiverDaemonIdentity.completeCreate(identity));
     RiverDaemonIdentityRecords.LockRecord owner = RiverDaemonIdentityRecords.parseLock(
@@ -383,9 +382,7 @@ final class RiverDaemonRuntimeRecordsTest {
     return ProcessHandle.current().info().startInstant().orElseThrow().toEpochMilli();
   }
 
-  private static String currentCommand() {
-    return ProcessHandle.current().info().command().orElseThrow();
-  }
+
 
   private static final class Fixture implements AutoCloseable {
     final RiverDaemonFileSystem filesystem;

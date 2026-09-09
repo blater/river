@@ -23,7 +23,7 @@ without scanning the process table.
 ## Design
 
 Use the normalized-datadir digest filename and canonical
-`riverd-registry-v1` record. Start may replace only a same-instance stale record
+`riverd-registry-v2` record. Start may replace only a same-instance stale record
 under its instance lock after proving the process absent. List only verified
 live records in deterministic order; `ps` warns but never deletes stale or
 invalid records.
