@@ -114,8 +114,8 @@ final class RiverTypedParameterJdbcTest {
 
   private static void assertSinglePageTextBoundaryRoundTrip(Connection connection)
       throws SQLException {
-    String inserted = "\ud83d\ude00".repeat(4_041);
-    String updated = "\ud83d\ude01".repeat(4_041);
+    String inserted = new String(new char[] {(char) 0xD83D, (char) 0xDE00}).repeat(4_041);
+    String updated = new String(new char[] {(char) 0xD83D, (char) 0xDE01}).repeat(4_041);
     try (PreparedStatement insert = connection.prepareStatement(
             "INSERT INTO typed_page_text VALUES (?,?,?,?,?)");
         PreparedStatement update = connection.prepareStatement(

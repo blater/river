@@ -89,7 +89,8 @@ final class SqlJoinHashKeyTest {
 
   @Test
   void hashesTextByUnicodeScalarIndependentOfDeclaredWidth() {
-    String text = "A\ud83c\udf0a\ud800\udf48";
+    String text = new String(new char[] {
+        'A', (char) 0xD83C, (char) 0xDF0A, (char) 0xD800, (char) 0xDF48});
     setText(left, text);
     setText(right, text);
 

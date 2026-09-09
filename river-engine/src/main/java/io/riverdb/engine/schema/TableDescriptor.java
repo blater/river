@@ -91,16 +91,6 @@ public final class TableDescriptor {
         secondaryKeys, foreignKeys, result, detail, true);
   }
 
-  public static StatusCode createForTest(
-      ColumnDescriptorSet columns,
-      KeyDescriptor primaryKey,
-      KeyDescriptor[] secondaryKeys,
-      KeyDescriptor[] foreignKeys,
-      Result result) {
-    return createForTest(
-        columns, primaryKey, secondaryKeys, foreignKeys, result, null);
-  }
-
   /** Freezes a private successor proposal that may contain newly unbound key identities. */
   public static StatusCode createProposedSuccessor(
       long tableId,
@@ -114,18 +104,6 @@ public final class TableDescriptor {
       StatusDetail detail) {
     return TableDescriptorFactory.create(
         tableId, 0, rowLayoutId, catalogGeneration, columns, primaryKey,
-        secondaryKeys, foreignKeys, result, detail, false);
-  }
-
-  public static StatusCode createForTest(
-      ColumnDescriptorSet columns,
-      KeyDescriptor primaryKey,
-      KeyDescriptor[] secondaryKeys,
-      KeyDescriptor[] foreignKeys,
-      Result result,
-      StatusDetail detail) {
-    return TableDescriptorFactory.create(
-        1, 0, 1, 1, columns, primaryKey,
         secondaryKeys, foreignKeys, result, detail, false);
   }
 

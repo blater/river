@@ -91,7 +91,6 @@ final class LockSlotIndex {
 
   long first(long hash) { return decode(heads.get(bucket(hash))); }
   long next(long slot) { return decode(next.get(slot)); }
-  long bucketForTest(long hash) { return bucket(hash); }
 
   static long hash(long first, long second, long third, long fourth, long fifth) {
     long value = mix(first) ^ Long.rotateLeft(mix(second), 11);
@@ -123,7 +122,7 @@ final class LockSlotIndex {
     return status;
   }
 
-  private long bucket(long hash) {
+  long bucket(long hash) {
     hash = mix(hash ^ seed);
     long bucket = hash & (base - 1);
     return bucket < split ? hash & ((base << 1) - 1) : bucket;

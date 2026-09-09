@@ -729,9 +729,9 @@ final class LockExactTableTest {
         fixture.table.tryAcquire(1, 1, 1, key(42, LockMode.EXCLUSIVE), owner));
     long firstLane = 0;
     long firstHash = LockExactDirectory.laneHash(2, 1, firstLane, 1);
-    long bucket = fixture.table.state.directory.laneIndex.bucketForTest(firstHash);
+    long bucket = fixture.table.state.directory.laneIndex.bucket(firstHash);
     long collidingLane = 1;
-    while (fixture.table.state.directory.laneIndex.bucketForTest(
+    while (fixture.table.state.directory.laneIndex.bucket(
         LockExactDirectory.laneHash(2, 1, collidingLane, 1)) != bucket) collidingLane++;
     assertEquals(StatusCode.RETRY, fixture.table.enqueue(
         2, 1, 2, firstLane, 1, key(42, LockMode.EXCLUSIVE),

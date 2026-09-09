@@ -1,5 +1,10 @@
 # F0: reproducible empty build
 
+Current validation note (2026-09-09): the historical manual hot-path bytecode
+inventory and SQL-shape occurrence-count checks described below have been
+removed. Use the current Gradle checks, functional tests and measured
+CPU/allocation evidence; do not recreate those inventories.
+
 Status: active
 
 Deliverables: P02, P03

@@ -93,7 +93,7 @@ final class ProtocolSqlRequestCodecTest {
   void roundTripsMaximumDescriptorVarcharParameterBeyondUnsignedShortLength() {
     // VARCHAR is bounded in Unicode scalars while parameter admission is bounded in encoded
     // bytes. A legal value at the descriptor boundary therefore needs more than a u16 length.
-    String value = "\u0800".repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
+    String value = String.valueOf((char) 0x0800).repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
     int utf8Bytes = Math.multiplyExact(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS, 3);
     assertTrue(utf8Bytes > Short.toUnsignedInt((short) -1));
     assertTrue(utf8Bytes <= ParameterSet.MAXIMUM_TEXT_BYTES);
@@ -127,8 +127,8 @@ final class ProtocolSqlRequestCodecTest {
     assertEquals(utf8Bytes, decoded.textLengthAt(0));
     char[] characters = new char[value.length()];
     assertEquals(value.length(), decoded.copyTextAt(0, characters, 0));
-    assertEquals('\u0800', characters[0]);
-    assertEquals('\u0800', characters[characters.length - 1]);
+    assertEquals((char) 0x0800, characters[0]);
+    assertEquals((char) 0x0800, characters[characters.length - 1]);
   }
 
   @Test

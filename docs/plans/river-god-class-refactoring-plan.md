@@ -1,5 +1,10 @@
 # River Large-Class Architecture and Refactoring Plan
 
+Current validation note (2026-09-09): the historical manual hot-path bytecode
+inventory and SQL-shape occurrence-count checks described below have been
+removed. Use the current Gradle checks, functional tests and measured
+CPU/allocation evidence; do not recreate those inventories.
+
 <!-- markdownlint-disable MD013 -->
 
 Status: Implemented through the bounded 2026-08-13 integration checkpoint

@@ -58,8 +58,8 @@ final class SqlDescriptorBlockRowValuesTest {
     assertEquals(StatusCode.OK, rows.load(values));
     assertFalse(rows.row().nullValue(REFERENCED_COLUMN));
     assertEquals(2, rows.row().textLength(REFERENCED_COLUMN));
-    assertEquals('\uD83C', rows.row().textCharacter(REFERENCED_COLUMN, 0));
-    assertEquals('\uDF0A', rows.row().textCharacter(REFERENCED_COLUMN, 1));
+    assertEquals((char) 0xD83C, rows.row().textCharacter(REFERENCED_COLUMN, 0));
+    assertEquals((char) 0xDF0A, rows.row().textCharacter(REFERENCED_COLUMN, 1));
 
     assertEquals(StatusCode.OK, lease.close());
     assertEquals(0, runtime.reservedShapeBytes());
@@ -162,7 +162,7 @@ final class SqlDescriptorBlockRowValuesTest {
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(types, names, nullable, columns));
     TableDescriptor.Result table = new TableDescriptor.Result();
     assertEquals(StatusCode.OK,
-        TableDescriptor.createForTest(columns.value(), null, null, null, table));
+        TableDescriptor.createProposedSuccessor(1, 1, 1, columns.value(), null, null, null, table, null));
     return table.value();
   }
 

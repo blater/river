@@ -94,7 +94,8 @@ public final class KeyDescriptor {
         name, result, detail, true);
   }
 
-  public static io.riverdb.base.error.StatusCode createForTest(
+  /** Creates a privately proposed key whose durable identity is bound at catalog reservation. */
+  public static io.riverdb.base.error.StatusCode createUnbound(
       int kind,
       boolean unique,
       ColumnDescriptorSet columns,
@@ -105,19 +106,6 @@ public final class KeyDescriptor {
     return KeyDescriptorFactory.create(
         0, kind, unique, columns, ordinals, referencedKeyId,
         null, result, detail, false);
-  }
-
-  public static io.riverdb.base.error.StatusCode createNamedForTest(
-      int kind,
-      boolean unique,
-      ColumnDescriptorSet columns,
-      int[] ordinals,
-      long referencedKeyId,
-      CharSequence name,
-      Result result,
-      io.riverdb.base.error.StatusDetail detail) {
-    return createNamedUnbound(
-        kind, unique, columns, ordinals, referencedKeyId, name, result, detail);
   }
 
   /** Creates a privately proposed key whose durable identity is bound at catalog reservation. */
@@ -135,23 +123,23 @@ public final class KeyDescriptor {
         name, result, detail, false);
   }
 
-  public static io.riverdb.base.error.StatusCode createForTest(
+  public static io.riverdb.base.error.StatusCode createUnbound(
       int kind,
       boolean unique,
       ColumnDescriptorSet columns,
       int[] ordinals,
       Result result,
       io.riverdb.base.error.StatusDetail detail) {
-    return createForTest(kind, unique, columns, ordinals, 0, result, detail);
+    return createUnbound(kind, unique, columns, ordinals, 0, result, detail);
   }
 
-  public static io.riverdb.base.error.StatusCode createForTest(
+  public static io.riverdb.base.error.StatusCode createUnbound(
       int kind,
       boolean unique,
       ColumnDescriptorSet columns,
       int[] ordinals,
       Result result) {
-    return createForTest(kind, unique, columns, ordinals, 0, result, null);
+    return createUnbound(kind, unique, columns, ordinals, 0, result, null);
   }
 
   public long keyId() {

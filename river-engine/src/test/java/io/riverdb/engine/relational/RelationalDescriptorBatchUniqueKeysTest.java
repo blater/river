@@ -227,12 +227,12 @@ final class RelationalDescriptorBatchUniqueKeysTest {
         new int[] {SqlTypeDescriptor.BIGINT}, new CharSequence[] {"id"},
         new boolean[] {false}, columns));
     KeyDescriptor.Result primary = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0},
         primary, null));
     TableDescriptor.Result table = new TableDescriptor.Result();
-    assertEquals(StatusCode.OK, TableDescriptor.createForTest(
-        columns.value(), primary.value(), null, null, table));
+    assertEquals(StatusCode.OK, TableDescriptor.createProposedSuccessor(1, 1, 1,
+        columns.value(), primary.value(), null, null, table, null));
     return table.value();
   }
 
