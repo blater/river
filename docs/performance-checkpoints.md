@@ -1173,3 +1173,52 @@ direction and command error reporting. Slopmark after entry-point migration:
 `/private/tmp/river-unified-slopmark-entrypoint.txt`; parser and foreground owner
 unchanged, new dispatcher 31.3175, client runner 6.60964. Installed persistent
 lifecycle and cumulative TPS checks remain required before acceptance.
+
+
+Help slice integrated at `18c353b2` (agent `37a69a0a`). Full client/server module
+tests, module distribution and assembled help alias smoke passed. Root review
+removed help-display-to-parser coupling and duplicate topic definitions, required
+all topic/alias exit checks, and corrected the inherited ps/datadir mismatch.
+
+The installed JVM lifecycle control on GraalVM 25 passed fresh start, CLI commit,
+graceful termination, restart and readback. Evidence directory:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-unified-jvm-smoke-46cirw86`;
+script `/private/tmp/river-jvm-lifecycle-smoke.py`. Owned database was removed.
+The first control used a noncanonical macOS /var alias for the config path and
+was rejected; using the canonical server path passed. This is a test-path fix,
+not an authentication change.
+
+Native feasibility on GraalVM 25.0.4 macOS arm64 produced a roughly 49 MiB image.
+First start exposed a missing FFM downcall registration; adding APFS signatures
+allowed startup to proceed to a later INVARIANT_BROKEN outcome. Native functional
+acceptance and TPS comparison are pending. Native build log:
+`/private/tmp/river-native-evidence-a51d/nativeCompile.log`. No native performance
+or cross-platform support claim is made from a build/help-only result.
+
+
+Unified command/help/default-client acceptance at `ce5ac8b9`:
+
+- Full client/server module tests and assembled help/default-client workflow pass.
+  Default server creation plus bare-client SQL used an isolated user home; startup
+  prints the resolved directory, endpoint and client configuration after readiness.
+- Updated TPS distribution build passed. Matching short samples
+  `unified-help-after-1` and `unified-help-after-2`: **155.8, 156.8 TPS**,
+  checkpoint/status OK, exit 0, reconciliation/capture OK. Artifacts are
+  `/private/tmp/river-unified-help-after-1/` and `...-2/`.
+- Because both short samples were below the first pair, ran a longer matched
+  control/candidate pair with 5-second warmup and 30 measured seconds; all other
+  settings unchanged. Control `af562206`, `unified-control-long-1`: **161.033 TPS**;
+  candidate `ce5ac8b9`, `unified-help-long-1`: **172.533 TPS**. Both completed with
+  status OK and reconciliation/capture OK. Artifacts:
+  `/private/tmp/river-unified-control-long-1/` and
+  `/private/tmp/river-unified-help-long-1/`. The short downward movement did not
+  repeat. Accept the Java command changes without a throughput improvement claim.
+- Final command/help slopmark: `/private/tmp/river-unified-slopmark-help.txt`.
+  Parser 215.049 -> 217.903; foreground 163.184 -> 163.844; new root dispatcher
+  71.357 and command catalog 6.89256; help renderer 42.1454. Cold command-routing
+  responsibilities account for growth; database, credential, transaction and
+  execution owners remain unchanged in these slices. Root review removed the
+  initial duplicated topic policy and display-driven flag parsing.
+
+Native image compatibility/performance remains a separate unfinished acceptance;
+these Java diagnostic samples do not measure the native executable.

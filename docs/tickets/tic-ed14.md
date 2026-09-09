@@ -1,11 +1,13 @@
 ---
 id: tic-ed14
-status: in_progress
+status: closed
 type: story
 priority: 1
 assignee: blater
 parent: tic-bf0b
 delivery: code
+branch: ticket/tic-ed14-unified-river-command
+delivered-commit: 39c9df6d
 tags:
     - cli
     - server
@@ -35,7 +37,7 @@ completeness pass; tic-a51d then delivers the native executable.
 - Expose `river version` using the existing distribution version owner; retain
   the server version operation as `river server version`. Reserve these root
   command words; an identically named client file remains usable by explicit
-  path, such as `./server`.
+  path, such as `/absolute/path/server`.
 
 ## Implementation boundary
 
@@ -69,3 +71,14 @@ durability, service installation or remote-listening changes belong here.
 
 Use branch `ticket/tic-ed14-unified-river-command` and the normal ticket commit
 trailer. Deliver only the executable entry-point migration on the JVM.
+
+## Delivery evidence (2026-09-09)
+
+Implemented and reviewed on the unified-command integration branch. Client/server
+module tests, module graph and installed workflow checks passed. Root exercised
+fresh startup, CLI commit, graceful shutdown, restart and readback on GraalVM 25.
+Help/default-client acceptance also includes all topic/alias forms and bare-client
+SQL against an isolated default instance. The performance ledger records short
+TPS pairs, the longer control/candidate follow-up and slopmark review. Java
+command changes are accepted without a TPS improvement claim; native packaging
+and its compatibility/performance validation remain in tic-a51d.

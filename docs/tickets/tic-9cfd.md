@@ -1,11 +1,13 @@
 ---
 id: tic-9cfd
-status: in_progress
+status: closed
 type: story
 priority: 1
 assignee: blater
 parent: tic-bf0b
 delivery: code
+branch: ticket/tic-9cfd-hierarchical-help
+delivered-commit: ce5ac8b9
 tags:
     - cli
     - help
@@ -56,7 +58,7 @@ Unknown topics, commands, misplaced options, duplicate/conflicting options and
 invalid values return exit 2 with a concise error and relevant usage. Help and
 version exit 0 without connecting, opening a listener, reading credentials or
 changing instance files. Reserved root words are commands/help; a client file
-with such a name can be selected using an explicit path such as `./server`.
+with such a name can be selected using an explicit path such as `/absolute/path/server`.
 
 The table is the complete current inventory, not a start-only checklist. Any
 command present at implementation time must receive equivalent coverage.
@@ -98,3 +100,29 @@ still own stop, listing and renewal; no audit command is introduced.
 Use branch `ticket/tic-9cfd-hierarchical-help` and the normal ticket commit
 trailer. Follow tic-ed14 and precede native packaging tic-a51d. No interactive
 shell, new lifecycle commands, authentication changes or distribution redesign.
+
+## User clarification: ergonomic defaults (2026-09-09)
+
+Bare `river` connects using the default instance's generated client configuration
+under `~/.river/default/security/client.properties`. An explicit absolute client
+configuration path selects another instance. If the default configuration is
+missing, report its path and suggest `river server start`; do not silently create
+a server or search unrelated instances. This supersedes the earlier missing-
+argument behavior after the entry-point-only slice. SQL remains stdin driven.
+
+Default server start must report resolved data directory, actual listening
+address/port and client configuration path in a concise human-readable startup
+summary. Preserve existing machine-readable readiness records and their ordering;
+human diagnostics do not control startup success or durability. Help shows the
+same defaults and gives a simple default start/connect example.
+
+## Delivery evidence (2026-09-09)
+
+Implemented and reviewed on the unified-command integration branch. Client/server
+module tests, module graph and installed workflow checks passed. Root exercised
+fresh startup, CLI commit, graceful shutdown, restart and readback on GraalVM 25.
+Help/default-client acceptance also includes all topic/alias forms and bare-client
+SQL against an isolated default instance. The performance ledger records short
+TPS pairs, the longer control/candidate follow-up and slopmark review. Java
+command changes are accepted without a TPS improvement claim; native packaging
+and its compatibility/performance validation remain in tic-a51d.

@@ -1,6 +1,6 @@
 ---
 id: tic-a51d
-status: open
+status: in_progress
 type: story
 priority: 1
 assignee: blater
