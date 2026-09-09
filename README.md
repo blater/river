@@ -87,7 +87,7 @@ The main sources for these limits are
 
 ## What remains unfinished
 
-The current `riverd start` candidate workflow has been validated on
+The current `river server start` candidate workflow has been validated on
 macOS/APFS and Linux/ext4/XFS. Windows/NTFS validation remains pending. SQL/
 security audit collection is deferred pending a concrete performance-neutral
 design. The foreground server creates or reopens
@@ -110,23 +110,23 @@ still required for performance and cross-database comparisons.
 
 Building River requires JDK 25. Gradle verifies dependency checksums.
 
-Build the server and SQL client distributions:
+Build the River distribution:
 
 ```sh
-./gradlew :river-server-app:installDist :river-cli:installDist
+./gradlew :river-server-app:installDist
 ```
 
 Start the candidate server in the foreground. It writes the
 generated client configuration under its data directory:
 
 ```sh
-river-server-app/build/install/riverd/bin/riverd start --datadir=/absolute/path/to/database --port=9191
+river-server-app/build/install/river/bin/river server start --datadir=/absolute/path/to/database --port=9191
 ```
 
 Use the reported `security/client.properties` path with the SQL client or JDBC:
 
 ```sh
-river-cli/build/install/river-cli/bin/river-cli /absolute/path/to/database/security/client.properties < setup.sql
+river-server-app/build/install/river/bin/river /absolute/path/to/database/security/client.properties < setup.sql
 ```
 
 The CLI reads semicolon-terminated SQL, emits tab-separated rows, and stops at

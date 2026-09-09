@@ -1,39 +1,38 @@
 package io.riverdb.server.app;
 
 import io.riverdb.base.error.StatusCode;
+import java.io.PrintStream;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Installed riverd process entry point. */
+/** Callable owner for the server command and its lifecycle. */
 public final class RiverdMain {
   private static final AtomicBoolean failureReported = new AtomicBoolean();
 
   private RiverdMain() { }
 
-  public static void main(String[] arguments) {
-    System.exit(run(arguments));
-  }
-
-  static int run(String[] arguments) {
+  static int run(String[] arguments, PrintStream output, PrintStream errors) {
     RiverdCommandResult command = new RiverdCommandResult();
     StatusCode status = RiverdCommandParser.parse(arguments, command);
     if (!status.isOk()) {
-      System.err.print(RiverdCommandHelp.brief(command.helpTopic()));
-      reportFailure(status, command.diagnostic());
+      errors.print(RiverdCommandHelp.brief(command.helpTopic()));
+      reportCommandFailure(status, command.diagnostic(), errors);
       return command.exitCode(status);
     }
     switch (command.command()) {
-      case BRIEF_HELP -> System.out.print(RiverdCommandHelp.brief(command.helpTopic()));
-      case FULL_HELP -> System.out.print(RiverdCommandHelp.full(command.helpTopic()));
-      case VERSION -> System.out.print(RiverdCommandHelp.version(RiverDaemonVersion.value()));
+      case BRIEF_HELP -> output.print(RiverdCommandHelp.brief(command.helpTopic()));
+      case FULL_HELP -> output.print(RiverdCommandHelp.full(command.helpTopic()));
+      case VERSION -> output.print(RiverdCommandHelp.version(RiverDaemonVersion.value()));
       case START -> {
         StatusCode start = RiverdForeground.run(command, Path.of(System.getProperty("user.home")));
-        if (!start.isOk()) reportFailure(start, "riverd could not complete the requested lifecycle");
+        if (!start.isOk()) {
+          reportFailure(start, "river server could not complete the requested lifecycle", errors);
+        }
         return command.exitCode(start);
       }
       default -> {
-        reportFailure(StatusCode.FEATURE_NOT_SUPPORTED,
-            "riverd command is unavailable in this milestone");
+        reportCommandFailure(StatusCode.FEATURE_NOT_SUPPORTED,
+            "river server command is unavailable in this milestone", errors);
         return 1;
       }
     }
@@ -42,10 +41,22 @@ public final class RiverdMain {
 
   /** Main and the shutdown hook share one final failure record, including signal-driven shutdown. */
   static void reportFailure(StatusCode status, String diagnostic) {
+    reportFailure(status, diagnostic, System.err);
+  }
+
+  private static void reportCommandFailure(
+      StatusCode status, String diagnostic, PrintStream errors) {
+    if (diagnostic != null) errors.println(diagnostic);
+    errors.println("riverd_status_code=" + status.stableCode());
+    errors.println("riverd_status=" + status);
+    errors.flush();
+  }
+
+  private static void reportFailure(StatusCode status, String diagnostic, PrintStream errors) {
     if (!failureReported.compareAndSet(false, true)) return;
-    if (diagnostic != null) System.err.println(diagnostic);
-    System.err.println("riverd_status_code=" + status.stableCode());
-    System.err.println("riverd_status=" + status);
-    System.err.flush();
+    if (diagnostic != null) errors.println(diagnostic);
+    errors.println("riverd_status_code=" + status.stableCode());
+    errors.println("riverd_status=" + status);
+    errors.flush();
   }
 }

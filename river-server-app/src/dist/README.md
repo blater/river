@@ -1,10 +1,10 @@
-# River server
+# River
 
-Use Java 25. Run `bin/riverd help` (`bin/riverd.bat help` on Windows)
-for commands and options. The server runs in the foreground:
+Use Java 25. Run `bin/river server --help` (`bin/river.bat server --help` on
+Windows) for server commands and options. The server runs in the foreground:
 
 ```sh
-bin/riverd start --port=9191
+bin/river server start --port=9191
 ```
 
 First start creates persistent data and credentials under `~/.river/default`.
@@ -29,6 +29,6 @@ try (var connection = java.sql.DriverManager.getConnection(
 }
 ```
 
-`stop`, `ps` and credential renewal are later deliveries. Their
+`server stop`, `server ps` and credential renewal are later deliveries. Their
 help is available, but the commands are not implemented in this candidate.
 PostgreSQL clients and remote addresses are not supported yet.

@@ -4,8 +4,8 @@ plugins {
 }
 
 application {
-  mainClass.set("io.riverdb.server.app.RiverdMain")
-  applicationName = "riverd"
+  mainClass.set("io.riverdb.server.app.RiverMain")
+  applicationName = "river"
   applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED", "-Xmx1g")
 }
 

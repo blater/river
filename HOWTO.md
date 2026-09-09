@@ -1,6 +1,6 @@
 # River database how-to
 
-River is a pre-V1 database with an installed foreground `riverd` workflow, an
+River is a pre-V1 database with an installed foreground `river server` workflow, an
 embedded Java API, JDBC, and a script-oriented SQL client. The installed
 server creates or reopens one authenticated local instance and publishes the
 client configuration needed by JDBC and the SQL client.
@@ -11,7 +11,7 @@ JDK 25 is required. Start the server in the foreground with a persistent data
 directory:
 
 ```sh
-riverd start --datadir=/absolute/path/to/database --port=9191
+river server start --datadir=/absolute/path/to/database --port=9191
 ```
 
 The first start creates the database and credentials. Later starts reopen the
@@ -78,7 +78,7 @@ lifetime; embedded callers should close the database after their sessions.
 Build the SQL client distribution:
 
 ```sh
-./gradlew --no-daemon :river-cli:installDist
+./gradlew --no-daemon :river-server-app:installDist
 ```
 
 Put semicolon-terminated SQL in `setup.sql`, for example:
@@ -101,7 +101,7 @@ CHECKPOINT;
 Run it against the generated client configuration:
 
 ```sh
-river-cli/build/install/river-cli/bin/river-cli \
+river-server-app/build/install/river/bin/river \
   /absolute/path/to/database/security/client.properties < setup.sql
 ```
 

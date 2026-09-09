@@ -11,13 +11,15 @@ public final class RiverSqlMain {
   private RiverSqlMain() {
   }
 
-  public static void main(String[] arguments) {
-    int exit = arguments.length == 1
-        ? runClientFile(arguments[0], System.in, System.out, System.err)
-        : usage(System.err);
-    if (exit != 0) {
-      System.exit(exit);
+  public static int run(
+      String[] arguments,
+      InputStream input,
+      PrintStream output,
+      PrintStream errors) {
+    if (arguments != null && arguments.length == 1) {
+      return runClientFile(arguments[0], input, output, errors);
     }
+    return usage(errors);
   }
 
   public static int runClientFile(
@@ -29,7 +31,7 @@ public final class RiverSqlMain {
   }
 
   private static int usage(PrintStream errors) {
-    errors.println("usage: river-sql CLIENT_PROPERTIES < script.sql");
+    errors.println("usage: river CLIENT_PROPERTIES < script.sql");
     return 2;
   }
 
