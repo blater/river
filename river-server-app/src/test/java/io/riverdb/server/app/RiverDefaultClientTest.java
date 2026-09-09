@@ -42,7 +42,7 @@ final class RiverDefaultClientTest {
     assertTrue(summary.contains("endpoint: [::1]:9191"));
     assertTrue(summary.contains("client configuration: " + datadir.resolve(
         "security/client.properties")));
-    assertTrue(summary.contains("maximum connections=16"));
+    assertTrue(summary.contains("maximum connections: 16"));
   }
 
   private static Invocation invoke(Path home) {

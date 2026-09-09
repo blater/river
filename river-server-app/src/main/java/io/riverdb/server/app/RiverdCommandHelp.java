@@ -24,13 +24,13 @@ public final class RiverdCommandHelp {
   private static String root() {
     return "River is the local SQL client and authenticated River server command.\n"
         + "\nUsage:\n"
-        + "  river CLIENT_PROPERTIES < script.sql\n"
+        + "  river [CLIENT_PROPERTIES] < script.sql\n"
         + "  river server <command> [options]\n"
         + "  river version\n\n"
         + "The default mode reads semicolon-terminated SQL from stdin, writes tab-separated\n"
-        + "results to stdout, and stops on the first error. CLIENT_PROPERTIES is the generated\n"
-        + "security/client.properties path published by `river server start`; use an explicit\n"
-        + "path such as /absolute/path/server when a client file has a reserved command name.\n"
+        + "results to stdout, and stops on the first error. Without CLIENT_PROPERTIES it uses\n"
+        + "~/.river/default/security/client.properties. An explicit path selects another instance;\n"
+        + "use an absolute path such as /absolute/path/server when a client file has a reserved name.\n"
         + "All topics accept `-h` and `--help`; `river help <topic>` is equivalent.\n\n"
         + "Examples:\n"
         + "  river /path/to/security/client.properties < setup.sql\n"
@@ -71,7 +71,8 @@ public final class RiverdCommandHelp {
         .append("Usage: ").append(RiverCommandCatalog.usage(spec)).append("\n\n");
     if (!spec.available) output.append("Availability: unavailable in this milestone.\n\n");
     if (spec == RiverCommandCatalog.CLI) {
-      output.append("CLIENT_PROPERTIES is an absolute path to the generated security/client.properties.\n"
+      output.append("CLIENT_PROPERTIES is an absolute path to the generated security/client.properties;\n"
+          + "when omitted, the default is ~/.river/default/security/client.properties.\n"
           + "SQL is framed by semicolons from stdin; output is tab-separated rows and ROWS counts.\n"
           + "Execution stops on the first SQL or connection error. Statements are limited to "
           + RiverSqlMain.MAXIMUM_STATEMENT_CHARACTERS + " Java characters.\n"

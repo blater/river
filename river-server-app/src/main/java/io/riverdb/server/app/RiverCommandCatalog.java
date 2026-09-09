@@ -22,7 +22,7 @@ final class RiverCommandCatalog {
       (DEFAULT_TIMEOUT_MILLIS / 1_000) + "s",
       "Positive decimal duration with ms, s, or m units, fitting signed-long milliseconds; zero, missing units, and overflow are rejected.");
 
-  static final Spec CLI = new Spec("cli", "river CLIENT_PROPERTIES < script.sql",
+  static final Spec CLI = new Spec("cli", "river [CLIENT_PROPERTIES] < script.sql",
       "Run SQL from stdin using a generated client configuration.", true, List.of(), List.of());
   static final Spec HELP = new Spec("help", "river help [TOPIC...]", "Navigate command help.", true,
       List.of(), List.of());
@@ -46,7 +46,7 @@ final class RiverCommandCatalog {
   static final Spec SERVER = new Spec("server", "river server <command> [options]",
       "Run or inspect one authenticated local River instance.", true, List.of(),
       List.of(START, STOP, PS, CREDENTIALS, SERVER_VERSION));
-  static final Spec ROOT = new Spec("", "river CLIENT_PROPERTIES < script.sql",
+  static final Spec ROOT = new Spec("", "river [CLIENT_PROPERTIES] < script.sql",
       "The River client and local server command.", true, List.of(),
       List.of(CLI, SERVER, VERSION, HELP));
 

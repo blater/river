@@ -3,6 +3,7 @@ package io.riverdb.server.app;
 import io.riverdb.cli.RiverSqlMain;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.nio.file.Path;
 import java.util.Arrays;
 
 /** The installed River command composition root. */
@@ -18,6 +19,10 @@ public final class RiverMain {
       InputStream input,
       PrintStream output,
       PrintStream errors) {
+    if (arguments != null && arguments.length == 0) {
+      return RiverDefaultClient.run(
+          input, output, errors, Path.of(System.getProperty("user.home")));
+    }
     if (arguments != null && arguments.length > 0) {
       String command = arguments[0];
       if ("server".equals(command)) {

@@ -16,7 +16,7 @@ maps implementation work.
 ## Commands
 
 ```text
-river CLIENT_PROPERTIES < script.sql
+river [CLIENT_PROPERTIES] < script.sql
 river help [TOPIC...]
 river version
 river server
@@ -36,8 +36,9 @@ There is no separate instance name or `--instance` option.
 ## Help
 
 - `river`, `river -h`, and `river --help` print identical top-level help. Bare `river`
-  remains the default client invocation and reports its required client configuration
-  when no path is supplied.
+  runs SQL through the default instance configuration at
+  `~/.river/default/security/client.properties`; a missing configuration suggests
+  `river server start`.
 - `river help <topic>`, `river -h <topic>`, and `river --help <topic>` are equivalent
   to the topic's trailing `-h` or `--help` form. Examples include `river help cli`,
   `river help server`, `river server start --help`, and
@@ -46,7 +47,10 @@ There is no separate instance name or `--instance` option.
   option, aliases, value syntax, defaults, constraints, effects and a copyable example.
 - Help and version exit successfully without connecting, opening a listener, reading
   credentials or changing instance files.
-- Help and version exit successfully without changing state.
+
+The default client reads semicolon-terminated SQL from stdin, writes tab-separated rows
+and `ROWS` counts to stdout, and stops on the first error. An explicit absolute
+`CLIENT_PROPERTIES` path selects another instance.
 
 Help must explain the supported workflow in plain language, with copyable
 examples. Unknown options, duplicate/conflicting options, extra arguments,

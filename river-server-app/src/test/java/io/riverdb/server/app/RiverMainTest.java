@@ -1,12 +1,15 @@
 package io.riverdb.server.app;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 final class RiverMainTest {
   @Test
@@ -21,11 +24,22 @@ final class RiverMainTest {
   }
 
   @Test
-  void bareRootKeepsClientUsageAndExitCode() {
-    Invocation invocation = invoke();
+  void bareRootUsesDefaultClientAndSuggestsStartingIt(@TempDir Path home) {
+    String previous = System.getProperty("user.home");
+    System.setProperty("user.home", home.toString());
+    Invocation invocation;
+    try {
+      invocation = invoke();
+    } finally {
+      if (previous == null) System.clearProperty("user.home");
+      else System.setProperty("user.home", previous);
+    }
 
-    assertEquals(2, invocation.exit);
-    assertEquals("usage: river CLIENT_PROPERTIES < script.sql\n", invocation.error);
+    assertEquals(1, invocation.exit);
+    assertTrue(invocation.error.contains(
+        home.toAbsolutePath().normalize()
+            .resolve(".river/default/security/client.properties").toString()));
+    assertTrue(invocation.error.contains("river server start"));
     assertEquals("", invocation.output);
   }
 
