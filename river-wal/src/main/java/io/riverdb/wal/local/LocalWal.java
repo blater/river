@@ -24,6 +24,7 @@ public final class LocalWal {
   public static final String FILE_NAME = "river.wal";
 
   private DurableFile file;
+  private LocalWalMappedTail mappedTail = new LocalWalMappedTail();
   private final DatabaseIncarnation databaseIncarnation;
   private WalGeneration walGeneration;
   private String fileName;
@@ -658,10 +659,7 @@ public final class LocalWal {
   }
 
   private StatusCode truncateTail(long validEnd, long sequence) {
-    StatusCode status = file.truncate(validEnd);
-    if (status.isOk()) {
-      status = forceFile(LocalWalForceCause.RECOVERY_MAINTENANCE, validEnd);
-    }
+    StatusCode status = forceFile(LocalWalForceCause.RECOVERY_MAINTENANCE, validEnd, validEnd);
     if (status.isOk()) {
       tailEnd = validEnd;
       durableEnd = validEnd;
@@ -755,6 +753,12 @@ public final class LocalWal {
   StatusCode readFileSize() {
     return file.size(fileSizeResult);
   }
+
+  StatusCode loadMappedTail() {
+    return mappedTail.load(file, fileSizeResult.sizeBytes());
+  }
+
+  long logicalFileSizeBytes() { return mappedTail.logicalEnd(); }
 
   long fileSizeBytes() {
     return fileSizeResult.sizeBytes();
@@ -850,8 +854,13 @@ public final class LocalWal {
   }
 
   private StatusCode forceFile(LocalWalForceCause cause, long coveredBytes) {
+    return forceFile(cause, coveredBytes, tailEnd);
+  }
+
+  private StatusCode forceFile(LocalWalForceCause cause, long coveredBytes, long logicalEnd) {
     long started = System.nanoTime();
     StatusCode status = file.force(ForceMode.CONTENT_AND_METADATA);
+    if (status.isOk()) status = mappedTail.persist(file, logicalEnd);
     forceMetrics.record(cause, coveredBytes, System.nanoTime() - started, status);
     return status;
   }
@@ -899,6 +908,7 @@ public final class LocalWal {
     file = replacement.file;
     fileName = nextFileName;
     walGeneration = nextGeneration;
+    mappedTail = replacement.mappedTail;
     tailEnd = replacement.tailEnd;
     durableEnd = replacement.durableEnd;
     nextJournalSequence = replacement.nextJournalSequence;

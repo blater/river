@@ -27,6 +27,7 @@ import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -64,7 +65,7 @@ final class DatabaseControlStoreTest {
     DirectoryOperationResult operation = new DirectoryOperationResult();
     assertEquals(
         StatusCode.OK,
-        directory.reopen(DatabaseControlStore.CONTROL_FILE_NAME, operation));
+        directory.reopen(DatabaseControlStore.CONTROL_FILE_NAME, FileIoMode.POSITIONAL, operation));
     DurableFile file = operation.file();
     IoResult io = new IoResult();
     assertEquals(StatusCode.OK, file.write(31, ByteBuffer.wrap(new byte[] {1}), io));
@@ -250,7 +251,7 @@ final class DatabaseControlStoreTest {
     }
 
     private void createDurable(String name, byte[] content) {
-      assertEquals(StatusCode.OK, directory.createFile(name, operation));
+      assertEquals(StatusCode.OK, directory.createFile(name, FileIoMode.POSITIONAL, operation));
       DurableFile file = operation.file();
       assertEquals(StatusCode.OK, file.write(0, ByteBuffer.wrap(content), io));
       assertEquals(content.length, io.bytesTransferred());

@@ -20,6 +20,7 @@ import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.zip.CRC32C;
@@ -43,7 +44,7 @@ final class SinglePageStoreTest {
     assertTrue(store.isDirty());
 
     DirectoryOperationResult rawResult = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.reopen(SinglePageStore.FILE_NAME, rawResult));
+    assertEquals(StatusCode.OK, directory.reopen(SinglePageStore.FILE_NAME, FileIoMode.POSITIONAL, rawResult));
     DurableFile raw = rawResult.file();
     ByteBuffer onDisk = ByteBuffer.allocate(PageCodec.PAGE_BYTES);
     IoResult io = new IoResult();
@@ -91,7 +92,7 @@ final class SinglePageStoreTest {
     assertEquals(StatusCode.OK, store.close());
 
     DirectoryOperationResult rawResult = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.reopen(SinglePageStore.FILE_NAME, rawResult));
+    assertEquals(StatusCode.OK, directory.reopen(SinglePageStore.FILE_NAME, FileIoMode.POSITIONAL, rawResult));
     DurableFile raw = rawResult.file();
     IoResult io = new IoResult();
     assertEquals(

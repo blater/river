@@ -777,7 +777,7 @@ final class IndexedTransactionSessionTest {
       Future<StatusCode> secondCommit = executor.submit(() -> second.commit(secondOutcome));
       assertEquals(StatusCode.OK, firstCommit.get());
       assertEquals(StatusCode.OK, secondCommit.get());
-      assertEquals(1, counters.forceCalls() - forcesBefore);
+      assertEquals(2, counters.forceCalls() - forcesBefore);
       assertEquals(StatusCode.OK, insert.get());
     } finally {
       executor.shutdownNow();
@@ -1576,7 +1576,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
     assertTrue(telemetry.reconciles());
     assertEquals(
-        1, counters.forceCalls() - forcesBefore,
+        2, counters.forceCalls() - forcesBefore,
         "groupCohorts=" + telemetry.successfulGroupCohorts()
             + " sharedTransactions=" + telemetry.successfulGroupTransactions()
             + " direct=" + telemetry.directCommitTransactions()
@@ -2006,7 +2006,7 @@ final class IndexedTransactionSessionTest {
     IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
     assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
     assertEquals(
-        1, counters.forceCalls() - forcesBefore,
+        2, counters.forceCalls() - forcesBefore,
         "groupCohorts=" + telemetry.successfulGroupCohorts()
             + " sharedTransactions=" + telemetry.successfulGroupTransactions()
             + " direct=" + telemetry.directCommitTransactions()
@@ -2183,7 +2183,7 @@ final class IndexedTransactionSessionTest {
     } finally {
       executor.shutdownNow();
     }
-    assertEquals(1, counters.forceCalls() - forcesBefore);
+    assertEquals(2, counters.forceCalls() - forcesBefore);
     assertEquals(2L * Long.BYTES, store.walCopyBytes() - walCopiesBefore);
     assertEquals(
         2L * Long.BYTES,

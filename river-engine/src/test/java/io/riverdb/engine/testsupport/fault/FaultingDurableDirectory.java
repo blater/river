@@ -7,6 +7,7 @@ import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
+import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
@@ -56,6 +57,7 @@ public final class FaultingDurableDirectory implements DurableDirectory {
   @Override
   public synchronized StatusCode createFile(
       String fileName,
+      FileIoMode mode,
       DirectoryOperationResult result) {
     return createEntry(fileName, false, DirectoryOperation.CREATE_FILE, result);
   }
@@ -292,7 +294,8 @@ public final class FaultingDurableDirectory implements DurableDirectory {
   }
 
   @Override
-  public synchronized StatusCode reopen(String fileName, DirectoryOperationResult result) {
+  public synchronized StatusCode reopen(
+      String fileName, FileIoMode mode, DirectoryOperationResult result) {
     result.reset();
     DirectoryOperation operation = DirectoryOperation.REOPEN;
     if (!running) {

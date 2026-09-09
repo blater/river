@@ -29,7 +29,7 @@ public final class RiverMain {
         return RiverdMain.run(
             Arrays.copyOfRange(arguments, 1, arguments.length), output, errors);
       }
-      if ("stop".equals(command) || "ps".equals(command)) {
+      if ("start".equals(command) || "stop".equals(command) || "ps".equals(command)) {
         return RiverdMain.run(arguments, output, errors);
       }
       if ("version".equals(command)) {

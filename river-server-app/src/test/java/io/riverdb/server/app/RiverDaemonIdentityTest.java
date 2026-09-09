@@ -60,16 +60,6 @@ final class RiverDaemonIdentityTest {
   }
 
   @Test
-  void commandControlCharacterIsRejectedBeforeFilesystemMutation(@TempDir Path root) {
-    Path datadir = root.resolve("instance").toAbsolutePath().normalize();
-    RiverDaemonIdentity.IdentityResult result = new RiverDaemonIdentity.IdentityResult();
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, RiverDaemonIdentity.beginCreate(
-        datadir, new ApfsRiverDaemonFileSystem(), INCARNATION, new SecureRandom(),
-        currentPid(), currentStart(), "/usr/bin/java\ncorrupt", result));
-    assertFalse(Files.exists(datadir));
-  }
-
-  @Test
   void restartHandoffRetainsPriorRecordThenPublishesCurrentOwnerThroughApfs(@TempDir Path root)
       throws Exception {
     Assumptions.assumeTrue("Mac OS X".equals(System.getProperty("os.name")));
@@ -78,7 +68,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult created = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-        "/usr/bin/java", created));
+        created));
     assertEquals(StatusCode.OK, RiverDaemonIdentity.completeCreate(created));
     assertEquals(StatusCode.OK, created.close());
     Path lockPath = datadir.resolve(RiverDaemonIdentity.LOCK_FILE);
@@ -87,7 +77,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult reopened = new RiverDaemonIdentity.IdentityResult();
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(
-          datadir, filesystem, new SecureRandom(), currentPid(), currentStart(), currentCommand(),
+          datadir, filesystem, new SecureRandom(), currentPid(), currentStart(),
           reopened));
       assertEquals(INCARNATION, reopened.incarnation());
       assertTrue(reopened.needsOwnerHandoff());
@@ -97,7 +87,6 @@ final class RiverDaemonIdentityTest {
           Files.readAllBytes(lockPath));
       assertEquals(currentPid(), current.pid);
       assertEquals(currentStart(), current.start);
-      assertEquals(currentCommand(), current.command);
       assertEquals(INCARNATION.high(), current.high);
       assertEquals(INCARNATION.low(), current.low);
       assertTrue(!priorBytes.equals(Files.readString(lockPath)));
@@ -114,14 +103,14 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult first = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-        "/usr/bin/java", first));
+        first));
     assertEquals(StatusCode.OK, first.close());
 
     RiverDaemonIdentity.IdentityResult resumed = new RiverDaemonIdentity.IdentityResult();
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           datadir, filesystem, DatabaseIncarnation.of(31, 47), new SecureRandom(),
-          currentPid(), currentStart(), currentCommand(), resumed));
+          currentPid(), currentStart(), resumed));
       assertEquals(INCARNATION, resumed.incarnation());
       assertEquals(StatusCode.OK, RiverDaemonIdentity.completeCreate(resumed));
       assertTrue(Files.isRegularFile(datadir.resolve(RiverDaemonIdentity.INSTANCE_FILE)));
@@ -143,7 +132,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           torn, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-          "/usr/bin/java", tornResult));
+          tornResult));
       assertTrue(Files.exists(torn.resolve("bootstrap.properties")));
       RiverDaemonIdentityRecords.LockRecord rewritten = RiverDaemonIdentityRecords.parseLock(
           Files.readAllBytes(torn.resolve(RiverDaemonIdentity.LOCK_FILE)));
@@ -153,7 +142,7 @@ final class RiverDaemonIdentityTest {
       RiverDaemonIdentity.IdentityResult reopened = new RiverDaemonIdentity.IdentityResult();
       try {
         assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(
-            torn, filesystem, new SecureRandom(), currentPid(), currentStart(), currentCommand(),
+            torn, filesystem, new SecureRandom(), currentPid(), currentStart(),
             reopened));
         assertEquals(INCARNATION, reopened.incarnation());
       } finally {
@@ -170,7 +159,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           empty, filesystem, INCARNATION, new SecureRandom(), currentPid(), currentStart(),
-          currentCommand(), emptyResult));
+          emptyResult));
       assertTrue(Files.exists(empty.resolve("bootstrap.properties")));
     } finally {
       emptyResult.close();
@@ -186,13 +175,12 @@ final class RiverDaemonIdentityTest {
             "database-incarnation-low=" + INCARNATION.low(),
             "pid=" + currentPid(),
             "process-start-epoch-millis=" + currentStart(),
-            "command=" + currentCommand(),
             "owner-nonce=0123456789abcdef0123456789abcdef")));
     RiverDaemonIdentity.IdentityResult liveResult = new RiverDaemonIdentity.IdentityResult();
     try {
       assertEquals(StatusCode.CONFLICT, RiverDaemonIdentity.beginCreate(
           live, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-          "/usr/bin/java", liveResult));
+          liveResult));
       assertFalse(Files.exists(live.resolve("bootstrap.properties")));
     } finally {
       liveResult.close();
@@ -211,7 +199,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.CORRUPTION, RiverDaemonIdentity.beginCreate(
           datadir, new ApfsRiverDaemonFileSystem(), INCARNATION, new SecureRandom(),
-          currentPid(), currentStart(), currentCommand(), result));
+          currentPid(), currentStart(), result));
       assertFalse(Files.exists(datadir.resolve(RiverDaemonIdentity.LOCK_FILE)));
       assertFalse(Files.exists(datadir.resolve("bootstrap.properties")));
       assertEquals("preserve", Files.readString(unknown));
@@ -235,7 +223,6 @@ final class RiverDaemonIdentityTest {
             "database-incarnation-low=" + INCARNATION.low(),
             "pid=999999999",
             "process-start-epoch-millis=0",
-            "command=/usr/bin/java",
             "owner-nonce=" + nonce)));
     writePrivate(datadir.resolve(".bootstrap-" + nonce + ".stage"),
         RiverDaemonIdentityRecords.record(java.util.List.of(
@@ -244,7 +231,6 @@ final class RiverDaemonIdentityTest {
             "database-incarnation-low=" + INCARNATION.low(),
             "pid=999999999",
             "process-start-epoch-millis=0",
-            "command=/usr/bin/java",
             "attempt-nonce=" + nonce,
             "database-name=database",
             "security-name=security",
@@ -255,7 +241,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           datadir, new ApfsRiverDaemonFileSystem(), DatabaseIncarnation.of(31, 47),
-          new SecureRandom(), currentPid(), currentStart(), currentCommand(), result));
+          new SecureRandom(), currentPid(), currentStart(), result));
       assertFalse(Files.exists(datadir.resolve(".bootstrap-" + nonce + ".stage")));
       assertTrue(Files.exists(datadir.resolve("bootstrap.properties")));
     } finally {
@@ -279,7 +265,6 @@ final class RiverDaemonIdentityTest {
             "database-incarnation-low=" + INCARNATION.low(),
             "pid=999999999",
             "process-start-epoch-millis=0",
-            "command=/usr/bin/java",
             "owner-nonce=" + lockNonce)));
     writePrivate(datadir.resolve(".bootstrap-" + stageNonce + ".stage"),
         RiverDaemonIdentityRecords.record(java.util.List.of(
@@ -288,7 +273,6 @@ final class RiverDaemonIdentityTest {
             "database-incarnation-low=" + INCARNATION.low(),
             "pid=999999999",
             "process-start-epoch-millis=0",
-            "command=/usr/bin/java",
             "attempt-nonce=" + stageNonce,
             "database-name=database",
             "security-name=security",
@@ -299,7 +283,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.CORRUPTION, RiverDaemonIdentity.beginCreate(
           datadir, new ApfsRiverDaemonFileSystem(), DatabaseIncarnation.of(31, 47),
-          new SecureRandom(), currentPid(), currentStart(), currentCommand(), result));
+          new SecureRandom(), currentPid(), currentStart(), result));
       assertTrue(Files.exists(datadir.resolve(".bootstrap-" + stageNonce + ".stage")));
       assertFalse(Files.exists(datadir.resolve("bootstrap.properties")));
     } finally {
@@ -317,7 +301,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-          "/usr/bin/java", result));
+          result));
       filesystem.armCommitForceFailure();
       assertEquals(StatusCode.IO_FAILURE, RiverDaemonIdentity.completeCreate(result));
       assertTrue(Files.exists(datadir.resolve(RiverDaemonIdentity.INSTANCE_FILE)));
@@ -336,7 +320,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult first = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-        "/usr/bin/java", first));
+        first));
     String nonce = first.nonce();
     for (String name : new String[] {RiverDaemonIdentity.DATABASE_NAME,
         RiverDaemonIdentity.SECURITY_NAME}) {
@@ -363,7 +347,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult reopened = new RiverDaemonIdentity.IdentityResult();
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(
-          datadir, filesystem, new SecureRandom(), currentPid(), currentStart(), currentCommand(),
+          datadir, filesystem, new SecureRandom(), currentPid(), currentStart(),
           reopened));
       // The owning component consumers have validated database and security here.
       assertEquals(StatusCode.OK, RiverDaemonIdentity.cleanupCommittedResidue(reopened));
@@ -383,7 +367,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult first = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-        "/usr/bin/java", first));
+        first));
     assertEquals(StatusCode.OK, first.close());
     Path unknown = datadir.resolve("unexpected");
     writePrivate(unknown, "preserve");
@@ -391,7 +375,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult retry = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.CORRUPTION, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, DatabaseIncarnation.of(31, 47), new SecureRandom(),
-        999_999_999L, 0, "/usr/bin/java", retry));
+        999_999_999L, 0, retry));
     assertEquals("preserve", Files.readString(unknown));
     retry.close();
   }
@@ -405,7 +389,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult first = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-        "/usr/bin/java", first));
+        first));
     DirectoryOperationResult publication = new DirectoryOperationResult();
     assertEquals(StatusCode.OK, first.directory().publishDirectoryExclusive(
         first.staging(), first.database(), RiverDaemonIdentity.DATABASE_NAME,
@@ -417,7 +401,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           datadir, filesystem, DatabaseIncarnation.of(31, 47), new SecureRandom(),
-          currentPid(), currentStart(), currentCommand(), resumed));
+          currentPid(), currentStart(), resumed));
       assertEquals(INCARNATION, resumed.incarnation());
       assertEquals(StatusCode.OK, RiverDaemonIdentity.completeCreate(resumed));
     } finally {
@@ -434,7 +418,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult first = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-        "/usr/bin/java", first));
+        first));
     String nonce = first.nonce();
     assertEquals(StatusCode.OK, first.close());
     Path staging = datadir.resolve(".riverd-bootstrap-" + nonce);
@@ -445,7 +429,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult retry = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.CORRUPTION, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, DatabaseIncarnation.of(31, 47), new SecureRandom(),
-        999_999_999L, 0, "/usr/bin/java", retry));
+        999_999_999L, 0, retry));
     assertTrue(Files.exists(unknown));
     assertTrue(!Files.exists(staging.resolve(RiverDaemonIdentity.SECURITY_NAME)));
     retry.close();
@@ -460,7 +444,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult first = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-        "/usr/bin/java", first));
+        first));
     assertEquals(StatusCode.OK, first.close());
     Files.writeString(datadir.resolve(RiverDaemonIdentity.LOCK_FILE), "torn");
 
@@ -468,7 +452,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           datadir, filesystem, DatabaseIncarnation.of(31, 47), new SecureRandom(),
-          currentPid(), currentStart(), currentCommand(), resumed));
+          currentPid(), currentStart(), resumed));
       assertEquals(INCARNATION, resumed.incarnation());
       assertEquals(StatusCode.OK, RiverDaemonIdentity.completeCreate(resumed));
     } finally {
@@ -485,13 +469,13 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult owner = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), currentPid(), currentStart(),
-        currentCommand(), owner));
+        owner));
     assertEquals(StatusCode.OK, owner.close());
     RiverDaemonIdentity.IdentityResult competing = new RiverDaemonIdentity.IdentityResult();
     try {
       assertEquals(StatusCode.CONFLICT, RiverDaemonIdentity.beginCreate(
           datadir, filesystem, DatabaseIncarnation.of(31, 47), new SecureRandom(),
-          currentPid(), currentStart(), currentCommand(), competing));
+          currentPid(), currentStart(), competing));
     } finally {
       competing.close();
       owner.close();
@@ -507,7 +491,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult first = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-        "/usr/bin/java", first));
+        first));
     String nonce = first.nonce();
     for (String name : new String[] {RiverDaemonIdentity.DATABASE_NAME,
         RiverDaemonIdentity.SECURITY_NAME}) {
@@ -526,7 +510,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult rejected = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.CORRUPTION, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(),
-        currentPid(), currentStart(), currentCommand(), rejected));
+        currentPid(), currentStart(), rejected));
     assertEquals("partial", Files.readString(stage));
     assertEquals(StatusCode.OK, rejected.close());
     Files.delete(unexpected);
@@ -535,7 +519,7 @@ final class RiverDaemonIdentityTest {
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           datadir, filesystem, DatabaseIncarnation.of(31, 47), new SecureRandom(),
-          currentPid(), currentStart(), currentCommand(), resumed));
+          currentPid(), currentStart(), resumed));
       assertTrue(Files.exists(stage));
       assertEquals(StatusCode.OK, RiverDaemonIdentity.completeCreate(resumed));
       assertTrue(!Files.exists(stage));
@@ -553,7 +537,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult first = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-        "/usr/bin/java", first));
+        first));
     String nonce = first.nonce();
     for (String name : new String[] {RiverDaemonIdentity.DATABASE_NAME,
         RiverDaemonIdentity.SECURITY_NAME}) {
@@ -574,7 +558,7 @@ final class RiverDaemonIdentityTest {
     RiverDaemonIdentity.IdentityResult retry = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.CORRUPTION, RiverDaemonIdentity.beginCreate(
         datadir, filesystem, DatabaseIncarnation.of(31, 47), new SecureRandom(),
-        currentPid(), currentStart(), currentCommand(), retry));
+        currentPid(), currentStart(), retry));
     assertTrue(Files.exists(stage));
     retry.close();
   }
@@ -587,9 +571,7 @@ final class RiverDaemonIdentityTest {
     return ProcessHandle.current().info().startInstant().orElseThrow().toEpochMilli();
   }
 
-  private static String currentCommand() {
-    return ProcessHandle.current().info().command().orElseThrow();
-  }
+
 
   private static void writeRecord(RiverFile file, String record) {
     ByteBuffer source = ByteBuffer.wrap(record.getBytes(StandardCharsets.UTF_8));

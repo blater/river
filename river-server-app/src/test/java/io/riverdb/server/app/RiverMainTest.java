@@ -61,15 +61,32 @@ final class RiverMainTest {
 
   @Test
   void rootOperationAliasesShareServerHelp() {
-    Invocation rootStop = invoke("stop", "--help");
-    Invocation serverStop = invoke("server", "stop", "--help");
-    Invocation rootPs = invoke("ps", "--help");
-    Invocation serverPs = invoke("server", "ps", "--help");
+    for (String command : new String[] {"start", "stop", "ps"}) {
+      for (String option : new String[] {"--help", "-h", "--unknown"}) {
+        Invocation server = invoke("server", command, option);
+        assertEquals(option.equals("--unknown") ? 2 : 0, server.exit);
+        assertEquals(server, invoke(command, option));
+      }
+      assertEquals(invoke("help", "server", command), invoke("help", command));
+    }
+  }
 
-    assertEquals(0, rootStop.exit);
-    assertEquals(rootStop.output, serverStop.output);
-    assertEquals(0, rootPs.exit);
-    assertEquals(rootPs.output, serverPs.output);
+  @Test
+  void stopAliasesShareDefaultAndExplicitSelection(@TempDir Path home) {
+    String previous = System.getProperty("user.home");
+    System.setProperty("user.home", home.toString());
+    try {
+      Invocation missing = invoke("server", "stop");
+      assertEquals(0, missing.exit);
+      assertEquals(missing, invoke("stop"));
+      String datadir = "--datadir=" + home.resolve("absent");
+      assertEquals(invoke("server", "stop", datadir), invoke("stop", datadir));
+      assertEquals(invoke("server", "stop", "localhost:9191", datadir),
+          invoke("stop", "localhost:9191", datadir));
+    } finally {
+      if (previous == null) System.clearProperty("user.home");
+      else System.setProperty("user.home", previous);
+    }
   }
 
   private static Invocation invoke(String... arguments) {

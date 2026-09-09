@@ -55,21 +55,25 @@ final class IndexedVacuumRowCursor {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = releaseRow();
     if (!status.isOk()) return status;
-    while (true) {
+    boolean finished = false;
+    while (!finished) {
       if (leaf != null && entry < BTreePage.entryCount(leaf)) {
         int current = entry++;
         if (rowsToSkip > 0) {
           rowsToSkip--;
-          continue;
+        } else {
+          currentRowId = BTreePage.leafValueAt(leaf, current);
+          currentSpace = BTreePage.spaceAt(leaf, current);
+          currentKey = BTreePage.keyAt(leaf, current);
+          status = table.pinRow(currentRowId, result, rowPin);
+          finished = true;
         }
-        currentRowId = BTreePage.leafValueAt(leaf, current);
-        currentSpace = BTreePage.spaceAt(leaf, current);
-        currentKey = BTreePage.keyAt(leaf, current);
-        return table.pinRow(currentRowId, result, rowPin);
+      } else {
+        status = nextLeaf();
+        finished = !status.isOk();
       }
-      status = nextLeaf();
-      if (!status.isOk()) return status;
     }
+    return status;
   }
 
   StatusCode close() {

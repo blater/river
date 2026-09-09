@@ -21,6 +21,7 @@ import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.zip.CRC32C;
@@ -42,8 +43,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageFile = new DirectoryOperationResult();
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
         io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(4, 2, 2));
@@ -84,8 +85,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageFile = new DirectoryOperationResult();
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
         io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(4, 2, 2));
@@ -127,8 +128,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageFile = new DirectoryOperationResult();
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
     DatabasePageCachePlan cachePlan = DatabasePageCacheTestPlan.geometry(4, 2, 2);
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION, cachePlan);
@@ -180,8 +181,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageFile = new DirectoryOperationResult();
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
     DatabasePageCachePlan cachePlan = DatabasePageCacheTestPlan.geometry(4, 2, 2);
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION, cachePlan);
@@ -215,8 +216,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageFile = new DirectoryOperationResult();
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
         io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(2, 1, 1));
@@ -247,10 +248,10 @@ final class IndexedPageCacheEvictionTest {
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
     DirectoryOperationResult rowFile = new DirectoryOperationResult();
     DirectoryOperationResult versionFile = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
-    assertEquals(StatusCode.OK, directory.createFile("rows", rowFile));
-    assertEquals(StatusCode.OK, directory.createFile("versions", versionFile));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
+    assertEquals(StatusCode.OK, directory.createFile("rows", FileIoMode.POSITIONAL, rowFile));
+    assertEquals(StatusCode.OK, directory.createFile("versions", FileIoMode.POSITIONAL, versionFile));
     DatabasePageCachePlan cachePlan = DatabasePageCacheTestPlan.geometry(2, 1, 1);
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION, cachePlan);
@@ -310,8 +311,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageOperation = new DirectoryOperationResult();
     DirectoryOperationResult stagingOperation = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageOperation));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingOperation));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageOperation));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingOperation));
     DurableFile pagesFile = pageOperation.file();
     DurableFile stagingFile = stagingOperation.file();
     IndexedPageSet pages = new IndexedPageSet(
@@ -368,8 +369,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageOperation = new DirectoryOperationResult();
     DirectoryOperationResult stagingOperation = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageOperation));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingOperation));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageOperation));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingOperation));
     DurableFile pagesFile = pageOperation.file();
     DurableFile stagingFile = stagingOperation.file();
     IndexedPageSet pages = new IndexedPageSet(
@@ -406,8 +407,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageOperation = new DirectoryOperationResult();
     DirectoryOperationResult stagingOperation = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageOperation));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingOperation));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageOperation));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingOperation));
     io.riverdb.engine.runtime.DatabasePageCachePlan scaleConfig =
         io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(128, 2, 256);
     IndexedPageSet pages = new IndexedPageSet(
@@ -457,8 +458,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageFile = new DirectoryOperationResult();
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
     io.riverdb.engine.runtime.DatabasePageCachePlan config =
         io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(2, 2, 2);
     IndexedPageSet pages = new IndexedPageSet(
@@ -503,8 +504,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageFile = new DirectoryOperationResult();
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
     ByteBuffer encoded = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
     assertEquals(StatusCode.OK, PageCodec.encode(
         DATABASE, GENERATION, 1, 1, 0, 0,
@@ -533,8 +534,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageOperation = new DirectoryOperationResult();
     DirectoryOperationResult stagingOperation = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageOperation));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingOperation));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageOperation));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingOperation));
     ByteBuffer encoded = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
     assertEquals(StatusCode.OK, PageCodec.encode(
         DATABASE, GENERATION, 1, 1, 1, 2,
@@ -569,10 +570,10 @@ final class IndexedPageCacheEvictionTest {
     DirectoryOperationResult stagingOperation = new DirectoryOperationResult();
     DirectoryOperationResult rowOperation = new DirectoryOperationResult();
     DirectoryOperationResult versionOperation = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageOperation));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingOperation));
-    assertEquals(StatusCode.OK, directory.createFile("rows", rowOperation));
-    assertEquals(StatusCode.OK, directory.createFile("versions", versionOperation));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageOperation));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingOperation));
+    assertEquals(StatusCode.OK, directory.createFile("rows", FileIoMode.POSITIONAL, rowOperation));
+    assertEquals(StatusCode.OK, directory.createFile("versions", FileIoMode.POSITIONAL, versionOperation));
 
     OneShotReadFailureFile failingPages = new OneShotReadFailureFile(pageOperation.file());
     DatabaseResourceGovernor governor =
@@ -611,8 +612,8 @@ final class IndexedPageCacheEvictionTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageOperation = new DirectoryOperationResult();
     DirectoryOperationResult stagingOperation = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageOperation));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingOperation));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageOperation));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingOperation));
     OneShotReadFailureFile stagingFile =
         new OneShotReadFailureFile(stagingOperation.file(), false);
     io.riverdb.engine.runtime.DatabasePageCachePlan config =

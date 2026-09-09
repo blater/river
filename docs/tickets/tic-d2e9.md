@@ -9,12 +9,12 @@ delivery: code
 tags:
     - riverd
     - operations
-    - registry
+    - runtime
 deps:
     - tic-0803
 created: 2026-09-04T15:23:11.538879Z
 ---
-# Complete bounded registry validation, ps, and multiple instances
+# Complete bounded runtime validation, ps, and multiple instances
 
 Consume the final records published by `tic-ec50`, complete their validation
 and stale-replacement behavior, add `ps`, and support independent instances
@@ -23,7 +23,8 @@ without scanning the process table.
 ## Design
 
 Use the normalized-datadir digest filename and canonical
-`riverd-registry-v1` record. Start may replace only a same-instance stale record
+`riverd-runtime-v2` record at `$HOME/.river/run/<sha256-datadir>.properties`.
+Start may replace only a same-instance stale record
 under its instance lock after proving the process absent. List only verified
 live records in deterministic order; `ps` warns but never deletes stale or
 invalid records.
@@ -31,7 +32,7 @@ invalid records.
 ## Acceptance Criteria
 
 `river ps` supplies empty guidance and supports two-instance start/list/stop;
-port collision, same-directory lock contention, stale-registry replacement,
+port collision, same-directory lock contention, stale-runtime replacement,
 warning-without-delete, and matching-record removal by shutdown/stop tests pass
 without signalling unrelated processes.
 
@@ -46,7 +47,7 @@ for Linux and Windows.
 
 ## Stop boundary
 
-Own only registry validation, ps, and multi-instance composition over the existing start/stop path. No process-table discovery, service manager, remote administration, or new registry format without a demonstrated contract defect.
+Own only runtime validation, ps, and multi-instance composition over the existing start/stop path. No process-table discovery, service manager, remote administration, or new runtime format without a demonstrated contract defect.
 
 ## Current delivery — 2026-09-09
 
@@ -56,7 +57,7 @@ Coordinate with tic-0803 on `ticket/tic-0803-river-stop` in
 SERVER contains the exact HOST:PORT accepted by `river stop`, followed by DEFAULT
 and DATA DIRECTORY columns. Empty output gives start guidance; stale or invalid
 records warn and remain untouched. The same verified record selection serves
-stop, with ambiguous endpoint matches rejected. No new registry format or
+stop, with ambiguous endpoint matches rejected. No new runtime format or
 persistent instance-name catalog.
 
 ## Delivered — 2026-09-09

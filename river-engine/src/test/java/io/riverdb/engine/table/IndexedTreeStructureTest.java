@@ -17,6 +17,7 @@ import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.storage.btree.BTreeRootPage;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -54,8 +55,8 @@ final class IndexedTreeStructureTest {
     NioDurableDirectory directory = directoryResult.directory();
     DirectoryOperationResult pageFile = new DirectoryOperationResult();
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
-    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
         io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(32, 32, 32));

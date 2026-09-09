@@ -41,10 +41,10 @@ final class RiverdForeground {
       status = RiverDaemonPaths.ensureParents(filesystem, paths.ready.getParent());
       if (!status.isOk()) return status;
     }
-    RiverDirectoryResult registryResult = new RiverDirectoryResult();
-    status = RiverDaemonPaths.ensureDirectory(filesystem, paths.registry, registryResult);
+    RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
+    status = RiverDaemonPaths.ensureDirectory(filesystem, paths.runtimeRoot, runtimeRootResult);
     if (!status.isOk()) return status;
-    status = registryResult.directory().close();
+    status = runtimeRootResult.directory().close();
     if (!status.isOk() && status != StatusCode.CLOSED) return status;
     // Parent creation changed the namespace; revalidate every prospective object before
     // identity/database mutation begins.
@@ -70,7 +70,7 @@ final class RiverdForeground {
       if (status.isOk()) status = RiverDaemonStop.recoverStale(
           filesystem, preparation.identity());
       if (status.isOk()) status = RiverDaemonRuntimeRecords.recoverStale(
-          paths.datadir, filesystem, preparation.identity(), paths.registry);
+          paths.datadir, filesystem, preparation.identity(), paths.runtimeRoot);
       if (status.isOk()) status = RiverDaemonInstance.openPreparedRestart(
           preparation, random, command.ip(), address, command.port(),
           LoopbackServerLimits.defaults(command.maximumConnections()), opened);
@@ -95,8 +95,8 @@ final class RiverdForeground {
     RiverDaemonRuntimeRecords.Metadata metadata = new RiverDaemonRuntimeRecords.Metadata(
         paths.datadir.toString(), instance.incarnation(), identity.currentOwner(), command.ip(),
         instance.server().port(), instance.credentialGeneration(), RiverDaemonVersion.value(),
-        instance.clientConfiguration().toString(), paths.ready);
-    Lifecycle lifecycle = new Lifecycle(instance, identity, filesystem, paths.registry, metadata);
+        instance.clientConfiguration().toString(), paths.ready, paths.runtimeRoot);
+    Lifecycle lifecycle = new Lifecycle(instance, identity, filesystem, paths.runtimeRoot, metadata);
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       lifecycle.shutdown();
       StatusCode closed = lifecycle.status();
@@ -160,7 +160,7 @@ final class RiverdForeground {
     private final RiverDaemonInstance instance;
     private final RiverDaemonIdentity.IdentityResult identity;
     private final RiverDaemonFileSystem filesystem;
-    private final Path registry;
+    private final Path runtimeRoot;
     private final RiverDaemonRuntimeRecords.Metadata metadata;
     private final RiverDaemonStop.Control control;
     private final CountDownLatch stopped = new CountDownLatch(1);
@@ -169,11 +169,11 @@ final class RiverdForeground {
 
     Lifecycle(RiverDaemonInstance instance, RiverDaemonIdentity.IdentityResult identity,
         RiverDaemonFileSystem filesystem,
-        Path registry, RiverDaemonRuntimeRecords.Metadata metadata) {
+        Path runtimeRoot, RiverDaemonRuntimeRecords.Metadata metadata) {
       this.instance = instance;
       this.identity = identity;
       this.filesystem = filesystem;
-      this.registry = registry;
+      this.runtimeRoot = runtimeRoot;
       this.metadata = metadata;
       control = new RiverDaemonStop.Control(filesystem, identity, metadata);
     }
@@ -186,10 +186,10 @@ final class RiverdForeground {
         RiverDaemonFileSystem filesystem, RiverDaemonPaths.Result paths, String certificateSha256) {
       if (stopped()) return StatusCode.CANCELLED;
       StatusCode current = instance.checkCredentialValidity();
-      if (current.isOk()) current = publishRuntimeAndRegistry(filesystem, paths, identity, metadata);
+      if (current.isOk()) current = publishRuntime(filesystem, paths, metadata);
       if (current.isOk()) current = control.poll();
       if (current.isOk()) current = RiverDaemonReadyOutput.publish(
-          filesystem, paths.registry, metadata, certificateSha256, System.out, System.err);
+          filesystem, paths.runtimeRoot, metadata, certificateSha256, System.out, System.err);
       return current;
     }
 
@@ -211,7 +211,7 @@ final class RiverdForeground {
       status = firstFailure(status, instance.closeServices());
       if (instance.servicesClosed()) {
         status = firstFailure(status, RiverDaemonRuntimeRecords.cleanupCurrent(
-            filesystem, identity, registry, metadata));
+            filesystem, identity, runtimeRoot, metadata));
         // Keep the acceptance receipt when shutdown failed; absence must not report success.
         if (status.isOk()) status = control.cleanup();
         status = firstFailure(status, instance.close());
@@ -237,19 +237,16 @@ final class RiverdForeground {
     synchronized StatusCode status() { return status; }
   }
 
-  private static StatusCode publishRuntimeAndRegistry(
+  private static StatusCode publishRuntime(
       RiverDaemonFileSystem filesystem, RiverDaemonPaths.Result paths,
-      RiverDaemonIdentity.IdentityResult identity, RiverDaemonRuntimeRecords.Metadata metadata) {
+      RiverDaemonRuntimeRecords.Metadata metadata) {
     StatusCode status = RiverDaemonPaths.verify(filesystem, paths);
-    if (status.isOk()) {
-      status = RiverDaemonRuntimeRecords.publishRuntime(identity.directory(), metadata);
-    }
     if (!status.isOk()) return status;
-    RiverDirectoryResult registryResult = new RiverDirectoryResult();
-    status = filesystem.openDirectory(paths.registry, registryResult);
+    RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
+    status = filesystem.openDirectory(paths.runtimeRoot, runtimeRootResult);
     if (!status.isOk()) return status;
-    status = RiverDaemonRuntimeRecords.publishRegistry(registryResult.directory(), metadata);
-    StatusCode close = registryResult.directory().close();
+    status = RiverDaemonRuntimeRecords.publishRuntime(runtimeRootResult.directory(), metadata);
+    StatusCode close = runtimeRootResult.directory().close();
     return status.isOk() && close != StatusCode.OK && close != StatusCode.CLOSED ? close : status;
   }
 

@@ -9,6 +9,7 @@ import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -32,10 +33,10 @@ final class IndexedDiskDirectoryCapacityTest {
     DirectoryOperationResult versionsOperation = new DirectoryOperationResult();
     assertEquals(
         StatusCode.OK,
-        directory.createFile(IndexedRowDirectory.FILE_NAME, rowsOperation));
+        directory.createFile(IndexedRowDirectory.FILE_NAME, FileIoMode.POSITIONAL, rowsOperation));
     assertEquals(
         StatusCode.OK,
-        directory.createFile(IndexedVersionDirectory.FILE_NAME, versionsOperation));
+        directory.createFile(IndexedVersionDirectory.FILE_NAME, FileIoMode.POSITIONAL, versionsOperation));
 
     IndexedRowDirectory rows = new IndexedRowDirectory(rowsOperation.file());
     rows.set(AUDIT_ROW_ID, 123_456, 7);
@@ -64,10 +65,10 @@ final class IndexedDiskDirectoryCapacityTest {
     directory = directoryResult.directory();
     rowsOperation = new DirectoryOperationResult();
     versionsOperation = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.reopen(IndexedRowDirectory.FILE_NAME, rowsOperation));
+    assertEquals(StatusCode.OK, directory.reopen(IndexedRowDirectory.FILE_NAME, FileIoMode.POSITIONAL, rowsOperation));
     assertEquals(
         StatusCode.OK,
-        directory.reopen(IndexedVersionDirectory.FILE_NAME, versionsOperation));
+        directory.reopen(IndexedVersionDirectory.FILE_NAME, FileIoMode.POSITIONAL, versionsOperation));
     rows = new IndexedRowDirectory(rowsOperation.file());
     versions = new IndexedVersionDirectory(versionsOperation.file());
 

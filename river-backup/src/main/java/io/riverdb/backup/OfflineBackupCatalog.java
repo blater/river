@@ -14,6 +14,7 @@ import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.security.DigestException;
 import java.security.MessageDigest;
@@ -135,7 +136,7 @@ final class OfflineBackupCatalog {
     if (!status.isOk()) {
       return status;
     }
-    status = target.createFile(MANIFEST_FILE_NAME, operation);
+    status = target.createFile(MANIFEST_FILE_NAME, FileIoMode.POSITIONAL, operation);
     DurableFile file = status.isOk() ? operation.file() : null;
     if (status.isOk()) {
       status = OfflineBackupIo.writeExact(file, manifestBuffer, 0, io);
@@ -220,7 +221,7 @@ final class OfflineBackupCatalog {
   }
 
   private StatusCode readControl(NioDurableDirectory source) {
-    StatusCode status = source.reopen(CONTROL_FILE_NAME, operation);
+    StatusCode status = source.reopen(CONTROL_FILE_NAME, FileIoMode.POSITIONAL, operation);
     DurableFile file = status.isOk() ? operation.file() : null;
     if (status.isOk()) {
       status = file.size(fileSize);
@@ -249,7 +250,7 @@ final class OfflineBackupCatalog {
   }
 
   private StatusCode readManifestBytes(NioDurableDirectory source) {
-    StatusCode status = source.reopen(MANIFEST_FILE_NAME, operation);
+    StatusCode status = source.reopen(MANIFEST_FILE_NAME, FileIoMode.POSITIONAL, operation);
     DurableFile file = status.isOk() ? operation.file() : null;
     if (status.isOk()) {
       status = file.size(fileSize);

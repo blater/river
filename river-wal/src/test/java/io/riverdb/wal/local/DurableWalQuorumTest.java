@@ -9,6 +9,7 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
@@ -48,14 +49,14 @@ final class DurableWalQuorumTest {
     assertEquals(3, primary.wal.availableDurableNodeCount());
     assertEquals(2, primary.wal.quorumDurableCommitSequence());
     assertEquals(4 * Long.BYTES, primary.wal.replicatedPayloadBytes());
-    assertEquals(primaryForces + 1, primary.counters.forceCalls());
-    assertEquals(followerOneForces + 1, followerOne.counters.forceCalls());
-    assertEquals(followerTwoForces + 1, followerTwo.counters.forceCalls());
+    assertEquals(primaryForces + 2, primary.counters.forceCalls());
+    assertEquals(followerOneForces + 2, followerOne.counters.forceCalls());
+    assertEquals(followerTwoForces + 2, followerTwo.counters.forceCalls());
     assertEquals(primary.wal.durableEnd(), followerOne.wal.durableEnd());
     assertEquals(primary.wal.durableEnd(), followerTwo.wal.durableEnd());
     assertEquals(StatusCode.OK, primary.wal.releaseForcedBatch(force, force.token()));
 
-    long firstRecord = 64;
+    long firstRecord = WalFileHeaderCodec.HEADER_BYTES;
     close(primary);
     close(followerOne);
     close(followerTwo);

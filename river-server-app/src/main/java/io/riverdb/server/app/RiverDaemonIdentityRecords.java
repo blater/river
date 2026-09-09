@@ -14,8 +14,8 @@ import java.util.List;
 final class RiverDaemonIdentityRecords {
   static final int MAX_RECORD_BYTES = 4096;
   static final String INSTANCE_FORMAT = "riverd-instance-v1";
-  static final String BOOTSTRAP_FORMAT = "riverd-bootstrap-v2";
-  static final String LOCK_FORMAT = "riverd-lock-v1";
+  static final String BOOTSTRAP_FORMAT = "riverd-bootstrap-v3";
+  static final String LOCK_FORMAT = "riverd-lock-v2";
 
   private RiverDaemonIdentityRecords() {
   }
@@ -42,7 +42,7 @@ final class RiverDaemonIdentityRecords {
   }
 
   static LockRecord parseLock(byte[] bytes) {
-    String[] fields = envelope(bytes, 8, LOCK_FORMAT);
+    String[] fields = envelope(bytes, 7, LOCK_FORMAT);
     if (fields == null) return null;
     try {
       long high = canonicalLong(value(fields[2], "database-incarnation-high="));
@@ -50,36 +50,34 @@ final class RiverDaemonIdentityRecords {
       long pid = canonicalLong(value(fields[4], "pid="));
       long start = canonicalLong(value(fields[5], "process-start-epoch-millis="));
       String datadir = value(fields[1], "datadir=");
-      String command = value(fields[6], "command=");
-      String nonce = value(fields[7], "owner-nonce=");
+      String nonce = value(fields[6], "owner-nonce=");
       if (!DatabaseIncarnation.of(high, low).isValid() || pid <= 0 || start < 0
-          || !validDatadir(datadir) || !validCommand(command)
+          || !validDatadir(datadir)
           || !nonce.matches("[0-9a-f]{32}")) return null;
-      return new LockRecord(datadir, high, low, pid, start, command, nonce);
+      return new LockRecord(datadir, high, low, pid, start, nonce);
     } catch (RuntimeException failure) {
       return null;
     }
   }
 
   static BootstrapRecord parseBootstrap(byte[] bytes) {
-    String[] fields = envelope(bytes, 11, BOOTSTRAP_FORMAT);
+    String[] fields = envelope(bytes, 10, BOOTSTRAP_FORMAT);
     if (fields == null) return null;
     try {
       long high = canonicalLong(value(fields[1], "database-incarnation-high="));
       long low = canonicalLong(value(fields[2], "database-incarnation-low="));
       long pid = canonicalLong(value(fields[3], "pid="));
       long start = canonicalLong(value(fields[4], "process-start-epoch-millis="));
-      String command = value(fields[5], "command=");
-      String nonce = value(fields[6], "attempt-nonce=");
-      String database = value(fields[7], "database-name=");
-      String security = value(fields[8], "security-name=");
-      String staging = value(fields[9], "staging-name=");
-      String instanceStage = value(fields[10], "instance-stage-name=");
+      String nonce = value(fields[5], "attempt-nonce=");
+      String database = value(fields[6], "database-name=");
+      String security = value(fields[7], "security-name=");
+      String staging = value(fields[8], "staging-name=");
+      String instanceStage = value(fields[9], "instance-stage-name=");
       if (!DatabaseIncarnation.of(high, low).isValid() || pid <= 0 || start < 0
-          || !validCommand(command) || !nonce.matches("[0-9a-f]{32}")
+          || !nonce.matches("[0-9a-f]{32}")
           || !RiverDaemonIdentity.DATABASE_NAME.equals(database)
           || !RiverDaemonIdentity.SECURITY_NAME.equals(security)) return null;
-      return new BootstrapRecord(DatabaseIncarnation.of(high, low), pid, start, command, nonce,
+      return new BootstrapRecord(DatabaseIncarnation.of(high, low), pid, start, nonce,
           staging, instanceStage);
     } catch (RuntimeException failure) {
       return null;
@@ -145,11 +143,6 @@ final class RiverDaemonIdentityRecords {
     }
   }
 
-  static boolean validCommand(String command) {
-    return command != null && !command.isBlank() && command.equals(command.trim())
-        && validAbsoluteNormalizedPath(command);
-  }
-
   private static boolean validAbsoluteNormalizedPath(String value) {
     if (value == null || value.isEmpty()) return false;
     for (int index = 0; index < value.length(); index++) {
@@ -187,17 +180,14 @@ final class RiverDaemonIdentityRecords {
     final long low;
     final long pid;
     final long start;
-    final String command;
     final String nonce;
 
-    LockRecord(String datadir, long high, long low, long pid, long start, String command,
-        String nonce) {
+    LockRecord(String datadir, long high, long low, long pid, long start, String nonce) {
       this.datadir = datadir;
       this.high = high;
       this.low = low;
       this.pid = pid;
       this.start = start;
-      this.command = command;
       this.nonce = nonce;
     }
   }
@@ -208,19 +198,17 @@ final class RiverDaemonIdentityRecords {
     final long low;
     final long pid;
     final long start;
-    final String command;
     final String nonce;
     final String stagingName;
     final String instanceStageName;
 
-    BootstrapRecord(DatabaseIncarnation incarnation, long pid, long start, String command,
-        String nonce, String stagingName, String instanceStageName) {
+    BootstrapRecord(DatabaseIncarnation incarnation, long pid, long start, String nonce,
+        String stagingName, String instanceStageName) {
       this.incarnation = incarnation;
       this.high = incarnation.high();
       this.low = incarnation.low();
       this.pid = pid;
       this.start = start;
-      this.command = command;
       this.nonce = nonce;
       this.stagingName = stagingName;
       this.instanceStageName = instanceStageName;

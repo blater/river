@@ -9,6 +9,7 @@ import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
+import io.riverdb.platform.file.FileIoMode;
 import java.util.zip.CRC32C;
 
 /** Writes immutable zero-suffix page bases for checkpoint WAL generations. */
@@ -53,7 +54,7 @@ final class IndexedCheckpointWriter {
   private StatusCode createFile(WalGeneration generation) {
     String name = IndexedTableStore.checkpointFileName(generation);
     operation.reset();
-    StatusCode status = directory.createFile(name, operation);
+    StatusCode status = directory.createFile(name, FileIoMode.POSITIONAL, operation);
     if (status != StatusCode.CONFLICT) {
       return status;
     }
@@ -61,7 +62,7 @@ final class IndexedCheckpointWriter {
     if (status.isOk()) {
       status = directory.force(operation);
     }
-    return status.isOk() ? directory.createFile(name, operation) : status;
+    return status.isOk() ? directory.createFile(name, FileIoMode.POSITIONAL, operation) : status;
   }
 
   private StatusCode writePages(

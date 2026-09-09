@@ -1324,7 +1324,7 @@ final class IndexedRelationalWalHarnessTest {
     } finally {
       executor.shutdownNow();
     }
-    check(counters.forceCalls() == forces + 1,
+    check(counters.forceCalls() == forces + 2,
         "hybrid cohort force delta " + (counters.forceCalls() - forces));
     check(firstOutcome.state() == TransactionState.COMMITTED
             && secondOutcome.state() == TransactionState.COMMITTED
@@ -1529,7 +1529,7 @@ final class IndexedRelationalWalHarnessTest {
             && second.groupTransaction().state() == TransactionState.COMMITTING,
         "published cohort acknowledged before durability");
     batch.completeDurability(2);
-    check(counters.forceCalls() == forceCalls + 1,
+    check(counters.forceCalls() == forceCalls + 2,
         "split cohort did not use exactly one shared force");
     check(firstRequest.outcome.state() == TransactionState.COMMITTED
             && secondRequest.outcome.state() == TransactionState.COMMITTED,

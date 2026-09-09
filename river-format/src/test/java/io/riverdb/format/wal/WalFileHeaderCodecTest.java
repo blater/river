@@ -21,13 +21,21 @@ final class WalFileHeaderCodecTest {
     WalFileHeaderDecodeResult result = new WalFileHeaderDecodeResult();
     assertEquals(StatusCode.OK, WalFileHeaderCodec.decode(encoded, result));
     assertEquals(expected, result.header());
-    for (int index = 0; index < encoded.capacity(); index++) {
+    for (int index = 0; index < 64; index++) {
       byte[] corrupt = encoded.array().clone();
       corrupt[index] ^= 1;
       assertEquals(
           StatusCode.CORRUPTION,
           WalFileHeaderCodec.decode(ByteBuffer.wrap(corrupt), result),
           "byte " + index);
+    }
+    for (int index = 64; index < encoded.capacity(); index++) {
+      byte[] reserved = encoded.array().clone();
+      reserved[index] ^= 1;
+      assertEquals(
+          StatusCode.OK,
+          WalFileHeaderCodec.decode(ByteBuffer.wrap(reserved), result),
+          "reserved byte " + index);
     }
   }
 }

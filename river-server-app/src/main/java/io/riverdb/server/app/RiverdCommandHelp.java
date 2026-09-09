@@ -26,6 +26,7 @@ public final class RiverdCommandHelp {
         + "\nUsage:\n"
         + "  river [CLIENT_PROPERTIES] < script.sql\n"
         + "  river server <command> [options]\n"
+        + "  river start [options]\n"
         + "  river stop [HOST:PORT]\n"
         + "  river ps\n"
         + "  river version\n\n"
@@ -124,7 +125,8 @@ public final class RiverdCommandHelp {
       output.append("This command has no operation options, apart from its help switches.\n");
     }
     if (spec == RiverCommandCatalog.START) {
-      output.append("\nExample: river server start --datadir=/path/to/database --port=9191\n");
+      output.append("\nAliases: river start [options]\n"
+          + "Example: river server start --datadir=/path/to/database --port=9191\n");
     } else if (spec == RiverCommandCatalog.STOP) {
       output.append("\nAliases: river server stop [HOST:PORT]\n"
           + "Example: river stop 127.0.0.1:9191 --timeout=60s\n");

@@ -139,7 +139,7 @@ final class RiverDaemonCredentialsTest {
     try {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
           datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0,
-          "/usr/bin/java", identity));
+          identity));
       assertEquals(StatusCode.OK, RiverDaemonCredentials.persist(
           material, identity.security(), INCARNATION, created));
       assertEquals(StatusCode.OK, RiverDaemonIdentity.completeCreate(identity));
@@ -151,7 +151,7 @@ final class RiverDaemonCredentialsTest {
         assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(
             datadir, filesystem, new SecureRandom(), current.pid(),
             current.info().startInstant().orElseThrow().toEpochMilli(),
-            current.info().command().orElseThrow(), reopened));
+            reopened));
         RiverDirectoryResult securityResult = new RiverDirectoryResult();
         assertEquals(StatusCode.OK, reopened.directory().openDirectory(
             RiverDaemonIdentity.SECURITY_NAME, securityResult));

@@ -34,6 +34,7 @@ val nativeImageExecutable = graalVmHome.map { file("$it/bin/$nativeImageCommand"
 val nativeImageOptions = (if (pgoInstrument.get()) emptyList() else listOf("-O3")) + listOf(
   "--no-fallback",
   "--enable-native-access=ALL-UNNAMED",
+  "-H:+SharedArenaSupport",
   "--enable-all-security-services",
   "--future-defaults=run-time-initialize-security-providers",
   "--initialize-at-run-time="

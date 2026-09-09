@@ -14,6 +14,7 @@ import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -143,7 +144,7 @@ final class IndexedDiskDirectoryEvictionTest {
           new FatalStateFence(), new NioIoCounters(), 8, opened));
       directory = opened.directory();
       DirectoryOperationResult created = new DirectoryOperationResult();
-      assertEquals(StatusCode.OK, directory.createFile("directory", created));
+      assertEquals(StatusCode.OK, directory.createFile("directory", FileIoMode.POSITIONAL, created));
       file = new ReadFailureFile(created.file());
     }
 

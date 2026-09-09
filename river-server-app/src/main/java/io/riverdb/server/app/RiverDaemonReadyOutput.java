@@ -15,7 +15,7 @@ final class RiverDaemonReadyOutput {
 
   static StatusCode publish(
       RiverDaemonFileSystem filesystem,
-      Path registryRoot,
+      Path runtimeRoot,
       RiverDaemonRuntimeRecords.Metadata metadata,
       String certificateSha256,
       PrintStream out,
@@ -24,9 +24,8 @@ final class RiverDaemonReadyOutput {
     String prefix = "riverd_datadir=" + metadata.datadir + "\n"
         + "riverd_data=" + datadir.resolve("database") + "\n"
         + "riverd_identity=" + datadir.resolve("instance.properties") + "\n"
-        + "riverd_runtime_file=" + datadir.resolve("runtime.properties") + "\n"
-        + "riverd_registry_record="
-        + registryRoot.resolve(RiverDaemonRuntimeRecords.registryName(metadata.datadir)) + "\n"
+        + "riverd_runtime_file="
+        + RiverDaemonRuntimeRecords.runtimePath(runtimeRoot, metadata.datadir) + "\n"
         + "riverd_listen_address=" + metadata.listenAddress + "\n"
         + "riverd_listen_port=" + metadata.listenPort + "\n"
         + "riverd_pid=" + metadata.owner.pid + "\n"
@@ -38,7 +37,7 @@ final class RiverDaemonReadyOutput {
     boolean fileMode = !"none".equals(metadata.readyFile);
     if (fileMode) {
       StatusCode status = RiverDaemonRuntimeRecords.publishReady(
-          filesystem, registryRoot, metadata, Path.of(metadata.readyFile), certificateSha256);
+          filesystem, metadata, Path.of(metadata.readyFile), certificateSha256);
       // Publication may already be visible on failure. Never continue serving after a
       // durability error, and never try to retract an observed readiness commitment.
       if (!status.isOk()) return status;

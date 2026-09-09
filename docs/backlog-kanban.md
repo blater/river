@@ -9,6 +9,13 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+User-approved for integration: [`tic-6a91`](tickets/tic-6a91.md) replaces WAL
+channel I/O with bounded memory mappings. Full checks and native crash recovery
+passed. JVM samples improved; native samples remained within their prior range.
+Native tail latency and retries increased against older controls. The user
+approved promotion with contention attribution retained as a follow-up question.
+Checkpoint: `perf-checkpoint-20260910-mapped-wal`.
+
 Closed user-directed correctness fix [`tic-f8dd`](tickets/tic-f8dd.md) resolves the
 post-run CORRUPTION found by [`tic-f539`](tickets/tic-f539.md): metadata-directory
 frames now reload from the start of their buffers, and read misses use bounded

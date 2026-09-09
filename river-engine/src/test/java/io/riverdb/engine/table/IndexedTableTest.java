@@ -23,6 +23,7 @@ import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -467,7 +468,7 @@ final class IndexedTableTest {
     DirectoryOperationResult operation = new DirectoryOperationResult();
     assertEquals(
         StatusCode.OK,
-        directory.reopen(IndexedTableStore.FILE_NAME, operation));
+        directory.reopen(IndexedTableStore.FILE_NAME, FileIoMode.POSITIONAL, operation));
     DurableFile file = operation.file();
     long offset = (long) (rootPageId - 1) * PageCodec.PAGE_BYTES + 10;
     ByteBuffer oneByte = ByteBuffer.allocate(1);

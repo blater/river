@@ -49,7 +49,7 @@ final class RiverCommandCatalog {
       List.of(START, STOP, PS, CREDENTIALS, SERVER_VERSION));
   static final Spec ROOT = new Spec("", "river [CLIENT_PROPERTIES] < script.sql",
       "The River client and local server command.", true, List.of(),
-      List.of(CLI, SERVER, STOP, PS, VERSION, HELP));
+      List.of(CLI, SERVER, START, STOP, PS, VERSION, HELP));
 
   private RiverCommandCatalog() { }
 
@@ -59,7 +59,7 @@ final class RiverCommandCatalog {
     if ("help".equals(topic)) return HELP;
     if ("version".equals(topic)) return VERSION;
     if ("server".equals(topic)) return SERVER;
-    if ("server start".equals(topic)) return START;
+    if ("start".equals(topic) || "server start".equals(topic)) return START;
     if ("stop".equals(topic) || "server stop".equals(topic)) return STOP;
     if ("ps".equals(topic) || "server ps".equals(topic)) return PS;
     if ("server credentials".equals(topic)) return CREDENTIALS;

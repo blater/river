@@ -12,6 +12,7 @@ import io.riverdb.platform.file.DirectoryDurability;
 import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
+import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
@@ -129,14 +130,16 @@ final class IndexedTableStoreConstructionTest {
   private static final class ReopenDirectory implements DurableDirectory {
     private final DurableFile file;
     private ReopenDirectory(DurableFile checkpointFile) { file = checkpointFile; }
-    @Override public StatusCode reopen(String name, DirectoryOperationResult result) {
+    @Override public StatusCode reopen(
+        String name, FileIoMode mode, DirectoryOperationResult result) {
       result.set(file, DirectoryDurability.DURABLE);
       return StatusCode.OK;
     }
     @Override public StatusCode createDirectory(String name, DirectoryOperationResult result) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    @Override public StatusCode createFile(String name, DirectoryOperationResult result) {
+    @Override public StatusCode createFile(
+        String name, FileIoMode mode, DirectoryOperationResult result) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     @Override public StatusCode createTemporary(String name, DirectoryOperationResult result) {

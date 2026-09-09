@@ -10,6 +10,7 @@ import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
+import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -32,7 +33,7 @@ final class NioDurableDirectoryTest {
 
     NioDurableDirectory directory = openResult.directory();
     DirectoryOperationResult operationResult = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("control", operationResult));
+    assertEquals(StatusCode.OK, directory.createFile("control", FileIoMode.POSITIONAL, operationResult));
 
     byte[] expected = {3, 1, 4, 1, 5, 9};
     IoResult ioResult = new IoResult();
@@ -42,7 +43,7 @@ final class NioDurableDirectoryTest {
     assertEquals(StatusCode.OK, created.force(ForceMode.CONTENT_AND_METADATA));
     assertEquals(StatusCode.OK, created.close());
 
-    assertEquals(StatusCode.OK, directory.reopen("control", operationResult));
+    assertEquals(StatusCode.OK, directory.reopen("control", FileIoMode.POSITIONAL, operationResult));
     ByteBuffer actual = ByteBuffer.allocate(expected.length);
     ioResult.reset();
     DurableFile reopened = operationResult.file();
@@ -77,10 +78,10 @@ final class NioDurableDirectoryTest {
             openResult));
     NioDurableDirectory directory = openResult.directory();
     DirectoryOperationResult operationResult = new DirectoryOperationResult();
-    assertEquals(StatusCode.CONFLICT, directory.reopen("link", operationResult));
-    assertEquals(StatusCode.CONFLICT, directory.reopen("child", operationResult));
+    assertEquals(StatusCode.CONFLICT, directory.reopen("link", FileIoMode.POSITIONAL, operationResult));
+    assertEquals(StatusCode.CONFLICT, directory.reopen("child", FileIoMode.POSITIONAL, operationResult));
 
-    assertEquals(StatusCode.OK, directory.createFile("data", operationResult));
+    assertEquals(StatusCode.OK, directory.createFile("data", FileIoMode.POSITIONAL, operationResult));
     DurableFile file = operationResult.file();
     IoResult ioResult = new IoResult();
     assertEquals(
@@ -104,7 +105,7 @@ final class NioDurableDirectoryTest {
             openResult));
     NioDurableDirectory directory = openResult.directory();
     DirectoryOperationResult operationResult = new DirectoryOperationResult();
-    assertEquals(StatusCode.OK, directory.createFile("data", operationResult));
+    assertEquals(StatusCode.OK, directory.createFile("data", FileIoMode.POSITIONAL, operationResult));
     IoResult ioResult = new IoResult();
     assertEquals(
         StatusCode.OK,

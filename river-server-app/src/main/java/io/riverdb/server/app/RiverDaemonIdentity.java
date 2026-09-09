@@ -41,10 +41,9 @@ public final class RiverDaemonIdentity {
       SecureRandom random,
       long pid,
       long processStartEpochMillis,
-      String command,
       IdentityResult result) {
     if (result == null || filesystem == null || !validDatadir(datadir) || random == null
-        || pid <= 0 || processStartEpochMillis < 0 || !validCommand(command)) {
+        || pid <= 0 || processStartEpochMillis < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -119,7 +118,7 @@ public final class RiverDaemonIdentity {
             acceptedInstance.generation);
         result.setLockFile(lockFile);
         result.prepareRestart(canonicalPath(datadir), owner, nonce(random), pid,
-            processStartEpochMillis, command);
+            processStartEpochMillis);
       }
     }
     return status;
@@ -251,11 +250,10 @@ public final class RiverDaemonIdentity {
       SecureRandom random,
       long pid,
       long processStartEpochMillis,
-      String command,
       IdentityResult result) {
     if (result == null || filesystem == null || !validDatadir(datadir)
         || incarnation == null || !incarnation.isValid() || random == null || pid <= 0
-        || processStartEpochMillis < 0 || !validCommand(command)) {
+        || processStartEpochMillis < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -280,20 +278,20 @@ public final class RiverDaemonIdentity {
     }
     if (prebootstrapStage != null) {
       return recoverPrebootstrapStage(datadir, directory, filesystem, incarnation, random, pid,
-          processStartEpochMillis, command, prebootstrapStage, result);
+          processStartEpochMillis, prebootstrapStage, result);
     }
     if (hasEntry(entries, INSTANCE_FILE) || hasEntry(entries, DATABASE_NAME)
         || hasEntry(entries, SECURITY_NAME)) {
       if (hasBootstrap) {
         return recoverCreate(datadir, directory, filesystem, pid,
-            processStartEpochMillis, command, entries, result);
+            processStartEpochMillis, entries, result);
       }
       closeDirectory(directory, StatusCode.CONFLICT);
       return StatusCode.CONFLICT;
     }
     if (hasBootstrap) {
       return recoverCreate(datadir, directory, filesystem, pid,
-          processStartEpochMillis, command, entries, result);
+          processStartEpochMillis, entries, result);
     }
 
     RiverFileResult lockFileResult = new RiverFileResult();
@@ -344,7 +342,7 @@ public final class RiverDaemonIdentity {
       return status;
     }
     return createBootstrap(datadir, directory, lockFile, lockResult.lock(), incarnation, random,
-        pid, processStartEpochMillis, command, result, priorOwner, hasLock);
+        pid, processStartEpochMillis, result, priorOwner, hasLock);
   }
 
   private static StatusCode createBootstrap(
@@ -356,19 +354,17 @@ public final class RiverDaemonIdentity {
       SecureRandom random,
       long pid,
       long processStartEpochMillis,
-      String command,
       IdentityResult result,
       RiverDaemonIdentityRecords.LockRecord priorOwner,
       boolean replaceExistingLock) {
     StatusCode status = StatusCode.OK;
     if (replaceExistingLock) status = lockFile.truncate(0);
     String nonce = nonce(random);
-    if (status.isOk()) {
-      status = writeLock(lockFile, datadir, incarnation, pid, processStartEpochMillis, command, nonce);
-    }
+    if (status.isOk()) status = writeLock(lockFile, datadir, incarnation, pid,
+        processStartEpochMillis, nonce);
     if (status.isOk() && replaceExistingLock) status = forceDirectory(directory);
     if (status.isOk()) {
-      status = writeBootstrap(directory, incarnation, pid, processStartEpochMillis, command, nonce);
+      status = writeBootstrap(directory, incarnation, pid, processStartEpochMillis, nonce);
     }
     RiverDirectory staging = null;
     RiverDirectory database = null;
@@ -399,7 +395,7 @@ public final class RiverDaemonIdentity {
     }
     result.complete(directory, lock, incarnation, 1L);
     result.setBootstrap(nonce, staging, database, security, lockFile,
-        false, false, canonicalPath(datadir), pid, processStartEpochMillis, command, false,
+        false, false, canonicalPath(datadir), pid, processStartEpochMillis, false,
         null, null);
     result.setPriorOwner(priorOwner);
     return StatusCode.OK;
@@ -413,7 +409,6 @@ public final class RiverDaemonIdentity {
       SecureRandom random,
       long pid,
       long processStartEpochMillis,
-      String command,
       String stageName,
       IdentityResult result) {
     RiverFileResult lockResult = new RiverFileResult();
@@ -482,9 +477,8 @@ public final class RiverDaemonIdentity {
     }
     if (status.isOk() && priorOwner != null
         && (priorOwner.high != bootstrap.high || priorOwner.low != bootstrap.low
-        || priorOwner.pid != bootstrap.pid || priorOwner.start != bootstrap.start
-        || !priorOwner.command.equals(bootstrap.command)
-        || !priorOwner.nonce.equals(bootstrap.nonce))) {
+            || priorOwner.pid != bootstrap.pid || priorOwner.start != bootstrap.start
+            || !priorOwner.nonce.equals(bootstrap.nonce))) {
       status = StatusCode.CORRUPTION;
     }
     if (status.isOk()) status = proveOwnerAbsent(bootstrapOwner(datadir, bootstrap));
@@ -499,7 +493,7 @@ public final class RiverDaemonIdentity {
       return status;
     }
     return createBootstrap(datadir, directory, lockFile, held, incarnation, random, pid,
-        processStartEpochMillis, command, result, priorOwner, true);
+        processStartEpochMillis, result, priorOwner, true);
   }
 
   /**
@@ -515,7 +509,6 @@ public final class RiverDaemonIdentity {
       RiverDaemonFileSystem filesystem,
       long pid,
       long processStartEpochMillis,
-      String command,
       DirectoryListResult entries,
       IdentityResult result) {
     if (!validDatadir(datadir) || directory == null || filesystem == null || entries == null) {
@@ -656,7 +649,7 @@ public final class RiverDaemonIdentity {
     result.complete(directory, held, bootstrap.incarnation, 1L);
     result.setBootstrap(bootstrap.nonce, staging, database, security, lockFile,
         databasePublished, securityPublished, canonicalPath(datadir), pid,
-        processStartEpochMillis, command, true, stageRepair.name, stageRepair.identity);
+        processStartEpochMillis, true, stageRepair.name, stageRepair.identity);
     result.setPriorOwner(lock);
     return StatusCode.OK;
   }
@@ -719,26 +712,26 @@ public final class RiverDaemonIdentity {
         || result.ownerNonce == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = validateCurrentOwner(result.ownerPid, result.ownerStart, result.ownerCommand);
+    StatusCode status = validateCurrentOwner(result.ownerPid, result.ownerStart);
     if (!status.isOk()) return status;
     status = result.lockFile.truncate(0);
     if (status.isOk()) {
       status = writeLockCanonical(result.lockFile, result.datadir, result.incarnation,
-          result.ownerPid, result.ownerStart, result.ownerCommand, result.ownerNonce);
+          result.ownerPid, result.ownerStart, result.ownerNonce);
     }
     if (status.isOk()) result.needsOwnerHandoff = false;
     return status;
   }
 
-  private static StatusCode validateCurrentOwner(long pid, long start, String command) {
+  private static StatusCode validateCurrentOwner(long pid, long start) {
     ProcessHandle current = ProcessHandle.current();
     if (current.pid() != pid) return StatusCode.NOT_OWNER;
     ProcessHandle.Info info = current.info();
-    if (info.startInstant().isEmpty() || info.command().isEmpty()) {
+    if (info.startInstant().isEmpty()) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     return info.startInstant().get().toEpochMilli() == start
-        && command.equals(info.command().get()) ? StatusCode.OK : StatusCode.NOT_OWNER;
+        ? StatusCode.OK : StatusCode.NOT_OWNER;
   }
 
   private static StatusCode validateStagingNames(
@@ -945,9 +938,8 @@ public final class RiverDaemonIdentity {
       DatabaseIncarnation incarnation,
       long pid,
       long start,
-      String command,
       String nonce) {
-    return writeLockCanonical(file, canonicalPath(datadir), incarnation, pid, start, command, nonce);
+    return writeLockCanonical(file, canonicalPath(datadir), incarnation, pid, start, nonce);
   }
 
   private static StatusCode writeLockCanonical(
@@ -956,7 +948,6 @@ public final class RiverDaemonIdentity {
       DatabaseIncarnation incarnation,
       long pid,
       long start,
-      String command,
       String nonce) {
     String body = RiverDaemonIdentityRecords.record(List.of(
       "format=" + RiverDaemonIdentityRecords.LOCK_FORMAT,
@@ -965,7 +956,6 @@ public final class RiverDaemonIdentity {
         "database-incarnation-low=" + incarnation.low(),
         "pid=" + pid,
         "process-start-epoch-millis=" + start,
-        "command=" + command,
         "owner-nonce=" + nonce));
     return write(file, body.getBytes(StandardCharsets.UTF_8));
   }
@@ -975,7 +965,6 @@ public final class RiverDaemonIdentity {
       DatabaseIncarnation incarnation,
       long pid,
       long start,
-      String command,
       String nonce) {
     String stageName = ".bootstrap-" + nonce + ".stage";
     String body = RiverDaemonIdentityRecords.record(List.of(
@@ -984,7 +973,6 @@ public final class RiverDaemonIdentity {
         "database-incarnation-low=" + incarnation.low(),
         "pid=" + pid,
         "process-start-epoch-millis=" + start,
-        "command=" + command,
         "attempt-nonce=" + nonce,
         "database-name=" + DATABASE_NAME,
         "security-name=" + SECURITY_NAME,
@@ -1058,12 +1046,11 @@ public final class RiverDaemonIdentity {
     var process = ProcessHandle.of(owner.pid);
     if (process.isEmpty() || !process.get().isAlive()) return StatusCode.OK;
     var info = process.get().info();
-    if (info.startInstant().isEmpty() || info.command().isEmpty()) {
+    if (info.startInstant().isEmpty()) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     long start = info.startInstant().get().toEpochMilli();
-    String command = info.command().get();
-    return owner.start == start && owner.command.equals(command)
+    return owner.start == start
         ? StatusCode.CONFLICT : StatusCode.OK;
   }
 
@@ -1071,7 +1058,7 @@ public final class RiverDaemonIdentity {
       Path datadir, RiverDaemonIdentityRecords.BootstrapRecord bootstrap) {
     return new RiverDaemonIdentityRecords.LockRecord(
         canonicalPath(datadir), bootstrap.high, bootstrap.low, bootstrap.pid, bootstrap.start,
-        bootstrap.command, bootstrap.nonce);
+        bootstrap.nonce);
   }
 
   private static boolean hasEntry(DirectoryListResult entries, String wanted) {
@@ -1082,7 +1069,7 @@ public final class RiverDaemonIdentity {
   }
 
   private static boolean isLifecycleEntry(String name) {
-    if ("runtime.properties".equals(name) || "stop.request".equals(name)) return true;
+    if ("stop.request".equals(name)) return true;
     if (name.startsWith(".stop-request-") && name.endsWith(".stage")) {
       String nonce = name.substring(".stop-request-".length(), name.length() - ".stage".length());
       return nonce.matches("[0-9a-f]{32}");
@@ -1143,10 +1130,6 @@ public final class RiverDaemonIdentity {
     return path != null && RiverDaemonIdentityRecords.validDatadir(path.toString());
   }
 
-  private static boolean validCommand(String command) {
-    return RiverDaemonIdentityRecords.validCommand(command);
-  }
-
   private static void closeQuiet(RiverDirectory directory) {
     if (directory != null) directory.close();
   }
@@ -1180,7 +1163,6 @@ public final class RiverDaemonIdentity {
     private String datadir;
     private long ownerPid;
     private long ownerStart;
-    private String ownerCommand;
     private String ownerNonce;
     private RiverDaemonIdentityRecords.LockRecord priorOwner;
     private boolean needsOwnerHandoff;
@@ -1202,7 +1184,6 @@ public final class RiverDaemonIdentity {
       datadir = null;
       ownerPid = 0;
       ownerStart = 0;
-      ownerCommand = null;
       ownerNonce = null;
       priorOwner = null;
       needsOwnerHandoff = false;
@@ -1232,7 +1213,6 @@ public final class RiverDaemonIdentity {
         String openedDatadir,
         long openedOwnerPid,
         long openedOwnerStart,
-        String openedOwnerCommand,
         boolean openedNeedsOwnerHandoff,
         String openedStageRepairName,
         io.riverdb.platform.riverd.FileIdentity openedStageRepairIdentity) {
@@ -1246,7 +1226,6 @@ public final class RiverDaemonIdentity {
       datadir = openedDatadir;
       ownerPid = openedOwnerPid;
       ownerStart = openedOwnerStart;
-      ownerCommand = openedOwnerCommand;
       ownerNonce = openedNonce;
       needsOwnerHandoff = openedNeedsOwnerHandoff;
       stageRepairName = openedStageRepairName;
@@ -1266,14 +1245,12 @@ public final class RiverDaemonIdentity {
         RiverDaemonIdentityRecords.LockRecord openedPriorOwner,
         String openedOwnerNonce,
         long openedOwnerPid,
-        long openedOwnerStart,
-        String openedOwnerCommand) {
+        long openedOwnerStart) {
       datadir = openedDatadir;
       priorOwner = openedPriorOwner;
       ownerNonce = openedOwnerNonce;
       ownerPid = openedOwnerPid;
       ownerStart = openedOwnerStart;
-      ownerCommand = openedOwnerCommand;
       needsOwnerHandoff = true;
     }
 
@@ -1299,7 +1276,7 @@ public final class RiverDaemonIdentity {
     RiverDaemonIdentityRecords.LockRecord currentOwner() {
       return new RiverDaemonIdentityRecords.LockRecord(
           datadir, incarnation.high(), incarnation.low(), ownerPid, ownerStart,
-          ownerCommand, ownerNonce);
+          ownerNonce);
     }
     boolean needsOwnerHandoff() { return needsOwnerHandoff; }
 

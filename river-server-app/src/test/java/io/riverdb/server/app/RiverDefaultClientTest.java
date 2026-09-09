@@ -57,10 +57,11 @@ final class RiverDefaultClientTest {
   void startupSummaryIsHumanReadableAndKeepsIpv6EndpointUnambiguous() {
     Path datadir = Path.of("/tmp/river-default-client-test");
     RiverDaemonIdentityRecords.LockRecord owner = new RiverDaemonIdentityRecords.LockRecord(
-        datadir.toString(), 17, 29, 42, 43, "/bin/java", "0123456789abcdef0123456789abcdef");
+        datadir.toString(), 17, 29, 42, 43, "0123456789abcdef0123456789abcdef");
     RiverDaemonRuntimeRecords.Metadata metadata = new RiverDaemonRuntimeRecords.Metadata(
         datadir.toString(), DatabaseIncarnation.of(17, 29), owner, "::1", 9191, 1,
-        "test-version", datadir.resolve("security/client.properties").toString(), null);
+        "test-version", datadir.resolve("security/client.properties").toString(), null,
+        Path.of("/tmp/river-default-client-test-run"));
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 
     RiverDaemonReadyOutput.printSummary(
