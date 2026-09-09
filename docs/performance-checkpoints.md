@@ -1300,3 +1300,36 @@ Owned processes exited and the temporary database was removed. An earlier smoke
 asserted a nonexistent AUTH status for token rejection; its fixture was corrected
 to the existing contract before this successful run. No product change was
 needed for that assertion.
+
+
+Native slowdown investigation (no production optimization applied): matched
+5s/30s profiles produced JVM 154.6 TPS and native O2 105.133 TPS. Native pauses
+totaled 52.387 ms over the approximate 30s measurement interval; GC pauses cannot
+explain the throughput gap. Evidence under
+`/private/tmp/native-cause-{jvm,native}-profile-1/` includes GC logs, sampled
+stacks, workload artifacts, cleanup results and JVM JFR.
+
+A symbol-retaining O2 build reproduced 108.2 TPS. Its largest Java execution leaf
+was `DirectByteBuffer.get`: 273 of approximately 1,820 Java execution samples.
+Native disassembly shows four out-of-line byte-getter calls for one
+`BTreePage.getInt`, retaining per-access bounds/session checks. A temporary O3
+compiler-only build inlined these getters and reached 129.6 TPS. Getter leaf
+samples fell to 20; samples moved into callers. This supports expensive native
+accessor code generation as a material contributor, but O3 changes optimization
+globally, so this experiment does not assign the entire gain or remaining gap
+to one B-tree method. The JVM still leads.
+
+Evidence: `/private/tmp/native-cause-native-symbols-1/`,
+`/private/tmp/native-cause-native-o3-1/`,
+`/private/tmp/river-native-hot-assembly.txt`, and
+`/private/tmp/river-native-o3-btree-assembly.txt`.
+The compiler experiments used temporary Gradle initialization scripts; no
+production source/build setting changed. All workload invariants and owned
+cleanup checks passed. The original O2 executable was restored after retaining
+the experimental binaries in `/private/tmp/river-native-before-symbols/`.
+
+A bounded follow-up is to express canonical fixed-width reads/writes directly
+with static fixed-endian ByteBuffer-view VarHandles in FormatBytes and route
+the B-tree duplicate primitives through that owner. This is a proposed source
+change, not an implemented or measured improvement. Keep CRC, key comparison,
+and broader buffer API changes outside that slice.
