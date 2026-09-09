@@ -1136,3 +1136,29 @@ Linux/ext4/XFS. Slopmark fell for identity (988.965→935.340), instance owner
 (245.744→221.793), and server (122.729→113.333). Full evidence and review are
 recorded in `docs/tickets/tic-1c4d.md`. Windows execution remains outstanding
 for the overall standalone milestone.
+
+
+## 2026-09-09 — unified River executable baseline (tic-ed14 / tic-9cfd / tic-a51d)
+
+Baseline source: `af562206`, with ticket-only planning commit `849c8f12` on
+`ticket/tic-ed14-unified-command-integration`. Built using
+`./gradlew --no-daemon :river-bench:installTps`; build passed. No other build or
+workload overlapped the two measured samples. Default runtime was OpenJDK
+26.0.2.1 on macOS arm64; native/JVM packaging comparisons must separately match
+the GraalVM runtime version.
+
+Commands: `tools/tps-test.sh --version=unified-before-N --seed=42
+--output-dir=PATH` for N=1,2. Defaults: tiny, standard mix, serializable,
+no-wait-stress, one warehouse, ten terminals, 32 maximum attempts, one second
+warmup and ten measured seconds, unchanged explicit resource budgets and durable
+commit behavior. Both completed checkpoint with status OK and exit 0, with
+successful deadlock reconciliation and performance capture: **157.7, 157.8 TPS**.
+Artifacts: `/private/tmp/river-unified-before-1-authorized/` and
+`/private/tmp/river-unified-before-2/`. The initial sandbox-restricted launch at
+`/private/tmp/river-unified-before-1/` failed startup and is not a TPS sample.
+
+Slopmark baseline: `/private/tmp/river-unified-slopmark-before.txt`, covering
+river-cli, river-server-app production sources and tools. Command parser 215.049,
+foreground owner 163.184, server main 13.044, client main 8.61233. These are review
+signals; this delivery does not authorize changes to database hot paths.
+Candidate validation and native feasibility remain pending.

@@ -1,6 +1,6 @@
 ---
 id: tic-ed14
-status: open
+status: in_progress
 type: story
 priority: 1
 assignee: blater
