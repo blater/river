@@ -180,6 +180,35 @@ riverd_protocol=river-v4
 riverd_status=OK
 ```
 
+## External workload runners
+
+Run the installed executable as a foreground child:
+
+```sh
+river server start --datadir=/absolute/path/to/run/instance --port=0
+```
+
+Give each run its own data directory. Read the published records until
+`riverd_status=ready`, then use `riverd_client_config` to connect. Keep monitoring
+child exit: readiness describes successful startup, not continued availability.
+The generated client configuration supplies the endpoint, pinned certificate
+and token file paths. Java clients use the JDBC URL above; other clients use
+the public River protocol with the same TLS and token authentication.
+
+After closing client connections, request shutdown and wait for the child:
+
+```sh
+river server stop --datadir=/absolute/path/to/run/instance
+```
+
+Use the explicit run directory for cleanup on success, failure and interruption;
+never select the user's default instance. Remove only runner-owned temporary
+data after the child exits. If the child cannot be stopped, report the failure
+and retain its data for diagnosis. A runner needs no River checkout, Gradle tasks, server classpath,
+process scan or private runtime-file parsing. Record the executable path,
+operator-supplied version label, workload settings and result. PostgreSQL wire
+support is not required for this lifecycle.
+
 ## Exit codes and errors
 
 Ordinary command termination has three public exit classes:

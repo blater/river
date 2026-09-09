@@ -109,20 +109,18 @@ workload runner. It may execute one selected database target and publish a
 versioned result artifact; it does not own durable cross-database comparison
 policy.
 
-The current pre-`riverd` harness contract accepts `--river-home`, builds only
-the required River classes, starts a fresh ephemeral River server on an unused
-port, and stops it on success, failure, or interruption. It does not run
-`clean`. This is an explicit external diagnostic contract owned by
-`river-harness`; it is removed when [`tic-bfca`](docs/tickets/tic-bfca.md)
-proves migration to the accepted installed `riverd` lifecycle. River must not
-add wrappers or APIs merely to preserve the source-tree launch path.
+The River target launches the installed `river` executable with `river server
+start`, uses the published client configuration for authenticated connections,
+and stops its owned instance through `river server stop --datadir=PATH`.
+Select the executable with `--river-executable`; it defaults to `river` on PATH.
+The harness does not build River or require a source checkout. Supply
+`--river-version=<meaningful-variation>` when testing multiple builds with the
+same public version. The consumer contract is in `docs/riverd-cli.md` and the
+migration evidence is in [`tic-bfca`](docs/tickets/tic-bfca.md).
 
-The accepted `riverd` process/readiness/client-configuration contract remains
-a prerequisite for harness-based River promotion and the external comparison
-pipeline. Until [`tic-45a7`](docs/tickets/tic-45a7.md) closes, current harness
-runs are diagnostic workload evidence only. Once it closes, use the exact
-launcher option and command recorded by the linked `river-harness` delivery and
-delete the superseded `--river-home` path.
+Until [`tic-45a7`](docs/tickets/tic-45a7.md) closes, runs remain diagnostic
+workload evidence. Functional harness runs do not wait for the formal
+multi-platform recovery or comparison campaign.
 
 The harness provides two data profiles:
 
@@ -143,7 +141,7 @@ Choose the smallest level that can answer the current question:
 
    ```sh
    ~/src/ingres/river-harness/benchmark run river tpcc sample new-order \
-     --river-home="$PWD" --warmup=1s --duration=3s --workers=1 \
+     --river-executable="$PWD/bin/river" --warmup=1s --duration=3s --workers=1 \
      --warehouses=1 --seed=42 --max-retries=3 --no-report
    ```
 
@@ -155,7 +153,7 @@ Choose the smallest level that can answer the current question:
    ```sh
    ~/src/ingres/river-harness/benchmark run river tpcc sample \
      new-order payment \
-     --river-home="$PWD" --warmup=2s --duration=10s --workers=4 \
+     --river-executable="$PWD/bin/river" --warmup=2s --duration=10s --workers=4 \
      --warehouses=1 --seed=42 --max-retries=3
    ```
 
@@ -170,7 +168,7 @@ Choose the smallest level that can answer the current question:
      --seed=42 --max-retries=3
 
    ~/src/ingres/river-harness/benchmark run river tpcc sample new-order \
-     --river-home="$PWD" --warmup=5s --duration=30s --workers=4 \
+     --river-executable="$PWD/bin/river" --warmup=5s --duration=30s --workers=4 \
      --warehouses=1 --seed=42 --max-retries=3
    ```
 
@@ -190,11 +188,11 @@ Choose the smallest level that can answer the current question:
 
    ```sh
    ~/src/ingres/river-harness/benchmark run river tpcc sample all \
-     --river-home="$PWD" --warmup=5s --duration=30s --workers=8 \
+     --river-executable="$PWD/bin/river" --warmup=5s --duration=30s --workers=8 \
      --warehouses=1 --seed=42 --max-retries=3
 
    ~/src/ingres/river-harness/benchmark run river tpcc full all \
-     --river-home="$PWD" --warmup=5s --duration=1m --workers=8 \
+     --river-executable="$PWD/bin/river" --warmup=5s --duration=1m --workers=8 \
      --warehouses=1 --seed=42 --max-retries=3
    ```
 
@@ -235,12 +233,9 @@ The default TPS test version is the current Git branch name. If several
 variants are tested from one branch, pass `--version=<meaningful-variation>`
 for each variant and record that exact value in the TPS log or artifact. Record the workload configuration alongside that label.
 
-A current `--river-home` River harness invocation is also a Gradle build and
-must obey the one-build-at-a-time rule. After the `riverd` migration it must not
-be a Gradle build. In both cases it consumes the same host CPU, memory, storage,
-and server resources, so do not overlap any harness run with compilation,
-tests, profiling, another harness run, or another database workload on the same
-host.
+The installed-server harness does not invoke Gradle. Its workload consumes
+host CPU, memory and storage, so do not overlap a run with compilation, tests,
+profiling, another harness run or another database workload on the same host.
 For MariaDB, use the harness target lifecycle rather than a low-level Go command
 so its guarded Homebrew lifecycle and owned-database cleanup apply. If MariaDB
 is already service-managed or active, do not stop the user's server; let the

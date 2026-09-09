@@ -25,11 +25,16 @@ sidecar.
 
 ## Design
 
+Run River as the standalone `river server` process via its public protocol
+client. Use the same logical workload against the MariaDB target; neither
+PostgreSQL wire support nor a PostgreSQL target is required. This comparison
+campaign does not block the functional harness migration in tic-bfca.
+
 Use identical runner manifests and multiple longer interleaved samples. The
 sidecar consumes only versioned artifacts and reports throughput, latency,
-retries, failures, CPU where available, requests, bytes, and setup/runtime
-provenance; do not compare against tools/tps-test.sh figures or import
-river-harness internals.
+retries, failures, CPU where available, requests, bytes, and build/version
+labels and workload configuration; do not compare against tools/tps-test.sh
+figures or import river-harness internals.
 
 ## Acceptance Criteria
 
@@ -37,3 +42,10 @@ The baseline quantifies confidence and per-family gaps, proves artifact and
 configuration eligibility, identifies the largest evidenced River mechanism,
 and creates concrete owner-scoped tickets in the relevant repositories rather
 than a generic parity rewrite.
+
+## Functional prerequisite delivered
+
+Harness commit `15ca297` produces valid, matching River/MariaDB all-family
+artifacts through the installed server. See tic-bfca for diagnostic results.
+This ticket remains open for the longer family-level comparison campaign and
+independent comparator; a short smoke pair does not close that acceptance.

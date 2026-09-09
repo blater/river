@@ -83,7 +83,7 @@ connection boundaries; its protocol implementation is outside that ticket.
 | --- | --- | --- | --- |
 | Standalone `riverd` | Portable APFS contract [`tic-485d`](tickets/tic-485d.md) delivered; SQL/security audit is deferred | [`tic-615d`](tickets/tic-615d.md) consumes APFS operations; [`tic-867d`](tickets/tic-867d.md) and [`tic-b75d`](tickets/tic-b75d.md) add Linux/Windows; then [`tic-ec50`](tickets/tic-ec50.md) composes the installed lifecycle | Safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
 | Transaction performance | [`tic-2828`](tickets/tic-2828.md) is closed with warmed page-generation reuse and a passing joint engine/clean-test gate; `tic-288d`, `tic-e2be` and `tic-50e8` are closed against the accepted joint checkpoint; `tic-5cc0` is now closed at `perf-checkpoint-20260907-savepoint-admission`; [`tic-af29`](tickets/tic-af29.md) is closed at `perf-checkpoint-20260907-lock-block-causality` as required observability with inconclusive performance; [`tic-8e74`](tickets/tic-8e74.md) is closed with the independent snapshot-cleanup gauge and no repeated diagnostic regression; [`tic-0636`](tickets/tic-0636.md) remains historically closed, but later commits removed its wired guarantees; [`tic-1fe7`](tickets/tic-1fe7.md) is closed with the current contract reconciliation; [`tic-ed12`](tickets/tic-ed12.md) is closed with verified prebuilt artifact binding; [`tic-d7c2`](tickets/tic-d7c2.md) is closed with qualified invocation host ownership; resume [`tic-1dda`](tickets/tic-1dda.md) | Complete [`tic-1dda`](tickets/tic-1dda.md) with the serializable P0 matrix, including the mixed-isolation reproducer; preserve the first failed criterion | The accepted [`tic-b368`](tickets/tic-b368.md) design and closed [`tic-7352`](tickets/tic-7352.md) serial ownership foundation precede overlap; after P0, complete the [`tic-4d14`](tickets/tic-4d14.md) lock-scope audit; re-baseline existing logical/WAL mechanisms before editing them; then admit cumulative cohorts, remove one proved redundant holding rule, implement only a real pre-force overlap mechanism, run P1 promotion, and proceed to the Payment A/B |
-| Stress and comparison | No River promotion work until [`tic-45a7`](tickets/tic-45a7.md) closes; `tools/tps-test.sh` remains available for River diagnostics | Verify `river-harness` uses the published `riverd` process contract; establish the independent artifact-comparison sidecar | [`tic-c7bb`](tickets/tic-c7bb.md): 500 committed TPS; then [`tic-9c58`](tickets/tic-9c58.md): MariaDB/PostgreSQL comparison and Alpha3 parity |
+| Stress and comparison | No River promotion work until [`tic-45a7`](tickets/tic-45a7.md) closes; `tools/tps-test.sh` remains available for River diagnostics | Standalone River/MariaDB harness runs delivered in `tic-bfca`; establish the independent artifact-comparison sidecar | [`tic-c7bb`](tickets/tic-c7bb.md): 500 committed TPS; then [`tic-9c58`](tickets/tic-9c58.md): MariaDB/PostgreSQL comparison and Alpha3 parity |
 | Workflow safety | [`tic-701f`](tickets/tic-701f.md) and [`tic-dd80`](tickets/tic-dd80.md) may proceed when they do not displace P0 product work | Atomic cross-worktree claims and promotion enforcement | Close [`tic-ef07`](tickets/tic-ef07.md) when both enforcement gaps are proved |
 
 The two P0 product lanes may proceed concurrently in separate worktrees. Builds,
@@ -126,8 +126,10 @@ path. `tic-831a` records the user's platform requirement amendment.
    verify the external harness migration in [`tic-bfca`](tickets/tic-bfca.md).
 8. Certify the complete prerequisite in [`tic-45a7`](tickets/tic-45a7.md).
 
-No harness-based River promotion or cross-engine comparison starts before step
-8. This does not block focused engine work or River-specific diagnostics.
+Step 8 gates performance promotion and the formal comparison campaign. The
+standalone harness migration and focused River/MariaDB diagnostic runs can
+proceed using the delivered start/stop/client contract; they do not wait for
+multi-platform recovery qualification.
 
 ### B. Remove the measured transaction ceilings
 
@@ -227,7 +229,7 @@ the certified `riverd` lifecycle are complete.
    [`tic-bd79`](tickets/tic-bd79.md).
 3. Run the interleaved campaign in [`tic-630d`](tickets/tic-630d.md), closing
    [`tic-c7bb`](tickets/tic-c7bb.md) only on honest lower-bound evidence.
-4. In parallel after `riverd` certification, classify workload compatibility
+4. After the standalone harness migration, classify workload compatibility
    through
    [`tic-46ec`](tickets/tic-46ec.md) and [`tic-e6c5`](tickets/tic-e6c5.md).
 5. Define and verify the independent comparison sidecar through

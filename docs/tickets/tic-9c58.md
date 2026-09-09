@@ -18,11 +18,18 @@ created: 2026-09-04T14:59:38.679044Z
 ---
 # Parity gate: compare external stress artifacts at Alpha3 scale
 
-Produce semantically eligible River, MariaDB, and PostgreSQL stress artifacts,
-compare them in an external engine-neutral sidecar, quantify the gap by family
-and mechanism, and satisfy the normative relative and capacity gates.
+First produce semantically eligible River and MariaDB stress artifacts, compare
+them in an external engine-neutral sidecar, quantify the gap by family and
+mechanism, and satisfy the normative relative and capacity gates.
 
 ## Design
+
+Use the standalone `river server` lifecycle and public River protocol
+connection. Keep target lifecycle, connection and SQL bindings in harness
+adapters so a PostgreSQL target or another database can be added later.
+PostgreSQL wire support in River is a separate capability, not a dependency of
+these runs. The initial delivery covers River and MariaDB; additional targets
+are follow-ups.
 
 River-harness remains the stress runner and emits a stable versioned result
 artifact. Comparison tooling lives outside River and consumes artifacts through
