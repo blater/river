@@ -1,5 +1,12 @@
 # riverd command-line contract
 
+The next command-interface delivery is specified in
+[tic-ed14](tickets/tic-ed14.md): port existing behavior to one `river` command
+with default client mode and `river server`. Then
+[tic-9cfd](tickets/tic-9cfd.md) consolidates the complete help hierarchy and
+supersedes the help-alias rules below. Finally,
+[tic-a51d](tickets/tic-a51d.md) owns single-file native packaging.
+
 Status: accepted implementation target. An installed start/JDBC/restart candidate
 is under validation; required platform and acceptance checks remain open. This document owns the user-facing commands and behavior;
 [ADR 0014](adr/0014-riverd-instance-security.md) owns their security and durable
