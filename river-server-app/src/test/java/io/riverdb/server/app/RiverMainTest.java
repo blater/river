@@ -35,12 +35,9 @@ final class RiverMainTest {
       else System.setProperty("user.home", previous);
     }
 
-    assertEquals(1, invocation.exit);
-    assertTrue(invocation.error.contains(
-        home.toAbsolutePath().normalize()
-            .resolve(".river/default/security/client.properties").toString()));
-    assertTrue(invocation.error.contains("river server start"));
-    assertEquals("", invocation.output);
+    assertEquals(0, invocation.exit);
+    assertTrue(invocation.output.contains("river server start"));
+    assertEquals("", invocation.error);
   }
 
   @Test

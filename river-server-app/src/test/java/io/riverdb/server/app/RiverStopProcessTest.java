@@ -31,10 +31,21 @@ final class RiverStopProcessTest {
     home = home.toRealPath();
     Path defaultData = home.resolve(".river/default");
     Path otherData = home.resolve("other");
+    Path registry = home.resolve(".river/run/instances");
+    String staleName;
+    byte[] staleBytes;
     try (Server first = start(home); Server second = start(home, "--datadir=" + otherData)) {
       Result sql = invoke(home, "CREATE TABLE stop_test (id BIGINT PRIMARY KEY);"
           + "INSERT INTO stop_test VALUES (7);", defaultData.resolve("security/client.properties").toString());
       assertEquals(0, sql.exit, sql.text);
+      try (var records = Files.list(registry)) {
+        Path record = records.filter(path -> {
+          try { return Files.readString(path).contains("datadir=" + otherData + "\n"); }
+          catch (IOException failure) { throw new java.io.UncheckedIOException(failure); }
+        }).findFirst().orElseThrow();
+        staleName = record.getFileName().toString();
+        staleBytes = Files.readAllBytes(record);
+      }
       Result listing = invoke(home, "", "ps");
       assertEquals(0, listing.exit, listing.text);
       assertTrue(listing.text.contains(first.endpoint()), listing.text);
@@ -68,11 +79,31 @@ final class RiverStopProcessTest {
       assertEquals(0, stop.exit, stop.text);
       restarted.assertExited();
     }
+    // A crashed benchmark can leave a valid registration for a removed directory.
+    try (var paths = Files.walk(otherData)) {
+      for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.delete(path);
+    }
+    RiverDaemonFileSystemResult filesystem = new RiverDaemonFileSystemResult();
+    assertEquals(StatusCode.OK, RiverDaemonFileSystems.current(filesystem));
+    RiverDirectoryResult directory = new RiverDirectoryResult();
+    assertEquals(StatusCode.OK, filesystem.fileSystem().openDirectory(registry, directory));
+    RiverFileResult record = new RiverFileResult();
+    try {
+      assertEquals(StatusCode.OK, directory.directory().openFile(staleName,
+          io.riverdb.platform.riverd.RiverOpenMode.CREATE_NEW, record));
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.write(record.file(), staleBytes));
+    } finally {
+      if (record.file() != null) record.file().close();
+      directory.directory().close();
+    }
     Result empty = invoke(home, "", "ps");
     assertEquals(0, empty.exit, empty.text);
     assertTrue(empty.text.contains("river server start"), empty.text);
+    assertFalse(empty.text.contains("warning:"), empty.text);
+    assertFalse(empty.text.contains("IO_FAILURE"), empty.text);
     Result absent = invoke(home, "", "stop");
-    assertEquals(1, absent.exit, absent.text);
+    assertEquals(0, absent.exit, absent.text);
+    assertTrue(absent.text.contains("No River server is running"), absent.text);
     assertTrue(Files.exists(defaultData.resolve("instance.properties")));
   }
 

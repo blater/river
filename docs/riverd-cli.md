@@ -36,7 +36,8 @@ selects its current running process. There is no separate instance-name catalog.
 - `river help`, `river -h`, and `river --help` print identical top-level help. Bare `river`
   runs SQL through the default instance configuration at
   `~/.river/default/security/client.properties`; a missing configuration suggests
-  `river server start`.
+  `river server start`. With no configuration, an interactive invocation or empty
+  input prints usage successfully; supplied SQL returns an error.
 - `river help <topic>`, `river -h <topic>`, and `river --help <topic>` are equivalent
   to the topic's trailing `-h` or `--help` form. Examples include `river help cli`,
   `river help server`, `river server start --help`, and
@@ -125,8 +126,8 @@ SERVER           DEFAULT  DATA DIRECTORY
 Copy the SERVER value into `river stop HOST:PORT`. IPv6 uses brackets;
 `localhost:PORT` selects the IPv4 loopback endpoint. Bare `stop` selects
 `~/.river/default`, even when other servers are running. An explicit data
-directory and an endpoint cannot be combined. A missing or ambiguous endpoint
-returns an error rather than choosing another server. Remote administration
+directory and an endpoint cannot be combined. An endpoint with no running server
+prints a message and exits successfully. An ambiguous endpoint returns an error. Remote administration
 is not supported.
 
 Stop requests
@@ -135,16 +136,16 @@ The default timeout is `30s`. A duration is a positive decimal integer followed
 by `ms`, `s` or `m`, fitting signed-long milliseconds. Fractions, signs, zero,
 whitespace, missing units and overflow are invalid.
 
-A timeout returns an error and never escalates to force-killing. A missing,
-stale or mismatched owner returns a clear error. The command does not select or
+A timeout returns an error and never escalates to force-killing. An absent or already stopped instance exits successfully.
+Invalid metadata or a mismatched active owner returns a clear error. The command does not select or
 signal a process by PID. Ctrl-C and platform shutdown signals use the same
 shutdown path: close the listener before the database and preserve committed
 data for restart.
 
 `ps` lists verified instances registered by the current user, sorted by data
 directory, with the endpoint, default-instance marker and data directory. An empty list exits
-successfully and suggests `river server start`. Invalid or stale records produce a
-concise warning and are preserved.
+successfully and suggests `river server start`. Registrations for absent or stopped instances are skipped. Invalid or unreadable
+records produce a concise warning. Records are preserved.
 
 Successful stop prints a confirmation followed by status records:
 

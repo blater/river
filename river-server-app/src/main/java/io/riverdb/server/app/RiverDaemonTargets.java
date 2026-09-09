@@ -12,6 +12,8 @@ import io.riverdb.platform.riverd.RiverFileResult;
 import io.riverdb.platform.riverd.RiverOpenMode;
 import java.io.PrintStream;
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -56,7 +58,7 @@ final class RiverDaemonTargets {
     status = filesystem.openDirectory(paths.registry, registryResult);
     if (status == StatusCode.CONFLICT) {
       printHeader(out, serverColumnWidth(List.of()));
-      out.println("No River servers are registered.");
+      out.println("No River servers are running.");
       out.println("Start one with: river server start");
       return StatusCode.OK;
     }
@@ -81,10 +83,15 @@ final class RiverDaemonTargets {
           continue;
         }
         RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
-        StatusCode targetStatus = RiverDaemonTarget.open(
+        StatusCode targetStatus = openRunning(
             filesystem, Path.of(values.record.datadir), targetResult);
         if (targetStatus.isOk()) {
           RiverDaemonTarget target = targetResult.target();
+          if (target == null) continue;
+          if (target.runtime == null) {
+            target.close();
+            continue;
+          }
           targetStatus = verifyRegistry(values.record, entries.name(index), target);
           if (targetStatus.isOk()) targetStatus = target.revalidate(true);
           if (targetStatus.isOk()) {
@@ -102,7 +109,10 @@ final class RiverDaemonTargets {
         out.printf("%-" + serverWidth + "s %-7s %s%n", row.endpoint,
             row.defaultTarget ? "yes" : "no", row.datadir);
       }
-      if (rows.isEmpty()) out.println("Start one with: river server start");
+      if (rows.isEmpty()) {
+        out.println("No River servers are running.");
+        out.println("Start one with: river server start");
+      }
       return StatusCode.OK;
     } finally {
       registry.close();
@@ -114,9 +124,8 @@ final class RiverDaemonTargets {
       Path datadir,
       RiverDaemonEndpoint requested,
       RiverDaemonTarget.Result result) {
-    StatusCode status = RiverDaemonTarget.open(filesystem, datadir, result);
-    if (status == StatusCode.CONFLICT) return StatusCode.NOT_OWNER;
-    if (!status.isOk()) return status;
+    StatusCode status = openRunning(filesystem, datadir, result);
+    if (!status.isOk() || result.target() == null) return status;
     RiverDaemonTarget target = result.target();
     // A local caller can still join an accepted stop after runtime cleanup.
     status = target.revalidate(requested != null);
@@ -139,7 +148,7 @@ final class RiverDaemonTargets {
       PrintStream errors) {
     RiverDirectoryResult registryResult = new RiverDirectoryResult();
     StatusCode status = filesystem.openDirectory(registryPath, registryResult);
-    if (status == StatusCode.CONFLICT) return StatusCode.NOT_OWNER;
+    if (status == StatusCode.CONFLICT) return StatusCode.OK;
     if (!status.isOk()) return status;
     RiverDirectory registry = registryResult.directory();
     RiverDaemonTarget selected = null;
@@ -162,13 +171,18 @@ final class RiverDaemonTargets {
         }
         if (!requested.matches(values.record.address, values.record.port)) continue;
         RiverDaemonTarget.Result candidateResult = new RiverDaemonTarget.Result();
-        status = RiverDaemonTarget.open(
+        status = openRunning(
             filesystem, Path.of(values.record.datadir), candidateResult);
         if (!status.isOk()) {
           warn(errors, entries.name(index), status);
           continue;
         }
         RiverDaemonTarget candidate = candidateResult.target();
+        if (candidate == null) continue;
+        if (candidate.runtime == null) {
+          candidate.close();
+          continue;
+        }
         status = verifyRegistry(values.record, entries.name(index), candidate);
         if (status.isOk()) status = candidate.revalidate(true);
         if (!status.isOk()) {
@@ -183,13 +197,29 @@ final class RiverDaemonTargets {
         }
         selected = candidate;
       }
-      if (selected == null) return StatusCode.NOT_OWNER;
+      if (selected == null) return StatusCode.OK;
       result.set(selected);
       return StatusCode.OK;
     } finally {
       registry.close();
       if (selected == null) result.reset();
     }
+  }
+
+  /** OK with no target means an absent directory or a released server lock. */
+  private static StatusCode openRunning(
+      RiverDaemonFileSystem filesystem, Path datadir, RiverDaemonTarget.Result result) {
+    StatusCode status = RiverDaemonTarget.open(filesystem, datadir, result);
+    if (!status.isOk()) {
+      return Files.notExists(datadir, LinkOption.NOFOLLOW_LINKS) ? StatusCode.OK : status;
+    }
+    RiverDaemonTarget target = result.target();
+    status = target.lockHeld();
+    if (status == StatusCode.OK) return status;
+    StatusCode close = target.close();
+    result.reset();
+    if (!close.isOk() && close != StatusCode.CLOSED) return close;
+    return status == StatusCode.NOT_OWNER ? StatusCode.OK : status;
   }
 
   private static StatusCode verifyRegistry(

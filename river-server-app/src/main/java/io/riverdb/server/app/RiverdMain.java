@@ -57,6 +57,12 @@ public final class RiverdMain {
           command.datadir(), command.server(), result, errors);
       if (status.isOk()) {
         RiverDaemonTarget target = result.target();
+        if (target == null) {
+          String selected = command.server() != null ? command.server()
+              : command.datadir() != null ? command.datadir().toString() : "the default instance";
+          output.println("No River server is running for " + selected + ".");
+          return 0;
+        }
         status = RiverDaemonStop.request(target, command.timeoutMillis());
         StatusCode close = target.close();
         if (status.isOk() && !close.isOk() && close != StatusCode.CLOSED) status = close;
