@@ -52,8 +52,9 @@ final class RiverdCommandHelpTest {
         "server", new String[] {"start", "stop", "ps", "credentials", "version", "9191"},
         "server start", new String[] {"-D", "--datadir=PATH", "--port=PORT", "--ip=ADDRESS",
             "--maximum-connections=N", "--ready-file=PATH", "65535", "127.0.0.1"},
-        "server stop", new String[] {"--datadir=PATH", "--timeout=DURATION", "30s", "unavailable"},
-        "server ps", new String[] {"no operation options", "unavailable"},
+        "server stop", new String[] {"HOST:PORT", "--datadir=PATH", "--timeout=DURATION", "30s",
+            "127.0.0.1", "[::1]"},
+        "server ps", new String[] {"current-user", "empty result"},
         "server credentials", new String[] {"renew", "stopped instance"},
         "server credentials renew", new String[] {"--datadir=PATH", "stopped instance", "unavailable"},
         "version", new String[] {"protocol version", "no operation options"},
@@ -73,15 +74,17 @@ final class RiverdCommandHelpTest {
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parse("stop", "--port=1"));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parse("ps", "--datadir=/tmp/river"));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parse("ps", "-D", "/tmp/river"));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parse("ps", "--timeout=1s"));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parse("ps", "localhost:9191"));
     Invocation unknown = invoke("help", "server", "unknown");
     assertEquals(2, unknown.exit);
     assertTrue(unknown.error.contains("unknown help topic"));
   }
 
   @Test
-  void unavailableOperationsDoNotBecomeExecutable() {
-    assertEquals(StatusCode.FEATURE_NOT_SUPPORTED, parse("stop"));
-    assertEquals(StatusCode.FEATURE_NOT_SUPPORTED, parse("ps"));
+  void operationAliasesParseThroughTheSameCommandPath() {
+    assertEquals(StatusCode.OK, parse("stop"));
+    assertEquals(StatusCode.OK, parse("ps"));
     assertEquals(StatusCode.FEATURE_NOT_SUPPORTED, parse("credentials", "renew"));
   }
 

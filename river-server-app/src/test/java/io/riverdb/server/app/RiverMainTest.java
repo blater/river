@@ -62,6 +62,19 @@ final class RiverMainTest {
     assertEquals(2, invalid.exit);
   }
 
+  @Test
+  void rootOperationAliasesShareServerHelp() {
+    Invocation rootStop = invoke("stop", "--help");
+    Invocation serverStop = invoke("server", "stop", "--help");
+    Invocation rootPs = invoke("ps", "--help");
+    Invocation serverPs = invoke("server", "ps", "--help");
+
+    assertEquals(0, rootStop.exit);
+    assertEquals(rootStop.output, serverStop.output);
+    assertEquals(0, rootPs.exit);
+    assertEquals(rootPs.output, serverPs.output);
+  }
+
   private static Invocation invoke(String... arguments) {
     ByteArrayOutputStream output = new ByteArrayOutputStream();
     ByteArrayOutputStream error = new ByteArrayOutputStream();

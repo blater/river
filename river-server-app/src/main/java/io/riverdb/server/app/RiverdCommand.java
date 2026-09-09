@@ -5,7 +5,7 @@ public enum RiverdCommand {
   HELP,
   VERSION,
   START,
-  STOP_UNAVAILABLE,
-  PS_UNAVAILABLE,
+  STOP,
+  PS,
   CREDENTIALS_RENEW_UNAVAILABLE
 }

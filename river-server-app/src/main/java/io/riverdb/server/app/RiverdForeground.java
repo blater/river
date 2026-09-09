@@ -67,6 +67,8 @@ final class RiverdForeground {
       status = RiverDaemonInstance.prepareRestart(paths.datadir, filesystem, random,
           resources.request(), EmbeddedLockDiagnosticsConfig.disabled(),
           resources.maximumActiveTransactions(), preparation);
+      if (status.isOk()) status = RiverDaemonStop.recoverStale(
+          filesystem, preparation.identity());
       if (status.isOk()) status = RiverDaemonRuntimeRecords.recoverStale(
           paths.datadir, filesystem, preparation.identity(), paths.registry);
       if (status.isOk()) status = RiverDaemonInstance.openPreparedRestart(
@@ -101,6 +103,10 @@ final class RiverdForeground {
       if (!closed.isOk()) RiverdMain.reportFailure(closed, "riverd shutdown failed");
     }, "riverd-shutdown"));
     status = lifecycle.publish(filesystem, paths, certificateSha256);
+    if (status == StatusCode.CANCELLED) {
+      lifecycle.shutdown();
+      return lifecycle.status();
+    }
     if (!status.isOk()) {
       lifecycle.shutdown();
       return status;
@@ -108,11 +114,12 @@ final class RiverdForeground {
     RiverDaemonReadyOutput.printSummary(metadata, command.maximumConnections(), System.err);
     try {
       while (!lifecycle.stopped()) {
+        if (lifecycle.pollStop()) break;
         if (!lifecycle.serverRunning()) {
           lifecycle.shutdown();
           break;
         }
-        lifecycle.await(1_000L);
+        lifecycle.await(100L);
       }
     } catch (InterruptedException interrupted) {
       Thread.currentThread().interrupt();
@@ -155,8 +162,10 @@ final class RiverdForeground {
     private final RiverDaemonFileSystem filesystem;
     private final Path registry;
     private final RiverDaemonRuntimeRecords.Metadata metadata;
+    private final RiverDaemonStop.Control control;
     private final CountDownLatch stopped = new CountDownLatch(1);
     private StatusCode status = StatusCode.OK;
+    private StatusCode lastControlStatus = StatusCode.OK;
 
     Lifecycle(RiverDaemonInstance instance, RiverDaemonIdentity.IdentityResult identity,
         RiverDaemonFileSystem filesystem,
@@ -166,6 +175,7 @@ final class RiverdForeground {
       this.filesystem = filesystem;
       this.registry = registry;
       this.metadata = metadata;
+      control = new RiverDaemonStop.Control(filesystem, identity, metadata);
     }
 
     void await(long millis) throws InterruptedException {
@@ -177,9 +187,23 @@ final class RiverdForeground {
       if (stopped()) return StatusCode.CANCELLED;
       StatusCode current = instance.checkCredentialValidity();
       if (current.isOk()) current = publishRuntimeAndRegistry(filesystem, paths, identity, metadata);
+      if (current.isOk()) current = control.poll();
       if (current.isOk()) current = RiverDaemonReadyOutput.publish(
           filesystem, paths.registry, metadata, certificateSha256, System.out, System.err);
       return current;
+    }
+
+    synchronized boolean pollStop() {
+      StatusCode requested = control.poll();
+      if (requested == StatusCode.CANCELLED) {
+        shutdown();
+        return true;
+      }
+      if (!requested.isOk() && requested != lastControlStatus) {
+        System.err.println("River stop request rejected: " + requested);
+      }
+      lastControlStatus = requested;
+      return false;
     }
 
     synchronized void shutdown() {
@@ -188,6 +212,8 @@ final class RiverdForeground {
       if (instance.servicesClosed()) {
         status = firstFailure(status, RiverDaemonRuntimeRecords.cleanupCurrent(
             filesystem, identity, registry, metadata));
+        // Keep the acceptance receipt when shutdown failed; absence must not report success.
+        if (status.isOk()) status = control.cleanup();
         status = firstFailure(status, instance.close());
       }
       // A nonterminal database close retains its lock and runtime records until process

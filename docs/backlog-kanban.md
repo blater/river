@@ -116,8 +116,8 @@ path. `tic-831a` records the user's platform requirement amendment.
    migrate every River caller including diagnostics, and delete all plain APIs;
    then prove the distribution and no-plain-path gate in
    [`tic-95e8`](tickets/tic-95e8.md).
-5. Deliver exact stop and instance discovery in
-   [`tic-0803`](tickets/tic-0803.md) then [`tic-d2e9`](tickets/tic-d2e9.md).
+5. Local stop and instance discovery are delivered in
+   [`tic-0803`](tickets/tic-0803.md) and [`tic-d2e9`](tickets/tic-d2e9.md).
    Credential renewal in [`tic-b901`](tickets/tic-b901.md) may proceed with the
    executable lifecycle; its former audit archive work is deferred.
 6. Run the operational/recovery gate in [`tic-9640`](tickets/tic-9640.md).
@@ -267,3 +267,8 @@ Apply these rules when refreshing:
   this queue in the same documentation delivery.
 - Ticket status changes happen in ticket files through `tk`; this document
   records priority and sequencing, not a second independent status.
+
+## Next release delivery — 2026-09-09
+
+After local stop/list, deliver [tic-b1a1](tickets/tic-b1a1.md): `release.sh`,
+GitHub Actions release builds, and the existing Homebrew tap, following NQL.

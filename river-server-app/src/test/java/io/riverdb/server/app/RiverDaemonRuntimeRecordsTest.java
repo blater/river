@@ -9,13 +9,19 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.platform.riverd.RiverDaemonFileSystem;
 import io.riverdb.platform.riverd.RiverDirectory;
 import io.riverdb.platform.riverd.RiverDirectoryResult;
+import io.riverdb.platform.riverd.RiverFile;
+import io.riverdb.platform.riverd.RiverFileResult;
+import io.riverdb.platform.riverd.RiverOpenMode;
 import io.riverdb.platform.riverd.apfs.ApfsRiverDaemonFileSystem;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.SecureRandom;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
@@ -98,7 +104,212 @@ final class RiverDaemonRuntimeRecordsTest {
     }
   }
 
+  @Test
+  void stopRequestTimesOutWithoutOwnerControlAndLeavesRuntime(@TempDir Path root) throws Exception {
+    Fixture fixture = fixture(root, false);
+    RiverDaemonTarget target = null;
+    try {
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+          fixture.identity.directory(), fixture.metadata));
+      RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
+      assertEquals(StatusCode.OK, RiverDaemonTarget.open(
+          fixture.filesystem, fixture.datadir, targetResult));
+      target = targetResult.target();
+
+      assertEquals(StatusCode.TIMEOUT, RiverDaemonStop.request(target, 100));
+      assertTrue(Files.exists(fixture.datadir.resolve("runtime.properties")));
+      assertNoStopControls(fixture.datadir);
+    } finally {
+      if (target != null) target.close();
+      fixture.close();
+    }
+  }
+
+  @Test
+  void stopRequestReportsOwnerExitBeforeAcceptance(@TempDir Path root) throws Exception {
+    Fixture fixture = fixture(root, false);
+    RiverDaemonTarget target = null;
+    FutureTask<StatusCode> caller = null;
+    try {
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+          fixture.identity.directory(), fixture.metadata));
+      RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
+      assertEquals(StatusCode.OK, RiverDaemonTarget.open(
+          fixture.filesystem, fixture.datadir, targetResult));
+      target = targetResult.target();
+      RiverDaemonTarget openedTarget = target;
+      caller = new FutureTask<>(() -> RiverDaemonStop.request(openedTarget, 2_000));
+      Thread requestThread = new Thread(caller, "river-stop-owner-exit-test");
+      requestThread.start();
+      awaitPath(fixture.datadir.resolve(RiverDaemonStopRequest.REQUEST_NAME));
+
+      assertEquals(StatusCode.OK, fixture.identity.close());
+      assertEquals(StatusCode.NOT_OWNER, caller.get(2, TimeUnit.SECONDS));
+      requestThread.join(2_000);
+      assertNoStopControls(fixture.datadir);
+      assertTrue(Files.exists(fixture.datadir.resolve(RiverDaemonRuntimeRecords.RUNTIME_NAME)));
+    } finally {
+      if (caller != null && !caller.isDone()) caller.cancel(true);
+      if (target != null) target.close();
+      fixture.close();
+    }
+  }
+
+  @Test
+  void targetAllowsLockHeldRevalidationAfterRuntimeRemoval(@TempDir Path root) throws Exception {
+    Fixture fixture = fixture(root, false);
+    RiverDaemonTarget target = null;
+    try {
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+          fixture.identity.directory(), fixture.metadata));
+      RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
+      assertEquals(StatusCode.OK, RiverDaemonTarget.open(
+          fixture.filesystem, fixture.datadir, targetResult));
+      target = targetResult.target();
+      Files.delete(fixture.datadir.resolve("runtime.properties"));
+
+      assertEquals(StatusCode.OK, target.revalidate(false));
+      assertEquals(StatusCode.NOT_OWNER, target.revalidate(true));
+    } finally {
+      if (target != null) target.close();
+      fixture.close();
+    }
+  }
+
+  @Test
+  void stalePendingStopIsReclaimedAfterRestartWithoutReplay(@TempDir Path root) throws Exception {
+    Fixture fixture = fixture(root, false, 999_999_999L, 0L, "/usr/bin/riverd");
+    RiverDaemonTarget target = null;
+    RiverDaemonIdentity.IdentityResult restarted = null;
+    try {
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+          fixture.identity.directory(), fixture.metadata));
+      RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
+      assertEquals(StatusCode.OK, RiverDaemonTarget.open(
+          fixture.filesystem, fixture.datadir, targetResult));
+      target = targetResult.target();
+      RiverFileResult requestResult = new RiverFileResult();
+      assertEquals(StatusCode.OK, fixture.identity.directory().openFile(
+          RiverDaemonStopRequest.REQUEST_NAME, RiverOpenMode.CREATE_NEW, requestResult));
+      RiverFile requestFile = requestResult.file();
+      try {
+        byte[] request = RiverDaemonStopRequest.encode(
+            target.owner.high, target.owner.low, target.owner.nonce,
+            "22222222222222222222222222222222", target.runtimeChecksum,
+            System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8);
+        assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.write(requestFile, request));
+      } finally {
+        assertEquals(StatusCode.OK, requestFile.close());
+      }
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.force(fixture.identity.directory()));
+      assertTrue(Files.exists(fixture.datadir.resolve(RiverDaemonStopRequest.REQUEST_NAME)));
+      assertEquals(StatusCode.OK, target.close());
+      target = null;
+      assertEquals(StatusCode.OK, fixture.identity.close());
+
+      restarted = new RiverDaemonIdentity.IdentityResult();
+      assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(
+          fixture.datadir, fixture.filesystem, new SecureRandom(), currentPid(), currentStart(),
+          currentCommand(), restarted));
+      assertEquals(StatusCode.OK, RiverDaemonStop.recoverStale(fixture.filesystem, restarted));
+      assertFalse(Files.exists(fixture.datadir.resolve(RiverDaemonStopRequest.REQUEST_NAME)));
+      assertFalse(Files.exists(fixture.datadir.resolve(
+          RiverDaemonStopRequest.ACCEPTED_PREFIX + "22222222222222222222222222222222")));
+      assertTrue(Files.exists(fixture.datadir.resolve(RiverDaemonRuntimeRecords.RUNTIME_NAME)));
+    } finally {
+      if (restarted != null) restarted.close();
+      if (target != null) target.close();
+      fixture.close();
+    }
+  }
+
+  @Test
+  void acceptedStopCanJoinAfterRuntimeCleanupUntilOwnerReleases(@TempDir Path root)
+      throws Exception {
+    Fixture fixture = fixture(root, false);
+    RiverDaemonTarget target = null;
+    FutureTask<StatusCode> caller = null;
+    Path foreignStage = fixture.datadir.resolve(
+        ".stop-request-11111111111111111111111111111111.stage");
+    try {
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+          fixture.identity.directory(), fixture.metadata));
+      Files.createFile(foreignStage);
+      RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
+      assertEquals(StatusCode.OK, RiverDaemonTarget.open(
+          fixture.filesystem, fixture.datadir, targetResult));
+      target = targetResult.target();
+      RiverDaemonStop.Control control = new RiverDaemonStop.Control(
+          fixture.filesystem, fixture.identity, fixture.metadata);
+      RiverDaemonTarget openedTarget = target;
+      caller = new FutureTask<>(() -> RiverDaemonStop.request(openedTarget, 2_000));
+      Thread requestThread = new Thread(caller, "river-stop-join-test");
+      requestThread.start();
+      awaitPath(fixture.datadir.resolve("stop.request"));
+
+      assertEquals(StatusCode.CANCELLED, control.poll());
+      awaitEntryPrefix(fixture.datadir, ".stop-accepted-");
+      assertTrue(Files.exists(foreignStage));
+      assertEquals(0, Files.size(foreignStage));
+      Files.delete(fixture.datadir.resolve("runtime.properties"));
+      assertEquals(StatusCode.OK, control.cleanup());
+      assertFalse(caller.isDone());
+
+      assertEquals(StatusCode.OK, fixture.identity.close());
+      assertEquals(StatusCode.OK, caller.get(2, TimeUnit.SECONDS));
+      requestThread.join(2_000);
+      assertNoStopControlsExcept(fixture.datadir, foreignStage);
+    } finally {
+      if (caller != null && !caller.isDone()) caller.cancel(true);
+      if (target != null) target.close();
+      fixture.close();
+    }
+  }
+
+  private static void awaitPath(Path path) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+    while (!Files.exists(path) && System.nanoTime() < deadline) {
+      Thread.sleep(10);
+    }
+    assertTrue(Files.exists(path), "expected path: " + path);
+  }
+
+  private static void awaitEntryPrefix(Path directory, String prefix) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+    while (System.nanoTime() < deadline) {
+      try (var entries = Files.newDirectoryStream(directory)) {
+        for (Path entry : entries) {
+          if (entry.getFileName().toString().startsWith(prefix)) return;
+        }
+      }
+      Thread.sleep(10);
+    }
+    assertTrue(false, "expected entry prefix: " + prefix);
+  }
+
+  private static void assertNoStopControls(Path datadir) throws Exception {
+    assertNoStopControlsExcept(datadir, null);
+  }
+
+  private static void assertNoStopControlsExcept(Path datadir, Path preserved)
+      throws Exception {
+    try (var entries = Files.newDirectoryStream(datadir)) {
+      for (Path entry : entries) {
+        String name = entry.getFileName().toString();
+        if (entry.equals(preserved)) continue;
+        assertFalse("stop.request".equals(name)
+            || name.startsWith(".stop-request-")
+            || name.startsWith(".stop-accepted-"), "unexpected stop control: " + entry);
+      }
+    }
+  }
+
   private static Fixture fixture(Path root, boolean withReady) throws Exception {
+    return fixture(root, withReady, currentPid(), currentStart(), currentCommand());
+  }
+
+  private static Fixture fixture(Path root, boolean withReady, long ownerPid, long ownerStart,
+      String ownerCommand) throws Exception {
     Path canonicalRoot = root.toRealPath();
     Files.setPosixFilePermissions(canonicalRoot, PRIVATE_DIRECTORY);
     Path datadir = canonicalRoot.resolve("instance");
@@ -113,8 +324,8 @@ final class RiverDaemonRuntimeRecordsTest {
     RiverDaemonFileSystem filesystem = new ApfsRiverDaemonFileSystem();
     RiverDaemonIdentity.IdentityResult identity = new RiverDaemonIdentity.IdentityResult();
     assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
-        datadir, filesystem, INCARNATION, new SecureRandom(), currentPid(), currentStart(),
-        currentCommand(), identity));
+        datadir, filesystem, INCARNATION, new SecureRandom(), ownerPid, ownerStart, ownerCommand,
+        identity));
     assertEquals(StatusCode.OK, RiverDaemonIdentity.completeCreate(identity));
     RiverDaemonIdentityRecords.LockRecord owner = RiverDaemonIdentityRecords.parseLock(
         Files.readAllBytes(datadir.resolve(RiverDaemonIdentity.LOCK_FILE)));

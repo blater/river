@@ -86,7 +86,7 @@ final class RiverDaemonIdentityRecords {
     }
   }
 
-  private static String[] envelope(byte[] bytes, int fieldCount, String format) {
+  static String[] envelope(byte[] bytes, int fieldCount, String format) {
     if (bytes == null) return null;
     int length = bytes.length;
     for (int index = 0; index < bytes.length; index++) {
@@ -107,8 +107,9 @@ final class RiverDaemonIdentityRecords {
     } catch (CharacterCodingException failure) {
       return null;
     }
-    int end = text.indexOf("record-sha256=");
-    if (end <= 0) return null;
+    int checksumStart = text.indexOf("\nrecord-sha256=");
+    if (checksumStart < 0) return null;
+    int end = checksumStart + 1;
     String prefix = text.substring(0, end);
     if (!prefix.endsWith("\n")) return null;
     String[] fields = prefix.substring(0, prefix.length() - 1).split("\\n", -1);

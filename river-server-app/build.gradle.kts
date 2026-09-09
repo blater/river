@@ -141,3 +141,8 @@ tasks.withType<Test>().configureEach {
   maxHeapSize = "1g"
   jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
+
+// Real-process lifecycle tests launch the same command composition root as the executable.
+tasks.named<Test>("test") {
+  systemProperty("river.test.classpath", sourceSets.test.get().runtimeClasspath.asPath)
+}

@@ -29,6 +29,9 @@ public final class RiverMain {
         return RiverdMain.run(
             Arrays.copyOfRange(arguments, 1, arguments.length), output, errors);
       }
+      if ("stop".equals(command) || "ps".equals(command)) {
+        return RiverdMain.run(arguments, output, errors);
+      }
       if ("version".equals(command)) {
         if (arguments.length == 1) {
           output.print(RiverdCommandHelp.version(RiverDaemonVersion.value()));

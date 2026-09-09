@@ -1581,3 +1581,73 @@ predecessor ownership fix for pre-alpha promotion. The original failing samples
 remain recorded; the focused reproducer is fixed, full checks pass and the
 four final workload samples and standalone lifecycle smoke pass. Linux/Windows
 native validation remains explicitly unclaimed under the user-approved exception.
+
+## 2026-09-09 — Local host:port stop and instance listing
+
+Branch `ticket/tic-0803-river-stop`, stable integration base `b15b0a6b`,
+tickets tic-0803 and tic-d2e9. Integration tag:
+`perf-checkpoint-river-stop-20260909`.
+
+`river stop [HOST:PORT]` selects the default instance or one verified local
+endpoint; `river ps` shows SERVER, DEFAULT and DATA DIRECTORY. Both retain the
+`river server` aliases. Stop uses the existing listener-first shutdown and
+portable filesystem ownership contract. Callers own their unpublished stages;
+they join only published requests or acceptance receipts. Shared record parsing
+now recognizes the checksum at a line boundary rather than inside a field name.
+There are no engine, transaction, durability or benchmark workload changes.
+
+Validation: full `./gradlew --no-daemon check` passed, followed by an incremental
+`check :river-bench:installTps` after the final owner-exit test. Logs:
+`/private/tmp/river-0803-check-12.log` and
+`/private/tmp/river-0803-check-final-2.log`. The full run took 5m32s; an engine
+worker inspected during an intentional lock-timeout test completed normally.
+All builds used GraalVM 25.0.4 and isolated worktree Gradle caches.
+
+Native build: `:river-server-app:nativeCompile
+-PriverPgoProfile=/private/tmp/river-native-final.iprof`, O3, armv8.1-a,
+unchanged Serial GC/1 GiB heap. Log:
+`/private/tmp/river-0803-native-build.log`. The executable copied alone, with
+Java removed from PATH, passed help aliases, two-instance listing, endpoint and
+default stop, SQL commit, restart/read, and control-file cleanup. Driver:
+`/private/tmp/river-0803-native-smoke.py`; logs:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-0803-native-smoke-ogqq2np3/`.
+
+Performance used the actual native foreground server because `tools/tps-test.sh`
+starts its benchmark-specific server and would not exercise the new lifecycle
+poll. Before edits, two short TPS controls were 148.500 and 146.900, version
+`0803-stop-baseline-{1,2}`, standard tiny serializable mix, 10 terminals, one
+warehouse, seed42, 2s warmup, 10s measurement; artifacts:
+`/private/tmp/river-0803-baseline-{1,2}`. Both passed reconciliation and capture.
+
+The native comparison used the unchanged acceptance workload: standard tiny
+serializable mix, 10 terminals, one warehouse, seed42, batch32, maximum attempts32,
+5s warmup and 60s measurement. Command:
+`python3 /private/tmp/river-native-final-forensic.py --server=EXECUTABLE
+--label=LABEL --mode=native --warmup=5 --duration=60`. Each artifact's `run.json`
+records the executable and complete workload command.
+
+| Run order | Label | TPS |
+| --- | --- | ---: |
+| Before implementation | river-0803-native-control-1 | 156.883 |
+| Before implementation | river-0803-native-control-2 | 155.400 |
+| Final executable | river-0803-native-candidate-1 | 143.383 |
+| Adjacent stable recheck | river-0803-native-control-3 | 143.767 |
+
+Artifacts are `/private/tmp/LABEL/`. All completed load, preflight, measurement,
+drain and checkpoint, with no failed or exhausted transactions and successful
+owned-server/database cleanup. The adjacent stable recheck reproduces the lower
+throughput, so the earlier higher controls do not establish a code regression.
+The adjacent pair shows no meaningful separation; this is local diagnostic
+evidence, not a performance gain claim. Per the user's instruction to streamline
+routine tickets, no duplicate JVM/native matrix or further samples were added.
+
+Slopmark guided deletion of the initial foreign-stage adoption and duplicate
+cleanup paths: Stop fell from 430.532 to 341.925. Existing Foreground changed
+163.844 → 174.887 and RuntimeRecords 552.142 → 553.656. New Targets is 185.085,
+Target 139.125 and StopRequest 0. Independent review covered ownership cleanup
+and receipt retention; the final implementation keeps one lifecycle owner.
+
+Decision: accept the local stop/list delivery. Linux/Windows native execution
+remains unclaimed under the existing pre-alpha validation boundary. Next is
+tic-b1a1: release.sh, GitHub Actions release assets and the Homebrew tap, using
+NQL's existing approach.

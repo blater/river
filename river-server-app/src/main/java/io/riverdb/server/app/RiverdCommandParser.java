@@ -21,10 +21,10 @@ public final class RiverdCommandParser {
     String command = arguments[0];
     if ("version".equals(command)) return parseVersion(arguments, result);
     if ("start".equals(command)) return parseStart(arguments, result);
-    if ("stop".equals(command)) return parseUnavailable(
-        arguments, result, RiverdCommand.STOP_UNAVAILABLE, "stop");
-    if ("ps".equals(command)) return parseUnavailable(
-        arguments, result, RiverdCommand.PS_UNAVAILABLE, "ps");
+    if ("stop".equals(command)) return parseOperation(
+        arguments, result, RiverdCommand.STOP, "stop");
+    if ("ps".equals(command)) return parseOperation(
+        arguments, result, RiverdCommand.PS, "ps");
     if ("credentials".equals(command)) return parseCredentials(arguments, result);
     return fail(result, "unknown server command: " + command);
   }
@@ -40,21 +40,28 @@ public final class RiverdCommandParser {
   private static StatusCode parseVersion(String[] arguments, RiverdCommandResult result) {
     StatusCode help = trailingHelp(arguments, result, "version");
     if (!help.isOk() || result.command() == RiverdCommand.HELP) return help;
-    if (arguments.length != 1) return fail(result, "version accepts no options");
+    boolean helpAtEnd = arguments.length > 2
+        && RiverCommandCatalog.isHelp(arguments[arguments.length - 1]);
+    if (arguments.length - (helpAtEnd ? 1 : 0) != 1) {
+      return fail(result, "version accepts no options");
+    }
     result.complete(RiverdCommand.VERSION);
-    return StatusCode.OK;
+    return helpAtEnd ? help(result, "version") : StatusCode.OK;
   }
 
   private static StatusCode parseStart(String[] arguments, RiverdCommandResult result) {
     StatusCode help = trailingHelp(arguments, result, "start");
     if (!help.isOk() || result.command() == RiverdCommand.HELP) return help;
+    boolean helpAtEnd = arguments.length > 2
+        && RiverCommandCatalog.isHelp(arguments[arguments.length - 1]);
     result.complete(RiverdCommand.START);
     result.setHelpTopic("server start");
     result.setPort(RiverCommandCatalog.DEFAULT_PORT);
     result.setIp("127.0.0.1");
     result.setMaximumConnections(RiverCommandCatalog.DEFAULT_MAXIMUM_CONNECTIONS);
     Set<String> seen = new HashSet<>();
-    for (int index = 1; index < arguments.length; index++) {
+    int argumentLimit = arguments.length - (helpAtEnd ? 1 : 0);
+    for (int index = 1; index < argumentLimit; index++) {
       String argument = arguments[index];
       if (RiverCommandCatalog.DATADIR.shortName.equals(argument)) {
         if (index + 1 >= arguments.length) return fail(result, "-D requires PATH");
@@ -100,43 +107,66 @@ public final class RiverdCommandParser {
         return fail(result, "unknown or misplaced start option: " + argument);
       }
     }
-    return StatusCode.OK;
+    return helpAtEnd ? help(result, "start") : StatusCode.OK;
   }
 
-  private static StatusCode parseUnavailable(
+  private static StatusCode parseOperation(
       String[] arguments, RiverdCommandResult result, RiverdCommand command, String name) {
     StatusCode help = trailingHelp(arguments, result, name);
     if (!help.isOk() || result.command() == RiverdCommand.HELP) return help;
+    boolean helpAtEnd = arguments.length > 2
+        && RiverCommandCatalog.isHelp(arguments[arguments.length - 1]);
     result.setHelpTopic(RiverCommandCatalog.serverTopic(name));
-    if ("ps".equals(name) && arguments.length > 1) {
-      return fail(result, "ps accepts no options");
-    }
     Set<String> seen = new HashSet<>();
     if ("stop".equals(name)) result.setTimeoutMillis(RiverCommandCatalog.DEFAULT_TIMEOUT_MILLIS);
-    for (int index = 1; index < arguments.length; index++) {
+    int argumentLimit = arguments.length - (helpAtEnd ? 1 : 0);
+    for (int index = 1; index < argumentLimit; index++) {
       String argument = arguments[index];
+      if ("ps".equals(name) && argument.startsWith("-")) {
+        return fail(result, "ps accepts no options");
+      }
       if (RiverCommandCatalog.DATADIR.shortName.equals(argument)) {
         if (index + 1 >= arguments.length || !seen.add("datadir")) {
           return fail(result, "invalid or duplicate datadir option");
         }
         String raw = arguments[++index];
-        if (raw.startsWith("-") || path(raw) == null) return fail(result, "invalid datadir path");
+        Path value = path(raw);
+        if (raw.startsWith("-") || value == null || result.server() != null) {
+          return fail(result, result.server() == null
+              ? "invalid datadir path" : "endpoint conflicts with datadir");
+        }
+        result.setDatadir(value);
       } else if (startsWith(argument, RiverCommandCatalog.DATADIR)) {
-        if (!seen.add("datadir") || path(valueOf(argument, RiverCommandCatalog.DATADIR)) == null) {
+        Path value = path(valueOf(argument, RiverCommandCatalog.DATADIR));
+        if (!seen.add("datadir") || value == null || result.server() != null) {
           return fail(result, "invalid or duplicate datadir option");
         }
+        result.setDatadir(value);
       } else if ("stop".equals(name) && startsWith(argument, RiverCommandCatalog.TIMEOUT)) {
         if (!seen.add("timeout")) return fail(result, "duplicate timeout option");
         Long timeout = duration(valueOf(argument, RiverCommandCatalog.TIMEOUT));
         if (timeout == null) return fail(result, "timeout must be positive decimal ms, s, or m");
         result.setTimeoutMillis(timeout);
+      } else if ("stop".equals(name) && !argument.startsWith("-")) {
+        if (result.server() != null) return fail(result, "duplicate server selector");
+        RiverDaemonEndpoint server = RiverDaemonEndpoint.parse(argument);
+        if (server == null) return fail(result, "server must be 127.0.0.1:PORT, [::1]:PORT, or localhost:PORT");
+        if (result.datadir() != null) return fail(result, "endpoint conflicts with datadir");
+        result.setServer(server.toString());
+      } else if ("ps".equals(name)) {
+        return fail(result, argument.startsWith("-")
+            ? "ps accepts no options" : "ps accepts no arguments");
       } else {
         return fail(result, "unknown or misplaced " + name + " option: " + argument);
       }
     }
     result.complete(command);
-    result.fail(name + " is not yet available in this milestone");
-    return StatusCode.FEATURE_NOT_SUPPORTED;
+    if (helpAtEnd) return help(result, RiverCommandCatalog.serverTopic(name));
+    if (command == RiverdCommand.CREDENTIALS_RENEW_UNAVAILABLE) {
+      result.fail(name + " is not yet available in this milestone");
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    return StatusCode.OK;
   }
 
   private static StatusCode parseCredentials(String[] arguments, RiverdCommandResult result) {
@@ -146,17 +176,19 @@ public final class RiverdCommandParser {
     if (arguments.length < 2 || !"renew".equals(arguments[1])) {
       return fail(result, "credentials requires the renew subcommand");
     }
-    return parseUnavailable(tail(arguments, 1), result,
+    return parseOperation(tail(arguments, 1), result,
         RiverdCommand.CREDENTIALS_RENEW_UNAVAILABLE, "credentials renew");
   }
 
   private static StatusCode trailingHelp(
       String[] arguments, RiverdCommandResult result, String topic) {
-    if (arguments.length == 2 && RiverCommandCatalog.isHelp(arguments[1])) {
-      return help(result, RiverCommandCatalog.serverTopic(topic));
-    }
-    if (arguments.length > 1 && RiverCommandCatalog.isHelp(arguments[1])) {
-      return fail(result, "help must be the trailing argument");
+    for (int index = 1; index < arguments.length; index++) {
+      if (!RiverCommandCatalog.isHelp(arguments[index])) continue;
+      if (index != arguments.length - 1) {
+        return fail(result, "help must be the trailing argument");
+      }
+      if (index == 1) return help(result, RiverCommandCatalog.serverTopic(topic));
+      return StatusCode.OK;
     }
     return StatusCode.OK;
   }

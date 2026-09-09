@@ -10,7 +10,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
-/** Focused parser checks for defaults, strict syntax, help, and unavailable commands. */
+/** Focused parser checks for defaults, strict syntax, help, and operation selectors. */
 final class RiverdCommandParserTest {
   @Test
   void defaultsAndExplicitStart() {
@@ -40,6 +40,31 @@ final class RiverdCommandParserTest {
   }
 
   @Test
+  void parsesAndNormalizesLoopbackSelectors() {
+    RiverdCommandResult stop = parse("stop", "127.0.0.1:9191", "--timeout=1s");
+    assertEquals(RiverdCommand.STOP, stop.command());
+    assertEquals("127.0.0.1:9191", stop.server());
+    assertEquals(1_000, stop.timeoutMillis());
+    assertEquals("[::1]:7", parse("stop", "[::1]:7").server());
+    assertEquals("127.0.0.1:65535", parse("stop", "localhost:65535").server());
+  }
+
+  @Test
+  void rejectsInvalidSelectorsAndDatadirConflicts() {
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("stop", "localhost:0"));
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("stop", "localhost:65536"));
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("stop", "127.0.0.2:9191"));
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("stop", "::1:9191"));
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("stop", "[::1]9191"));
+    assertEquals(INVALID_EXTERNAL_INPUT,
+        parseStatus("stop", "127.0.0.1:9191", "-D", "data"));
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("ps", "-D", "data"));
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("ps", "localhost:9191"));
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("ps", "localhost:9191", "extra"));
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("ps", "--timeout=1s"));
+  }
+
+  @Test
   void helpFormsMatch() {
     assertEquals(RiverdCommand.HELP, parse().command());
     assertEquals(RiverdCommand.HELP, parse("-h").command());
@@ -52,6 +77,10 @@ final class RiverdCommandParserTest {
 
     assertEquals(render("help"), render("--help"));
     assertEquals(render("help", "start"), render("start", "--help"));
+    assertEquals(render("help", "server", "stop"),
+        render("stop", "127.0.0.1:9191", "--timeout=1s", "--help"));
+    assertEquals(render("help", "server", "ps"),
+        render("ps", "--help"));
     assertEquals(render("help", "credentials", "renew"),
         render("credentials", "renew", "--help"));
   }
@@ -62,10 +91,12 @@ final class RiverdCommandParserTest {
     assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("start", "--unknown"));
     assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("start", "--help", "--port=1"));
     assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("version", "unexpected"));
-    assertEquals(FEATURE_NOT_SUPPORTED, parseStatus("stop"));
-    assertEquals(FEATURE_NOT_SUPPORTED, parseStatus("stop", "--timeout=1s"));
+    assertEquals(OK, parseStatus("stop"));
+    assertEquals(OK, parseStatus("stop", "--timeout=1s"));
+    assertEquals(OK, parseStatus("ps"));
     assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("stop", "--timeout=0s"));
     assertEquals(FEATURE_NOT_SUPPORTED, parseStatus("credentials", "renew"));
+    assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("credentials", "renew", "unexpected"));
     assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("help", "audit"));
   }
 

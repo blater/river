@@ -12,6 +12,7 @@ public final class RiverdCommandResult {
   private int maximumConnections;
   private Path readyFile;
   private long timeoutMillis;
+  private String server;
   private String helpTopic;
   private String diagnostic;
 
@@ -23,6 +24,7 @@ public final class RiverdCommandResult {
     maximumConnections = 0;
     readyFile = null;
     timeoutMillis = 0;
+    server = null;
     helpTopic = null;
     diagnostic = null;
   }
@@ -34,6 +36,7 @@ public final class RiverdCommandResult {
   public int maximumConnections() { return maximumConnections; }
   public Path readyFile() { return readyFile; }
   public long timeoutMillis() { return timeoutMillis; }
+  public String server() { return server; }
   public String helpTopic() { return helpTopic; }
   public String diagnostic() { return diagnostic; }
 
@@ -49,6 +52,7 @@ public final class RiverdCommandResult {
   void setMaximumConnections(int value) { maximumConnections = value; }
   void setReadyFile(Path value) { readyFile = value; }
   void setTimeoutMillis(long value) { timeoutMillis = value; }
+  void setServer(String value) { server = value; }
   void setHelpTopic(String value) { helpTopic = value; }
   void fail(String value) { diagnostic = value; }
 }

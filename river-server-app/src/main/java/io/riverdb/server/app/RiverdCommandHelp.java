@@ -26,6 +26,8 @@ public final class RiverdCommandHelp {
         + "\nUsage:\n"
         + "  river [CLIENT_PROPERTIES] < script.sql\n"
         + "  river server <command> [options]\n"
+        + "  river stop [HOST:PORT]\n"
+        + "  river ps\n"
         + "  river version\n\n"
         + "The default mode reads semicolon-terminated SQL from stdin, writes tab-separated\n"
         + "results to stdout, and stops on the first error. Without CLIENT_PROPERTIES it uses\n"
@@ -35,6 +37,8 @@ public final class RiverdCommandHelp {
         + "Examples:\n"
         + "  river /path/to/security/client.properties < setup.sql\n"
         + "  river server start --port=9191\n"
+        + "  river stop 127.0.0.1:9191\n"
+        + "  river ps\n"
         + "  river server version\n\n"
         + "Use `river help cli`, `river help server`, or `river help server start` for details.\n";
   }
@@ -94,11 +98,12 @@ public final class RiverdCommandHelp {
           + "The process stays in the foreground and closes gracefully on shutdown.\n");
     } else if (spec == RiverCommandCatalog.STOP) {
       output.append("The command requests cooperative shutdown and waits up to the timeout; it\n"
-          + "does not force-kill an instance. The default timeout is "
+          + "does not force-kill an instance. HOST:PORT accepts 127.0.0.1:PORT, [::1]:PORT,\n"
+          + "or localhost:PORT (normalized to 127.0.0.1:PORT). Without a selector, the\n"
+          + "default data directory is used. The default timeout is "
           + RiverCommandCatalog.TIMEOUT.defaultValue + ".\n");
     } else if (spec == RiverCommandCatalog.PS) {
-      output.append("This command has no operation options. It lists verified current-user\n"
-          + "instances with data directory, PID, and endpoint; an empty list is successful.\n"
+      output.append("The command reports verified current-user instances; an empty result is successful.\n"
           + "Stale records are reported as warnings and preserved.\n");
     } else if (spec == RiverCommandCatalog.RENEW) {
       output.append("Renewal requires a stopped instance, replaces its credentials, and does not\n"
@@ -121,7 +126,11 @@ public final class RiverdCommandHelp {
     if (spec == RiverCommandCatalog.START) {
       output.append("\nExample: river server start --datadir=/path/to/database --port=9191\n");
     } else if (spec == RiverCommandCatalog.STOP) {
-      output.append("\nExample: river server stop --datadir=/path/to/database --timeout=60s\n");
+      output.append("\nAliases: river server stop [HOST:PORT]\n"
+          + "Example: river stop 127.0.0.1:9191 --timeout=60s\n");
+    } else if (spec == RiverCommandCatalog.PS) {
+      output.append("\nAliases: river server ps\n"
+          + "Example: river ps\n");
     } else if (spec == RiverCommandCatalog.RENEW) {
       output.append("\nExample: river server credentials renew --datadir=/path/to/database\n");
     }

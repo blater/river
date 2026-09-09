@@ -740,8 +740,9 @@ records, and never deletes database/identity/security data.
 `riverd stop` never signals a PID, calls `ProcessHandle.destroy`, acquires or
 steals the live lock, or selects a process by an identifier that can be reused.
 Before creating a stage it scans through the verified parent handle the direct instance-root control names:
-the fixed `stop.request`, every `.stop-request-<nonce>.stage`, and every
-`.stop-accepted-<nonce>`. One canonical accepted receipt bound to the instance
+the fixed `stop.request` and every `.stop-accepted-<nonce>`.
+Staging files are private to the caller writing them: another live caller must
+never read or publish them, because their contents may still be incomplete. One canonical accepted receipt bound to the instance
 and currently contended lock owner is joined immediately even if shutdown has
 already removed runtime state. One canonical pending request is joined after
 its runtime checksum and lock owner validate. Multiple accepted receipts,
@@ -774,7 +775,9 @@ still-matching pending request is joined; a matching accepted receipt is joined
 even if runtime disappeared during shutdown. If ownership changed or became
 free while the exact request remains pending, the CLI deletes only that request
 and its stage by checksum/file key, forces `DATADIR`, and returns `NOT_OWNER`.
-It never deletes a request after a matching accepted receipt is visible.
+It never deletes the accepted receipt. If another request was accepted before
+its own publication completed, it removes only its own redundant pending
+request and joins that receipt.
 
 The lock-owning server's sole
 lifecycle-control thread checks this fixed file before readiness and at least
@@ -817,7 +820,7 @@ and returns `NOT_OWNER`.
 
 | Stop crash/publication boundary | Only permitted recovery |
 | --- | --- |
-| One or more CLI stages exist, `stop.request` absent | A later stop validates every stage for the still-live owner, publishes the lexicographically smallest request nonce, then removes and directory-forces the other matching stages; invalid stages are preserved as `CORRUPTION`. A new owner removes only stages bound to the proved-absent old owner. |
+| One or more CLI stages exist, `stop.request` absent | Each caller publishes or removes only its own stage. Other callers ignore unpublished stages. A new lock owner may remove a complete stage bound to the proved-absent old owner; incomplete stages are preserved and do not prevent startup or stop. |
 | Request link is visible and its directory force fails or the CLI crashes | The request remains authoritative for the live owner; the CLI/later retry applies matching stage/target alias recovery, joins, and never retracts the publication. |
 | Request is forced, server has not accepted | The server accepts it or timeout removes exactly that file; the atomic rename/remove winner decides. |
 | Accepted receipt is forced, server is shutting down | Every matching prepublication or retry scan idempotently joins it; no CLI cancels it; contenders wait for cleanup or return `TIMEOUT`. |
