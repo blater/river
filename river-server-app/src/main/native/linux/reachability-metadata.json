@@ -1,0 +1,120 @@
+{
+  "comment": "Unique foreign downcall signatures used by LinuxFileBridge on supported LP64 architectures (x86_64 and aarch64).",
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "long",
+        "parameterTypes": [
+          "long",
+          "long",
+          "void*",
+          "long"
+        ],
+        "options": {
+          "captureCallState": true,
+          "firstVariadicArg": 1
+        }
+      },
+      {
+        "returnType": "long",
+        "parameterTypes": [
+          "long",
+          "long",
+          "void*",
+          "void*",
+          "long"
+        ],
+        "options": {
+          "captureCallState": true,
+          "firstVariadicArg": 1
+        }
+      },
+      {
+        "returnType": "long",
+        "parameterTypes": [
+          "long",
+          "long",
+          "void*",
+          "long",
+          "long",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true,
+          "firstVariadicArg": 1
+        }
+      },
+      {
+        "returnType": "long",
+        "parameterTypes": [
+          "long",
+          "long",
+          "void*",
+          "long",
+          "void*",
+          "long"
+        ],
+        "options": {
+          "captureCallState": true,
+          "firstVariadicArg": 1
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "void*",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "long",
+        "parameterTypes": [
+          "int",
+          "void*",
+          "long",
+          "long"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "long"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": []
+      }
+    ]
+  }
+}

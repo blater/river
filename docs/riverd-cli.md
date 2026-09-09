@@ -1,7 +1,9 @@
-# riverd command-line contract
+# `river` command-line contract
 
-Status: accepted implementation target. An installed start/JDBC/restart candidate
-is under validation; required platform and acceptance checks remain open. This document owns the user-facing commands and behavior;
+The unified command and help hierarchy are implemented by
+[tic-ed14](tickets/tic-ed14.md) and [tic-9cfd](tickets/tic-9cfd.md).
+[tic-a51d](tickets/tic-a51d.md) owns single-file native packaging, which remains
+under validation. This document owns the user-facing commands and behavior;
 [ADR 0014](adr/0014-riverd-instance-security.md) owns their security and durable
 lifecycle mechanisms. The [delivery plan](plans/riverd-standalone-server-plan.md)
 maps implementation work.
@@ -9,14 +11,17 @@ maps implementation work.
 ## Commands
 
 ```text
-riverd
-riverd help
-riverd version
-riverd start [-D PATH|--datadir=PATH] [--port=PORT] [--ip=ADDRESS]
+river [CLIENT_PROPERTIES] < script.sql
+river help [TOPIC...]
+river version
+river server
+river server help
+river server version
+river server start [-D PATH|--datadir=PATH] [--port=PORT] [--ip=ADDRESS]
              [--maximum-connections=N] [--ready-file=PATH]
-riverd stop [-D PATH|--datadir=PATH] [--timeout=DURATION]
-riverd ps
-riverd credentials renew [-D PATH|--datadir=PATH]
+river server stop [-D PATH|--datadir=PATH] [--timeout=DURATION]
+river server ps
+river server credentials renew [-D PATH|--datadir=PATH]
 ```
 
 An instance is identified by its data directory. Start, stop and offline
@@ -25,15 +30,22 @@ There is no separate instance name or `--instance` option.
 
 ## Help
 
-- `riverd` and `riverd -h` print useful brief usage: short command descriptions,
-  a start example, the default data location and port, and a pointer to full
-  help. They do not inspect or list instances.
-- `riverd help` and `riverd --help` print identical full global help.
-- Every command and group listed above accepts trailing `-h` for brief usage
-  or `--help` for full help. `riverd help` followed by the command or group
-  gives the same full help: for example, `riverd help start` and
-  `riverd help credentials renew`.
-- Help and version exit successfully without changing state.
+- `river`, `river -h`, and `river --help` print identical top-level help. Bare `river`
+  runs SQL through the default instance configuration at
+  `~/.river/default/security/client.properties`; a missing configuration suggests
+  `river server start`.
+- `river help <topic>`, `river -h <topic>`, and `river --help <topic>` are equivalent
+  to the topic's trailing `-h` or `--help` form. Examples include `river help cli`,
+  `river help server`, `river server start --help`, and
+  `river help server credentials renew`.
+- Group help lists immediate commands and availability. Leaf help lists every accepted
+  option, aliases, value syntax, defaults, constraints, effects and a copyable example.
+- Help and version exit successfully without connecting, opening a listener, reading
+  credentials or changing instance files.
+
+The default client reads semicolon-terminated SQL from stdin, writes tab-separated rows
+and `ROWS` counts to stdout, and stops on the first error. An explicit absolute
+`CLIENT_PROPERTIES` path selects another instance.
 
 Help must explain the supported workflow in plain language, with copyable
 examples. Unknown options, duplicate/conflicting options, extra arguments,
@@ -52,11 +64,11 @@ before changing files or opening a listener.
 | `--ready-file=PATH` | None | Optional readiness file for automation |
 
 ```sh
-riverd start
-riverd start --port=9192
-riverd start --datadir=/path/to/database --port=9192
-riverd start --port=0
-riverd start --ip=::1 --port=9192
+river server start
+river server start --port=9192
+river server start --datadir=/path/to/database --port=9192
+river server start --port=0
+river server start --ip=::1 --port=9192
 ```
 
 `start` runs in the foreground. First start creates an instance; later starts
@@ -90,9 +102,9 @@ The installed distribution includes the JDBC driver and its dependencies in `lib
 ## Stop and list
 
 ```sh
-riverd stop
-riverd stop --datadir=/path/to/database --timeout=60s
-riverd ps
+river server stop
+river server stop --datadir=/path/to/database --timeout=60s
+river server ps
 ```
 
 `stop` targets the default data directory unless one is supplied. It requests
@@ -109,7 +121,7 @@ data for restart.
 
 `ps` lists verified instances registered by the current user, sorted by data
 directory, with PID, endpoint and data directory. An empty list exits
-successfully and suggests `riverd start`. Invalid or stale records produce a
+successfully and suggests `river server start`. Invalid or stale records produce a
 concise warning and are preserved.
 
 Successful stop prints:
@@ -122,7 +134,7 @@ riverd_status=OK
 
 ## Offline maintenance
 
-`riverd credentials renew` replaces the instance credentials. It requires a
+`river server credentials renew` replaces the instance credentials. It requires a
 stopped instance and accepts the same data-directory option. After renewal,
 restart and use the newly published client settings; old credentials no longer
 authenticate. The command does not delete database data. SQL/security audit
@@ -134,7 +146,7 @@ installed start, authenticated JDBC, graceful shutdown and persistent restart.
 
 ## Version
 
-`riverd version` prints:
+`river version` and `river server version` print:
 
 ```text
 riverd_version=<distribution-version>

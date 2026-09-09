@@ -132,7 +132,7 @@ final class ProtocolTransactionProgramCodecTest {
   void roundTripsMaximumDescriptorProgramTextBeyondUnsignedShortLength() {
     // Program results use the descriptor's scalar boundary and the logical-response byte budget;
     // a cell's encoded length is not constrained by a physical frame or legacy u16 width.
-    String value = "\u0800".repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
+    String value = String.valueOf((char) 0x0800).repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
     int utf8Bytes = Math.multiplyExact(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS, 3);
     assertTrue(utf8Bytes > Short.toUnsignedInt((short) -1));
     assertTrue(utf8Bytes < ProtocolFrameCodec.MAXIMUM_LOGICAL_RESPONSE_PAYLOAD_BYTES);
@@ -165,8 +165,8 @@ final class ProtocolTransactionProgramCodecTest {
     assertEquals(StatusCode.OK, codec.decodeProgramResultResponse(response, frame, decoded));
     assertEquals(descriptor, decoded.typeDescriptorAt(0, 0));
     assertEquals(value.length(), decoded.textLengthAt(0, 0));
-    assertEquals('\u0800', decoded.textCharacterAt(0, 0, 0));
-    assertEquals('\u0800', decoded.textCharacterAt(
+    assertEquals((char) 0x0800, decoded.textCharacterAt(0, 0, 0));
+    assertEquals((char) 0x0800, decoded.textCharacterAt(
         0, 0, SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS - 1));
   }
 

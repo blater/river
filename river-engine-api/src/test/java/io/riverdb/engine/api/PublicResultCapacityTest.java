@@ -100,7 +100,8 @@ final class PublicResultCapacityTest {
   @Test
   void carriesMaximumDeclaredVarcharWithoutAConvenienceScratchLimit() {
     int scalars = io.riverdb.base.text.Utf8Text.MAXIMUM_SCALARS;
-    char[] value = "\ud83d\ude00".repeat(scalars).toCharArray();
+    char[] value = new String(new char[] {(char) 0xD83D, (char) 0xDE00})
+        .repeat(scalars).toCharArray();
     int descriptor = SqlTypeDescriptor.varchar(scalars);
     CommandResult result = new CommandResult();
 

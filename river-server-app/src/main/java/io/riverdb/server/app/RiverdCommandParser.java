@@ -6,32 +6,19 @@ import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Set;
 
-/** Strict, side-effect-free parser for the installed riverd command contract. */
+/** Strict, side-effect-free parser for the server portion of the River command. */
 public final class RiverdCommandParser {
-  private static final int DEFAULT_PORT = 9191;
-  private static final int DEFAULT_MAXIMUM_CONNECTIONS = 16;
-  private static final long DEFAULT_TIMEOUT_MILLIS = 30_000;
-
   private RiverdCommandParser() { }
 
   public static StatusCode parse(String[] arguments, RiverdCommandResult result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (arguments == null) return fail(result, "arguments are required");
-    if (arguments.length == 0) {
-      result.complete(RiverdCommand.BRIEF_HELP);
-      return StatusCode.OK;
-    }
-    if (arguments.length == 1 && "-h".equals(arguments[0])) {
-      result.complete(RiverdCommand.BRIEF_HELP);
-      return StatusCode.OK;
-    }
-    if (arguments.length == 1 && "--help".equals(arguments[0])) {
-      result.complete(RiverdCommand.FULL_HELP);
-      return StatusCode.OK;
+    if (arguments.length == 0) return help(result, "server");
+    if (RiverCommandCatalog.isHelp(arguments[0]) || "help".equals(arguments[0])) {
+      return parseHelpTopic(arguments, result);
     }
     String command = arguments[0];
-    if ("help".equals(command)) return parseHelp(arguments, result);
     if ("version".equals(command)) return parseVersion(arguments, result);
     if ("start".equals(command)) return parseStart(arguments, result);
     if ("stop".equals(command)) return parseUnavailable(
@@ -39,54 +26,37 @@ public final class RiverdCommandParser {
     if ("ps".equals(command)) return parseUnavailable(
         arguments, result, RiverdCommand.PS_UNAVAILABLE, "ps");
     if ("credentials".equals(command)) return parseCredentials(arguments, result);
-    return fail(result, "unknown command: " + command);
+    return fail(result, "unknown server command: " + command);
   }
 
-  private static StatusCode parseHelp(String[] arguments, RiverdCommandResult result) {
-    if (arguments.length == 1) {
-      result.complete(RiverdCommand.FULL_HELP);
-      result.setHelpTopic("global");
-      return StatusCode.OK;
-    }
-    if (arguments.length > 3) return fail(result, "help accepts one command or group");
-    String topic = arguments[1];
-    if (!validHelpTopic(topic)) return fail(result, "unknown help topic: " + topic);
-    if (arguments.length == 3) {
-      if (!("credentials".equals(topic) && "renew".equals(arguments[2]))) {
-        return fail(result, "unknown help topic: " + arguments[2]);
-      }
-      topic += " " + arguments[2];
-    }
-    result.complete(RiverdCommand.FULL_HELP);
-    result.setHelpTopic(topic);
-    return StatusCode.OK;
+  private static StatusCode parseHelpTopic(String[] arguments, RiverdCommandResult result) {
+    if (arguments.length == 1) return help(result, "server");
+    String topic = RiverCommandCatalog.join(arguments, 1);
+    String canonical = RiverCommandCatalog.serverTopic(topic);
+    if (canonical == null) return fail(result, "unknown help topic: " + topic);
+    return help(result, canonical);
   }
 
   private static StatusCode parseVersion(String[] arguments, RiverdCommandResult result) {
-    StatusCode help = trailingHelp(arguments, result, 1, "version");
-    if (!help.isOk()) return help;
-    if (result.command() == RiverdCommand.BRIEF_HELP
-        || result.command() == RiverdCommand.FULL_HELP) return StatusCode.OK;
+    StatusCode help = trailingHelp(arguments, result, "version");
+    if (!help.isOk() || result.command() == RiverdCommand.HELP) return help;
     if (arguments.length != 1) return fail(result, "version accepts no options");
     result.complete(RiverdCommand.VERSION);
     return StatusCode.OK;
   }
 
   private static StatusCode parseStart(String[] arguments, RiverdCommandResult result) {
-    if (arguments.length > 1 && isHelp(arguments[arguments.length - 1])) {
-      if (arguments.length != 2) return fail(result, "start help must be the only trailing argument");
-      result.complete("-h".equals(arguments[1]) ? RiverdCommand.BRIEF_HELP : RiverdCommand.FULL_HELP);
-      result.setHelpTopic("start");
-      return StatusCode.OK;
-    }
+    StatusCode help = trailingHelp(arguments, result, "start");
+    if (!help.isOk() || result.command() == RiverdCommand.HELP) return help;
     result.complete(RiverdCommand.START);
-    result.setPort(DEFAULT_PORT);
+    result.setHelpTopic("server start");
+    result.setPort(RiverCommandCatalog.DEFAULT_PORT);
     result.setIp("127.0.0.1");
-    result.setMaximumConnections(DEFAULT_MAXIMUM_CONNECTIONS);
+    result.setMaximumConnections(RiverCommandCatalog.DEFAULT_MAXIMUM_CONNECTIONS);
     Set<String> seen = new HashSet<>();
     for (int index = 1; index < arguments.length; index++) {
       String argument = arguments[index];
-      if ("-D".equals(argument)) {
+      if (RiverCommandCatalog.DATADIR.shortName.equals(argument)) {
         if (index + 1 >= arguments.length) return fail(result, "-D requires PATH");
         if (!seen.add("datadir")) return fail(result, "duplicate datadir option");
         String raw = arguments[++index];
@@ -94,31 +64,36 @@ public final class RiverdCommandParser {
         Path value = path(raw);
         if (value == null) return fail(result, "invalid datadir path");
         result.setDatadir(value);
-      } else if (argument.startsWith("--datadir=")) {
+      } else if (startsWith(argument, RiverCommandCatalog.DATADIR)) {
         if (!seen.add("datadir")) return fail(result, "duplicate datadir option");
-        Path value = path(argument.substring("--datadir=".length()));
+        Path value = path(valueOf(argument, RiverCommandCatalog.DATADIR));
         if (value == null) return fail(result, "invalid datadir path");
         result.setDatadir(value);
-      } else if (argument.startsWith("--port=")) {
+      } else if (startsWith(argument, RiverCommandCatalog.PORT)) {
         if (!seen.add("port")) return fail(result, "duplicate port option");
-        Integer value = decimal(argument.substring("--port=".length()), 0, 65535);
+        Integer value = decimal(valueOf(argument, RiverCommandCatalog.PORT), 0, 65535);
         if (value == null) return fail(result, "port must be decimal 0..65535");
         result.setPort(value);
-      } else if (argument.startsWith("--ip=")) {
+      } else if (startsWith(argument, RiverCommandCatalog.IP)) {
         if (!seen.add("ip")) return fail(result, "duplicate ip option");
-        String value = argument.substring("--ip=".length());
+        String value = valueOf(argument, RiverCommandCatalog.IP);
         if (!"127.0.0.1".equals(value) && !"::1".equals(value)) {
           return fail(result, "ip must be 127.0.0.1 or ::1");
         }
         result.setIp(value);
-      } else if (argument.startsWith("--maximum-connections=")) {
-        if (!seen.add("maximum-connections")) return fail(result, "duplicate maximum-connections option");
-        Integer value = decimal(argument.substring("--maximum-connections=".length()), 1, Integer.MAX_VALUE);
-        if (value == null) return fail(result, "maximum-connections must be decimal 1..2147483647");
+      } else if (startsWith(argument, RiverCommandCatalog.MAXIMUM_CONNECTIONS)) {
+        if (!seen.add("maximum-connections")) {
+          return fail(result, "duplicate maximum-connections option");
+        }
+        Integer value = decimal(valueOf(argument, RiverCommandCatalog.MAXIMUM_CONNECTIONS),
+            1, Integer.MAX_VALUE);
+        if (value == null) {
+          return fail(result, "maximum-connections must be decimal 1..2147483647");
+        }
         result.setMaximumConnections(value);
-      } else if (argument.startsWith("--ready-file=")) {
+      } else if (startsWith(argument, RiverCommandCatalog.READY_FILE)) {
         if (!seen.add("ready-file")) return fail(result, "duplicate ready-file option");
-        Path value = path(argument.substring("--ready-file=".length()));
+        Path value = path(valueOf(argument, RiverCommandCatalog.READY_FILE));
         if (value == null) return fail(result, "invalid ready-file path");
         result.setReadyFile(value);
       } else {
@@ -130,26 +105,29 @@ public final class RiverdCommandParser {
 
   private static StatusCode parseUnavailable(
       String[] arguments, RiverdCommandResult result, RiverdCommand command, String name) {
-    StatusCode help = trailingHelp(arguments, result, 1, name);
-    if (help == StatusCode.OK && (result.command() == RiverdCommand.FULL_HELP
-        || result.command() == RiverdCommand.BRIEF_HELP)) return help;
-    if (!help.isOk()) return help;
+    StatusCode help = trailingHelp(arguments, result, name);
+    if (!help.isOk() || result.command() == RiverdCommand.HELP) return help;
+    result.setHelpTopic(RiverCommandCatalog.serverTopic(name));
+    if ("ps".equals(name) && arguments.length > 1) {
+      return fail(result, "ps accepts no options");
+    }
     Set<String> seen = new HashSet<>();
+    if ("stop".equals(name)) result.setTimeoutMillis(RiverCommandCatalog.DEFAULT_TIMEOUT_MILLIS);
     for (int index = 1; index < arguments.length; index++) {
       String argument = arguments[index];
-      if ("-D".equals(argument)) {
+      if (RiverCommandCatalog.DATADIR.shortName.equals(argument)) {
         if (index + 1 >= arguments.length || !seen.add("datadir")) {
           return fail(result, "invalid or duplicate datadir option");
         }
         String raw = arguments[++index];
         if (raw.startsWith("-") || path(raw) == null) return fail(result, "invalid datadir path");
-      } else if (argument.startsWith("--datadir=")) {
-        if (!seen.add("datadir") || path(argument.substring(10)) == null) {
+      } else if (startsWith(argument, RiverCommandCatalog.DATADIR)) {
+        if (!seen.add("datadir") || path(valueOf(argument, RiverCommandCatalog.DATADIR)) == null) {
           return fail(result, "invalid or duplicate datadir option");
         }
-      } else if ("stop".equals(name) && argument.startsWith("--timeout=")) {
+      } else if ("stop".equals(name) && startsWith(argument, RiverCommandCatalog.TIMEOUT)) {
         if (!seen.add("timeout")) return fail(result, "duplicate timeout option");
-        Long timeout = duration(argument.substring("--timeout=".length()));
+        Long timeout = duration(valueOf(argument, RiverCommandCatalog.TIMEOUT));
         if (timeout == null) return fail(result, "timeout must be positive decimal ms, s, or m");
         result.setTimeoutMillis(timeout);
       } else {
@@ -162,10 +140,8 @@ public final class RiverdCommandParser {
   }
 
   private static StatusCode parseCredentials(String[] arguments, RiverdCommandResult result) {
-    if (arguments.length == 2 && isHelp(arguments[1])) {
-      result.complete("-h".equals(arguments[1]) ? RiverdCommand.BRIEF_HELP : RiverdCommand.FULL_HELP);
-      result.setHelpTopic("credentials");
-      return StatusCode.OK;
+    if (arguments.length == 2 && RiverCommandCatalog.isHelp(arguments[1])) {
+      return help(result, "server credentials");
     }
     if (arguments.length < 2 || !"renew".equals(arguments[1])) {
       return fail(result, "credentials requires the renew subcommand");
@@ -174,31 +150,39 @@ public final class RiverdCommandParser {
         RiverdCommand.CREDENTIALS_RENEW_UNAVAILABLE, "credentials renew");
   }
 
+  private static StatusCode trailingHelp(
+      String[] arguments, RiverdCommandResult result, String topic) {
+    if (arguments.length == 2 && RiverCommandCatalog.isHelp(arguments[1])) {
+      return help(result, RiverCommandCatalog.serverTopic(topic));
+    }
+    if (arguments.length > 1 && RiverCommandCatalog.isHelp(arguments[1])) {
+      return fail(result, "help must be the trailing argument");
+    }
+    return StatusCode.OK;
+  }
+
+  private static StatusCode help(RiverdCommandResult result, String topic) {
+    result.complete(RiverdCommand.HELP);
+    result.setHelpTopic(topic);
+    return StatusCode.OK;
+  }
+
   private static String[] tail(String[] arguments, int count) {
     String[] result = new String[arguments.length - count];
     System.arraycopy(arguments, count, result, 0, result.length);
     return result;
   }
 
-  private static StatusCode trailingHelp(
-      String[] arguments, RiverdCommandResult result, int commandLength, String command) {
-    if (arguments.length == commandLength + 1 && isHelp(arguments[commandLength])) {
-      result.complete("-h".equals(arguments[commandLength])
-          ? RiverdCommand.BRIEF_HELP : RiverdCommand.FULL_HELP);
-      result.setHelpTopic(command);
-      return StatusCode.OK;
-    }
-    if (arguments.length > commandLength && isHelp(arguments[commandLength])) {
-      return fail(result, "help must be the trailing argument");
-    }
-    return StatusCode.OK;
+  private static boolean startsWith(String value, RiverCommandCatalog.Option option) {
+    return value.startsWith(prefix(option));
   }
 
-  private static boolean isHelp(String value) { return "-h".equals(value) || "--help".equals(value); }
+  private static String valueOf(String value, RiverCommandCatalog.Option option) {
+    return value.substring(prefix(option).length());
+  }
 
-  private static boolean validHelpTopic(String value) {
-    return "start".equals(value) || "stop".equals(value) || "ps".equals(value)
-        || "credentials".equals(value) || "version".equals(value);
+  private static String prefix(RiverCommandCatalog.Option option) {
+    return option.longName + "=";
   }
 
   private static Path path(String value) {

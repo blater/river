@@ -8,11 +8,11 @@ are never labeled `tpmC`.
 
 ## Promotion lifecycle
 
-The installed `riverd` lifecycle belongs to the caller. Start an empty
+The installed `river server` lifecycle belongs to the caller. Start an empty
 instance, then use the generated client configuration for phase one:
 
 ```sh
-riverd start --datadir=/absolute/path/to/database --port=54321
+river server start --datadir=/absolute/path/to/database --port=54321
 ./gradlew --no-daemon :river-bench:tpccAcceptance --args='--url=jdbc:river:client-file:/absolute/path/to/database/security/client.properties --phase=load-run-checkpoint --artifact=/absolute/path/river-tpcc.properties'
 ```
 
@@ -23,7 +23,7 @@ whole-transaction attempts. Stop the foreground server with Ctrl-C, restart the
 same data directory, and run phase two (the port may change):
 
 ```sh
-riverd start --datadir=/absolute/path/to/database --port=54322
+river server start --datadir=/absolute/path/to/database --port=54322
 ./gradlew --no-daemon :river-bench:tpccAcceptance --args='--url=jdbc:river:client-file:/absolute/path/to/database/security/client.properties --phase=recovery-verify --artifact=/absolute/path/river-tpcc.properties'
 ```
 

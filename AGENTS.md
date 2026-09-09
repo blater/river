@@ -363,6 +363,12 @@ the refactor.
 
 ## Coupling and ceremony
 
+- Apply universal build rules across the repository. Do not maintain duplicate
+  inventories of class/method signatures or source-token occurrence ceilings
+  as performance gates. Refactoring should not require updating a parallel
+  catalogue. Use runtime profiling, workload measurements and focused tests
+  for explicit allocation/copy contracts; static findings need execution context.
+
 - Use two-space indentation and no tabs.
 - Prefer concrete, local code and shallow control flow.
 - Introduce an interface only for a real ownership/architecture boundary or a

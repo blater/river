@@ -66,7 +66,7 @@ final class LockSegmentArenaTest {
     LockSlotIndex index = new LockSlotIndex(arena, 0x5eed);
     long firstHash = 11;
     long secondHash = 12;
-    while (index.bucketForTest(secondHash) != index.bucketForTest(firstHash)) secondHash++;
+    while (index.bucket(secondHash) != index.bucket(firstHash)) secondHash++;
     assertEquals(StatusCode.OK, index.reserve(0, firstHash));
     index.add(0, firstHash);
     assertEquals(StatusCode.OK, index.reserve(1, secondHash));

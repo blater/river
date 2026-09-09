@@ -1136,3 +1136,448 @@ Linux/ext4/XFS. Slopmark fell for identity (988.965→935.340), instance owner
 (245.744→221.793), and server (122.729→113.333). Full evidence and review are
 recorded in `docs/tickets/tic-1c4d.md`. Windows execution remains outstanding
 for the overall standalone milestone.
+
+
+## 2026-09-09 — unified River executable baseline (tic-ed14 / tic-9cfd / tic-a51d)
+
+Baseline source: `af562206`, with ticket-only planning commit `849c8f12` on
+`ticket/tic-ed14-unified-command-integration`. Built using
+`./gradlew --no-daemon :river-bench:installTps`; build passed. No other build or
+workload overlapped the two measured samples. Default runtime was OpenJDK
+26.0.2.1 on macOS arm64; native/JVM packaging comparisons must separately match
+the GraalVM runtime version.
+
+Commands: `tools/tps-test.sh --version=unified-before-N --seed=42
+--output-dir=PATH` for N=1,2. Defaults: tiny, standard mix, serializable,
+no-wait-stress, one warehouse, ten terminals, 32 maximum attempts, one second
+warmup and ten measured seconds, unchanged explicit resource budgets and durable
+commit behavior. Both completed checkpoint with status OK and exit 0, with
+successful deadlock reconciliation and performance capture: **157.7, 157.8 TPS**.
+Artifacts: `/private/tmp/river-unified-before-1-authorized/` and
+`/private/tmp/river-unified-before-2/`. The initial sandbox-restricted launch at
+`/private/tmp/river-unified-before-1/` failed startup and is not a TPS sample.
+
+Slopmark baseline: `/private/tmp/river-unified-slopmark-before.txt`, covering
+river-cli, river-server-app production sources and tools. Command parser 215.049,
+foreground owner 163.184, server main 13.044, client main 8.61233. These are review
+signals; this delivery does not authorize changes to database hot paths.
+Candidate validation and native feasibility remain pending.
+
+
+Entry-point slice integrated at `39c9df6d` (agent source `004ffbac`; final
+agent branch `04bcf875` adds two documentation-name corrections).
+`:river-server-app:test :river-cli:test verifyModuleGraph
+:river-server-app:installDist` passed in an isolated checkout, with installed
+help/version/client-usage smoke passing. Root review checked application/library
+direction and command error reporting. Slopmark after entry-point migration:
+`/private/tmp/river-unified-slopmark-entrypoint.txt`; parser and foreground owner
+unchanged, new dispatcher 31.3175, client runner 6.60964. Installed persistent
+lifecycle and cumulative TPS checks remain required before acceptance.
+
+
+Help slice integrated at `18c353b2` (agent `37a69a0a`). Full client/server module
+tests, module distribution and assembled help alias smoke passed. Root review
+removed help-display-to-parser coupling and duplicate topic definitions, required
+all topic/alias exit checks, and corrected the inherited ps/datadir mismatch.
+
+The installed JVM lifecycle control on GraalVM 25 passed fresh start, CLI commit,
+graceful termination, restart and readback. Evidence directory:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-unified-jvm-smoke-46cirw86`;
+script `/private/tmp/river-jvm-lifecycle-smoke.py`. Owned database was removed.
+The first control used a noncanonical macOS /var alias for the config path and
+was rejected; using the canonical server path passed. This is a test-path fix,
+not an authentication change.
+
+Native feasibility on GraalVM 25.0.4 macOS arm64 produced a roughly 49 MiB image.
+First start exposed a missing FFM downcall registration; adding APFS signatures
+allowed startup to proceed to a later INVARIANT_BROKEN outcome. Native functional
+acceptance and TPS comparison are pending. Native build log:
+`/private/tmp/river-native-evidence-a51d/nativeCompile.log`. No native performance
+or cross-platform support claim is made from a build/help-only result.
+
+
+Unified command/help/default-client acceptance at `ce5ac8b9`:
+
+- Full client/server module tests and assembled help/default-client workflow pass.
+  Default server creation plus bare-client SQL used an isolated user home; startup
+  prints the resolved directory, endpoint and client configuration after readiness.
+- Updated TPS distribution build passed. Matching short samples
+  `unified-help-after-1` and `unified-help-after-2`: **155.8, 156.8 TPS**,
+  checkpoint/status OK, exit 0, reconciliation/capture OK. Artifacts are
+  `/private/tmp/river-unified-help-after-1/` and `...-2/`.
+- Because both short samples were below the first pair, ran a longer matched
+  control/candidate pair with 5-second warmup and 30 measured seconds; all other
+  settings unchanged. Control `af562206`, `unified-control-long-1`: **161.033 TPS**;
+  candidate `ce5ac8b9`, `unified-help-long-1`: **172.533 TPS**. Both completed with
+  status OK and reconciliation/capture OK. Artifacts:
+  `/private/tmp/river-unified-control-long-1/` and
+  `/private/tmp/river-unified-help-long-1/`. The short downward movement did not
+  repeat. Accept the Java command changes without a throughput improvement claim.
+- Final command/help slopmark: `/private/tmp/river-unified-slopmark-help.txt`.
+  Parser 215.049 -> 217.903; foreground 163.184 -> 163.844; new root dispatcher
+  71.357 and command catalog 6.89256; help renderer 42.1454. Cold command-routing
+  responsibilities account for growth; database, credential, transaction and
+  execution owners remain unchanged in these slices. Root review removed the
+  initial duplicated topic policy and display-driven flag parsing.
+
+Native image compatibility/performance remains a separate unfinished acceptance;
+these Java diagnostic samples do not measure the native executable.
+
+
+### Native executable credential compatibility — 2026-09-09 (not accepted)
+
+Branch: `ticket/tic-a51d-native-river-executable`. Native compatibility candidate
+used the unified entrypoint at `39c9df6d` plus native packaging and trace-derived
+credential registrations; the final packaging source also incorporates the
+accepted help/default-client changes at `7c1b45d5`. JVM control distribution was
+built at `ce5ac8b9`. These commits have the same database engine behavior.
+
+GraalVM 25.0.4 on macOS arm64 built a standalone executable with default `-O2`,
+Serial GC and a 1 GiB maximum heap. The JVM control used the same GraalVM JDK,
+its default collector and a 1 GiB maximum heap. Both servers used unchanged
+production resource defaults. This comparison measures native versus JVM
+execution; it is separate from the earlier `tools/tps-test.sh` numbers.
+
+The temporary driver `/private/tmp/river-native-tps.py` launched each production
+server and the existing `TpccAcceptanceMain` over JDBC. All samples used tiny
+cardinalities, standard mix, serializable isolation, no-wait-stress scheduling,
+one warehouse, ten terminals, seed 42, batch rows 32 and maximum attempts 32.
+The same JVM benchmark client drove both server types. Full commands, runtime,
+results and cleanup are retained under `/private/tmp/<label>/` in `run.json`,
+`client.log`, `server.log` and `acceptance.properties`.
+
+Samples ran serially without compilation or other task-owned workloads:
+
+| Variation label | Warmup / measurement | Committed TPS |
+| --- | --- | ---: |
+| `native-packaging-jvm25-before-1` | 1s / 10s | 133.5 |
+| `native-packaging-native25-after-1` | 1s / 10s | 116.0 |
+| `native-packaging-jvm25-before-2` | 1s / 10s | 135.6 |
+| `native-packaging-native25-after-2` | 1s / 10s | 116.8 |
+| `native-packaging-jvm25-long-1` | 5s / 30s | 162.367 |
+| `native-packaging-native25-long-1` | 5s / 30s | 107.667 |
+
+Each run passed pre/post workload invariants and checkpoint, with no failed
+transactions. Owned servers exited and temporary databases were removed.
+These workload runs did not execute the separate recovery-verify phase.
+Recovery and credential reuse were checked independently by a copied-executable
+lifecycle: fresh startup, authenticated CREATE/INSERT/SELECT, graceful shutdown,
+restart and reading the committed row. Evidence:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-aqqn2cs0`.
+
+The native credential failure was missing Bouncy Castle reflection registration.
+A successful JVM tracing-agent lifecycle identified six zero-argument constructors
+needed for create/sign/parse/reload. Independent review confirmed that these
+registrations leave crypto and TLS semantics unchanged. Credential source has
+no production change; diagnostic logging and an ineffective provider flag were
+removed. Investigation details and build logs:
+`/private/tmp/river-native-evidence-a51d/credential-registration.md`.
+
+Decision: credential compatibility is fixed, but native packaging is **not
+accepted for merge**. The short-sample throughput gap repeated and grew in the
+longer pair. Compiler/collector differences are candidates for investigation,
+not an established cause. Do not disguise the gap with benchmark changes or
+broaden this packaging ticket into engine optimization. Linux and Windows native
+lifecycle validation also remains outstanding.
+
+
+Focused integrated validation: `:river-server-app:test :river-cli:test` passed
+with `--no-daemon` on GraalVM JDK 25.0.4. Log:
+`/private/tmp/river-native-evidence-a51d/affected-tests.log`.
+Slopmark comparison against the accepted help slice found no changed scores in
+credential, TLS, parser, lifecycle or CLI execution owners. The changed version
+resource reader scores 0. Output: `/private/tmp/river-unified-slopmark-native.txt`.
+
+Final integrated native build passed with per-platform FFM metadata selected by
+the build and common credential metadata embedded. Log:
+`/private/tmp/river-native-evidence-a51d/nativeCompile-integrated.log`.
+The copied executable passed all help topics and aliases, embedded version,
+invalid-port rejection, conflicting startup (`CONFLICT`), wrong-token rejection
+(`INVALID_EXTERNAL_INPUT`, the existing authenticator contract), authenticated
+SQL, graceful shutdown, and restart/read. Evidence:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-j2ylovc7`.
+Owned processes exited and the temporary database was removed. An earlier smoke
+asserted a nonexistent AUTH status for token rejection; its fixture was corrected
+to the existing contract before this successful run. No product change was
+needed for that assertion.
+
+
+Native slowdown investigation (no production optimization applied): matched
+5s/30s profiles produced JVM 154.6 TPS and native O2 105.133 TPS. Native pauses
+totaled 52.387 ms over the approximate 30s measurement interval; GC pauses cannot
+explain the throughput gap. Evidence under
+`/private/tmp/native-cause-{jvm,native}-profile-1/` includes GC logs, sampled
+stacks, workload artifacts, cleanup results and JVM JFR.
+
+A symbol-retaining O2 build reproduced 108.2 TPS. Its largest Java execution leaf
+was `DirectByteBuffer.get`: 273 of approximately 1,820 Java execution samples.
+Native disassembly shows four out-of-line byte-getter calls for one
+`BTreePage.getInt`, retaining per-access bounds/session checks. A temporary O3
+compiler-only build inlined these getters and reached 129.6 TPS. Getter leaf
+samples fell to 20; samples moved into callers. This supports expensive native
+accessor code generation as a material contributor, but O3 changes optimization
+globally, so this experiment does not assign the entire gain or remaining gap
+to one B-tree method. The JVM still leads.
+
+Evidence: `/private/tmp/native-cause-native-symbols-1/`,
+`/private/tmp/native-cause-native-o3-1/`,
+`/private/tmp/river-native-hot-assembly.txt`, and
+`/private/tmp/river-native-o3-btree-assembly.txt`.
+The compiler experiments used temporary Gradle initialization scripts; no
+production source/build setting changed. All workload invariants and owned
+cleanup checks passed. The original O2 executable was restored after retaining
+the experimental binaries in `/private/tmp/river-native-before-symbols/`.
+
+A bounded follow-up is to express canonical fixed-width reads/writes directly
+with static fixed-endian ByteBuffer-view VarHandles in FormatBytes and route
+the B-tree duplicate primitives through that owner. This is a proposed source
+change, not an implemented or measured improvement. Keep CRC, key comparison,
+and broader buffer API changes outside that slice.
+
+
+### Fixed-width format access — tic-e419 (2026-09-09)
+
+Branch `ticket/tic-e419-fixed-width-access` starts at native candidate `349de73e`.
+The user requested comparison against JVM 154.6 TPS and native O3 129.6 TPS.
+Adjacent unchanged controls were JVM 153.4 TPS and native O3 130.0 TPS, retained
+at `/private/tmp/word-access-jvm-control-1/` and
+`/private/tmp/word-access-native-control-1/`.
+
+The source change replaces FormatBytes byte assembly with three static final
+little-endian ByteBuffer-view VarHandles using plain get/set. BTreePage and
+BTreeKeyLayout import those primitives and delete their duplicate implementations.
+Checksums, comparison loops, buffer ownership, format layouts, compiler defaults,
+and durability behavior are unchanged. Bytecode inspection confirms primitive
+signatures without boxing/allocation in the six accessors.
+
+One clean `test check` checkpoint ran with `--no-daemon` on GraalVM JDK 25.0.4.
+All tests passed, including new independent encoding/state/boundary checks and
+existing format, storage, recovery and SQL integration tests. Overall `check`
+failed solely in `verifySourcePolicy`: existing XML/Java indentation, raw Unicode
+escapes and test-support identifier violations. Every reported file is unchanged
+from baseline `349de73e`; no waiver or unrelated cleanup was added. Full log:
+`/private/tmp/river-word-access-check.log`.
+
+Slopmark before/after: BTreePage 28.6416 → 28.3441; BTreeKeyLayout 7.92481 →
+7.92481; FormatBytes 6.00817 → 6.00817. Artifacts:
+`/private/tmp/river-word-access-slopmark-{before,after}.txt`.
+
+Comparisons use the same temporary `/private/tmp/river-native-profile.py` driver
+as the requested baselines: tiny, standard mix, serializable, no-wait-stress,
+one warehouse, ten terminals, seed42, batch rows32, maximum attempts32, 5s warmup
+and 30s measurement. Both servers retain production defaults and a 1GiB heap.
+GraalVM25.0.4 drives both; native remains O3/Serial GC with retained symbols and
+GC logging; JVM retains default G1, GC logging and profile JFR. Both receive the
+same 20s stack sample during measurement. No build overlaps any measured run.
+The JVM launches the current compiled classes directly, without Gradle, using
+`/private/tmp/river-word-access-jvm`; native uses the rebuilt `bin/river`.
+
+| Runtime | Requested baseline TPS | Adjacent control TPS | Candidate 1 TPS | Candidate 2 TPS | Candidate mean TPS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| JVM | 154.6 | 153.4 | 174.2 | 174.0 | 174.1 |
+| Native O3 | 129.6 | 130.0 | 143.6 | 141.7 | 142.7 |
+
+Candidate means are 12.6% and 10.1% above the respective requested baselines.
+These are short local diagnostic comparisons, not a sustained performance claim
+or promotion gate. Both runtimes improve; native still trails the improved JVM.
+Run order was JVM control, native control, JVM candidate 1, native candidate 1,
+JVM candidate 2, native candidate 2. Candidate artifacts are
+`/private/tmp/word-access-{jvm,native}-after-{1,2}/`; each contains the exact
+commands, workload result, GC/profile data and cleanup outcome. TPS sums measured
+commits only, excluding drain commits. All runs completed with zero retries,
+retry exhaustion or failed outcomes; workload invariant checks passed and owned
+servers/databases were cleaned up. Longer interleaved controls/candidates remain
+necessary before making a sustained gain claim or promoting a performance feature.
+
+Native disassembly confirms single 32/64-bit loads in the FormatBytes fast paths,
+with bounds and buffer-lifetime checks retained. Byte assembly and its repeated
+byte getter calls are gone. Evidence:
+`/private/tmp/river-word-access-native-assembly.txt`. This demonstrates the intended
+mechanism; it does not attribute the entire measured difference to one call site.
+
+The copied native executable passed help aliases, version, invalid port rejection,
+credential generation/use/rejection, duplicate instance rejection, SQL commit,
+shutdown and restart/read with JAVA_HOME and GRAALVM_HOME unset. Its owned database
+was removed. Logs:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-16hyfnsb/`.
+
+Decision: implementation and requested diagnostic comparison complete; retain the
+isolated feature commit. No merge/promotion is recorded here. Native packaging
+acceptance remains open under tic-a51d, including platform validation and the
+remaining native/JVM performance gap. The inherited source-policy check failures
+remain visible rather than being waived or folded into this optimization.
+
+
+### Native CPU target and PGO investigation — tic-a51d (2026-09-09)
+
+Branch `ticket/tic-a51d-native-compiler-tuning`, source `c05e3439`. This is a
+compiler-only experiment after fixed-width access; no database semantics,
+protocol, durability, heap, GC, or production build defaults change.
+Artifacts and temporary build/runner scripts: `/private/tmp/river-native-tuning/`.
+All native builds use GraalVM 25.0.4, `--no-daemon`, retained local symbols, and
+run serially without concurrent workloads. Native runtime keeps Serial GC and
+1GiB maximum heap. Every measurement uses the same diagnostic production-server
+runner described above, 5s warmup and 60s measurement, tiny data, serializable,
+ten terminals, one warehouse. TPS excludes drain commits.
+
+CPU-target interleaving, standard mix/seed42:
+
+| Variant | Sample 1 TPS | Sample 2 TPS | Mean TPS |
+| --- | ---: | ---: | ---: |
+| O3 armv8.1-a | 140.1 | 139.4 | 139.7 |
+| O3 native | 140.8 | 140.5 | 140.7 |
+
+This small observed difference does not establish a worthwhile general gain.
+Disassembly confirms hardware AES/PMULL in the native-target intrinsic stubs,
+where the generic image retains software AES/GHASH methods. CRC32 and LSE were
+already enabled in the generic target. Do not silently narrow distributed
+binary CPU compatibility on these measurements.
+Runs: `/private/tmp/cpu-tuning-{generic,native}-{1,2}/`, in that interleaved order.
+All passed workload checks and owned cleanup. Native sample1 had two Delivery
+deadlock retries, matched by server/client counters; neither exhausted. Other
+runs had no retries. No failed or drain-failed outcomes occurred.
+
+PGO training uses `--pgo-instrument -march=native`, the standard five-family mix,
+seed77, 5s warmup and 90s measurement. Graal reports its instrumentation build
+as O2, sampling+instrument; it is not a timed performance candidate. Training
+passed with zero retries/failures and successful cleanup, producing
+`/private/tmp/river-native-tuning/training.iprof`. Training run:
+`/private/tmp/pgo-tuning-training/`. The optimized candidate uses O3,
+`-march=native`, and that profile; build output confirms `PGO: user-provided`.
+
+
+PGO validation interleaves O3 native-target controls with the PGO candidate,
+keeping all other settings fixed. Standard mix uses seed42 (training used77).
+The held-out New Order/Stock Level 50/50 mix uses seed99.
+
+| Workload / variant | Sample 1 TPS | Sample 2 TPS | Mean TPS |
+| --- | ---: | ---: | ---: |
+| Standard / control | 143.3 | 139.5 | 141.4 |
+| Standard / PGO | 158.9 | 157.7 | 158.3 |
+| New Order/Stock Level / control | 88.2 | — | 88.2 |
+| New Order/Stock Level / PGO | 100.1 | — | 100.1 |
+
+Standard-mix mean improvement is 12.0%; the single held-out pair improves 13.5%.
+All six validation runs had zero retries, retry exhaustion, failed or drain-failed
+outcomes, passed workload checks and removed their owned servers/databases.
+Artifacts: `/private/tmp/pgo-tuning-{native,pgo}-standard-{1,2}/` and
+`/private/tmp/pgo-tuning-{native,pgo}-new-order-stock-level-50-50-1/`.
+The candidate code area fell from 46.70MB to 24.70MB. That verifies a substantial
+code-generation change but does not allocate the measured gain among inlining,
+branch decisions, instruction-cache effects or individual methods. Profiling
+and compiler logs are retained with the experiments. These local diagnostics
+do not establish performance across all workloads or platforms, and are not
+matched directly against earlier 30s JVM samples.
+
+The PGO executable passed the same copied-file native lifecycle smoke with no
+JAVA_HOME/GRAALVM_HOME: help aliases, version, invalid port, credential creation,
+wrong-token rejection, duplicate-instance rejection, SQL commit, shutdown and
+restart/read. Logs:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-2c3a7aa_/`.
+No production source/build change was made, so this compiler-only experiment
+needed no new source tests or slopmark run. The preceding source checkpoint's
+full test suite passed; its inherited source-policy check failures remain open.
+
+Decision: PGO is a promising packaging follow-up with a repeated local gain and
+a positive held-out check. CPU targeting alone shows only a small effect here;
+do not require the build host's CPU features in public binaries without choosing
+and validating a supported target. Keep both decisions separate. Production
+build defaults are unchanged. Experimental executables remain in
+`/private/tmp/river-native-tuning/river-o3-{generic,native,pgo}`; the working
+`bin/river` is restored to the starting generic O3 executable. No merge or native
+packaging acceptance is implied; tic-a51d remains open for supported-platform
+validation and a deliberate final build configuration.
+
+
+## Native delivery validation and predecessor ownership — 2026-09-09
+
+Branch `ticket/tic-a51d-native-compiler-tuning`, following `1faa014d`.
+The supported native task now provides an O3 build and explicit PGO instrument/profile
+options using the compiler's portable default CPU target. The user accepted the
+remaining Linux/Windows native validation risk for pre-alpha.
+
+The manual hot-method bytecode inventory and SQL source-match ceilings were
+removed at the user's request, including their fixtures and task wiring. Global
+source, dependency and architecture checks remain. The complete `check` task
+passed without exclusions before final workload validation
+(`/private/tmp/river-native-final-check-complete.log`).
+
+Final validation then exposed intermittent publication `INVARIANT_BROKEN`
+failures in both JVM and native execution. Failed samples are retained at
+`/private/tmp/native-final-jvm-1`, `/private/tmp/native-final-native-1`, and
+`/private/tmp/native-final-jvm-fence-probe-{1,2}`; the latter three retain their
+failed databases. Successful adjacent JVM samples do not erase those failures.
+Temporary failure probes narrowed the returned error to group publication,
+without a durability-cleanup failure or an unexpected Java exception. A later
+probed 90s JVM sample passed (`/private/tmp/native-final-jvm-fence-probe-3`);
+it is diagnostic only, not an optimized throughput sample.
+
+Review found an unowned predecessor cache-slot reference in prepared page
+publication. Later member preparation could evict that predecessor before its
+successor was linked. The small-cache regression
+`preservesPreparedPredecessorWhenLaterMemberNeedsEviction` fails at installation
+with `INVARIANT_BROKEN` on the original code and passes after the fix. The batch
+now holds a predecessor pin until linking, or releases it on cancellation.
+This adds no allocation or copied payload and preserves the existing WAL ordering.
+Independent review checked ownership across repeated same-page generations,
+reverse cancellation and concurrent reader pins. The focused cache test class
+passes, including old/new snapshot visibility and cancellation pin cleanup.
+Red/green logs: `/private/tmp/native-fence-probes/predecessor-{red-2,green-2}.log`.
+Slopmark for `IndexedPreparedPageBatch`: 32.8233 → 35.1522; the change stays within
+its existing page-generation ownership responsibility. All temporary probes
+were removed. A benchmark rollback failure now retains the original SQL error
+as a suppressed exception while preserving the existing thrown-error classification.
+
+The final full `check :river-bench:installTps` build passed without exclusions
+after the ownership fix (5m08s):
+`/private/tmp/river-native-final-fixed-check.log`. All Gradle invocations used
+`--no-daemon`. The final native rebuild reuses the representative seed77 profile
+`/private/tmp/river-native-final.iprof`, captured with the supported generic-target
+instrumentation task before the pin-accounting fix. The training workload passed;
+the profile remains a build input only.
+
+Final build: `/private/tmp/river-native-fixed-final-build.log`, successful in
+1m51s; Oracle GraalVM 25.0.4, O3, armv8.1-a, user-provided PGO, Serial GC.
+Final matched samples use tiny data, standard mix, serializable isolation,
+10 terminals, one warehouse, seed42, batch rows32, maximum attempts32,
+5s warmup and 60s measurement. Server resource defaults are unchanged; the JVM
+launcher uses the same GraalVM JDK with `-Xmx1g`. Runs are sequential and
+interleaved JVM/native/JVM/native. Driver and commands:
+`/private/tmp/river-native-fixed-compare.py`,
+`/private/tmp/river-native-final-forensic.py`, and each artifact's `run.json`.
+
+| Runtime | Sample 1 TPS | Sample 2 TPS | Mean TPS |
+| --- | ---: | ---: | ---: |
+| JVM | 169.100 | 169.600 | 169.350 |
+| Native O3/PGO | 153.333 | 153.017 | 153.175 |
+
+Artifacts: `/private/tmp/native-fixed-final-{jvm,native}-{1,2}/`. All four
+completed load, preflight, measurement, drain and checkpoint, with zero failed
+or exhausted transactions and successful owned-server/database cleanup. Native
+sample2 had one Delivery deadlock retry, matched exactly by server/client
+counters; the other three had no retries. Accounted Delivery deadlocks also
+appeared in the earlier CPU-target controls. The publication failure did not
+recur. These local results exceed the original 154.6 JVM / 129.6 native figures,
+but those earlier baselines were separate runs; do not interpret the difference
+as a controlled estimate of the pin fix's cost or gain.
+
+The final executable, copied alone outside the build tree with no JAVA_HOME or
+GRAALVM_HOME, passed help aliases, version and invalid-port handling, credential
+creation, wrong-token and duplicate-instance rejection, authenticated SQL commit,
+shutdown, restart and reading the committed row. Both owned servers stopped
+and the database was removed. Log directory:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-l9j51dyb/`.
+
+Final `tools/tps-test.sh` smoke also passed: version
+`a51d-final-predecessor-pin`, tiny standard mix, serializable, seed42,
+10 terminals, one warehouse, 2s warmup and 10s measurement; 148.0 TPS, zero
+errors, `deadlock_reconciliation=OK`, `performance_capture=OK`. This short
+managed-server smoke is separate from the matched runtime comparison above.
+Artifact directory `/private/tmp/river-a51d-final-tps-test`; console log
+`/private/tmp/river-a51d-final-tps-test.log`.
+
+Decision: accept the unified command/help/native delivery and the reviewed
+predecessor ownership fix for pre-alpha promotion. The original failing samples
+remain recorded; the focused reproducer is fixed, full checks pass and the
+four final workload samples and standalone lifecycle smoke pass. Linux/Windows
+native validation remains explicitly unclaimed under the user-approved exception.

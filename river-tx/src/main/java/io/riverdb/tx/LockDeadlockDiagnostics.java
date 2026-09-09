@@ -133,7 +133,7 @@ final class LockDeadlockDiagnostics {
         (byte) kind.ordinal(), (byte) precondition.ordinal());
   }
 
-  int admitSignatureForTest(long epoch, long fingerprint, long guard) {
+  int admitSignature(long epoch, long fingerprint, long guard) {
     return admitSignature(epoch, fingerprint, guard, nextEventSequence());
   }
 

@@ -2,8 +2,11 @@ package io.riverdb.bench.tpcc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Proxy;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
@@ -53,6 +56,23 @@ final class TpccRetryTest {
             System.nanoTime() + 5_000_000_000L,
             TpccRetryObserver.NONE));
     assertEquals(0, failure.getErrorCode());
+  }
+
+  @Test
+  void preservesPrimaryFailureWhenRollbackFails() {
+    SQLException primary = new SQLException("primary failure");
+    SQLException rollback = new SQLException("rollback failure");
+    Connection connection = (Connection) Proxy.newProxyInstance(
+        Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
+        (ignored, method, arguments) -> {
+          if (method.getName().equals("rollback")) throw rollback;
+          return null;
+        });
+
+    SQLException actual = org.junit.jupiter.api.Assertions.assertThrows(
+        SQLException.class, () -> TpccRetry.rollbackAfterFailure(connection, primary));
+    assertSame(rollback, actual);
+    assertSame(primary, actual.getSuppressed()[0]);
   }
 
   @Test

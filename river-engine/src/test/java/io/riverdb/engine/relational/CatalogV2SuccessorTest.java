@@ -226,12 +226,12 @@ final class CatalogV2SuccessorTest {
         new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BIGINT},
         new CharSequence[] {"a", "b"}, new boolean[2], columns));
     KeyDescriptor.Result primary = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0},
         primary, null));
     TableDescriptor.Result table = new TableDescriptor.Result();
-    assertEquals(StatusCode.OK, TableDescriptor.createForTest(
-        columns.value(), primary.value(), null, null, table));
+    assertEquals(StatusCode.OK, TableDescriptor.createProposedSuccessor(1, 1, 1,
+        columns.value(), primary.value(), null, null, table, null));
     return table.value();
   }
 
@@ -247,18 +247,18 @@ final class CatalogV2SuccessorTest {
     assertEquals(StatusCode.OK,
         ColumnDescriptorSet.create(types, names, nullable, columns));
     KeyDescriptor.Result primary = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0},
         primary, null));
     TableDescriptor.Result table = new TableDescriptor.Result();
-    assertEquals(StatusCode.OK, TableDescriptor.createForTest(
-        columns.value(), primary.value(), null, null, table));
+    assertEquals(StatusCode.OK, TableDescriptor.createProposedSuccessor(1, 1, 1,
+        columns.value(), primary.value(), null, null, table, null));
     return table.value();
   }
 
   private static TableDescriptor withIndex(TableDescriptor current) {
     KeyDescriptor.Result secondary = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createNamedForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createNamedUnbound(
         KeyDescriptor.KIND_SECONDARY, false, current.columns(), new int[] {0, 1},
         0, "by_pair", secondary, null));
     return proposed(current, new KeyDescriptor[] {secondary.value()});

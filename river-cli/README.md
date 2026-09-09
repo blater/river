@@ -1,10 +1,10 @@
-# River SQL CLI
+# River SQL client
 
-The installed `river-cli` reads semicolon-terminated SQL from standard input
+The installed `river` command reads semicolon-terminated SQL from standard input
 through the generated client configuration:
 
 ```sh
-river-cli /absolute/path/to/database/security/client.properties < setup.sql
+river /absolute/path/to/database/security/client.properties < setup.sql
 ```
 
 The client configuration identifies the loopback endpoint, pins the server

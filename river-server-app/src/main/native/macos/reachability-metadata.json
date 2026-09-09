@@ -1,0 +1,194 @@
+{
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "void*",
+          "int",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true,
+          "firstVariadicArg": 3
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "void*",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": [
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "void*",
+          "void*",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "long",
+        "parameterTypes": [
+          "int",
+          "void*",
+          "long",
+          "long"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "long"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "int",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true,
+          "firstVariadicArg": 2
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "void*",
+          "int",
+          "void*",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "int",
+          "void*",
+          "int",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": [
+          "int",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      }
+    ]
+  }
+}

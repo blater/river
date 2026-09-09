@@ -1,5 +1,10 @@
 # River Indexed-Table Store Ownership Refactoring Plan
 
+Current validation note (2026-09-09): the historical manual hot-path bytecode
+inventory and SQL-shape occurrence-count checks described below have been
+removed. Use the current Gradle checks, functional tests and measured
+CPU/allocation evidence; do not recreate those inventories.
+
 <!-- markdownlint-disable MD013 -->
 
 Status: Completed 2026-08-12

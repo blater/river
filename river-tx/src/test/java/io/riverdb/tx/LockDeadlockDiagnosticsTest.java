@@ -244,10 +244,10 @@ final class LockDeadlockDiagnosticsTest {
     LockDeadlockDiagnosticsConfig config =
         diagnostics(4_096, 1, 1, 1, 1, 2);
     Fixture fixture = new Fixture(config);
-    assertEquals(0, fixture.table.deadlocks.admitSignatureForTest(1, 17, 23));
-    assertEquals(-1, fixture.table.deadlocks.admitSignatureForTest(1, 17, 29));
-    assertEquals(-1, fixture.table.deadlocks.admitSignatureForTest(1, 31, 37));
-    assertEquals(-1, fixture.table.deadlocks.admitSignatureForTest(2, 41, 43));
+    assertEquals(0, fixture.table.deadlocks.admitSignature(1, 17, 23));
+    assertEquals(-1, fixture.table.deadlocks.admitSignature(1, 17, 29));
+    assertEquals(-1, fixture.table.deadlocks.admitSignature(1, 31, 37));
+    assertEquals(-1, fixture.table.deadlocks.admitSignature(2, 41, 43));
 
     LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(config);
     fixture.table.snapshotDeadlocks(snapshot);

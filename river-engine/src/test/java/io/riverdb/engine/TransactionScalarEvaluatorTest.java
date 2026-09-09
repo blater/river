@@ -81,13 +81,14 @@ final class TransactionScalarEvaluatorTest {
     int source = SqlTypeDescriptor.varchar(2);
     int target = SqlTypeDescriptor.varchar(1);
     TransactionProgram program = unary(source, target, TransactionScalarOperator.CAST);
-    assertEquals(StatusCode.OK, invocation.setText(0, source, "\ud83d\ude80"));
+    assertEquals(StatusCode.OK, invocation.setText(
+        0, source, new String(new char[] {(char) 0xD83D, (char) 0xDE80})));
 
     assertEquals(StatusCode.OK, evaluator.evaluate(program, 0, invocation, prior));
     assertEquals(target, evaluator.descriptor());
     assertEquals(2, evaluator.textLength());
-    assertEquals('\ud83d', evaluator.textCharacter(0));
-    assertEquals('\ude80', evaluator.textCharacter(1));
+    assertEquals((char) 0xD83D, evaluator.textCharacter(0));
+    assertEquals((char) 0xDE80, evaluator.textCharacter(1));
   }
 
   @Test

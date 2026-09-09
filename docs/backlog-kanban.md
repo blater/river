@@ -53,6 +53,30 @@ Finally execute the existing lifecycle delivery path.
 Lifecycle is technically independent; this order is a scheduling preference.
 None of this mapping certifies outstanding P0 or external-harness gates.
 
+## Unified executable follow-up (2026-09-09)
+
+User-directed delivery: first [tic-ed14](tickets/tic-ed14.md) unifies the public
+client/server entry points while porting existing behavior; next
+[tic-9cfd](tickets/tic-9cfd.md) consolidates and completes the help hierarchy;
+then [tic-a51d](tickets/tic-a51d.md) packages one native executable per platform.
+Its completed source follow-up [tic-e419](tickets/tic-e419.md) replaces byte
+assembly with shared fixed-width access; short JVM/native comparisons improved.
+The three tickets are delivered for pre-alpha: command modes, complete help and
+O3/PGO native packaging passed final checks and matched JVM/native workloads.
+Linux/Windows native validation remains outstanding under the user-approved
+pre-alpha exception; macOS arm64/APFS is validated.
+All three remain under the existing installable-server epic, tic-bf0b. Native
+packaging follows the help delivery; it includes a focused compatibility
+trial and measured JVM/native comparison, not a new benchmark framework.
+Stop, instance listing and credential renewal remain with their existing
+operations tickets. Their help must be complete and honest about availability;
+these deliveries do not expand into implementing those operations.
+
+Remote connectivity follows these deliveries in
+[tic-4ec3](tickets/tic-4ec3.md): explicit network listening and a portable,
+authenticated client profile for CLI/JDBC. Future wire support reuses the same
+connection boundaries; its protocol implementation is outside that ticket.
+
 ## Board
 
 | Lane | Now: ready work | Next: unlocked by Now | Later: promotion path |

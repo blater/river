@@ -22,15 +22,15 @@ final class CatalogDescriptorIdentityTestFixture {
     KeyDescriptor foreign = key(3, KeyDescriptor.KIND_FOREIGN, false, 999,
         columns.value(), 1);
     TableDescriptor.Result result = new TableDescriptor.Result();
-    assertEquals(StatusCode.OK, TableDescriptor.createForTest(columns.value(), primary,
-        new KeyDescriptor[] {secondary}, new KeyDescriptor[] {foreign}, result));
+    assertEquals(StatusCode.OK, TableDescriptor.createProposedSuccessor(1, 1, 1, columns.value(), primary,
+        new KeyDescriptor[] {secondary}, new KeyDescriptor[] {foreign}, result, null));
     return result.value();
   }
 
   static TableDescriptor tableWithoutKeys() {
     TableDescriptor.Result result = new TableDescriptor.Result();
     assertEquals(StatusCode.OK,
-        TableDescriptor.createForTest(table().columns(), null, null, null, result));
+        TableDescriptor.createProposedSuccessor(1, 1, 1, table().columns(), null, null, null, result, null));
     return result.value();
   }
 

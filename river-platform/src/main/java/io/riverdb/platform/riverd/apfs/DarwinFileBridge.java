@@ -48,7 +48,7 @@ final class DarwinFileBridge {
   private static final long ERRNO_STATE_OFFSET = Linker.Option.captureStateLayout()
       .byteOffset(MemoryLayout.PathElement.groupElement("errno"));
   /* Launcher I/O is synchronous; one confined capture state per calling thread avoids a second
-     __error downcall after the native call has returned. */
+    __error downcall after the native call has returned. */
   private static final ThreadLocal<CallState> CALL_STATE =
       ThreadLocal.withInitial(CallState::new);
   private static final MethodHandle OPENAT = function(

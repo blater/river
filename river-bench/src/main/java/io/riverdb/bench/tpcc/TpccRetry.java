@@ -1,6 +1,7 @@
 package io.riverdb.bench.tpcc;
 
 import io.riverdb.base.error.StatusCode;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;
@@ -11,6 +12,17 @@ final class TpccRetry {
   record Result(boolean committed, boolean retryExhausted, int retries) {}
 
   private TpccRetry() {}
+
+  static SQLException rollbackAfterFailure(Connection connection, SQLException failure)
+      throws SQLException {
+    try {
+      connection.rollback();
+      return failure;
+    } catch (SQLException rollbackFailure) {
+      rollbackFailure.addSuppressed(failure);
+      throw rollbackFailure;
+    }
+  }
 
   static Result execute(
       TpccAttempt attempt,

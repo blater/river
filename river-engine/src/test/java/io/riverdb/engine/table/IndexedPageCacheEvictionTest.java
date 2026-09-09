@@ -120,6 +120,94 @@ final class IndexedPageCacheEvictionTest {
   }
 
   @Test
+  void preservesPreparedPredecessorWhenLaterMemberNeedsEviction(@TempDir Path root) {
+    NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
+    assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
+        root, new FatalStateFence(), new NioIoCounters(), 8, directoryResult));
+    NioDurableDirectory directory = directoryResult.directory();
+    DirectoryOperationResult pageFile = new DirectoryOperationResult();
+    DirectoryOperationResult stagingFile = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    DatabasePageCachePlan cachePlan = DatabasePageCacheTestPlan.geometry(4, 2, 2);
+    IndexedPageSet pages = new IndexedPageSet(
+        pageFile.file(), stagingFile.file(), DATABASE, GENERATION, cachePlan);
+
+    publishScalar(pages, 1, 11, 1);
+    publishScalar(pages, 2, 22, 2);
+    publishScalar(pages, 3, 33, 3);
+    publishScalar(pages, 4, 41, 4);
+    assertEquals(StatusCode.OK, pages.pinCurrentPage(1));
+
+    ByteBuffer changed = pages.stageExisting(3, IndexedTableLimits.MAX_CHANGED_PAGES);
+    assertNotNull(changed);
+    changed.putInt(0, 333);
+    assertEquals(StatusCode.OK, pages.beginPreparedBatch());
+    assertEquals(StatusCode.OK, pages.freezeChangedPages(0, Long.MAX_VALUE));
+
+    ByteBuffer added = pages.stageNew(5, IndexedTableLimits.MAX_CHANGED_PAGES);
+    assertNotNull(added);
+    added.putInt(0, 51);
+    assertEquals(StatusCode.OK, pages.freezeChangedPages(1, Long.MAX_VALUE));
+    assertEquals(StatusCode.OK,
+        pages.installPreparedPages(new long[] {5, 6}, 2, 5, 6));
+
+    IndexedPageGenerationPin oldSnapshot = new IndexedPageGenerationPin();
+    assertEquals(StatusCode.OK, pages.pinPageAt(3, 3, oldSnapshot));
+    assertEquals(33, oldSnapshot.payload().getInt(0));
+    IndexedPageGenerationPin newSnapshot = new IndexedPageGenerationPin();
+    assertEquals(StatusCode.OK, pages.pinPageAt(3, 5, newSnapshot));
+    assertEquals(333, newSnapshot.payload().getInt(0));
+    IndexedPageGenerationPin addedSnapshot = new IndexedPageGenerationPin();
+    assertEquals(StatusCode.OK, pages.pinPageAt(5, 6, addedSnapshot));
+    assertEquals(51, addedSnapshot.payload().getInt(0));
+
+    assertEquals(StatusCode.OK, pages.releasePreparedBatch());
+    assertEquals(StatusCode.OK, pages.unpinPage(addedSnapshot));
+    assertEquals(StatusCode.OK, pages.unpinPage(newSnapshot));
+    assertEquals(StatusCode.OK, pages.unpinPage(oldSnapshot));
+    pages.unpinCurrentPage(1);
+    assertEquals(StatusCode.OK, pageFile.file().close());
+    assertEquals(StatusCode.OK, stagingFile.file().close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void cancellationReleasesPreparedPredecessorPin(@TempDir Path root) {
+    NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
+    assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
+        root, new FatalStateFence(), new NioIoCounters(), 8, directoryResult));
+    NioDurableDirectory directory = directoryResult.directory();
+    DirectoryOperationResult pageFile = new DirectoryOperationResult();
+    DirectoryOperationResult stagingFile = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    DatabasePageCachePlan cachePlan = DatabasePageCacheTestPlan.geometry(4, 2, 2);
+    IndexedPageSet pages = new IndexedPageSet(
+        pageFile.file(), stagingFile.file(), DATABASE, GENERATION, cachePlan);
+
+    publishScalar(pages, 1, 11, 1);
+    publishScalar(pages, 2, 22, 2);
+    publishScalar(pages, 3, 33, 3);
+    publishScalar(pages, 4, 41, 4);
+    assertEquals(StatusCode.OK, pages.pinCurrentPage(1));
+    assertEquals(StatusCode.OK, pages.pinCurrentPage(4));
+
+    assertNotNull(pages.stageExisting(3, IndexedTableLimits.MAX_CHANGED_PAGES));
+    assertEquals(StatusCode.OK, pages.beginPreparedBatch());
+    assertEquals(StatusCode.OK, pages.freezeChangedPages(0, Long.MAX_VALUE));
+    pages.cancelPreparedBatch();
+
+    pages.unpinCurrentPage(4);
+    pages.unpinCurrentPage(1);
+    for (int pageId = 1; pageId <= 4; pageId++) pages.markClean(pageId);
+    assertEquals(StatusCode.OK, pages.detach());
+    assertEquals(StatusCode.OK, pageFile.file().close());
+    assertEquals(StatusCode.OK, stagingFile.file().close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
   void rejectsFreezeUntilEveryStagingBorrowIsReturned(@TempDir Path root) {
     NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
     assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
@@ -564,6 +652,15 @@ final class IndexedPageCacheEvictionTest {
         pages.installPreparedPages(
             new long[] {commitSequence}, 1, recordStart, recordEnd));
     assertEquals(StatusCode.OK, pages.releasePreparedBatch());
+  }
+
+  private static void publishScalar(
+      IndexedPageSet pages, int pageId, int value, long commitSequence) {
+    ByteBuffer page = pages.stageNew(pageId, IndexedTableLimits.MAX_CHANGED_PAGES);
+    assertNotNull(page);
+    page.putInt(0, value);
+    publishPrepared(pages, Long.MAX_VALUE, commitSequence, commitSequence + 1, commitSequence);
+    pages.resetChanges();
   }
 
   private static final class OneShotReadFailureFile implements DurableFile {

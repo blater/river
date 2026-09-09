@@ -100,22 +100,20 @@ and amplification. OS/JVM tools corroborate them and reveal external costs.
 All versions are pinned in the benchmark image/manifest. A profiler, JVM,
 kernel, firmware, or driver upgrade starts a new baseline.
 
-### 4.1 Source and bytecode gates
+### 4.1 Source and contract checks
 
 | Check | Purpose | Cadence |
 | --- | --- | --- |
 | `.editorconfig` plus deterministic source-policy checks | Two spaces, no tabs, deterministic text layout | Every PR |
 | Gradle dependency rules and preferably ArchUnit | Enforce the module DAG | Every PR |
-| `javac -Xlint:all -Werror` plus River source/bytecode rules | Detect ignored diagnostics, boxing, accidental varargs, exception construction, and unsafe hot-path calls | Every PR |
-| Hot-path bytecode audit | Reject forbidden allocation/calls in designated kernel methods unless allowlisted | Every PR |
+| `javac -Xlint:all -Werror` plus River source rules | Detect compiler diagnostics and enforce source boundaries | Every PR |
 | Format compatibility and size fixtures | Detect durable/wire/page representation changes | Every PR |
 
-The bytecode audit checks designated hot paths for exception construction,
-streams/collectors, string formatting, captured lambdas, object arrays used for
-varargs, boxing, and other forbidden operations. It does not impose kernel rules
-on parsing, planning, DDL, or administration. Runtime measurement is still the
-source of truth because JIT escape analysis can eliminate allocations and
-libraries can hide them.
+Universal rules apply repository-wide. Performance validation uses representative
+CPU/allocation profiles and focused tests for explicit steady-state contracts.
+A manually selected method inventory cannot prove runtime cost: JIT optimization
+can remove allocations, and callees can hide them. The old method inventory and
+SQL-shape token-count gate were removed on 2026-09-09.
 
 ### 4.2 JVM and concurrency tools
 
@@ -398,7 +396,7 @@ use, and redistribution as a separate license decision.
 
 ### Every PR
 
-- Format/tab/dependency/static/bytecode/ownership/status/copy gates.
+- Format/tab/dependency/source-boundary/ownership/status/copy checks.
 - Relevant JMH smoke run, advisory on shared CI.
 - `tiny` generated workload plus affected correctness/fault tests.
 - Declaration of required dedicated run for a material hot-path change.
@@ -464,7 +462,7 @@ The reviewer links:
 
 - Add JMH for codecs, checksums, journal reservations, page access, B+tree nodes,
   queues, and disabled diagnostics.
-- Add scoped hot-path bytecode audit and owned allowlist.
+- Add measured CPU/allocation evidence and focused allocation-contract tests.
 - Implement RiverBank `tiny`/`cache` and WAL/buffer/index component loads.
 - Freeze initial allocation/copy/WAL/force/recovery/p99 budgets before Phase 1.
 

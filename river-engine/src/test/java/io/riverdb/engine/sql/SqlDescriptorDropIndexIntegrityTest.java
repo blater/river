@@ -132,8 +132,8 @@ final class SqlDescriptorDropIndexIntegrityTest {
       ColumnDescriptorSet columns, KeyDescriptor support, KeyDescriptor foreign) {
     TableDescriptor.Result table = new TableDescriptor.Result();
     KeyDescriptor[] secondary = support == null ? null : new KeyDescriptor[] {support};
-    assertEquals(StatusCode.OK, TableDescriptor.createForTest(
-        columns, null, secondary, new KeyDescriptor[] {foreign}, table));
+    assertEquals(StatusCode.OK, TableDescriptor.createProposedSuccessor(1, 1, 1,
+        columns, null, secondary, new KeyDescriptor[] {foreign}, table, null));
     return table.value();
   }
 }

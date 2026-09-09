@@ -9,7 +9,7 @@ agents: how to specify work, divide it between agents, and review the result.
 
 > River is pre-V1 evaluation software. APIs and on-disk formats may change
 > incompatibly; automatic upgrades are not provided. This README describes
-> the `riverd` feature candidate as of 2026-09-08. The
+> the `river` feature candidate as of 2026-09-08. The
 > [alpha.2 release notes](docs/delivery/alpha-2-known-limitations.md) describe
 > the earlier release.
 
@@ -87,7 +87,7 @@ The main sources for these limits are
 
 ## What remains unfinished
 
-The current `riverd start` candidate workflow has been validated on
+The current `river server start` candidate workflow has been validated on
 macOS/APFS and Linux/ext4/XFS. Windows/NTFS validation remains pending. SQL/
 security audit collection is deferred pending a concrete performance-neutral
 design. The foreground server creates or reopens
@@ -108,25 +108,35 @@ still required for performance and cross-database comparisons.
 
 ## Build and run
 
-Building River requires JDK 25. Gradle verifies dependency checksums.
+Building River requires JDK 25. Gradle verifies dependency checksums. JVM
+compilation, tests, and development commands use the normal JDK. Native
+packaging additionally requires a GraalVM JDK 25 installation for the host
+OS and architecture, with `GRAALVM_HOME` set to its installation directory.
 
-Build the server and SQL client distributions:
+Native packaging is pre-alpha. The macOS arm64 executable has been exercised;
+Linux and Windows native builds have not yet been validated.
+
+Build the self-contained native executable:
 
 ```sh
-./gradlew :river-server-app:installDist :river-cli:installDist
+GRAALVM_HOME=/path/to/graalvm-jdk-25 ./gradlew --no-daemon :river-server-app:nativeCompile
 ```
 
-Start the candidate server in the foreground. It writes the
-generated client configuration under its data directory:
+Native builds use O3 optimization. For profile-guided optimization (PGO), see
+the [native build guide](docs/native-build.md).
+
+The result is `bin/river` (`bin/river.exe` on Windows). Copy that executable
+alone to run the client or start the server. The server writes the generated
+client configuration under its data directory:
 
 ```sh
-river-server-app/build/install/riverd/bin/riverd start --datadir=/absolute/path/to/database --port=9191
+bin/river server start --datadir=/absolute/path/to/database --port=9191
 ```
 
 Use the reported `security/client.properties` path with the SQL client or JDBC:
 
 ```sh
-river-cli/build/install/river-cli/bin/river-cli /absolute/path/to/database/security/client.properties < setup.sql
+bin/river /absolute/path/to/database/security/client.properties < setup.sql
 ```
 
 The CLI reads semicolon-terminated SQL, emits tab-separated rows, and stops at

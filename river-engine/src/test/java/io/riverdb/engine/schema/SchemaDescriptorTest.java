@@ -106,7 +106,7 @@ final class SchemaDescriptorTest {
         columnsResult));
     ColumnDescriptorSet columns = columnsResult.value();
     KeyDescriptor.Result keyResult = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY,
         true,
         columns,
@@ -135,10 +135,10 @@ final class SchemaDescriptorTest {
         new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BIGINT},
         new CharSequence[] {"a", "b"}, new boolean[] {false, false}, columnsResult));
     KeyDescriptor.Result result = new KeyDescriptor.Result();
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_UNIQUE, true, columnsResult.value(), new int[] {0, 0}, result));
     assertNull(result.value());
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_SECONDARY, false, columnsResult.value(), new int[] {2}, result));
   }
 
@@ -173,7 +173,7 @@ final class SchemaDescriptorTest {
         new boolean[] {false, false, false},
         columns));
     KeyDescriptor.Result key = new KeyDescriptor.Result();
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0, 1, 2}, key));
     assertNull(key.value());
   }
@@ -189,7 +189,7 @@ final class SchemaDescriptorTest {
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, KeyDescriptor.create(
         0, KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0}, 0, result, detail));
     assertNull(result.value());
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {1}, result, detail));
     assertNull(result.value());
     assertEquals(StatusCode.OK, KeyDescriptor.create(
@@ -204,14 +204,14 @@ final class SchemaDescriptorTest {
         new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BIGINT},
         new CharSequence[] {"id", "lookup"}, new boolean[] {false, false}, columns));
     KeyDescriptor.Result unbound = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0}, unbound));
     TableDescriptor.Result table = new TableDescriptor.Result();
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, TableDescriptor.create(
         1, 1, 1, columns.value(), unbound.value(), null, null, table, null));
     assertNull(table.value());
-    assertEquals(StatusCode.OK, TableDescriptor.createForTest(
-        columns.value(), unbound.value(), null, null, table));
+    assertEquals(StatusCode.OK, TableDescriptor.createProposedSuccessor(1, 1, 1,
+        columns.value(), unbound.value(), null, null, table, null));
 
     KeyDescriptor.Result first = new KeyDescriptor.Result();
     KeyDescriptor.Result second = new KeyDescriptor.Result();
@@ -264,8 +264,8 @@ final class SchemaDescriptorTest {
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         wideTypes, wideNames, wideNullability, wideColumns));
     TableDescriptor.Result wideTable = new TableDescriptor.Result();
-    assertEquals(StatusCode.OK, TableDescriptor.createForTest(
-        wideColumns.value(), null, null, null, wideTable));
+    assertEquals(StatusCode.OK, TableDescriptor.createProposedSuccessor(1, 1, 1,
+        wideColumns.value(), null, null, null, wideTable, null));
     assertEquals(8_352, wideTable.value().encodedMaximumRowBytes());
   }
 
@@ -283,8 +283,8 @@ final class SchemaDescriptorTest {
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         exactTypes, exactNames, exactNullable, exact));
     TableDescriptor.Result exactTable = new TableDescriptor.Result();
-    assertEquals(StatusCode.OK, TableDescriptor.createForTest(
-        exact.value(), null, null, null, exactTable));
+    assertEquals(StatusCode.OK, TableDescriptor.createProposedSuccessor(1, 1, 1,
+        exact.value(), null, null, null, exactTable, null));
     assertEquals(HeapPage.MAXIMUM_ROW_BYTES, exactTable.value().encodedMaximumRowBytes());
 
     int[] overTypes = {
@@ -300,8 +300,8 @@ final class SchemaDescriptorTest {
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         overTypes, overNames, overNullable, over));
     TableDescriptor.Result overTable = new TableDescriptor.Result();
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, TableDescriptor.createForTest(
-        over.value(), null, null, null, overTable));
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, TableDescriptor.createProposedSuccessor(1, 1, 1,
+        over.value(), null, null, null, overTable, null));
     assertNull(overTable.value());
   }
 }

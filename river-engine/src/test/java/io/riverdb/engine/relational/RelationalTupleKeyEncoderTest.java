@@ -26,7 +26,7 @@ final class RelationalTupleKeyEncoderTest {
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         types, 0, names, 0, nullable, 0, types.length, columns, null));
     KeyDescriptor.Result key = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0, 1}, key));
 
     SqlValueBuffer values = new SqlValueBuffer();
@@ -58,7 +58,7 @@ final class RelationalTupleKeyEncoderTest {
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         types, 0, names, 0, nullable, 0, types.length, columns, null));
     KeyDescriptor.Result key = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_SECONDARY, false, columns.value(),
         new int[] {1, 2}, key));
 
@@ -93,7 +93,7 @@ final class RelationalTupleKeyEncoderTest {
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         types, 0, names, 0, nullable, 0, types.length, columns, null));
     KeyDescriptor.Result key = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(),
         new int[] {0, 1}, key));
 
@@ -128,13 +128,13 @@ final class RelationalTupleKeyEncoderTest {
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         types, 0, names, 0, nullable, 0, types.length, columns, null));
     KeyDescriptor.Result primary = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {1, 0}, primary));
     KeyDescriptor.Result secondary = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_SECONDARY, false, columns.value(), new int[] {0}, secondary));
     KeyDescriptor.Result foreign = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_FOREIGN, false, columns.value(), new int[] {1, 0},
         -1, foreign, null));
 
@@ -178,7 +178,7 @@ final class RelationalTupleKeyEncoderTest {
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         types, 0, names, 0, nullable, 0, count, columns, null));
     KeyDescriptor.Result key = new KeyDescriptor.Result();
-    assertEquals(StatusCode.OK, KeyDescriptor.createForTest(
+    assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), ordinals, key));
     SqlValueBuffer values = new SqlValueBuffer();
     assertEquals(StatusCode.OK, values.reserve(count, count, 0, 0));

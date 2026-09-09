@@ -155,18 +155,11 @@ is encoded in all of these layers:
 - the existing `TupleKeyCodec` and `TupleBTreePageCodec` are useful groundwork
   but hard-code arity four and four descriptors in an 80-byte page header.
 
-The implementation inventory must remain a checked deliverable. Before each
-slice is accepted, `rg` searches for `MAXIMUM_COLUMNS`, `MAXIMUM_JOIN_ROLES`,
-`MAXIMUM_ARITY`, `nullMask`, column-index shifts such as `1L << column`, and
-fixed result/index/JDBC maxima in production source. Each remaining match must
-be either removed or documented as a non-column scalar flag.
-
-W0 installs `verifySqlShapeSourcePolicy` as the ratchet for the named legacy
-patterns. Its per-module ceilings capture the accepted starting inventory;
-each delivery slice lowers the affected ceiling after removing matches, and
-any net addition fails `check`. The broader fixed result/index/JDBC inventory
-is reviewed and added to the ratchet when its owning W1/W2 boundary is changed,
-so W0 does not freeze unrelated scalar capacities by substring accident.
+Review remaining fixed column bounds and scalar null masks when changing their
+owning code. Validate wide shapes through the public API and storage/protocol
+boundaries. The former per-module source-token count gate was removed on
+2026-09-09: names and helper extraction changed its count without changing capacity.
+Do not replace behavioral capacity tests with a manually maintained match ceiling.
 
 ## Shared architecture
 

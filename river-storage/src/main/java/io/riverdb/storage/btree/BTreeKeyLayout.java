@@ -1,5 +1,9 @@
 package io.riverdb.storage.btree;
 
+import static io.riverdb.format.FormatBytes.getInt;
+import static io.riverdb.format.FormatBytes.getLong;
+import static io.riverdb.format.FormatBytes.putLong;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
 import java.nio.ByteBuffer;
@@ -115,29 +119,5 @@ final class BTreeKeyLayout {
 
   private static int entryOffset(int index) {
     return BTreePage.HEADER_BYTES + index * BTreePage.ENTRY_BYTES;
-  }
-
-  private static void putInt(ByteBuffer target, int offset, int value) {
-    target.put(offset, (byte) value);
-    target.put(offset + 1, (byte) (value >>> 8));
-    target.put(offset + 2, (byte) (value >>> 16));
-    target.put(offset + 3, (byte) (value >>> 24));
-  }
-
-  private static int getInt(ByteBuffer source, int offset) {
-    return Byte.toUnsignedInt(source.get(offset))
-        | Byte.toUnsignedInt(source.get(offset + 1)) << 8
-        | Byte.toUnsignedInt(source.get(offset + 2)) << 16
-        | Byte.toUnsignedInt(source.get(offset + 3)) << 24;
-  }
-
-  private static void putLong(ByteBuffer target, int offset, long value) {
-    putInt(target, offset, (int) value);
-    putInt(target, offset + 4, (int) (value >>> 32));
-  }
-
-  private static long getLong(ByteBuffer source, int offset) {
-    return Integer.toUnsignedLong(getInt(source, offset))
-        | Integer.toUnsignedLong(getInt(source, offset + 4)) << 32;
   }
 }

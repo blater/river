@@ -230,7 +230,7 @@ final class ProtocolFrameCodecTest {
   void decodesMaximumDescriptorVarcharResponseBeyondUnsignedShortLength() {
     // Ordinary response text is bounded by the result-row byte contract and VARCHAR scalar
     // declaration, independently of the 16 KiB physical frame and legacy u16 length width.
-    String value = "\u0800".repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
+    String value = String.valueOf((char) 0x0800).repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
     ByteBuffer bytes = encodedTextResponse(value);
     int utf8Bytes = bytes.getInt(responseTextLengthOffset());
     assertTrue(utf8Bytes > Short.toUnsignedInt((short) -1));
@@ -244,15 +244,15 @@ final class ProtocolFrameCodecTest {
     assertEquals(utf8Bytes, response.textByteLengthAt(0));
     char[] decoded = new char[value.length()];
     assertEquals(value.length(), response.copyTextAt(0, decoded, 0));
-    assertEquals('\u0800', decoded[0]);
-    assertEquals('\u0800', decoded[decoded.length - 1]);
+    assertEquals((char) 0x0800, decoded[0]);
+    assertEquals((char) 0x0800, decoded[decoded.length - 1]);
   }
 
   @Test
   void rejectsNegativeAndEnvelopeOverrunU32ResponseTextLengths() {
     // The decoder rejects both the signed-invalid u32 representation and a positive length that
     // crosses the enclosing logical result boundary before exposing any columns.
-    String value = "\u0800".repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
+    String value = String.valueOf((char) 0x0800).repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
     int length = responseTextLengthOffset();
     ProtocolResponse response = new ProtocolResponse();
     ProtocolResponseDecoder decoder = new ProtocolResponseDecoder();

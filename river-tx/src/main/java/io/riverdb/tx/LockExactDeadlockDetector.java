@@ -70,8 +70,8 @@ final class LockExactDeadlockDetector {
         waiter, request, blocker, blockingResource, kind, precondition);
   }
 
-  int admitSignatureForTest(long epoch, long fingerprint, long guard) {
-    return diagnostics.admitSignatureForTest(epoch, fingerprint, guard);
+  int admitSignature(long epoch, long fingerprint, long guard) {
+    return diagnostics.admitSignature(epoch, fingerprint, guard);
   }
 
   private long cycleVictim(long start) {
