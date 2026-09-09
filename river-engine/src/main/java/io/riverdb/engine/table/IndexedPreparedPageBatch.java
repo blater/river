@@ -64,8 +64,11 @@ final class IndexedPreparedPageBatch {
       pageIds[count] = pageId;
       frameSlots[count] = slot;
       int previous = latest.find(pageId);
-      previousFrameSlots[count] = previous >= 0
+      int previousSlot = previous >= 0
           ? previous : cache.currentMap.find(pageId);
+      previousFrameSlots[count] = previousSlot;
+      // Keep the predecessor pinned until its successor link is installed or this batch clears.
+      if (previousSlot >= 0) cache.currentFrames[previousSlot].pinCount++;
       members[count++] = member;
     }
     for (int index = first; index < count; index++) {
@@ -88,6 +91,7 @@ final class IndexedPreparedPageBatch {
       install(
           cache, pageState, frameSlots[index], previousFrameSlots[index], pageIds[index],
           commitSequences[members[index]], start, end);
+      releasePredecessor(cache, index);
     }
     this.state = INSTALLED;
     return StatusCode.OK;
@@ -169,6 +173,7 @@ final class IndexedPreparedPageBatch {
   private void clear(IndexedPageFrameCache cache, boolean published) {
     for (int index = count - 1; index >= 0; index--) {
       latest.remove(pageIds[index]);
+      releasePredecessor(cache, index);
       releaseFrame(cache, frameSlots[index], published);
       pageIds[index] = 0;
       frameSlots[index] = -1;
@@ -177,6 +182,14 @@ final class IndexedPreparedPageBatch {
     }
     count = 0;
     state = IDLE;
+  }
+
+  private void releasePredecessor(IndexedPageFrameCache cache, int index) {
+    int slot = previousFrameSlots[index];
+    if (slot >= 0) {
+      cache.currentFrames[slot].pinCount--;
+      previousFrameSlots[index] = -1;
+    }
   }
 
   private static int reserve(
