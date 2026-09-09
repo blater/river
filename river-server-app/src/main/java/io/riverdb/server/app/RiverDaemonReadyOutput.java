@@ -59,11 +59,11 @@ final class RiverDaemonReadyOutput {
 
   static void printSummary(
       RiverDaemonRuntimeRecords.Metadata metadata, int maximumConnections, PrintStream err) {
-    String address = metadata.listenAddress.indexOf(':') >= 0
-        ? "[" + metadata.listenAddress + "]" : metadata.listenAddress;
+    String endpoint = new RiverDaemonEndpoint(metadata.listenAddress, metadata.listenPort).toString();
     err.println("River server ready");
     err.println("  data directory: " + metadata.datadir);
-    err.println("  endpoint: " + address + ":" + metadata.listenPort);
+    err.println("  endpoint: " + endpoint);
+    err.println("  stop: river stop " + endpoint);
     err.println("  client configuration: " + metadata.clientConfig);
     err.println("  maximum connections: " + maximumConnections);
     err.flush();

@@ -133,6 +133,12 @@ client configuration under its data directory:
 bin/river server start --datadir=/absolute/path/to/database --port=9191
 ```
 
+In another terminal, `bin/river ps` lists local servers with the exact HOST:PORT
+accepted by `bin/river stop HOST:PORT`. Bare `bin/river stop` stops the default
+instance at `~/.river/default`. Stop waits for graceful shutdown; it does not
+delete the database.
+
+
 Use the reported `security/client.properties` path with the SQL client or JDBC:
 
 ```sh

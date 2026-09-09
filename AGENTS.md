@@ -91,6 +91,16 @@ because module `build/` outputs still collide. See the Gradle
 [command-line](https://docs.gradle.org/current/userguide/command_line_interface.html)
 documentation.
 
+## Proportionate validation
+
+Use focused JVM tests and affected-module checks for routine tickets. Add one
+standalone smoke when commands, packaging, or a platform boundary changes.
+Do not repeat full JVM/native build and benchmark matrices for every ticket;
+reserve those matrices for release workflows or a specific performance question.
+For a small lifecycle change, use one representative workload and an adjacent
+control if its result is surprising. Expand only to resolve a concrete failure
+or repeated regression, not to accumulate more evidence.
+
 ## TPC-C performance loop
 
 Use the standalone local harness at

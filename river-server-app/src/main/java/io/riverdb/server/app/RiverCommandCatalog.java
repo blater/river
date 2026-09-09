@@ -31,11 +31,12 @@ final class RiverCommandCatalog {
   static final Spec START = new Spec("server start", "river server start [options]",
       "Start the authenticated server in the foreground.", true,
       List.of(DATADIR, PORT, IP, MAXIMUM_CONNECTIONS, READY_FILE), List.of());
-  static final Spec STOP = new Spec("server stop", "river server stop [options]",
-      "Request cooperative shutdown of an instance.", false,
+  static final Spec STOP = new Spec("stop", "river stop [HOST:PORT]",
+      "Request cooperative shutdown of an instance.", true,
       List.of(DATADIR, TIMEOUT), List.of());
-  static final Spec PS = new Spec("server ps", "river server ps",
-      "List verified instances owned by the current user.", false, List.of(), List.of());
+  static final Spec PS = new Spec("ps", "river ps",
+      "List verified instances owned by the current user.", true,
+      List.of(), List.of());
   static final Spec RENEW = new Spec("server credentials renew",
       "river server credentials renew [options]", "Replace credentials for a stopped instance.", false,
       List.of(DATADIR), List.of());
@@ -48,7 +49,7 @@ final class RiverCommandCatalog {
       List.of(START, STOP, PS, CREDENTIALS, SERVER_VERSION));
   static final Spec ROOT = new Spec("", "river [CLIENT_PROPERTIES] < script.sql",
       "The River client and local server command.", true, List.of(),
-      List.of(CLI, SERVER, VERSION, HELP));
+      List.of(CLI, SERVER, STOP, PS, VERSION, HELP));
 
   private RiverCommandCatalog() { }
 
@@ -59,8 +60,8 @@ final class RiverCommandCatalog {
     if ("version".equals(topic)) return VERSION;
     if ("server".equals(topic)) return SERVER;
     if ("server start".equals(topic)) return START;
-    if ("server stop".equals(topic)) return STOP;
-    if ("server ps".equals(topic)) return PS;
+    if ("stop".equals(topic) || "server stop".equals(topic)) return STOP;
+    if ("ps".equals(topic) || "server ps".equals(topic)) return PS;
     if ("server credentials".equals(topic)) return CREDENTIALS;
     if ("server credentials renew".equals(topic)) return RENEW;
     if ("server version".equals(topic)) return SERVER_VERSION;

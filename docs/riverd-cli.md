@@ -2,8 +2,8 @@
 
 The unified command and help hierarchy are implemented by
 [tic-ed14](tickets/tic-ed14.md) and [tic-9cfd](tickets/tic-9cfd.md).
-[tic-a51d](tickets/tic-a51d.md) owns single-file native packaging, which remains
-under validation. This document owns the user-facing commands and behavior;
+[tic-a51d](tickets/tic-a51d.md) delivers single-file native packaging; Linux/Windows native validation
+remains outstanding. This document owns the user-facing commands and behavior;
 [ADR 0014](adr/0014-riverd-instance-security.md) owns their security and durable
 lifecycle mechanisms. The [delivery plan](plans/riverd-standalone-server-plan.md)
 maps implementation work.
@@ -14,23 +14,26 @@ maps implementation work.
 river [CLIENT_PROPERTIES] < script.sql
 river help [TOPIC...]
 river version
+river ps
+river stop [HOST:PORT] [-D PATH|--datadir=PATH] [--timeout=DURATION]
 river server
 river server help
 river server version
 river server start [-D PATH|--datadir=PATH] [--port=PORT] [--ip=ADDRESS]
              [--maximum-connections=N] [--ready-file=PATH]
-river server stop [-D PATH|--datadir=PATH] [--timeout=DURATION]
+river server stop [HOST:PORT] [-D PATH|--datadir=PATH] [--timeout=DURATION]
 river server ps
 river server credentials renew [-D PATH|--datadir=PATH]
 ```
 
-An instance is identified by its data directory. Start, stop and offline
-maintenance use the same `--datadir=PATH` option, or its short form `-D PATH`.
-There is no separate instance name or `--instance` option.
+Start and offline maintenance select persistent data with `--datadir=PATH` or
+`-D PATH`. `river ps` shows the HOST:PORT identifier accepted by `river stop`.
+The data directory remains the instance's persistent identity; the endpoint
+selects its current running process. There is no separate instance-name catalog.
 
 ## Help
 
-- `river`, `river -h`, and `river --help` print identical top-level help. Bare `river`
+- `river help`, `river -h`, and `river --help` print identical top-level help. Bare `river`
   runs SQL through the default instance configuration at
   `~/.river/default/security/client.properties`; a missing configuration suggests
   `river server start`.
@@ -79,7 +82,8 @@ hostnames and malformed values are rejected. `--maximum-connections` accepts
 fails before mutation. There are no individual engine tuning flags.
 
 On success, startup reports the resolved data directory, actual address and
-port, PID and client settings path. Its final readiness record is
+port, PID and client settings path, plus a copyable `river stop HOST:PORT` command.
+Its final readiness record is
 `riverd_status=ready`. Automation may use `--ready-file`; an existing target
 is never overwritten. The exact publication and failure rules remain in
 [ADR 0014](adr/0014-riverd-instance-security.md#readiness-runtime-record-and-registry-formats).
@@ -102,12 +106,30 @@ The installed distribution includes the JDBC driver and its dependencies in `lib
 ## Stop and list
 
 ```sh
-river server stop
-river server stop --datadir=/path/to/database --timeout=60s
-river server ps
+river ps
+river stop
+river stop 127.0.0.1:9192
+river stop '[::1]:9192' --timeout=60s
+river stop --datadir=/path/to/database
 ```
 
-`stop` targets the default data directory unless one is supplied. It requests
+`river stop` and `river server stop` are equivalent, as are `river ps` and
+`river server ps`. Listing shows verified current-user local instances:
+
+```text
+SERVER           DEFAULT  DATA DIRECTORY
+127.0.0.1:9191    yes      /Users/alex/.river/default
+127.0.0.1:9192    no       /Users/alex/databases/demo
+```
+
+Copy the SERVER value into `river stop HOST:PORT`. IPv6 uses brackets;
+`localhost:PORT` selects the IPv4 loopback endpoint. Bare `stop` selects
+`~/.river/default`, even when other servers are running. An explicit data
+directory and an endpoint cannot be combined. A missing or ambiguous endpoint
+returns an error rather than choosing another server. Remote administration
+is not supported.
+
+Stop requests
 graceful shutdown from the verified instance owner and waits for completion.
 The default timeout is `30s`. A duration is a positive decimal integer followed
 by `ms`, `s` or `m`, fitting signed-long milliseconds. Fractions, signs, zero,
@@ -120,13 +142,14 @@ shutdown path: close the listener before the database and preserve committed
 data for restart.
 
 `ps` lists verified instances registered by the current user, sorted by data
-directory, with PID, endpoint and data directory. An empty list exits
+directory, with the endpoint, default-instance marker and data directory. An empty list exits
 successfully and suggests `river server start`. Invalid or stale records produce a
 concise warning and are preserved.
 
-Successful stop prints:
+Successful stop prints a confirmation followed by status records:
 
 ```text
+Stopped River server 127.0.0.1:9191.
 riverd_datadir=<normalized-absolute-path>
 riverd_pid=<positive-decimal-long>
 riverd_status=OK
@@ -134,8 +157,9 @@ riverd_status=OK
 
 ## Offline maintenance
 
-`river server credentials renew` replaces the instance credentials. It requires a
-stopped instance and accepts the same data-directory option. After renewal,
+`river server credentials renew` is planned and currently reports that it is
+unavailable. It will replace credentials for a stopped instance and accept the
+same data-directory option. After renewal,
 restart and use the newly published client settings; old credentials no longer
 authenticate. The command does not delete database data. SQL/security audit
 collection and an audit archive command are deferred; they are not part of the
@@ -161,7 +185,7 @@ Ordinary command termination has three public exit classes:
 
 | Exit | Native outcome | Meaning |
 | --- | --- | --- |
-| 0 | `OK` | Help, version, listing including an empty list, successful offline operation, or a foreground server that shut down cleanly. |
+| 0 | `OK` | Help, version, listing including an empty list, successful stop or offline operation, or a foreground server that shut down cleanly. |
 | 2 | `INVALID_EXTERNAL_INPUT` | Invalid command syntax or option value, detected before mutation. |
 | 1 | Named non-`OK` `StatusCode` | Startup, lifecycle, authentication/authorization, filesystem, I/O, or shutdown failure. |
 

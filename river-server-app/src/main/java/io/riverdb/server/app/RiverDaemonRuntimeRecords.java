@@ -30,7 +30,7 @@ public final class RiverDaemonRuntimeRecords {
   // Process/runtime records use the accepted process-record framing bound, which is larger
   // than the identity lock-record bound.
   private static final int MAX_RECORD_BYTES = 8192;
-  private static final String RUNTIME_NAME = "runtime.properties";
+  static final String RUNTIME_NAME = "runtime.properties";
   private static final String RUNTIME_FORMAT = "riverd-runtime-v1";
   private static final String REGISTRY_FORMAT = "riverd-registry-v1";
   private static final String READY_FORMAT = "riverd-ready-v1";
@@ -513,7 +513,7 @@ public final class RiverDaemonRuntimeRecords {
     return ReadyTarget.failure(primary);
   }
 
-  private static ReadResult read(RiverFile file) {
+  static ReadResult read(RiverFile file) {
     FileSizeResult size = new FileSizeResult();
     StatusCode status = file.size(size);
     if (!status.isOk()) return new ReadResult(status, null);
@@ -534,7 +534,7 @@ public final class RiverDaemonRuntimeRecords {
     return new ReadResult(StatusCode.OK, bytes);
   }
 
-  private static StatusCode write(RiverFile file, byte[] bytes) {
+  static StatusCode write(RiverFile file, byte[] bytes) {
     try {
       ByteBuffer source = ByteBuffer.wrap(bytes);
       IoResult io = new IoResult();
@@ -552,7 +552,7 @@ public final class RiverDaemonRuntimeRecords {
     }
   }
 
-  private static StatusCode force(RiverDirectory directory) {
+  static StatusCode force(RiverDirectory directory) {
     return directory.force(new DirectoryOperationResult());
   }
 
@@ -607,7 +607,7 @@ public final class RiverDaemonRuntimeRecords {
     return true;
   }
 
-  private static boolean validAddress(String value) {
+  static boolean validAddress(String value) {
     return "localhost".equals(value) || "127.0.0.1".equals(value) || "::1".equals(value);
   }
 
@@ -619,7 +619,7 @@ public final class RiverDaemonRuntimeRecords {
     }
   }
 
-  private static String[] envelope(byte[] bytes, int fieldCount, String format) {
+  private static Envelope envelope(byte[] bytes, int fieldCount, String format) {
     if (bytes == null) return null;
     String text;
     try {
@@ -642,7 +642,8 @@ public final class RiverDaemonRuntimeRecords {
     byte[] expected = digest(prefix.getBytes(StandardCharsets.UTF_8));
     boolean valid = checksum.equals(HexFormat.of().formatHex(expected));
     Arrays.fill(expected, (byte) 0);
-    return valid && format.equals(value(fields[0], "format=")) ? fields : null;
+    return valid && format.equals(value(fields[0], "format="))
+        ? new Envelope(fields, checksum) : null;
   }
 
   private static String value(String field, String key) {
@@ -662,9 +663,10 @@ public final class RiverDaemonRuntimeRecords {
     return (int) parsed;
   }
 
-  private static RuntimeRecord parseRuntime(byte[] bytes) {
-    String[] fields = envelope(bytes, 13, RUNTIME_FORMAT);
-    if (fields == null) return null;
+  static RuntimeRecord parseRuntime(byte[] bytes) {
+    Envelope envelope = envelope(bytes, 13, RUNTIME_FORMAT);
+    if (envelope == null) return null;
+    String[] fields = envelope.fields;
     try {
       return new RuntimeRecord(
           value(fields[1], "datadir="),
@@ -676,15 +678,16 @@ public final class RiverDaemonRuntimeRecords {
           canonicalPort(value(fields[8], "listen-port=")),
           value(fields[9], "client-config="),
           canonicalLong(value(fields[10], "credential-generation=")),
-          value(fields[11], "ready-file="), value(fields[12], "owner-nonce="));
+          value(fields[11], "ready-file="), value(fields[12], "owner-nonce="), envelope.checksum);
     } catch (RuntimeException failure) {
       return null;
     }
   }
 
-  private static RegistryRecord parseRegistry(byte[] bytes) {
-    String[] fields = envelope(bytes, 14, REGISTRY_FORMAT);
-    if (fields == null) return null;
+  static RegistryRecord parseRegistry(byte[] bytes) {
+    Envelope envelope = envelope(bytes, 14, REGISTRY_FORMAT);
+    if (envelope == null) return null;
+    String[] fields = envelope.fields;
     try {
       return new RegistryRecord(value(fields[1], "datadir="),
           canonicalLong(value(fields[2], "database-incarnation-high=")),
@@ -702,8 +705,9 @@ public final class RiverDaemonRuntimeRecords {
   }
 
   private static ReadyRecord parseReady(byte[] bytes) {
-    String[] fields = envelope(bytes, 17, READY_FORMAT);
-    if (fields == null) return null;
+    Envelope envelope = envelope(bytes, 17, READY_FORMAT);
+    if (envelope == null) return null;
+    String[] fields = envelope.fields;
     try {
       return new ReadyRecord(value(fields[1], "datadir="),
           canonicalLong(value(fields[2], "database-incarnation-high=")),
@@ -721,7 +725,7 @@ public final class RiverDaemonRuntimeRecords {
     }
   }
 
-  private static final class RuntimeRecord {
+  static final class RuntimeRecord {
     final String datadir;
     final long high;
     final long low;
@@ -734,10 +738,18 @@ public final class RiverDaemonRuntimeRecords {
     final long generation;
     final String readyFile;
     final String nonce;
+    final String checksum;
 
     RuntimeRecord(String datadir, long high, long low, long pid, long start, String command,
         String address, int port, String clientConfig, long generation, String readyFile,
         String nonce) {
+      this(datadir, high, low, pid, start, command, address, port, clientConfig, generation,
+          readyFile, nonce, null);
+    }
+
+    RuntimeRecord(String datadir, long high, long low, long pid, long start, String command,
+        String address, int port, String clientConfig, long generation, String readyFile,
+        String nonce, String checksum) {
       this.datadir = datadir;
       this.high = high;
       this.low = low;
@@ -750,6 +762,7 @@ public final class RiverDaemonRuntimeRecords {
       this.generation = generation;
       this.readyFile = readyFile;
       this.nonce = nonce;
+      this.checksum = checksum;
     }
 
     boolean matches(String expectedDatadir, DatabaseIncarnation incarnation,
@@ -762,7 +775,7 @@ public final class RiverDaemonRuntimeRecords {
     }
   }
 
-  private static final class RegistryRecord {
+  static final class RegistryRecord {
     final String datadir;
     final long high;
     final long low;
@@ -883,13 +896,23 @@ public final class RiverDaemonRuntimeRecords {
     }
   }
 
-  private static final class ReadResult {
+  static final class ReadResult {
     final StatusCode status;
     final byte[] bytes;
 
     ReadResult(StatusCode status, byte[] bytes) {
       this.status = status;
       this.bytes = bytes;
+    }
+  }
+
+  private static final class Envelope {
+    final String[] fields;
+    final String checksum;
+
+    Envelope(String[] fields, String checksum) {
+      this.fields = fields;
+      this.checksum = checksum;
     }
   }
 }
