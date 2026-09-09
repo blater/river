@@ -37,8 +37,7 @@ final class TpccStockLevel implements AutoCloseable {
       connection.commit();
       return true;
     } catch (SQLException failure) {
-      connection.rollback();
-      throw failure;
+      throw TpccRetry.rollbackAfterFailure(connection, failure);
     }
   }
 
