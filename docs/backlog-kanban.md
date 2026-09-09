@@ -59,6 +59,9 @@ User-directed delivery: first [tic-ed14](tickets/tic-ed14.md) unifies the public
 client/server entry points while porting existing behavior; next
 [tic-9cfd](tickets/tic-9cfd.md) consolidates and completes the help hierarchy;
 then [tic-a51d](tickets/tic-a51d.md) packages one native executable per platform.
+Its completed source follow-up [tic-e419](tickets/tic-e419.md) replaces byte
+assembly with shared fixed-width access; short JVM/native comparisons improved.
+Native packaging acceptance and performance promotion remain open.
 All three remain under the existing installable-server epic, tic-bf0b. Native
 packaging follows the help delivery; it includes a focused compatibility
 trial and measured JVM/native comparison, not a new benchmark framework.

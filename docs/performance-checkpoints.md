@@ -1333,3 +1333,76 @@ with static fixed-endian ByteBuffer-view VarHandles in FormatBytes and route
 the B-tree duplicate primitives through that owner. This is a proposed source
 change, not an implemented or measured improvement. Keep CRC, key comparison,
 and broader buffer API changes outside that slice.
+
+
+### Fixed-width format access — tic-e419 (2026-09-09)
+
+Branch `ticket/tic-e419-fixed-width-access` starts at native candidate `349de73e`.
+The user requested comparison against JVM 154.6 TPS and native O3 129.6 TPS.
+Adjacent unchanged controls were JVM 153.4 TPS and native O3 130.0 TPS, retained
+at `/private/tmp/word-access-jvm-control-1/` and
+`/private/tmp/word-access-native-control-1/`.
+
+The source change replaces FormatBytes byte assembly with three static final
+little-endian ByteBuffer-view VarHandles using plain get/set. BTreePage and
+BTreeKeyLayout import those primitives and delete their duplicate implementations.
+Checksums, comparison loops, buffer ownership, format layouts, compiler defaults,
+and durability behavior are unchanged. Bytecode inspection confirms primitive
+signatures without boxing/allocation in the six accessors.
+
+One clean `test check` checkpoint ran with `--no-daemon` on GraalVM JDK 25.0.4.
+All tests passed, including new independent encoding/state/boundary checks and
+existing format, storage, recovery and SQL integration tests. Overall `check`
+failed solely in `verifySourcePolicy`: existing XML/Java indentation, raw Unicode
+escapes and test-support identifier violations. Every reported file is unchanged
+from baseline `349de73e`; no waiver or unrelated cleanup was added. Full log:
+`/private/tmp/river-word-access-check.log`.
+
+Slopmark before/after: BTreePage 28.6416 → 28.3441; BTreeKeyLayout 7.92481 →
+7.92481; FormatBytes 6.00817 → 6.00817. Artifacts:
+`/private/tmp/river-word-access-slopmark-{before,after}.txt`.
+
+Comparisons use the same temporary `/private/tmp/river-native-profile.py` driver
+as the requested baselines: tiny, standard mix, serializable, no-wait-stress,
+one warehouse, ten terminals, seed42, batch rows32, maximum attempts32, 5s warmup
+and 30s measurement. Both servers retain production defaults and a 1GiB heap.
+GraalVM25.0.4 drives both; native remains O3/Serial GC with retained symbols and
+GC logging; JVM retains default G1, GC logging and profile JFR. Both receive the
+same 20s stack sample during measurement. No build overlaps any measured run.
+The JVM launches the current compiled classes directly, without Gradle, using
+`/private/tmp/river-word-access-jvm`; native uses the rebuilt `bin/river`.
+
+| Runtime | Requested baseline TPS | Adjacent control TPS | Candidate 1 TPS | Candidate 2 TPS | Candidate mean TPS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| JVM | 154.6 | 153.4 | 174.2 | 174.0 | 174.1 |
+| Native O3 | 129.6 | 130.0 | 143.6 | 141.7 | 142.7 |
+
+Candidate means are 12.6% and 10.1% above the respective requested baselines.
+These are short local diagnostic comparisons, not a sustained performance claim
+or promotion gate. Both runtimes improve; native still trails the improved JVM.
+Run order was JVM control, native control, JVM candidate 1, native candidate 1,
+JVM candidate 2, native candidate 2. Candidate artifacts are
+`/private/tmp/word-access-{jvm,native}-after-{1,2}/`; each contains the exact
+commands, workload result, GC/profile data and cleanup outcome. TPS sums measured
+commits only, excluding drain commits. All runs completed with zero retries,
+retry exhaustion or failed outcomes; workload invariant checks passed and owned
+servers/databases were cleaned up. Longer interleaved controls/candidates remain
+necessary before making a sustained gain claim or promoting a performance feature.
+
+Native disassembly confirms single 32/64-bit loads in the FormatBytes fast paths,
+with bounds and buffer-lifetime checks retained. Byte assembly and its repeated
+byte getter calls are gone. Evidence:
+`/private/tmp/river-word-access-native-assembly.txt`. This demonstrates the intended
+mechanism; it does not attribute the entire measured difference to one call site.
+
+The copied native executable passed help aliases, version, invalid port rejection,
+credential generation/use/rejection, duplicate instance rejection, SQL commit,
+shutdown and restart/read with JAVA_HOME and GRAALVM_HOME unset. Its owned database
+was removed. Logs:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-16hyfnsb/`.
+
+Decision: implementation and requested diagnostic comparison complete; retain the
+isolated feature commit. No merge/promotion is recorded here. Native packaging
+acceptance remains open under tic-a51d, including platform validation and the
+remaining native/JVM performance gap. The inherited source-policy check failures
+remain visible rather than being waived or folded into this optimization.
