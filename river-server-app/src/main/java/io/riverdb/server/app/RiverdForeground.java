@@ -105,6 +105,7 @@ final class RiverdForeground {
       lifecycle.shutdown();
       return status;
     }
+    RiverDaemonReadyOutput.printSummary(metadata, command.maximumConnections(), System.err);
     try {
       while (!lifecycle.stopped()) {
         if (!lifecycle.serverRunning()) {

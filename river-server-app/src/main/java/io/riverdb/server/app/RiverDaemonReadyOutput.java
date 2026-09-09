@@ -56,4 +56,16 @@ final class RiverDaemonReadyOutput {
     err.println("riverd: readiness file published; stdout mirror could not be written.");
     return StatusCode.OK;
   }
+
+  static void printSummary(
+      RiverDaemonRuntimeRecords.Metadata metadata, int maximumConnections, PrintStream err) {
+    String address = metadata.listenAddress.indexOf(':') >= 0
+        ? "[" + metadata.listenAddress + "]" : metadata.listenAddress;
+    err.println("River server ready");
+    err.println("  data directory: " + metadata.datadir);
+    err.println("  endpoint: " + address + ":" + metadata.listenPort);
+    err.println("  client configuration: " + metadata.clientConfig);
+    err.println("  maximum connections: " + maximumConnections);
+    err.flush();
+  }
 }
