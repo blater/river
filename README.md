@@ -9,7 +9,7 @@ agents: how to specify work, divide it between agents, and review the result.
 
 > River is pre-V1 evaluation software. APIs and on-disk formats may change
 > incompatibly; automatic upgrades are not provided. This README describes
-> the `riverd` feature candidate as of 2026-09-08. The
+> the `river` feature candidate as of 2026-09-08. The
 > [alpha.2 release notes](docs/delivery/alpha-2-known-limitations.md) describe
 > the earlier release.
 

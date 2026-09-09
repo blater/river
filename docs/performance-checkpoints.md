@@ -1162,3 +1162,14 @@ river-cli, river-server-app production sources and tools. Command parser 215.049
 foreground owner 163.184, server main 13.044, client main 8.61233. These are review
 signals; this delivery does not authorize changes to database hot paths.
 Candidate validation and native feasibility remain pending.
+
+
+Entry-point slice integrated at `39c9df6d` (agent source `004ffbac`; final
+agent branch `04bcf875` adds two documentation-name corrections).
+`:river-server-app:test :river-cli:test verifyModuleGraph
+:river-server-app:installDist` passed in an isolated checkout, with installed
+help/version/client-usage smoke passing. Root review checked application/library
+direction and command error reporting. Slopmark after entry-point migration:
+`/private/tmp/river-unified-slopmark-entrypoint.txt`; parser and foreground owner
+unchanged, new dispatcher 31.3175, client runner 6.60964. Installed persistent
+lifecycle and cumulative TPS checks remain required before acceptance.

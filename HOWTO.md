@@ -70,7 +70,7 @@ The directory must exist before either call. The `ID_HIGH`/`ID_LOW` pair is the
 durable database identity: generate it once, store it in application
 configuration, and pass the same identity and WAL generation to
 `openExisting`. Do not call `create` over an existing database. The installed
-`riverd` owner is responsible for listener, TLS, credential, and shutdown
+`river server` owner is responsible for listener, TLS, credential, and shutdown
 lifetime; embedded callers should close the database after their sessions.
 
 ## Run DDL and DML

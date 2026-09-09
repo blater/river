@@ -1,6 +1,6 @@
 ---
 id: tic-9cfd
-status: open
+status: in_progress
 type: story
 priority: 1
 assignee: blater
