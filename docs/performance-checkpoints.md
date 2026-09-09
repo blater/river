@@ -1487,3 +1487,97 @@ build defaults are unchanged. Experimental executables remain in
 `bin/river` is restored to the starting generic O3 executable. No merge or native
 packaging acceptance is implied; tic-a51d remains open for supported-platform
 validation and a deliberate final build configuration.
+
+
+## Native delivery validation and predecessor ownership — 2026-09-09
+
+Branch `ticket/tic-a51d-native-compiler-tuning`, following `1faa014d`.
+The supported native task now provides an O3 build and explicit PGO instrument/profile
+options using the compiler's portable default CPU target. The user accepted the
+remaining Linux/Windows native validation risk for pre-alpha.
+
+The manual hot-method bytecode inventory and SQL source-match ceilings were
+removed at the user's request, including their fixtures and task wiring. Global
+source, dependency and architecture checks remain. The complete `check` task
+passed without exclusions before final workload validation
+(`/private/tmp/river-native-final-check-complete.log`).
+
+Final validation then exposed intermittent publication `INVARIANT_BROKEN`
+failures in both JVM and native execution. Failed samples are retained at
+`/private/tmp/native-final-jvm-1`, `/private/tmp/native-final-native-1`, and
+`/private/tmp/native-final-jvm-fence-probe-{1,2}`; the latter three retain their
+failed databases. Successful adjacent JVM samples do not erase those failures.
+Temporary failure probes narrowed the returned error to group publication,
+without a durability-cleanup failure or an unexpected Java exception. A later
+probed 90s JVM sample passed (`/private/tmp/native-final-jvm-fence-probe-3`);
+it is diagnostic only, not an optimized throughput sample.
+
+Review found an unowned predecessor cache-slot reference in prepared page
+publication. Later member preparation could evict that predecessor before its
+successor was linked. The small-cache regression
+`preservesPreparedPredecessorWhenLaterMemberNeedsEviction` fails at installation
+with `INVARIANT_BROKEN` on the original code and passes after the fix. The batch
+now holds a predecessor pin until linking, or releases it on cancellation.
+This adds no allocation or copied payload and preserves the existing WAL ordering.
+Independent review checked ownership across repeated same-page generations,
+reverse cancellation and concurrent reader pins. The focused cache test class
+passes, including old/new snapshot visibility and cancellation pin cleanup.
+Red/green logs: `/private/tmp/native-fence-probes/predecessor-{red-2,green-2}.log`.
+Slopmark for `IndexedPreparedPageBatch`: 32.8233 → 35.1522; the change stays within
+its existing page-generation ownership responsibility. All temporary probes
+were removed. A benchmark rollback failure now retains the original SQL error
+as a suppressed exception while preserving the existing thrown-error classification.
+
+The final full `check :river-bench:installTps` build passed without exclusions
+after the ownership fix (5m08s):
+`/private/tmp/river-native-final-fixed-check.log`. All Gradle invocations used
+`--no-daemon`. The final native rebuild reuses the representative seed77 profile
+`/private/tmp/river-native-final.iprof`, captured with the supported generic-target
+instrumentation task before the pin-accounting fix. The training workload passed;
+the profile remains a build input only.
+
+Final build: `/private/tmp/river-native-fixed-final-build.log`, successful in
+1m51s; Oracle GraalVM 25.0.4, O3, armv8.1-a, user-provided PGO, Serial GC.
+Final matched samples use tiny data, standard mix, serializable isolation,
+10 terminals, one warehouse, seed42, batch rows32, maximum attempts32,
+5s warmup and 60s measurement. Server resource defaults are unchanged; the JVM
+launcher uses the same GraalVM JDK with `-Xmx1g`. Runs are sequential and
+interleaved JVM/native/JVM/native. Driver and commands:
+`/private/tmp/river-native-fixed-compare.py`,
+`/private/tmp/river-native-final-forensic.py`, and each artifact's `run.json`.
+
+| Runtime | Sample 1 TPS | Sample 2 TPS | Mean TPS |
+| --- | ---: | ---: | ---: |
+| JVM | 169.100 | 169.600 | 169.350 |
+| Native O3/PGO | 153.333 | 153.017 | 153.175 |
+
+Artifacts: `/private/tmp/native-fixed-final-{jvm,native}-{1,2}/`. All four
+completed load, preflight, measurement, drain and checkpoint, with zero failed
+or exhausted transactions and successful owned-server/database cleanup. Native
+sample2 had one Delivery deadlock retry, matched exactly by server/client
+counters; the other three had no retries. Accounted Delivery deadlocks also
+appeared in the earlier CPU-target controls. The publication failure did not
+recur. These local results exceed the original 154.6 JVM / 129.6 native figures,
+but those earlier baselines were separate runs; do not interpret the difference
+as a controlled estimate of the pin fix's cost or gain.
+
+The final executable, copied alone outside the build tree with no JAVA_HOME or
+GRAALVM_HOME, passed help aliases, version and invalid-port handling, credential
+creation, wrong-token and duplicate-instance rejection, authenticated SQL commit,
+shutdown, restart and reading the committed row. Both owned servers stopped
+and the database was removed. Log directory:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-l9j51dyb/`.
+
+Final `tools/tps-test.sh` smoke also passed: version
+`a51d-final-predecessor-pin`, tiny standard mix, serializable, seed42,
+10 terminals, one warehouse, 2s warmup and 10s measurement; 148.0 TPS, zero
+errors, `deadlock_reconciliation=OK`, `performance_capture=OK`. This short
+managed-server smoke is separate from the matched runtime comparison above.
+Artifact directory `/private/tmp/river-a51d-final-tps-test`; console log
+`/private/tmp/river-a51d-final-tps-test.log`.
+
+Decision: accept the unified command/help/native delivery and the reviewed
+predecessor ownership fix for pre-alpha promotion. The original failing samples
+remain recorded; the focused reproducer is fixed, full checks pass and the
+four final workload samples and standalone lifecycle smoke pass. Linux/Windows
+native validation remains explicitly unclaimed under the user-approved exception.

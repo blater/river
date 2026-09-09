@@ -61,7 +61,10 @@ client/server entry points while porting existing behavior; next
 then [tic-a51d](tickets/tic-a51d.md) packages one native executable per platform.
 Its completed source follow-up [tic-e419](tickets/tic-e419.md) replaces byte
 assembly with shared fixed-width access; short JVM/native comparisons improved.
-Native packaging acceptance and performance promotion remain open.
+The three tickets are delivered for pre-alpha: command modes, complete help and
+O3/PGO native packaging passed final checks and matched JVM/native workloads.
+Linux/Windows native validation remains outstanding under the user-approved
+pre-alpha exception; macOS arm64/APFS is validated.
 All three remain under the existing installable-server epic, tic-bf0b. Native
 packaging follows the help delivery; it includes a focused compatibility
 trial and measured JVM/native comparison, not a new benchmark framework.

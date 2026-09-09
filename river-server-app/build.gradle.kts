@@ -15,11 +15,23 @@ val nativePlatform = when {
 }
 val nativeConfigurationDirectory = layout.projectDirectory.dir("src/main/native/$nativePlatform")
 val nativeExecutableName = if (windowsHost) "river.exe" else "river"
-val nativeImageOutput = rootProject.layout.projectDirectory.file("bin/$nativeExecutableName")
+val pgoInstrument = providers.gradleProperty("riverPgoInstrument").map {
+  when (it) {
+    "true" -> true
+    "false" -> false
+    else -> throw GradleException("riverPgoInstrument must be true or false")
+  }
+}.orElse(false)
+val pgoProfile = providers.gradleProperty("riverPgoProfile").map { rootProject.file(it) }
+val nativeImageOutput = if (pgoInstrument.get()) {
+  layout.buildDirectory.file("native-instrumented/$nativeExecutableName").get()
+} else {
+  rootProject.layout.projectDirectory.file("bin/$nativeExecutableName")
+}
 val graalVmHome = providers.environmentVariable("GRAALVM_HOME").orElse("")
 val nativeImageCommand = if (windowsHost) "native-image.cmd" else "native-image"
 val nativeImageExecutable = graalVmHome.map { file("$it/bin/$nativeImageCommand") }
-val nativeImageOptions = listOf(
+val nativeImageOptions = (if (pgoInstrument.get()) emptyList() else listOf("-O3")) + listOf(
   "--no-fallback",
   "--enable-native-access=ALL-UNNAMED",
   "--enable-all-security-services",
@@ -61,7 +73,7 @@ tasks.register<JavaExec>("run") {
 }
 
 tasks.named<Delete>("clean") {
-  delete(nativeImageOutput)
+  delete(rootProject.layout.projectDirectory.file("bin/$nativeExecutableName"))
 }
 
 tasks.register<Exec>("nativeCompile") {
@@ -75,8 +87,14 @@ tasks.register<Exec>("nativeCompile") {
   inputs.property("applicationVersion", applicationVersion)
   inputs.property("mainClass", riverMainClass)
   inputs.property("nativeImageOptions", nativeImageOptions)
+  inputs.property("pgoInstrument", pgoInstrument)
+  inputs.file(pgoProfile).optional()
+  inputs.property("pgoProfilePath", pgoProfile.map { it.absolutePath }.orElse(""))
   outputs.file(nativeImageOutput)
   doFirst {
+    if (pgoInstrument.get() && pgoProfile.isPresent) {
+      throw GradleException("Use either riverPgoInstrument or riverPgoProfile, not both")
+    }
     if (graalVmHome.get().isBlank()) {
       throw GradleException("nativeCompile requires GRAALVM_HOME to point to GraalVM JDK 25")
     }
@@ -91,6 +109,8 @@ tasks.register<Exec>("nativeCompile") {
     } else {
       executable(image)
     }
+    if (pgoInstrument.get()) args("--pgo-instrument")
+    if (pgoProfile.isPresent) args("--pgo=${pgoProfile.get().absolutePath}")
     args(
       "-H:ConfigurationFileDirectories=${nativeConfigurationDirectory.asFile.absolutePath}",
       *nativeImageOptions.toTypedArray(),

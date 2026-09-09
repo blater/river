@@ -1,6 +1,6 @@
 ---
 id: tic-a51d
-status: in_progress
+status: closed
 type: story
 priority: 1
 assignee: blater
@@ -103,10 +103,9 @@ graceful shutdown, restart with existing credentials, and reading the committed
 row. Both owned server processes exited and the temporary database was removed.
 The native binary links only macOS system libraries and frameworks.
 
-Acceptance remains open: matched native TPS is repeatedly lower than JVM TPS,
-and Linux/Windows native lifecycle validation has not run. See the performance
-checkpoint entry. Do not merge or label this native delivery complete on the
-strength of the credential fix alone.
+At that checkpoint, acceptance remained open for native performance and
+Linux/Windows validation. The subsequent performance and risk decisions below
+supersede that merge hold.
 
 
 ## CPU target and PGO experiments — 2026-09-09
@@ -124,3 +123,34 @@ See [performance checkpoints](../performance-checkpoints.md) for individual
 samples, exact configuration and retained artifacts. PGO is a supported next
 packaging choice to develop; CPU compatibility remains a separate decision.
 No production build defaults changed, and this does not close platform acceptance.
+
+
+## Pre-alpha promotion decision — 2026-09-09
+
+The user approved O3 and PGO and explicitly accepted merging without Linux/Windows
+native lifecycle validation at this pre-alpha stage. Those platforms remain
+required; their untested status must remain visible in the README and native
+build guide. This exception permits current integration, not a claim that the
+platforms have passed. Final build-path validation, source-policy check fixes
+and matched JVM/native evidence remain required before this merge.
+
+
+## Accepted delivery — 2026-09-09
+
+The supported build produces the standalone executable with O3 and optional PGO.
+The public native build guide records training, final build and platform status.
+Full `check` passed without exclusions. Final interleaved 60s samples passed:
+JVM 169.1 / 169.6 TPS; native O3/PGO 153.3 / 153.0 TPS. There were no failed
+or exhausted transactions; one native Delivery retry reconciled with the server.
+The copied-file credential/SQL/restart smoke and `tools/tps-test.sh` passed.
+
+Validation exposed an existing prepared-page predecessor ownership bug. A focused
+regression reproduces its publication `INVARIANT_BROKEN`; the reviewed fix pins
+the predecessor until linking or cancellation. Snapshot and cancellation tests
+pass. The brittle build-time hot-method inventory and SQL match ceilings were
+removed as requested; global checks remain. See the final evidence in
+[performance checkpoints](../performance-checkpoints.md).
+
+Closed under the user's explicit pre-alpha Linux/Windows validation exception
+above. macOS arm64/APFS is validated; Linux ext4/XFS and Windows NTFS native
+validation remain outstanding requirements, not claimed successes.

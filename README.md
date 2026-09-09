@@ -113,14 +113,17 @@ compilation, tests, and development commands use the normal JDK. Native
 packaging additionally requires a GraalVM JDK 25 installation for the host
 OS and architecture, with `GRAALVM_HOME` set to its installation directory.
 
-Native packaging is experimental; performance and platform validation are still
-in progress.
+Native packaging is pre-alpha. The macOS arm64 executable has been exercised;
+Linux and Windows native builds have not yet been validated.
 
 Build the self-contained native executable:
 
 ```sh
 GRAALVM_HOME=/path/to/graalvm-jdk-25 ./gradlew --no-daemon :river-server-app:nativeCompile
 ```
+
+Native builds use O3 optimization. For profile-guided optimization (PGO), see
+the [native build guide](docs/native-build.md).
 
 The result is `bin/river` (`bin/river.exe` on Windows). Copy that executable
 alone to run the client or start the server. The server writes the generated
