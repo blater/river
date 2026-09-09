@@ -90,13 +90,11 @@ Local validation completed with:
   verifySourcePolicy verifyHotPathBytecodeFixtures verifyHotPathBytecode
   --rerun-tasks --stacktrace`, with 69 executed tasks; and
 - `RIVER_GRADLE_HOME=/private/tmp/river-gradle-home ./verify --rerun-tasks`,
-  including both exact archive builds, byte-for-byte comparison, and the final
-  clean 149-task `check` run.
+  including the final clean 149-task `check` run.
 
 After the controlled-hierarchy fixes received an independent `SAFE` verdict,
 the reviewed sequence was integrated through `a8ea3fb`. The root branch reran
-the 69-task focused audit and the complete gate: both clean 58-archive builds
-matched byte for byte, the final 149 tasks executed, and 218 JUnit tests passed
+the 69-task focused audit and the complete gate: the final 149 tasks executed, and 218 JUnit tests passed
 with zero failures, errors, or skips.
 
 ## Proof boundary

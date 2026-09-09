@@ -17,12 +17,6 @@ G0 promotion evidence
 | Full-gate result | `BUILD SUCCESSFUL`; 91 tests, 0 failures, 0 errors, 0 skipped |
 | Policy command | `GRADLE_USER_HOME=/private/tmp/river-gradle-home ./gradlew verifyBuildPolicyFixtures verifySourcePolicy verifyModuleGraph --stacktrace` |
 | Policy result | `BUILD SUCCESSFUL`; all seven negative fixture families produced their required diagnostic and the test-source exclusion fixture passed |
-| Archive command | `GRADLE_USER_HOME=/private/tmp/river-gradle-home ./gradle/verify-reproducible-archives.sh` |
-| Archive result | `BUILD SUCCESSFUL` twice with `--no-build-cache --rerun-tasks`; the derived exact set of 58 archives was present and compared byte for byte as identical |
-
-The 58 archives comprise the main and sources JAR for each of the 29 declared
-River modules. The standalone comparison emitted
-`build/reports/reproducible-archives.tsv` with one result row per archive.
 
 ## Checks exercised
 
@@ -39,11 +33,7 @@ River modules. The standalone comparison emitted
   and River gate scripts, with dedicated shell-tab and extensionless-indent
   negative fixtures;
 - a source-level forbidden-API rule scoped only to named hot-path package
-  families in production sources, with a test-source exclusion fixture; and
-- byte-for-byte comparison of main and sources JARs from two clean local
-  uncached, forced assemblies using the repository wrapper and selected local
-  Gradle user home. `RIVER_GRADLE_HOME` explicitly overrides an existing
-  `GRADLE_USER_HOME`; otherwise the existing value is preserved.
+  families in production sources, with a test-source exclusion fixture.
 
 ## What this does not prove
 

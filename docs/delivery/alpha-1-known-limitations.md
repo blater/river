@@ -62,8 +62,7 @@ delivery status is recorded in the
 ## Validation boundary
 
 The release tag identifies the exact source used for validation. The SQL,
-engine, backup, and remaining JDBC suites pass, as do reproducible archive
-comparison, dependency verification, static design-debt policy, and repository
-diff checks. The clean release verifier stops only at the documented
+engine, backup, and remaining JDBC suites pass, as do dependency verification,
+static design-debt policy, and repository diff checks. The clean release verifier stops only at the documented
 `M5TypeRecoveryBoundaryTest` failure above; that boundary is not represented as
 accepted behavior.

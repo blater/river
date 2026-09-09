@@ -49,8 +49,7 @@ as developer workload infrastructure.
 
 ## Validation
 
-The isolated final branch passed both 99-task archive builds, reproducible
-comparison, the final clean check, 178 tests with zero failures/errors/skips,
+The isolated final branch passed the final clean check, 178 tests with zero failures/errors/skips,
 source policy, module graph, workload smoke, Markdown lint, and JSON parsing.
 
 After integration, `verifyDependencyLedger`, source policy, module graph, all

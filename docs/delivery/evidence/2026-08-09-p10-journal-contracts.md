@@ -52,8 +52,6 @@ At integrated commit `b2c9dec`:
 
 - `RIVER_GRADLE_HOME=/private/tmp/river-gradle-home ./verify --rerun-tasks`
   completed successfully;
-- both uncached, forced archive builds produced the exact 58 expected archives
-  byte-for-byte identically;
 - the final check executed 84 tasks; and
 - 130 tests ran with zero failures, errors, or skips.
 

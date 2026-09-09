@@ -39,9 +39,7 @@ Tested source: `da09f01`, after all four merges. Command:
 RIVER_GRADLE_HOME=/Users/blater/.gradle ./verify --continue
 ```
 
-Every Gradle invocation used `--no-daemon`. Two uncached clean archive builds
-passed in 44s and 31s and produced identical archives. The subsequent clean
-check took 7m 2s: **384 suites / 1,806 tests, zero failures/errors, two existing
+Every Gradle invocation used `--no-daemon`. The clean check took 7m 2s: **384 suites / 1,806 tests, zero failures/errors, two existing
 skips**. Engine tests executed freshly; 17 other module test tasks reused
 passing cached results, including the affected suites run earlier in this
 delivery. This is not a claim that all 1,806 tests executed freshly.

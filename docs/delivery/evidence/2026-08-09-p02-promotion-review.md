@@ -28,8 +28,6 @@ The reviewer confirmed that:
   indentation while the non-script `LICENSE` text is deliberately excluded;
 - exact inherited dependency edges, unknown/missing/forbidden edges, cycles,
   and cross-module internal-package leakage fail closed;
-- the expected set of 58 main/source archives is derived from the module graph
-  and two clean, uncached, forced builds compare byte for byte;
 - the detached-checkout gate suppresses hidden Git/Gradle source inputs, uses
   the exact pinned offline wrapper cache, disables the task cache, and removes
   its temporary clone; and
@@ -37,7 +35,7 @@ The reviewer confirmed that:
   slow hosted execution mandatory during the initial local-first phase.
 
 The reviewer independently ran `./verify-clean-checkout` against exact commit
-`56c29d0`. Both 58-archive builds and the final 149-task check succeeded, and
+`56c29d0`. The final 149-task check succeeded, and
 the gate reported the exact detached commit before removing the clone.
 
 ## Promotion decision

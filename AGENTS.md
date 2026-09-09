@@ -72,7 +72,7 @@ Use targeted Gradle tasks with `--no-daemon` while editing:
   change. Expand to affected-module tests and policy checks before commit.
 - Reserve `./verify` and `./verify-clean-checkout` for integration checkpoints,
   release evidence, or changes to the build itself. They intentionally perform
-  destructive cold/reproducibility work and are not iteration commands.
+  clean-build work and are not iteration commands.
 - Do not enable the Gradle configuration cache globally without a measured
   trial and compatibility fixes.
 

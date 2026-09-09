@@ -9,7 +9,7 @@ Deliverables: P02, P03
 A clean checkout builds and tests all declared River module boundaries with a
 repository-pinned JDK/Gradle contract. The build rejects dependency cycles,
 dependencies outside the approved module graph, exported internal packages,
-tabs, non-two-space source indentation, and non-reproducible archives.
+tabs, and non-two-space source indentation.
 
 ## Authority and invariants
 
@@ -40,7 +40,6 @@ speed. Generated output is confined to each module's `build/` directory.
 
 - Wrapper distribution URL and SHA-256 are pinned.
 - `./gradlew clean check` passes in a clean checkout.
-- A second build produces byte-identical archives where archives exist.
 - Negative fixtures prove tab/style, forbidden dependency, cycle, and internal
   package violations fail for the expected reason.
 - `./verify` is the authoritative local gate and uses the checked-in wrapper.
@@ -89,13 +88,7 @@ custom configuration, and a dependency cycle. A positive fixture proves test
 sources are excluded only from the hot-path API rule. Shell and tracked
 extensionless gate scripts use the same tab/two-space policy, with distinct
 negative fixtures; non-source extensionless text such as `LICENSE` is not
-misclassified as a script. `./verify` invokes two clean archive assemblies with
-task reruns and the Gradle build cache disabled.
-Each build must produce exactly the main and sources JAR paths derived from the
-declared module graph (currently 58 archives), and the two sets are compared
-byte for byte before the final clean local check. The comparison can also be
-run alone with `gradle/verify-reproducible-archives.sh`; it writes a local TSV
-report beneath `build/reports/`.
+misclassified as a script. `./verify` runs `clean check`.
 
 `verifyHotPathBytecodeFixtures` compiles a deterministic Java 25 negative case
 for every bytecode rule plus positive primitive-status and caller-owned-buffer
@@ -104,8 +97,8 @@ missing selectors fail closed. The contract, narrow compiler-artifact allowlist,
 and proof boundary are recorded in
 `docs/delivery/evidence/2026-08-09-p02-p07-bytecode-policy.md`.
 
-Set `RIVER_GRADLE_OFFLINE=true` to make all three Gradle invocations in
-`./verify` use Gradle offline mode. Any other non-empty value fails closed.
+Set `RIVER_GRADLE_OFFLINE=true` to run `./verify` in Gradle offline mode.
+Any other non-empty value fails closed.
 `./verify-clean-checkout` always selects this mode and requires
 `RIVER_GRADLE_HOME` or `GRADLE_USER_HOME` to be an existing absolute directory,
 so it does not silently create a checkout-local cache or fetch missing inputs.

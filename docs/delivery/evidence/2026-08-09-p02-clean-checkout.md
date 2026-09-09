@@ -17,7 +17,7 @@ This is specifically a source-checkout isolation gate, not a hermetic runner or
 supply-chain proof. It establishes which committed source tree is built and
 prevents common workspace-local Git and Gradle build-logic injection.
 
-The clean build runs all three Gradle invocations in offline mode using an
+The clean build runs Gradle in offline mode using an
 explicit existing absolute Gradle user home. It rejects Gradle user-home init
 scripts, user-home `gradle.properties`, tracked repository symlinks, and Git
 links. Checkout hooks are disabled, ignored files count as pre-build dirt, and
@@ -41,20 +41,17 @@ the build rather than being downloaded.
 | Focused command | `GRADLE_USER_HOME=/private/tmp/river-gradle-home ./gradlew --offline verifyDependencyLedger verifySourcePolicy verifyModuleGraph verifyBuildPolicyFixtures --rerun-tasks --stacktrace --console=plain` |
 | Focused result | `BUILD SUCCESSFUL`; 35 tasks executed |
 | Clean-checkout command | `RIVER_GRADLE_HOME=/private/tmp/river-gradle-home ./verify-clean-checkout` |
-| Archive results | Two offline, uncached, forced archive builds passed; 99 actionable tasks per build; the exact 58-archive set compared byte for byte |
 | Final clean/check result | `BUILD SUCCESSFUL`; 117 tasks executed with task reruns and the build cache disabled in detached commit `409dc621c05d26867d1dd06336075c8a53a52ac0` |
 | Independent review | `SAFE` at evidence tip `76d1b72`; all strict-review negative probes passed |
 
-The clean-checkout gate disables the Gradle build cache for the final check as
-well as both archive builds so no task output can be restored from the shared
+The clean-checkout gate disables the Gradle build cache for the final check so no task output can be restored from the shared
 user home.
 
 The strict-review fix run removed its temporary checkout after the successful
 gate.
 
 The reviewed sequence was then integrated through `a9c5a07`. From that exact
-detached root commit, `./verify-clean-checkout` again completed both offline,
-uncached 58-archive builds and the final offline, uncached 149-task check. The
+detached root commit, `./verify-clean-checkout` again completed the final offline, uncached 149-task check. The
 gate removed its temporary clone after reporting the exact commit and success.
 
 Fail-closed preflight checks also produced their intended stable failures:

@@ -99,12 +99,10 @@ explicit source/test snapshot gate and both online and offline dependency and
 negative-fixture gates passed with the identities recorded below. Historical
 full-gate evidence for the hardening branch remains: the
 `RIVER_GRADLE_HOME=/private/tmp/river-gradle-home RIVER_GRADLE_OFFLINE=true
-./verify --rerun-tasks` gate then passed both 99-task clean archive assemblies,
-matched all 58 archives byte for byte, and passed the final 150-task check. The
+./verify --rerun-tasks` gate then passed the final 150-task check. The
 final test reports contain 218 tests with zero failures, errors, or skips.
 The committed tip `4520de0` also passed `./verify-clean-checkout` from a detached
-temporary clone using only the populated offline Gradle cache. Both 99-task
-archive assemblies and the final 150-task check passed there without either
+temporary clone using only the populated offline Gradle cache. The final 150-task check passed there without either
 external reference tree being present in the checkout.
 
 ## Remaining P01 work

@@ -60,8 +60,7 @@ On the integrated branch:
 
 At integrated commit `c563547`, the repository's authoritative
 `RIVER_GRADLE_HOME=/private/tmp/river-gradle-home ./verify --rerun-tasks` gate
-also completed successfully. Both clean, uncached archive builds matched the
-exact expected set, the final check executed 86 tasks, and 151 tests ran with
+also completed successfully. The final check executed 86 tasks, and 151 tests ran with
 zero failures, errors, or skips.
 
 ## Required before P05 can pass

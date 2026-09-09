@@ -32,7 +32,7 @@ maintained in the [alpha delivery roadmap](alpha-roadmap.md).
 | Next product slice | A3C-1 wide-schema runtime, then A3C-2 bounded large-table storage and the remaining [Alpha 3 functional TPC-C readiness](alpha-roadmap.md) |
 | Lead integrator | Primary implementation agent |
 | Latest green functional checkpoint | `16ded83` (2026-08-22) — complete P4C direct, point, aggregate, grouped, distinct, ordered/spilled, joined, and P3 consumer integration with lifecycle, allocation, and topology-reuse gates green |
-| Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
+| Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check |
 
 The bytecode-policy and clean-checkout gates are integrated, independently
 reviewed, and verified together from the exact detached integration commit.

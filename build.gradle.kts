@@ -3441,40 +3441,6 @@ val verifyHotPathBytecodeFixtures = tasks.register("verifyHotPathBytecodeFixture
   }
 }
 
-val expectedArchiveList = layout.buildDirectory.file("reports/expected-archives.paths")
-val expectedArchiveCount = layout.buildDirectory.file("reports/expected-archives.count")
-val writeExpectedArchiveList = tasks.register("writeExpectedArchiveList") {
-  outputs.files(expectedArchiveList, expectedArchiveCount)
-
-  doLast {
-    val archivePaths = subprojects.flatMap { module ->
-      listOf(
-        module.tasks.named<Jar>("jar").get().archiveFile.get().asFile,
-        module.tasks.named<Jar>("sourcesJar").get().archiveFile.get().asFile
-      )
-    }.map { archive ->
-      rootDir.toPath().toAbsolutePath().normalize()
-        .relativize(archive.toPath().toAbsolutePath().normalize())
-        .toString()
-        .replace(java.io.File.separatorChar, '/')
-    }.sorted()
-    val listPath = expectedArchiveList.get().asFile.toPath()
-    val countPath = expectedArchiveCount.get().asFile.toPath()
-    Files.createDirectories(listPath.parent)
-    Files.write(listPath, archivePaths)
-    Files.writeString(countPath, "${archivePaths.size}\n")
-  }
-}
-
-tasks.register("assembleRiverArchives") {
-  group = LifecycleBasePlugin.BUILD_GROUP
-  description = "Assembles every production and benchmark JAR for comparison."
-  dependsOn(writeExpectedArchiveList)
-  dependsOn(subprojects.flatMap { module ->
-    listOf(module.tasks.named("jar"), module.tasks.named("sourcesJar"))
-  })
-}
-
 fun sha256(file: java.io.File): String {
   val digest = MessageDigest.getInstance("SHA-256")
   file.inputStream().use { input ->

@@ -66,8 +66,7 @@ Local validation on 2026-08-09:
 
 - focused base, journal API, testkit, source-policy, and module-graph gate:
   46 tasks, all successful;
-- full `./verify --rerun-tasks`: two 99-task exact archive builds compared
-  equal, followed by 149 successful check tasks; and
+- full `./verify --rerun-tasks`: 149 successful check tasks; and
 - final test reports: 220 tests, zero failures, errors, or skips.
 
 Strict independent correctness/allocation review found the follow-up safe: all

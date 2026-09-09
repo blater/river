@@ -48,28 +48,36 @@ agents: how to specify work, divide it between agents, and review the result.
 
 The [SQL conformance profile](docs/compatibility/sql-conformance-profile.md)
 and [JDBC support matrix](docs/compatibility/jdbc-support-matrix.md) describe
-supported features and omissions. Some numeric limits in those documents
-predate the current implementation; the table below reflects current source.
+supported features and omissions. The main size and capacity limits are
+summarized below.
 
 ## Current limits
 
-Memory, temporary disk space, and concurrent use can limit an operation before
-it reaches these bounds. A supported row-ID range does not mean River has been
-tested with that many rows.
+These limits apply to individual tables, rows, keys, or SQL clauses as stated.
+Available memory, temporary disk space, and concurrent work may limit an
+operation sooner. Capacity limits describe what the formats can represent;
+they are not claims that River has been tested at that scale.
 
-| Area | Limit |
+**The 4 MiB result-row limit applies to one row, not the whole query result.**
+A query can return more than 4 MiB in total. JDBC streams rows as the client
+reads them; sorting and other operations that retain results also need memory
+and, when they spill to disk, temporary disk space.
+
+| Area | Current limit |
 | --- | --- |
-| Columns | 1,024 per table; 1,664 result columns, grouping expressions, or ordering expressions. Table rows must also fit the byte limit below |
-| Stored row | 16,216 encoded bytes, including row metadata, within a 16,384-byte page |
-| Text | `VARCHAR(n)` supports declarations up to 65,535 Unicode scalar values. A table schema must fit the stored-row limit, allowing four bytes per declared character plus metadata; this gives table columns a lower practical limit |
-| Decimal | Up to 38 digits, with scale from zero to the declared precision |
-| Indexes | Up to 64 secondary indexes per table, 32 columns per key, and 3,072 encoded user-key bytes |
-| Table capacity | Logical row IDs from 1 through 4,294,967,294. Row and version directories are stored on disk; physical page IDs and WAL operation sizes have separate limits |
-| Joins | Up to 64 table references in a left-associative `INNER`/`LEFT` chain. Join reordering and partitioned hash spill remain unfinished |
-| Materialized results | Paged storage and external sorting replace the old 65,536-row / 256 MB store cap. Capacity depends on memory budgets, temporary disk space, and address limits. Each encoded result-row payload is limited to 4,194,304 bytes |
-| Savepoints | Limited by the session's resource budget; the old three-savepoint cap is gone. Budget exhaustion returns `RESOURCE_EXHAUSTED` |
-| Network | Loopback only, with TLS 1.3 and token authentication. Remote deployment is unsupported |
-| JDBC | One live statement per connection; forward-only, read-only results. No callable statements or scrollable/updatable cursors |
+| Table columns | Up to 1,024 columns per table. The combined row must also fit the stored-row limit below |
+| Result columns and SQL clauses | Up to 1,664 columns in a result row, 1,664 expressions in a `GROUP BY` list, and 1,664 expressions in an `ORDER BY` list |
+| One stored row | Up to 16,216 bytes after encoding, including row metadata. A stored row must fit within one 16,384-byte page |
+| Text (`VARCHAR(n)`) | The type can represent `n` up to 65,535 Unicode scalar values (not bytes). A table definition must fit the stored-row limit using each column's declared maximum: four bytes per scalar value, plus metadata. This makes the maximum `n` for a stored column smaller, even if its actual values would be short |
+| Decimal (`DECIMAL(p,s)`) | Up to 38 total digits (`p`). The number of digits after the decimal point (`s`) must be between zero and `p` |
+| Indexes and keys | Up to 64 secondary indexes per table and 32 columns per key. The combined encoded column values in one index key must fit within 3,072 bytes |
+| Table row IDs | Row IDs range from 1 through 4,294,967,294 per table. This is the ID range, not a guaranteed usable table size; storage capacity and page-address limits also apply |
+| Joins | Up to 64 table references in one left-to-right chain of `INNER`/`LEFT` joins. Referencing the same table twice counts twice. Join reordering and partitioned hash-join spill are unfinished |
+| One result row | Up to 4 MiB (4,194,304 bytes) of encoded row payload. This is a per-row limit, not a limit on the total query result |
+| Results held for sorting or other processing | Stored in pages and able to spill to temporary disk. Total capacity depends on configured memory budgets, temporary disk space, and address limits |
+| Savepoints | The number of savepoints is limited by the session's resource budget. Exhausting that budget returns `RESOURCE_EXHAUSTED` |
+| Network access | Clients must connect from the same machine over a loopback address. Remote deployment is unsupported |
+| JDBC | Multiple statements may be open per connection, but only one query can be active at a time. Finish reading or close that query before running another. Result sets are forward-only and read-only: they cannot scroll backward or update rows. Callable statements are unsupported |
 
 The main sources for these limits are
 [`SqlShapeLimits`](river-base/src/main/java/io/riverdb/base/sql/SqlShapeLimits.java),
@@ -84,7 +92,7 @@ macOS/APFS and Linux/ext4/XFS. Windows/NTFS validation remains pending. SQL/
 security audit collection is deferred pending a concrete performance-neutral
 design. The foreground server creates or reopens
 the database, publishes `security/client.properties`, and accepts only
-authenticated TLS 1.3 connections. Backup and restore are offline; replication,
+authenticated connections. Backup and restore are offline; replication,
 failover, and online schema migration are not available.
 
 Focused recovery, concurrency, and capacity tests pass, but the full crash,
@@ -100,14 +108,12 @@ still required for performance and cross-database comparisons.
 
 ## Build and run
 
-The build uses a JDK 25 toolchain and targets Java 25. Gradle verifies dependency
-checksums. Always use `--no-daemon` and run one build or database workload at a
-time on the host.
+Building River requires JDK 25. Gradle verifies dependency checksums.
 
 Build the server and SQL client distributions:
 
 ```sh
-./gradlew --no-daemon :river-server-app:installDist :river-cli:installDist
+./gradlew :river-server-app:installDist :river-cli:installDist
 ```
 
 Start the candidate server in the foreground. It writes the
@@ -127,17 +133,12 @@ The CLI reads semicolon-terminated SQL, emits tab-separated rows, and stops at
 the first error. The [CLI reference](river-cli/README.md) and [database
 how-to](HOWTO.md) describe the generated client-file workflow.
 
-Size settings use decimal `KB`, `MB`, and `GB`. The exact byte counts in the
-limits table describe storage formats. See
-[ADR 0013](docs/adr/0013-configuration-size-units.md).
-
 ## Validate a checkout
 
-Use focused module and test tasks while editing. Run the full test matrix at
-an integration checkpoint:
+Run the tests:
 
 ```sh
-./gradlew --no-daemon test
+./gradlew test
 ```
 
 For the clean release checks:
@@ -146,25 +147,17 @@ For the clean release checks:
 ./verify
 ```
 
-`./verify` checks reproducible archives, runs `clean check`, and enforces source
-and dependency policies. It uses an isolated Gradle home in the repository by
-default.
+`./verify` runs `clean check`: tests plus source and dependency policy checks.
 
-The candidate clean test run reports 1,897 tests: 1,879 executed, 18 skipped,
-and no failures or errors. The module graph check passes; existing source-policy
-and SQL-shape violations still fail their checks. This run did not validate
-every additional release check. Details are in the
-[checkpoint ledger](docs/performance-checkpoints.md).
+For River-specific throughput diagnostics:
 
-For River-specific TPS diagnostics, run `./make.sh` first, then
-`tools/tps-test.sh`. `make.sh` runs `:river-bench:installTps` to build the
-runnable benchmark distribution;
-the TPS command consumes that distribution and does not run Gradle or inspect
-the source tree. The default test version is the current Git branch. When a
-branch contains several meaningful variants, pass
-`--version=<meaningful-variation>` and record that value in the TPS log or
-artifact. Follow the [performance loop](AGENTS.md#tpc-c-performance-loop)
-when choosing workloads and collecting evidence.
+```sh
+./make.sh
+tools/tps-test.sh
+```
+
+Results use the current Git branch as their version label. Use
+`--version=<label>` to give a run a different name.
 
 ## Direction and backlog
 
@@ -173,12 +166,9 @@ and queries across different data types to help agents manage context. NQL
 integration may also provide queries and updates across databases and files.
 These are future directions, not current features.
 
-Work is tracked in Markdown [tickets](docs/tickets/), configured by
-[`ticket.yaml`](ticket.yaml). Run `tk` from the repository or a subdirectory.
-The [delivery queue](docs/backlog-kanban.md) sets the current order of work.
-[`manifesto.md`](manifesto.md) and [`AGENTS.md`](AGENTS.md) define the engineering
-principles and working rules. Tickets link to design decisions, evidence, and
-work owned by other repositories.
+The [delivery queue](docs/backlog-kanban.md) lists planned work, with details
+in the [tickets](docs/tickets/). See the [manifesto](manifesto.md) for engineering
+principles and [AGENTS.md](AGENTS.md) for contributor workflow instructions.
 
 ## License
 

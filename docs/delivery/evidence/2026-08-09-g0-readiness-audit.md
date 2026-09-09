@@ -55,8 +55,7 @@ or canonical performance budgets.
 ## Locally closable gaps
 
 1. Add negative fixtures for the module graph, internal-package boundary,
-   source policy, and forbidden APIs; add isolated clean-build and reproducible
-   archive comparison evidence.
+   source policy, and forbidden APIs; add isolated clean-build evidence.
 2. Strengthen package/export enforcement beyond text matching and record an
    independent dependency-graph review.
 3. Complete typed lineage identities, allocation/ownership evidence, the

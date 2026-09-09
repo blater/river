@@ -47,8 +47,7 @@ The final independent review found the tip safe for provisional integration.
 
 ## Local validation
 
-The isolated final tip passed both clean 98-task archive builds, archive
-comparison, an 85-task clean check, and 143 tests with zero failures, errors,
+The isolated final tip passed an 85-task clean check, and 143 tests with zero failures, errors,
 or skips. The 13 transaction-specific tests include a warmed allocation test
 that executed rather than being skipped.
 

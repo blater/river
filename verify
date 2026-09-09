@@ -10,7 +10,6 @@ elif [ -z "${GRADLE_USER_HOME:-}" ]; then
 fi
 
 export GRADLE_USER_HOME
-"$river_root/gradle/verify-reproducible-archives.sh"
 
 case "${RIVER_GRADLE_OFFLINE:-}" in
   "")

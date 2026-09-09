@@ -95,7 +95,7 @@ issue for the explicitly bounded atomic-install subset.
 
 At integrated commit `33f6aa2`,
 `RIVER_GRADLE_HOME=/private/tmp/river-gradle-home ./verify --rerun-tasks`
-completed successfully. Both clean archive builds matched, the final gate
+completed successfully. The final gate
 executed 117 tasks, and 192 tests ran with zero failures, errors, or skips.
 
 ## Deliberate limits

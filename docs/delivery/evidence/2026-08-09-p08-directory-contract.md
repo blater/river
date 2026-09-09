@@ -89,8 +89,7 @@ The independently reviewed changes were integrated on `codex/implementation`
 through commit `f105eb5`. The combined local gate reran dependency inventory,
 source policy, module graph, and both platform and testkit suites: 74 Gradle
 tasks executed and 120 tests passed with zero failures or errors.
-The authoritative `./verify --rerun-tasks` gate then reproduced all 58 declared
-archives across two clean uncached builds and executed the final 117-task
+The authoritative `./verify --rerun-tasks` gate then executed the final 117-task
 check; 218 tests passed with zero failures, errors, or skips.
 
 ## Deliberate physical limits
