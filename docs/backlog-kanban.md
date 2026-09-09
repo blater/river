@@ -66,6 +66,11 @@ Stop, instance listing and credential renewal remain with their existing
 operations tickets. Their help must be complete and honest about availability;
 these deliveries do not expand into implementing those operations.
 
+Remote connectivity follows these deliveries in
+[tic-4ec3](tickets/tic-4ec3.md): explicit network listening and a portable,
+authenticated client profile for CLI/JDBC. Future wire support reuses the same
+connection boundaries; its protocol implementation is outside that ticket.
+
 ## Board
 
 | Lane | Now: ready work | Next: unlocked by Now | Later: promotion path |
