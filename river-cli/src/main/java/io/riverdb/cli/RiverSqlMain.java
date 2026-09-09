@@ -6,7 +6,7 @@ import java.io.PrintStream;
 
 /** Bounded script-oriented SQL client using generated client.properties. */
 public final class RiverSqlMain {
-  static final int MAXIMUM_STATEMENT_CHARACTERS = 64 * 1024;
+  public static final int MAXIMUM_STATEMENT_CHARACTERS = 64 * 1024;
 
   private RiverSqlMain() {
   }

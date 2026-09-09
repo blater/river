@@ -1,4 +1,4 @@
-# `river server` command-line contract
+# `river` command-line contract
 
 The next command-interface delivery is specified in
 [tic-ed14](tickets/tic-ed14.md): port existing behavior to one `river` command
@@ -16,6 +16,9 @@ maps implementation work.
 ## Commands
 
 ```text
+river CLIENT_PROPERTIES < script.sql
+river help [TOPIC...]
+river version
 river server
 river server help
 river server version
@@ -32,14 +35,17 @@ There is no separate instance name or `--instance` option.
 
 ## Help
 
-- `river server` and `river server -h` print useful brief usage: short command descriptions,
-  a start example, the default data location and port, and a pointer to full
-  help. They do not inspect or list instances.
-- `river server help` and `river server --help` print identical full global help.
-- Every command and group listed above accepts trailing `-h` for brief usage
-  or `--help` for full help. `river server help` followed by the command or group
-  gives the same full help: for example, `river server help start` and
-  `river server help credentials renew`.
+- `river`, `river -h`, and `river --help` print identical top-level help. Bare `river`
+  remains the default client invocation and reports its required client configuration
+  when no path is supplied.
+- `river help <topic>`, `river -h <topic>`, and `river --help <topic>` are equivalent
+  to the topic's trailing `-h` or `--help` form. Examples include `river help cli`,
+  `river help server`, `river server start --help`, and
+  `river help server credentials renew`.
+- Group help lists immediate commands and availability. Leaf help lists every accepted
+  option, aliases, value syntax, defaults, constraints, effects and a copyable example.
+- Help and version exit successfully without connecting, opening a listener, reading
+  credentials or changing instance files.
 - Help and version exit successfully without changing state.
 
 Help must explain the supported workflow in plain language, with copyable

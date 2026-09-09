@@ -15,13 +15,13 @@ public final class RiverdMain {
     RiverdCommandResult command = new RiverdCommandResult();
     StatusCode status = RiverdCommandParser.parse(arguments, command);
     if (!status.isOk()) {
-      errors.print(RiverdCommandHelp.brief(command.helpTopic()));
+      errors.print(RiverdCommandHelp.render(
+          command.helpTopic() == null ? "server" : command.helpTopic()));
       reportCommandFailure(status, command.diagnostic(), errors);
       return command.exitCode(status);
     }
     switch (command.command()) {
-      case BRIEF_HELP -> output.print(RiverdCommandHelp.brief(command.helpTopic()));
-      case FULL_HELP -> output.print(RiverdCommandHelp.full(command.helpTopic()));
+      case HELP -> output.print(RiverdCommandHelp.render(command.helpTopic()));
       case VERSION -> output.print(RiverdCommandHelp.version(RiverDaemonVersion.value()));
       case START -> {
         StatusCode start = RiverdForeground.run(command, Path.of(System.getProperty("user.home")));
@@ -54,9 +54,6 @@ public final class RiverdMain {
 
   private static void reportFailure(StatusCode status, String diagnostic, PrintStream errors) {
     if (!failureReported.compareAndSet(false, true)) return;
-    if (diagnostic != null) errors.println(diagnostic);
-    errors.println("riverd_status_code=" + status.stableCode());
-    errors.println("riverd_status=" + status);
-    errors.flush();
+    reportCommandFailure(status, diagnostic, errors);
   }
 }

@@ -41,17 +41,19 @@ final class RiverdCommandParserTest {
 
   @Test
   void helpFormsMatch() {
-    assertEquals(RiverdCommand.BRIEF_HELP, parse().command());
-    assertEquals(RiverdCommand.BRIEF_HELP, parse("-h").command());
-    assertEquals(RiverdCommand.FULL_HELP, parse("help").command());
-    assertEquals(RiverdCommand.FULL_HELP, parse("--help").command());
-    assertEquals("start", parse("help", "start").helpTopic());
-    assertEquals(RiverdCommand.FULL_HELP, parse("start", "--help").command());
-    assertEquals(RiverdCommand.BRIEF_HELP, parse("version", "-h").command());
-    assertEquals(RiverdCommand.FULL_HELP, parse("version", "--help").command());
+    assertEquals(RiverdCommand.HELP, parse().command());
+    assertEquals(RiverdCommand.HELP, parse("-h").command());
+    assertEquals(RiverdCommand.HELP, parse("help").command());
+    assertEquals(RiverdCommand.HELP, parse("--help").command());
+    assertEquals("server start", parse("help", "start").helpTopic());
+    assertEquals(RiverdCommand.HELP, parse("start", "--help").command());
+    assertEquals(RiverdCommand.HELP, parse("version", "-h").command());
+    assertEquals(RiverdCommand.HELP, parse("version", "--help").command());
 
-    assertEquals(renderFull("help"), renderFull("--help"));
-    assertEquals(renderFull("help", "start"), renderFull("start", "--help"));
+    assertEquals(render("help"), render("--help"));
+    assertEquals(render("help", "start"), render("start", "--help"));
+    assertEquals(render("help", "credentials", "renew"),
+        render("credentials", "renew", "--help"));
   }
 
   @Test
@@ -79,8 +81,8 @@ final class RiverdCommandParserTest {
     return RiverdCommandParser.parse(arguments, result);
   }
 
-  private static String renderFull(String... arguments) {
+  private static String render(String... arguments) {
     RiverdCommandResult result = parse(arguments);
-    return RiverdCommandHelp.full(result.helpTopic());
+    return RiverdCommandHelp.render(result.helpTopic());
   }
 }

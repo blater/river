@@ -1,9 +1,8 @@
 package io.riverdb.server.app;
 
-/** Commands understood by the first installed riverd command-line composition. */
+/** Server operations and the side-effect-free help route. */
 public enum RiverdCommand {
-  BRIEF_HELP,
-  FULL_HELP,
+  HELP,
   VERSION,
   START,
   STOP_UNAVAILABLE,

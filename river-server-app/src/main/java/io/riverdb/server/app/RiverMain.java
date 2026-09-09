@@ -29,11 +29,34 @@ public final class RiverMain {
           output.print(RiverdCommandHelp.version(RiverDaemonVersion.value()));
           return 0;
         }
+        if (arguments.length == 2 && RiverCommandCatalog.isHelp(arguments[1])) {
+          output.print(RiverdCommandHelp.render("version"));
+          return 0;
+        }
         return usage(errors);
       }
-      if (("help".equals(command) || "-h".equals(command) || "--help".equals(command))
-          && arguments.length == 1) {
-        output.print(usage());
+      if ("cli".equals(command) && arguments.length == 2
+          && RiverCommandCatalog.isHelp(arguments[1])) {
+        output.print(RiverdCommandHelp.render("cli"));
+        return 0;
+      }
+      if ("help".equals(command) || RiverCommandCatalog.isHelp(command)) {
+        if ("help".equals(command) && arguments.length == 2
+            && RiverCommandCatalog.isHelp(arguments[1])) {
+          output.print(RiverdCommandHelp.render("help"));
+          return 0;
+        }
+        String topic = RiverCommandCatalog.join(arguments, 1);
+        if (arguments.length == 1) {
+          output.print(RiverdCommandHelp.render(null));
+          return 0;
+        }
+        if (RiverCommandCatalog.rootTopic(topic) == null) {
+          errors.print(RiverdCommandHelp.render(null));
+          errors.println("unknown help topic: " + topic);
+          return 2;
+        }
+        output.print(RiverdCommandHelp.render(topic));
         return 0;
       }
       if (command.startsWith("-")) return usage(errors);
@@ -42,16 +65,12 @@ public final class RiverMain {
   }
 
   static String usage() {
-    return "Usage: river CLIENT_PROPERTIES < script.sql\n"
-        + "       river server <command> [options]\n"
-        + "       river version\n"
-        + "\n"
-        + "Run SQL scripts with a generated client configuration, or use `river server --help`\n"
-        + "for server commands and options.\n";
+    return RiverdCommandHelp.render(null);
   }
 
   private static int usage(PrintStream errors) {
-    errors.print(usage());
+    errors.print(RiverdCommandHelp.render(null));
     return 2;
   }
+
 }
