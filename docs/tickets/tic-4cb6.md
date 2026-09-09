@@ -1,10 +1,12 @@
 ---
 id: tic-4cb6
-status: open
+status: closed
 type: story
 assignee: blater
 parent: tic-761e
 delivery: documentation
+branch: ticket/tic-4cb6-standalone-harness
+delivered-commit: 80c8fd5ff38733903636dd269dc456974b1348fe
 tags:
     - riverd
     - benchmark

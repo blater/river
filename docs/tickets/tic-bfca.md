@@ -56,7 +56,7 @@ scope.
 
 ## Delivery notes
 
-Work is on River branch `ticket/tic-bfca-standalone-harness`. Before the harness
+Work is on River branch `ticket/tic-4cb6-standalone-harness`. Before the harness
 changes were exercised, the existing native executable passed two identical
 short JDBC workload controls: 160.6 and 160.2 committed TPS. Configuration:
 standard tiny mix, serializable, 10 terminals, one warehouse, seed 42, 2s
