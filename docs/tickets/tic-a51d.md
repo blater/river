@@ -89,3 +89,21 @@ reproducible-archive comparison or release-governance project.
 Use branch `ticket/tic-a51d-native-river-executable` and the normal ticket commit
 trailer. Depend on tic-9cfd, which follows tic-ed14. Reuse existing lifecycle validation and external
 consumer migration ownership; do not create duplicate certification tracks.
+
+## Native compatibility progress — 2026-09-09
+
+The macOS arm64 native credential blocker is resolved. GraalVM 25.0.4 needed
+explicit registrations for six Bouncy Castle constructors used by credential
+creation and reload. A working JVM lifecycle trace identified the registrations;
+independent review confirmed the crypto and TLS behavior is unchanged. Temporary
+diagnostics and the ineffective additional-provider build flag were removed.
+
+A copied executable passed fresh startup, authenticated CREATE/INSERT/SELECT,
+graceful shutdown, restart with existing credentials, and reading the committed
+row. Both owned server processes exited and the temporary database was removed.
+The native binary links only macOS system libraries and frameworks.
+
+Acceptance remains open: matched native TPS is repeatedly lower than JVM TPS,
+and Linux/Windows native lifecycle validation has not run. See the performance
+checkpoint entry. Do not merge or label this native delivery complete on the
+strength of the credential fix alone.

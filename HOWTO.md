@@ -75,10 +75,10 @@ lifetime; embedded callers should close the database after their sessions.
 
 ## Run DDL and DML
 
-Build the SQL client distribution:
+Build the native executable with GraalVM JDK 25:
 
 ```sh
-./gradlew --no-daemon :river-server-app:installDist
+GRAALVM_HOME=/path/to/graalvm-jdk-25 ./gradlew --no-daemon :river-server-app:nativeCompile
 ```
 
 Put semicolon-terminated SQL in `setup.sql`, for example:
@@ -101,7 +101,7 @@ CHECKPOINT;
 Run it against the generated client configuration:
 
 ```sh
-river-server-app/build/install/river/bin/river \
+bin/river \
   /absolute/path/to/database/security/client.properties < setup.sql
 ```
 

@@ -1,0 +1,237 @@
+{
+  "comment": "Unique foreign downcall signatures used by WindowsFileBridge. Windows capture entries use the Linker capture state for GetLastError; symbol names and DLL ownership are intentionally omitted.",
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int",
+          "void*",
+          "void*",
+          "void*",
+          "int",
+          "int",
+          "int",
+          "int",
+          "void*",
+          "int"
+        ]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*"
+        ]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*",
+          "void*",
+          "void*",
+          "void*",
+          "int",
+          "void*",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*",
+          "int",
+          "int"
+        ]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*",
+          "void*",
+          "void*",
+          "void*",
+          "int",
+          "int",
+          "jbyte",
+          "void*",
+          "jbyte"
+        ]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*",
+          "void*",
+          "int",
+          "int",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int",
+          "int",
+          "int",
+          "int",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int",
+          "int",
+          "int",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int",
+          "void*",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int",
+          "void*",
+          "int",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int",
+          "int",
+          "void*",
+          "void*",
+          "void*",
+          "void*",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "int",
+          "int"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int"
+        ]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": [
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": [
+          "void*",
+          "int",
+          "void*",
+          "void*"
+        ],
+        "options": {
+          "captureCallState": true
+        }
+      }
+    ]
+  }
+}

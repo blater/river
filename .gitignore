@@ -27,6 +27,7 @@ replay_pid*
 .gradle/
 .river-gradle/
 **/build/
+/bin/
 
 # IDEs and local tooling
 .DS_Store

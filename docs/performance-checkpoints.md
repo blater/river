@@ -1222,3 +1222,81 @@ Unified command/help/default-client acceptance at `ce5ac8b9`:
 
 Native image compatibility/performance remains a separate unfinished acceptance;
 these Java diagnostic samples do not measure the native executable.
+
+
+### Native executable credential compatibility — 2026-09-09 (not accepted)
+
+Branch: `ticket/tic-a51d-native-river-executable`. Native compatibility candidate
+used the unified entrypoint at `39c9df6d` plus native packaging and trace-derived
+credential registrations; the final packaging source also incorporates the
+accepted help/default-client changes at `7c1b45d5`. JVM control distribution was
+built at `ce5ac8b9`. These commits have the same database engine behavior.
+
+GraalVM 25.0.4 on macOS arm64 built a standalone executable with default `-O2`,
+Serial GC and a 1 GiB maximum heap. The JVM control used the same GraalVM JDK,
+its default collector and a 1 GiB maximum heap. Both servers used unchanged
+production resource defaults. This comparison measures native versus JVM
+execution; it is separate from the earlier `tools/tps-test.sh` numbers.
+
+The temporary driver `/private/tmp/river-native-tps.py` launched each production
+server and the existing `TpccAcceptanceMain` over JDBC. All samples used tiny
+cardinalities, standard mix, serializable isolation, no-wait-stress scheduling,
+one warehouse, ten terminals, seed 42, batch rows 32 and maximum attempts 32.
+The same JVM benchmark client drove both server types. Full commands, runtime,
+results and cleanup are retained under `/private/tmp/<label>/` in `run.json`,
+`client.log`, `server.log` and `acceptance.properties`.
+
+Samples ran serially without compilation or other task-owned workloads:
+
+| Variation label | Warmup / measurement | Committed TPS |
+| --- | --- | ---: |
+| `native-packaging-jvm25-before-1` | 1s / 10s | 133.5 |
+| `native-packaging-native25-after-1` | 1s / 10s | 116.0 |
+| `native-packaging-jvm25-before-2` | 1s / 10s | 135.6 |
+| `native-packaging-native25-after-2` | 1s / 10s | 116.8 |
+| `native-packaging-jvm25-long-1` | 5s / 30s | 162.367 |
+| `native-packaging-native25-long-1` | 5s / 30s | 107.667 |
+
+Each run passed pre/post workload invariants and checkpoint, with no failed
+transactions. Owned servers exited and temporary databases were removed.
+These workload runs did not execute the separate recovery-verify phase.
+Recovery and credential reuse were checked independently by a copied-executable
+lifecycle: fresh startup, authenticated CREATE/INSERT/SELECT, graceful shutdown,
+restart and reading the committed row. Evidence:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-aqqn2cs0`.
+
+The native credential failure was missing Bouncy Castle reflection registration.
+A successful JVM tracing-agent lifecycle identified six zero-argument constructors
+needed for create/sign/parse/reload. Independent review confirmed that these
+registrations leave crypto and TLS semantics unchanged. Credential source has
+no production change; diagnostic logging and an ineffective provider flag were
+removed. Investigation details and build logs:
+`/private/tmp/river-native-evidence-a51d/credential-registration.md`.
+
+Decision: credential compatibility is fixed, but native packaging is **not
+accepted for merge**. The short-sample throughput gap repeated and grew in the
+longer pair. Compiler/collector differences are candidates for investigation,
+not an established cause. Do not disguise the gap with benchmark changes or
+broaden this packaging ticket into engine optimization. Linux and Windows native
+lifecycle validation also remains outstanding.
+
+
+Focused integrated validation: `:river-server-app:test :river-cli:test` passed
+with `--no-daemon` on GraalVM JDK 25.0.4. Log:
+`/private/tmp/river-native-evidence-a51d/affected-tests.log`.
+Slopmark comparison against the accepted help slice found no changed scores in
+credential, TLS, parser, lifecycle or CLI execution owners. The changed version
+resource reader scores 0. Output: `/private/tmp/river-unified-slopmark-native.txt`.
+
+Final integrated native build passed with per-platform FFM metadata selected by
+the build and common credential metadata embedded. Log:
+`/private/tmp/river-native-evidence-a51d/nativeCompile-integrated.log`.
+The copied executable passed all help topics and aliases, embedded version,
+invalid-port rejection, conflicting startup (`CONFLICT`), wrong-token rejection
+(`INVALID_EXTERNAL_INPUT`, the existing authenticator contract), authenticated
+SQL, graceful shutdown, and restart/read. Evidence:
+`/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-j2ylovc7`.
+Owned processes exited and the temporary database was removed. An earlier smoke
+asserted a nonexistent AUTH status for token rejection; its fixture was corrected
+to the existing contract before this successful run. No product change was
+needed for that assertion.

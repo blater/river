@@ -108,25 +108,32 @@ still required for performance and cross-database comparisons.
 
 ## Build and run
 
-Building River requires JDK 25. Gradle verifies dependency checksums.
+Building River requires JDK 25. Gradle verifies dependency checksums. JVM
+compilation, tests, and development commands use the normal JDK. Native
+packaging additionally requires a GraalVM JDK 25 installation for the host
+OS and architecture, with `GRAALVM_HOME` set to its installation directory.
 
-Build the River distribution:
+Native packaging is experimental; performance and platform validation are still
+in progress.
+
+Build the self-contained native executable:
 
 ```sh
-./gradlew :river-server-app:installDist
+GRAALVM_HOME=/path/to/graalvm-jdk-25 ./gradlew --no-daemon :river-server-app:nativeCompile
 ```
 
-Start the candidate server in the foreground. It writes the
-generated client configuration under its data directory:
+The result is `bin/river` (`bin/river.exe` on Windows). Copy that executable
+alone to run the client or start the server. The server writes the generated
+client configuration under its data directory:
 
 ```sh
-river-server-app/build/install/river/bin/river server start --datadir=/absolute/path/to/database --port=9191
+bin/river server start --datadir=/absolute/path/to/database --port=9191
 ```
 
 Use the reported `security/client.properties` path with the SQL client or JDBC:
 
 ```sh
-river-server-app/build/install/river/bin/river /absolute/path/to/database/security/client.properties < setup.sql
+bin/river /absolute/path/to/database/security/client.properties < setup.sql
 ```
 
 The CLI reads semicolon-terminated SQL, emits tab-separated rows, and stops at
