@@ -1951,3 +1951,32 @@ unchanged, final `a73c-check-final.log` passed full check/installTps. Independen
 review and slopmark details are in the ticket; BatchInsert score rose under
 consolidation while SQL execution/batch state fell. No threshold was weakened.
 Checkpoint: `perf-checkpoint-20260910-insert-admission`.
+
+
+## 2026-09-10 — validated tuple lookup (`tic-2e91`)
+
+Base `2d7833ff`, checkpoint `perf-checkpoint-20260910-insert-admission`;
+candidate `3caa18d3` on `ticket/tic-2e91-unique-lookup`. Reused immediately
+preceding accepted controls `a73c-candidate-long-{1,2}`: 262.567 / 264.933 TPS.
+Same command/configuration as the preceding longer samples (warm5/duration30).
+New labels use `insert-2e91-LABEL`, artifacts `/private/tmp/insert-step5/2e91-LABEL`.
+
+| Subsequent order | Label | TPS |
+| --- | --- | ---: |
+| 1 | candidate-1 | 275.600 |
+| 2 | candidate-2 | 278.033 |
+| 3 | control-recheck | 264.400 |
+
+All passed invariants, zero retries/errors, capture and cleanup. Clean full
+check/installTps passed (`2e91-clean-check.log`). Independent lookup review and
+slopmark evidence are in the ticket; cursor advance/open scores returned to their
+baselines after simplifying the first draft.
+
+Same four-worker INSERT workload: 8,026.01 → 8,722.66 inserts/s, final row counts
+passed. Prefix comparison 1.133 → 0.071 accumulated thread-seconds; published
+probes 2.434 → 1.059; descriptor INSERT 6.142 → 4.893. Source/commands, SVGs,
+raw stacks and cleanup: `/private/tmp/insert-step5/2e91-candidate-profile/` and
+the preceding `a73c-candidate-profile/`. These overlapping wall estimates omit
+unmounted virtual waits; they are diagnostic evidence, not exact call timings.
+Decision: accept with no sustained regression and the targeted search/decode work
+removed. Checkpoint: `perf-checkpoint-20260910-unique-lookup`.

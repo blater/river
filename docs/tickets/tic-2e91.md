@@ -1,12 +1,12 @@
 ---
 id: tic-2e91
-status: in_progress
+status: closed
 type: story
 priority: 1
 delivery: code
 created: 2026-09-10
 branch: ticket/tic-2e91-unique-lookup
-base: ad1db42f5d3d9dcdb6789111a99384041ccaec77
+base-commit: 2d7833ff828d9e5c5b5681268af5b4550077003b
 parent: tic-6d42
 deps:
   - tic-a73c
@@ -16,8 +16,7 @@ deps:
 ## Change
 
 After tic-a73c removes duplicate admission, profile its remaining unique-key probe.
-Performance measurement is deferred to step 5; this slice covers correctness and
-focused tests only.
+The initial candidate deferred measurement to step 5; acceptance is recorded below.
 Replace general prefix-cursor setup/advance/close work where the consumer needs
 only the first matching live key. Reuse the existing B-tree search owner and the
 validated tuple shape, key bounds and page information; do not add a parallel
@@ -53,7 +52,7 @@ rewrite or clustered-storage implementation.
 ## Implementation evidence
 
 - Branch: `ticket/tic-2e91-unique-lookup`
-- Base: `ad1db42f5d3d9dcdb6789111a99384041ccaec77`
+- Initial implementation base: `ad1db42f`; rebased onto accepted `tic-a73c` for step 5.
 - Correctness command:
   `./gradlew --no-daemon --project-cache-dir /private/tmp/river-project-cache-unique-lookup :river-format:test :river-storage:test :river-engine:test --tests io.riverdb.engine.table.IndexedTreeStructureTest --tests io.riverdb.engine.sql.SqlDescriptorTupleIndexScanTest`
 - Result: `BUILD SUCCESSFUL` (27 actionable tasks; 10 executed, 17 up-to-date)
@@ -63,4 +62,29 @@ rewrite or clustered-storage implementation.
 - Independent storage/recovery review: root review accepted the validated
   prefix state, one comparison path, binary leaf positioning, admission and
   root/page lifetime checks.
-- Step 5 performance measurement remains pending by user instruction.
+- Initial performance deferral was lifted for the acceptance below.
+
+
+## Step 5 acceptance — 2026-09-10
+
+Clean full `check :river-bench:installTps` passed with `--no-daemon` on top of
+`perf-checkpoint-20260910-insert-admission`; log
+`/private/tmp/insert-step5/2e91-clean-check.log`. The final touched slopmark
+scores above remain valid; rebasing introduced no further lookup code changes.
+
+Reuse the immediately preceding accepted 5s-warmup/30s, four-terminal TPS controls
+262.567 / 264.933. Candidate samples are 275.600 / 278.033 TPS; the following
+accepted-predecessor recheck is 264.400. Same tiny standard mix, serializable,
+one warehouse, seed42, JDK and resource/durability settings. All passed invariants,
+zero retries/errors, capture and cleanup. No unexplained regression remains.
+
+The matching four-worker INSERT profile improves 8,026.01 → 8,722.66 inserts/s
+with final row-count checks. In the 20s wall captures, prefix comparison falls
+1.133 → 0.071 thread-seconds, published probing 2.434 → 1.059, and the descriptor
+INSERT subtree 6.142 → 4.893. Inclusive groups overlap; virtual-thread waits not
+mounted on native threads remain absent. This supports binary leaf positioning
+and reuse of admitted prefixes, without claiming exact per-call latency.
+
+Evidence: `/private/tmp/insert-step5/2e91-*`, with TPS console logs
+`/private/tmp/insert-2e91-*.log`; predecessor artifacts retain their `a73c-` labels.
+Checkpoint: `perf-checkpoint-20260910-unique-lookup`.
