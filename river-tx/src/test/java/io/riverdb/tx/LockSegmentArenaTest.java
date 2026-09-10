@@ -1,6 +1,7 @@
 package io.riverdb.tx;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
@@ -35,8 +36,12 @@ final class LockSegmentArenaTest {
 
   @Test
   void failedLeafAdmissionRollsBackEveryNewRadixNode() {
+    LockSegmentArena sizingArena = new LockSegmentArena(new LockMemoryEnvelope(Long.MAX_VALUE));
+    LockRadixDirectory sizingDirectory = new LockRadixDirectory(sizingArena);
+    long beforePath = sizingArena.accountedBytes();
+    assertEquals(StatusCode.OK, sizingDirectory.reserve(1L << 40));
+    long directoryPathBytes = sizingArena.accountedBytes() - beforePath;
     long rootBytes = LockRadixDirectory.BASE_BYTES;
-    long directoryPathBytes = 12 * LockRadixDirectory.BASE_BYTES;
     LockSegmentArena arena = new LockSegmentArena(
         new LockMemoryEnvelope(rootBytes + directoryPathBytes));
     LockLongStore values = new LockLongStore(arena);
@@ -52,7 +57,7 @@ final class LockSegmentArenaTest {
 
     assertEquals(StatusCode.OK, directory.reserve(0));
     directory.set(0, 11L);
-    assertEquals(null, directory.get(256));
+    assertNull(directory.get(256));
     assertEquals(StatusCode.OK, directory.reserve(256));
     directory.set(256, 22L);
     assertEquals(StatusCode.OK, directory.reserve(65_536));
@@ -65,7 +70,7 @@ final class LockSegmentArenaTest {
     directory.remove(65_536);
     assertEquals(11L, directory.get(0));
     assertEquals(22L, directory.get(256));
-    assertEquals(null, directory.get(65_536));
+    assertNull(directory.get(65_536));
     directory.remove(256);
     assertEquals(base, arena.accountedBytes());
     assertEquals(11L, directory.get(0));
@@ -76,17 +81,17 @@ final class LockSegmentArenaTest {
   @Test
   void failedAdaptiveExpansionLeavesExistingRootAndAccountingUntouched() {
     long base = LockRadixDirectory.BASE_BYTES;
-    long node = LockRadixDirectory.BASE_BYTES;
-    LockSegmentArena arena = new LockSegmentArena(new LockMemoryEnvelope(base + 6 * node - 1));
+    LockSegmentArena arena = new LockSegmentArena(new LockMemoryEnvelope(base + 6 * base - 1));
     LockRadixDirectory directory = new LockRadixDirectory(arena);
     assertEquals(StatusCode.OK, directory.reserve(7));
     directory.set(7, 41L);
     assertEquals(StatusCode.OK, directory.reserve(65_536));
     directory.set(65_536, 73L);
+    long beforeExpansion = arena.accountedBytes();
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, directory.reserve(1L << 24));
     assertEquals(41L, directory.get(7));
     assertEquals(73L, directory.get(65_536));
-    assertEquals(base + 3 * node, arena.accountedBytes());
+    assertEquals(beforeExpansion, arena.accountedBytes());
   }
 
   @Test
