@@ -1,6 +1,6 @@
 ---
 id: tic-4f20
-status: in_progress
+status: closed
 type: investigation
 priority: 1
 delivery: evidence
@@ -63,7 +63,7 @@ copies each staged key into reusable application storage, applies the mutation,
 and stages the resulting registry state. The copy crosses a real ownership and
 visibility boundary: an SQL-time page position cannot be retained through lock
 wait, client work or durable publication. `IndexedGroupCommitBatch` subsequently
-publishes the prepared group and forces its WAL/pages. Those staged boundaries
+publishes the prepared group and completes its durability barrier. Those staged boundaries
 are required by River's snapshot, rollback and recovery model; they are not
 evidence that every physical write is caused by the base-row representation.
 
@@ -94,13 +94,12 @@ were:
 | sync | 4.116 | 3.810 |
 | row insert | 0.631 | 0.660 |
 
-The secondary index therefore increases the expected tuple and lock work, while
+The secondary run shows the expected increase in tuple and lock work, while
 the primary-only mapping is not isolated as the dominant cost. The largest
 visible samples remain sync and ordinary writes, with page-history reclamation,
 tuple compilation and lock work also present. These groups overlap in the
 profile; they must not be summed into a serial per-row cost. The wall samples
-also have different row/tree growth and do not expose waits spent inside virtual
-threads, so they establish direction and scope rather than a universal
+also have different row/tree growth and omit waits while virtual threads are unmounted, so they establish direction and scope rather than a universal
 throughput claim.
 
 The source-level mutation count explains why the secondary run cannot be used as
@@ -122,5 +121,12 @@ Any future replacement would need to preserve stable logical row identity,
 primary-key update handling for secondary references, snapshot visibility,
 rollback, WAL/recovery and split correctness in one end-to-end write/read path.
 It would be justified only by repeatable matched evidence isolating that mapping
-as the dominant removable cost after accounting for sync, publication, lock
+as a material removable cost after accounting for sync, publication, lock
 waits, tuple work and tree growth. No such evidence is present here.
+
+Integrator review accepted this bounded decision after all three code tickets
+passed their matched performance and correctness gates. No production code or
+format changes belong to this ticket. Evidence, scripts, commands and SVGs:
+`/private/tmp/insert-step5/8b64-candidate-profile/` and
+`/private/tmp/insert-step5/final-secondary-profile/`. Final checkpoint:
+`perf-checkpoint-20260910-insert-efficiency`.

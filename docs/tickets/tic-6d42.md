@@ -85,35 +85,32 @@ and evidence shows the targeted repeated work removed with correctness preserved
 and no unexplained sustained regression. A rejected architecture proposal is a
 valid final decision; implementation requires a separately bounded ticket.
 
-## User-directed execution plan (2026-09-10)
+## Delivery completed (2026-09-10)
 
-The host will temporarily run at reduced CPU power. Implement steps 1–3 on
-separate reviewable branches and prepare step 4's source-based architecture
-assessment. Run correctness tests and slopmark now; defer all performance runs,
-performance acceptance, tags and integration merges to step 5. Do not label
-pre-throttle profiles as adjacent baselines for the new implementations.
+The user initially deferred performance tests while the host ran at reduced CPU
+power, then authorized steps 4–5. Fresh comparisons and independent reviews
+accepted each code ticket in order; each was rebased onto the preceding accepted
+checkpoint, merged, tagged and pushed. All four children are closed.
 
-Step 5 starts when the user confirms the platform is ready for measurement.
-Take fresh control/candidate measurements for each ticket in dependency order,
-remediate it, then tag/merge/push that accepted ticket before advancing to the
-next. Rebase dependent candidates onto the accepted predecessor as needed and
-repeat affected correctness checks after remediation. The architecture decision
-remains provisional until the resulting profiles are available. This explicit
-user instruction supersedes the usual per-feature immediate performance gate;
-no code ticket closes merely because correctness tests pass.
+| Ticket | Delivered checkpoint |
+| --- | --- |
+| [tic-a73c](tic-a73c.md) | `perf-checkpoint-20260910-insert-admission` |
+| [tic-2e91](tic-2e91.md) | `perf-checkpoint-20260910-unique-lookup` |
+| [tic-8b64](tic-8b64.md) | `perf-checkpoint-20260910-lock-storage` |
+| [tic-4f20](tic-4f20.md) | `perf-checkpoint-20260910-insert-efficiency` |
 
-## Candidate branches
+The final JVM TPS samples were 451.867 / 452.833; the immediately preceding
+code's control recheck was 277.333. All final workload invariants passed with
+zero retries/errors. The ledger retains every sample, including the first
+short-window discrepancy and its longer interleaved follow-up. Profiles confirm
+less INSERT preparation, prefix comparison and lock directory traversal.
 
-These pre-measurement candidates share production base `ad1db42f`. Step 5 was
-authorized on 2026-09-10 and is now running in dependency order. Each ticket and
-the performance ledger record its subsequent acceptance and integration point.
+Clean checks, affected tests, independent correctness reviews and slopmark
+reviews passed. The combined O3/PGO native executable passed indexed INSERT,
+duplicate rejection, crash recovery and public stop checks. Native throughput
+was not measured in this comparison.
 
-| Ticket | Branch | Current checkpoint |
-| --- | --- | --- |
-| tic-a73c | `ticket/tic-a73c-insert-admission` | `b66de835`: full engine and source/module checks passed; independent review accepted. |
-| tic-2e91 | `ticket/tic-2e91-unique-lookup` | `1a1d9084`: format/storage and focused engine tests passed; independent review accepted. |
-| tic-8b64 | `ticket/tic-8b64-lock-storage` | `7c7fee93`: focused and full transaction tests passed; independent review accepted. |
-| tic-4f20 | `ticket/tic-4f20-storage-assessment` | `efb95e00`: source assessment prepared; storage decision awaits step 5 profiles. |
-
-Each branch owns its ticket's implementation evidence. The planning branch is
-`ticket/tic-6d42-insert-efficiency`; it changes no production code.
+The storage decision retains the current logical row/tuple layout. The remaining
+profile does not justify a clustered-format rewrite; no new implementation ticket
+or speculative infrastructure was added. Full commands, results and limitations
+are in [the performance ledger](../performance-checkpoints.md).

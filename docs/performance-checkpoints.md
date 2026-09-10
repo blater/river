@@ -2015,3 +2015,28 @@ SIGKILL recovery/public stop smoke passed. Logs:
 `/private/tmp/insert-step5/final-native-build.log` and `native-crash-smoke.log`;
 temporary test sources alongside them. No native performance matrix was added.
 Decision: accept. Checkpoint: `perf-checkpoint-20260910-lock-storage`.
+
+
+## 2026-09-10 — INSERT storage decision and epic completion (`tic-4f20`, `tic-6d42`)
+
+All three code tickets were accepted and promoted in order. The final bounded
+investigation retains separate logical base rows and tuple indexes; no storage
+format rewrite is supported by the remaining evidence. This documentation-only
+decision changes no database behavior and needs no additional TPS matrix.
+
+At the final code candidate `df88f18c`, the same four-worker INSERT probe with
+one ordinary secondary index committed 216,680 rows at 8,667.09 inserts/s, versus
+234,003 at 9,360.04 with only the primary key. Both final row checks and cleanup
+passed. Warmup15s, load25s, wall profile20s; source/command and raw artifacts:
+`/private/tmp/insert-step5/final-secondary-profile/` and `8b64-candidate-profile/`.
+Tuple compilation was 2.123 → 3.238 accumulated thread-seconds, locks
+1.904 → 2.990, sync 4.116 → 3.810. These overlapping estimates omit unmounted
+virtual waits; different achieved row counts/tree growth prevent isolating the
+primary mapping's cost. Logical mutations are not physical writes or syncs.
+
+The ticket records row identity, secondary references and primary-key updates,
+snapshot/rollback, recovery and split implications. Keep the current layout;
+future replacement needs evidence of material removable cost. Independent source
+assessment and integrator review completed this decision without another code
+path, format migration or speculative framework. Epic and all four children are
+closed. Final checkpoint: `perf-checkpoint-20260910-insert-efficiency`.
