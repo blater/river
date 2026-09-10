@@ -1980,3 +1980,38 @@ the preceding `a73c-candidate-profile/`. These overlapping wall estimates omit
 unmounted virtual waits; they are diagnostic evidence, not exact call timings.
 Decision: accept with no sustained regression and the targeted search/decode work
 removed. Checkpoint: `perf-checkpoint-20260910-unique-lookup`.
+
+
+## 2026-09-10 — adaptive lock storage (`tic-8b64`)
+
+Base `2a21dbcf`, checkpoint `perf-checkpoint-20260910-unique-lookup`; candidate
+`df88f18c` on `ticket/tic-8b64-lock-storage`. Reused preceding accepted controls
+`2e91-candidate-{1,2}`: 275.600 / 278.033 TPS. Same JVM and workload configuration
+as above: four terminals, seed42, warm5/duration30, unchanged isolation/durability.
+Command: `tools/tps-test.sh --terminals=4 --seed=42 --warmup-seconds=5
+--measured-seconds=30 --version=insert-8b64-LABEL
+--output-dir=/private/tmp/insert-step5/8b64-LABEL`.
+
+| Subsequent order | Label | TPS |
+| --- | --- | ---: |
+| 1 | candidate-1 | 451.867 |
+| 2 | candidate-2 | 452.833 |
+| 3 | control-recheck | 277.333 |
+
+All passed invariants, zero retries/errors, capture and cleanup. Clean full
+check/installTps passed (`/private/tmp/insert-step5/8b64-clean-check.log`).
+Slopmark stayed 0 → 0 for both touched production files; independent ownership,
+allocation-failure and concurrency review is recorded in the ticket.
+
+Four-worker INSERT improved 8,722.66 → 9,360.04 inserts/s; row counts passed.
+Directory lookup self time fell 2.318 → 0.256 accumulated thread-seconds and lock
+work 4.519 → 1.904. Raw stacks, SVGs and commands are in
+`/private/tmp/insert-step5/{2e91,8b64}-candidate-profile/`. Overlapping wall groups
+omit unmounted virtual-thread waits. The control recheck supports a repeatable
+local improvement; this is not a native or cross-database throughput claim.
+
+The final combined O3/PGO native build and indexed insert/duplicate rejection/
+SIGKILL recovery/public stop smoke passed. Logs:
+`/private/tmp/insert-step5/final-native-build.log` and `native-crash-smoke.log`;
+temporary test sources alongside them. No native performance matrix was added.
+Decision: accept. Checkpoint: `perf-checkpoint-20260910-lock-storage`.

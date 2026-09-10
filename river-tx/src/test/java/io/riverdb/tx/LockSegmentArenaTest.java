@@ -1,6 +1,7 @@
 package io.riverdb.tx;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
@@ -26,7 +27,8 @@ final class LockSegmentArenaTest {
 
   @Test
   void byteEnvelopeBackpressuresBeforeAllocatingAPath() {
-    LockSegmentArena arena = new LockSegmentArena(new LockMemoryEnvelope(1_048));
+    LockSegmentArena arena = new LockSegmentArena(
+        new LockMemoryEnvelope(LockRadixDirectory.BASE_BYTES));
     LockLongStore values = new LockLongStore(arena);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, values.reserve(0));
     assertEquals(0, values.get(0));
@@ -34,13 +36,62 @@ final class LockSegmentArenaTest {
 
   @Test
   void failedLeafAdmissionRollsBackEveryNewRadixNode() {
-    long rootBytes = 1_048;
-    long directoryPathBytes = 7 * 2_072L;
+    LockSegmentArena sizingArena = new LockSegmentArena(new LockMemoryEnvelope(Long.MAX_VALUE));
+    LockRadixDirectory sizingDirectory = new LockRadixDirectory(sizingArena);
+    long beforePath = sizingArena.accountedBytes();
+    assertEquals(StatusCode.OK, sizingDirectory.reserve(1L << 40));
+    long directoryPathBytes = sizingArena.accountedBytes() - beforePath;
+    long rootBytes = LockRadixDirectory.BASE_BYTES;
     LockSegmentArena arena = new LockSegmentArena(
         new LockMemoryEnvelope(rootBytes + directoryPathBytes));
     LockLongStore values = new LockLongStore(arena);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, values.reserve(1L << 48));
     assertEquals(rootBytes, arena.accountedBytes());
+  }
+
+  @Test
+  void adaptivePromotionKeepsLowAndHighOrdinalsDistinctAndReclaimsWrappers() {
+    LockSegmentArena arena = new LockSegmentArena(new LockMemoryEnvelope(1L << 20));
+    LockRadixDirectory directory = new LockRadixDirectory(arena);
+    long base = arena.accountedBytes();
+
+    assertEquals(StatusCode.OK, directory.reserve(0));
+    directory.set(0, 11L);
+    assertNull(directory.get(256));
+    assertEquals(StatusCode.OK, directory.reserve(256));
+    directory.set(256, 22L);
+    assertEquals(StatusCode.OK, directory.reserve(65_536));
+    directory.set(65_536, 33L);
+
+    assertEquals(11L, directory.get(0));
+    assertEquals(22L, directory.get(256));
+    assertEquals(33L, directory.get(65_536));
+
+    directory.remove(65_536);
+    assertEquals(11L, directory.get(0));
+    assertEquals(22L, directory.get(256));
+    assertNull(directory.get(65_536));
+    directory.remove(256);
+    assertEquals(base, arena.accountedBytes());
+    assertEquals(11L, directory.get(0));
+    directory.remove(0);
+    assertEquals(base, arena.accountedBytes());
+  }
+
+  @Test
+  void failedAdaptiveExpansionLeavesExistingRootAndAccountingUntouched() {
+    long base = LockRadixDirectory.BASE_BYTES;
+    LockSegmentArena arena = new LockSegmentArena(new LockMemoryEnvelope(base + 6 * base - 1));
+    LockRadixDirectory directory = new LockRadixDirectory(arena);
+    assertEquals(StatusCode.OK, directory.reserve(7));
+    directory.set(7, 41L);
+    assertEquals(StatusCode.OK, directory.reserve(65_536));
+    directory.set(65_536, 73L);
+    long beforeExpansion = arena.accountedBytes();
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, directory.reserve(1L << 24));
+    assertEquals(41L, directory.get(7));
+    assertEquals(73L, directory.get(65_536));
+    assertEquals(beforeExpansion, arena.accountedBytes());
   }
 
   @Test
