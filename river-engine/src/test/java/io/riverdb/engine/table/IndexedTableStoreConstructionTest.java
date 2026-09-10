@@ -99,6 +99,11 @@ final class IndexedTableStoreConstructionTest {
     public StatusCode force(ForceMode mode) { return StatusCode.INVARIANT_BROKEN; }
 
     @Override
+    public StatusCode force(long startInclusive, long endExclusive, ForceMode mode) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+
+    @Override
     public StatusCode truncate(long sizeBytes) { return StatusCode.INVARIANT_BROKEN; }
 
     @Override
@@ -120,6 +125,9 @@ final class IndexedTableStoreConstructionTest {
       return StatusCode.INVARIANT_BROKEN;
     }
     @Override public StatusCode force(ForceMode mode) { return StatusCode.INVARIANT_BROKEN; }
+    @Override public StatusCode force(long startInclusive, long endExclusive, ForceMode mode) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     @Override public StatusCode truncate(long sizeBytes) { return StatusCode.INVARIANT_BROKEN; }
     @Override public StatusCode size(FileSizeResult result) {
       throw new OutOfMemoryError("injected");

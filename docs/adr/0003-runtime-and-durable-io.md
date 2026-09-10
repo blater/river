@@ -74,6 +74,16 @@ synchronization (`msync(MS_SYNC)` in the current macOS JVM), not a per-commit
 `F_FULLFSYNC`. Successful process-recovery tests do not establish equivalent
 hardware power-loss behavior across synchronization primitives.
 
+The WAL submits the contiguous interval from its durable frontier through the
+captured group end, including the footer. The mapped provider synchronizes the
+resident portions of that interval using a cached mapped buffer; OS page
+alignment may extend the physical request. Mapping eviction first synchronizes
+its pending append coverage, so a later commit force need not remap those bytes.
+One conservative interval per mapping retains coverage after partial forces;
+it is not a second WAL durability frontier. Metadata barriers remain separate
+where file growth requires them, and acknowledgement still follows successful
+completion of the entire force operation.
+
 ## Invariants
 
 - Page/WAL code depends on platform SPIs, never `os.name` or raw NIO handles.

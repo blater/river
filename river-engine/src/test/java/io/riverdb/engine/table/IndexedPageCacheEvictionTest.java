@@ -698,6 +698,11 @@ final class IndexedPageCacheEvictionTest {
     public StatusCode force(ForceMode mode) { return delegate.force(mode); }
 
     @Override
+    public StatusCode force(long startInclusive, long endExclusive, ForceMode mode) {
+      return delegate.force(startInclusive, endExclusive, mode);
+    }
+
+    @Override
     public StatusCode truncate(long sizeBytes) { return delegate.truncate(sizeBytes); }
 
     @Override

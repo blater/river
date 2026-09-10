@@ -4,6 +4,112 @@ This ledger records stable feature points for performance-sensitive work. It
 does not turn short local samples into performance claims. Its purpose is to
 make regressions visible, attribution reviewable, and rollback exact.
 
+## 2026-09-10 — contiguous WAL synchronization (`tic-c7e2`)
+
+Base: `7444f542`, `perf-checkpoint-20260910-atomic-wal-sync`.
+Branch: `ticket/tic-c7e2-wal-range-sync`; worktree:
+`/private/tmp/river-wal-range-sync`. Fresh baselines used the unchanged main
+checkout's built distribution, before candidate builds or workloads.
+
+```sh
+RIVER_JAVA=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Contents/Home/bin/java \
+  tools/tps-test.sh --terminals=4 --warmup-seconds=2 --measured-seconds=10 \
+  --version=tic-c7e2-baseline-N --output-dir=/private/tmp/wal-range-baseline-N
+```
+
+Baseline samples: **207.0 / 208.5 TPS**. Both passed with zero retries/errors,
+successful reconciliation and performance capture. Artifact directories and
+matching `.log` files: `/private/tmp/wal-range-baseline-{1,2}`. These are the
+River-specific tiny standard-mix serializable diagnostic workload, one warehouse,
+four terminals, GraalVM 25.0.4 on macOS/arm64.
+
+The focused INSERT probe uses one connection, a reused prepared statement,
+one explicit commit per row, 30s warmup and 10s measurement. The external
+`msync` timer records exact requested byte lengths and elapsed time; it does not
+change arguments, return values or durability. This run omits Java method tracing
+on both control and candidate; do not compare its throughput with earlier
+method-instrumented runs. Baseline: 29,572 measured commits, 29,573 syncs
+(including final validation), all requesting **16,777,216 bytes**, with mean
+**124.920 us/call** and **124.924 us/measured commit**. All 135,910 rows passed
+the final count check. Owned processes and database directories were cleaned up.
+Scripts, timer source and immutable baseline output:
+`/private/tmp/wal-range-validation/insert-baseline` and its parent directory.
+Slopmark baseline: `/private/tmp/wal-range-slopmark-before.txt`.
+
+The interleaved INSERT sequence was control, candidate, control, candidate. Each
+run used the same timer, workload and runtime configuration:
+
+| Run directory | Mean sync (us) | Mean requested bytes | Measured commits | msync calls | Inserts/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| insert-baseline | 124.920 | 16,777,216 | 29,572 | 29,573 | 2,956.32 |
+| insert-candidate | 24.589 | 9,001 | 50,777 | 50,780 | 5,077.51 |
+| insert-control-2 | 113.301 | 16,777,216 | 34,684 | 34,685 | 3,468.24 |
+| insert-candidate-2 | 23.844 | 9,002 | 51,658 | 51,660 | 5,165.64 |
+
+All directories are below `/private/tmp/wal-range-validation`. Per-length
+counts/timings and raw snapshots are retained in each. Candidate request lengths
+ranged from 281 to 17,193 bytes, including mapping-boundary operations. Normal
+commits still use one sync; boundary operations can add calls, and the capture
+also brackets final row-count validation. All four row-count checks passed and
+owned processes/data directories were cleaned up.
+
+The repeated drop in requested range and sync latency supports the intended
+mechanism. These local INSERT results are not cross-database throughput claims.
+
+Initial candidate short TPS samples were **186.1 / 176.5**, both passing with
+zero errors/retries. These lower results triggered longer interleaved runs and
+an adjacent recheck of the original configuration; they were not discarded.
+
+| TPS run suffix | Warmup / measured seconds | TPS | Retries |
+| --- | --- | ---: | ---: |
+| control-long-1 | 10 / 30 | 253.367 | 0 |
+| candidate-long-1 | 10 / 30 | 256.433 | 0 |
+| control-long-2 | 10 / 30 | 256.333 | 0 |
+| candidate-long-2 | 10 / 30 | 266.567 | 1 |
+| control-short-check | 2 / 10 | 211.5 | 0 |
+| candidate-short-check | 2 / 10 | 207.0 | 0 |
+
+Commands otherwise match the baseline above. Version labels are `tic-c7e2-`
+plus the suffix; artifact directories and matching logs are `/private/tmp/wal-range-`
+plus the suffix. Initial candidate artifacts use `candidate-{1,2}`. All runs
+passed with zero errors, successful invariants, reconciliation and performance
+capture, and zero retained transactions, snapshots or locks. The single retry
+was PAYMENT attempt tag 4637, step 6, `DEADLOCK`: one server outcome matched one
+client retry, with no retry-accounting overflow or unclassified outcome.
+
+Measured-window WAL force averages in the longer pairs were **335.764 / 327.194
+us** for controls and **87.826 / 79.285 us** for candidates. Group publication
+averages were **451.775 / 452.808 us** versus **455.091 / 432.870 us**. The broader
+publication slowdown seen in the initial short candidates did not persist.
+Only `capture_*` counters, including drain, were used for these averages; lifetime
+counters include setup and warmup. Summary:
+`/private/tmp/wal-range-validation/stage-comparison.json`.
+
+The initial short-run drop did not reproduce in the longer pairs or the adjacent
+short recheck. Its specific transient cause is not established. The acceptance
+decision rests on the interleaved comparisons and mechanism evidence, not an
+assumption about host load or a fixed percentage tolerance. No sustained TPS
+regression was observed; no qualified TPS speedup is claimed.
+
+Validation: clean full `check :river-bench:installTps :river-server-app:nativeCompile`
+passed with `--no-daemon --no-build-cache`, GraalVM 25.0.4, O3 and the existing
+`-PriverPgoProfile=/private/tmp/river-native-final.iprof`; log:
+`/private/tmp/wal-range-clean-check.log`. No additional test skips. The actual
+native executable committed 100 rows, survived SIGKILL/restart with every value
+intact, then passed public stop and readiness cleanup; log:
+`/private/tmp/wal-range-validation/native-crash-smoke.log`.
+
+Independent review covered captured range ownership, partial coverage, mapping
+eviction, metadata barriers and failure propagation. Slopmark LocalWal
+159.756 → 159.675; NioDurableFile 43.287 → 42.98; NioMappedWindow 15.3519 →
+21.0395. The window increase was reviewed as one bounded mapping-lifetime
+responsibility, with two coverage offsets and a cached mapped buffer, no new
+executor, range collection or per-force view allocation. Scores:
+`/private/tmp/wal-range-slopmark-before.txt`, `wal-range-slopmark-baseline-focused.txt`
+and `wal-range-slopmark-after.txt` in `/private/tmp`.
+
+Decision: accept. Checkpoint: `perf-checkpoint-20260910-wal-range-sync`.
+
 ## Acceptance workflow
 
 1. Identify the prior pushed `perf-checkpoint-*` tag and capture matched control

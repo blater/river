@@ -137,13 +137,35 @@ final class NioDurableFile implements DurableFile {
     if (mode == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    return forceInternal(0, 0, mode, false);
+  }
+
+  @Override
+  public StatusCode force(long startOffset, long endOffset, ForceMode mode) {
+    StatusCode admission = owner.admit(this, generation, slot, slotEpoch, closed);
+    if (!admission.isOk()) {
+      return admission;
+    }
+    if (mode == null || startOffset < 0 || endOffset <= startOffset) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return forceInternal(startOffset, endOffset, mode, true);
+  }
+
+  private StatusCode forceInternal(
+      long startOffset, long endOffset, ForceMode mode, boolean range) {
     try {
       if (mappedData == null) {
         channel.force(mode == ForceMode.CONTENT_AND_METADATA);
       } else {
         synchronized (mappedData) {
-          mappedData.force();
-          mappedHeader.force();
+          if (range) {
+            mappedHeader.forceRange(startOffset, endOffset);
+            mappedData.forceRange(startOffset, endOffset);
+          } else {
+            mappedData.force();
+            mappedHeader.force();
+          }
           if (mode == ForceMode.CONTENT_AND_METADATA
               && (mappedMetadataDirty || mappedData.metadataDirty() || mappedHeader.metadataDirty())) {
             channel.force(true);

@@ -73,6 +73,71 @@ final class NioMappedFileTest {
   }
 
   @Test
+  void rangedForceCoversHeaderAndDataWindowBoundaries(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(
+        StatusCode.OK,
+        directory.createFile("mapped", FileIoMode.MAPPED, operation));
+    DurableFile file = operation.file();
+    byte[] headerBoundary = {11, 12, 13, 14};
+    byte[] dataBoundary = {21, 22, 23, 24};
+    write(file, 4094, headerBoundary);
+    write(file, WINDOW_BYTES - 2, dataBoundary);
+
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        file.force(4094, 4094, ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.OK,
+        file.force(4094, 4094 + headerBoundary.length, ForceMode.CONTENT));
+    assertEquals(StatusCode.OK,
+        file.force(WINDOW_BYTES - 2, WINDOW_BYTES + 2, ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.OK, file.close());
+
+    assertEquals(
+        StatusCode.OK,
+        directory.reopen("mapped", FileIoMode.MAPPED, operation));
+    DurableFile reopened = operation.file();
+    assertArrayEquals(headerBoundary, read(reopened, 4094, headerBoundary.length));
+    assertArrayEquals(dataBoundary, read(reopened, WINDOW_BYTES - 2, dataBoundary.length));
+    assertEquals(StatusCode.OK, reopened.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void partialRangeThenLaterForceAndEvictionPreserveEarlierWrites(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(
+        StatusCode.OK,
+        directory.createFile("mapped", FileIoMode.MAPPED, operation));
+    DurableFile file = operation.file();
+    byte[] first = {31, 32, 33, 34};
+    byte[] second = {41, 42, 43, 44};
+    byte[] evicted = {51, 52, 53, 54};
+    write(file, 8 * 1024, first);
+    write(file, 16 * 1024, second);
+    assertEquals(StatusCode.OK,
+        file.force(8 * 1024, 8 * 1024 + first.length, ForceMode.CONTENT));
+
+    // Moving to the next mapping evicts the first one; the later range force must
+    // leave the earlier, already synchronized bytes intact.
+    write(file, WINDOW_BYTES + 17, evicted);
+    assertEquals(StatusCode.OK,
+        file.force(16 * 1024, 16 * 1024 + second.length, ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.OK, file.close());
+
+    assertEquals(
+        StatusCode.OK,
+        directory.reopen("mapped", FileIoMode.MAPPED, operation));
+    DurableFile reopened = operation.file();
+    assertArrayEquals(first, read(reopened, 8 * 1024, first.length));
+    assertArrayEquals(second, read(reopened, 16 * 1024, second.length));
+    assertArrayEquals(evicted, read(reopened, WINDOW_BYTES + 17, evicted.length));
+    assertEquals(StatusCode.OK, reopened.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
   void supportsSparseWriteBeyondTwoGiBWithSmallBuffers(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     DirectoryOperationResult operation = new DirectoryOperationResult();

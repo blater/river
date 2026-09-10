@@ -11,6 +11,14 @@ public interface DurableFile {
 
   StatusCode force(ForceMode mode);
 
+  /**
+   * Synchronizes the nonnegative, non-empty half-open physical range
+   * {@code [startOffset, endOffset)}. Providers synchronize all existing bytes in that range;
+   * bytes outside it may also be synchronized. The force mode's metadata guarantee remains in
+   * effect for the operation.
+   */
+  StatusCode force(long startOffset, long endOffset, ForceMode mode);
+
   StatusCode truncate(long sizeBytes);
 
   StatusCode size(FileSizeResult result);
