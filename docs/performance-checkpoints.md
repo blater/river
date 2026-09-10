@@ -2121,3 +2121,78 @@ public-stop smoke passed (`native-build.log`, `native-smoke.log` in the artifact
 root). All 100 acknowledged rows recovered; owned data and readiness state were
 removed. Native throughput was not measured.
 Checkpoint: `perf-checkpoint-20260910-transaction-bindings`.
+
+
+## 2026-09-10 — share live prepared statements (`tic-7a32`)
+
+Stable base `a4567c01`; feature `ticket/tic-7a32-shared-preparation`, implementation
+`f90eabf9`. Exact SQL now shares one live session-owned plan across independent
+handles. An immutable published preparation generation controls reuse; private DDL
+never enters the index. Existing authorization and atomic schema admission remain
+in the single validation path. No benchmark, SQL, transaction, isolation or
+durability changes. Independent ownership/visibility review found no blocker.
+
+Artifact root: `/private/tmp/river-tic-7a32/`. GraalVM25.0.4 JVM, `-Xmx1g`, same
+macOS arm64 host. `clean check :river-bench:installTps` passed in 4m14s; focused
+ownership, generation, private-DDL rollback, authorization, transaction-program
+and retained-key pressure tests passed. Logs: `clean-check.log`,
+`final-focused-tests.log`. Slopmark details and review are in the ticket.
+
+External workload command:
+`~/src/ingres/river-harness/benchmark run river tpcc sample all
+--river-executable=EXE --river-version=LABEL --warmup=15s --duration=DURATION
+--workers=4 --warehouses=1 --seed=42 --max-retries=20`.
+READ COMMITTED with explicit FOR UPDATE, unchanged local durable WAL acknowledgement.
+Control launcher: `/private/tmp/river-maria-20260910-final/river-jvm`; candidate:
+`/private/tmp/river-tic-7a32/river-jvm`. No build, profiling or other owned workload
+ran concurrently with a timed sample. Full configuration, versions, eligibility
+keys and immutable report paths are in `samples.json`; individual logs retain the
+short names below. Reports are under `~/src/ingres/river-harness/runs/`.
+
+| Order / sample | Duration | TPS | p99 ms | Retries | Report ID |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1. control-1 | 30s | 313.033 | 52.855 | 1205 | `river_harness_20260910_170117_58030e31` |
+| 2. control-2 | 30s | 338.371 | 50.561 | 1292 | `river_harness_20260910_170208_7f915b13` |
+| 3. candidate-1 | 30s | 377.231 | 43.647 | 1418 | `river_harness_20260910_172259_d65da7f1` |
+| 4. candidate-2 | 30s | 377.604 | 43.647 | 1386 | `river_harness_20260910_172351_19a2110d` |
+| 5. long-control | 60s | 371.733 | 44.237 | 2864 | `river_harness_20260910_172506_1e2bd23b` |
+| 6. long-candidate | 60s | 389.817 | 41.878 | 2891 | `river_harness_20260910_172629_c5323521` |
+
+Short labels: `master-a4567c01-preparation-control-{1,2}` and
+`tic-7a32-f90eabf9-shared-preparation-jvm-{1,2}`. Longer labels:
+`master-a4567c01-preparation-long-control` and
+`tic-7a32-f90eabf9-preparation-long-candidate`.
+
+All samples passed warmup and measurement with zero failed/unknown outcomes,
+successful invariants, graceful stop and inactive final state. Comparison keys
+match within each duration; do not pool the 30s and 60s groups. Short candidate
+mean was 15.9% above controls, but the adjacent longer pair was only 4.9% higher.
+The duration/host variation rules out a precise general speedup claim. Candidate
+p99 and retries per commit improved in both groups, with no repeated regression.
+These are local JVM diagnostics, not native or cross-DBMS performance claims.
+
+
+The repeated full-mix CPU/wall profile used warm15/load60, then 20s CPU at 10ms
+and 20s wall at 1ms (`--total --nobatch`). Baseline at the same stable source:
+`/private/tmp/river-tic-5c21/{cpu,wall}.collapsed`. Candidate raw stacks, request/
+commit SVGs, configuration and summary are in the current artifact root.
+PREPARE inclusive CPU share fell 16.895% → 3.195%; wall share fell
+16.583% → 3.659%. Template capture had no candidate samples. Percentages use
+request/commit-worker stacks, overlap, and omit unmounted virtual waits; they are
+not method-duration measurements or predicted TPS gains. Profile report
+`river_harness_20260910_172847_359b3c1a` passed all correctness and cleanup checks.
+Its instrumented 357.20 TPS is excluded from the timing comparison.
+
+Accept the bounded repetition removal: tests and the profile establish the
+mechanism, and matched timing groups show improvement without a repeated
+regression. Socket write self time remains prominent (17.14% of selected CPU);
+FK discovery and execution workspace reset also remain. These observations do not
+expand this ticket. The prepared-store refactor also removes the redundant second
+handle lookup when resolving a plan without a requested query kind.
+
+The approved O3/PGO standalone build passed in 1m56s (`native-build.log`), using
+`-PriverPgoProfile=/private/tmp/river-native-final.iprof`. The resulting executable
+passed `sample all --warmup=1s --duration=3s --workers=1 --warehouses=1 --seed=42
+--max-retries=3 --no-report`, including authenticated lifecycle, post-run
+validation and public shutdown (`native-smoke.log`). This smoke is functionality
+evidence only. Checkpoint: `perf-checkpoint-20260910-shared-preparation`.

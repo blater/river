@@ -9,6 +9,12 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+Completed repeated preparation sharing: [tic-7a32](tickets/tic-7a32.md) retains
+one plan per live exact SQL/generation within a session, with independent handles.
+PREPARE CPU share fell 16.9% → 3.2%; the longer JVM pair improved 371.7 → 389.8
+TPS. Clean tests, independent review and the standalone full-mix smoke passed.
+Checkpoint: `perf-checkpoint-20260910-shared-preparation`.
+
 Completed transaction-scoped table bindings: [tic-5c21](tickets/tic-5c21.md)
 reuses admitted schema resolution. Full-mix JVM candidates passed at 338.8/332.5
 TPS versus initial controls 307.2/303.3 and an interleaved 287.0. Descriptor lookup

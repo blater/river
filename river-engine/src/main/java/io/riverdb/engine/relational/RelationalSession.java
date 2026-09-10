@@ -180,6 +180,11 @@ public final class RelationalSession {
   /** Current global catalog publication token for conservative plan invalidation. */
   public long catalogGeneration() { return schemaGate.version(); }
 
+  /** Sharing is valid only in the published view, never a private DDL overlay. */
+  public boolean matchesPreparedGeneration(long expected) {
+    return !schemaChangeActive && schemaGate.matchesVersion(expected);
+  }
+
   public boolean matchesCatalogGeneration(long expected) {
     return schemaGate.matchesVersion(expected);
   }

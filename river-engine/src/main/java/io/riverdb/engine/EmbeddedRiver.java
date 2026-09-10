@@ -349,10 +349,7 @@ public final class EmbeddedRiver {
       result.reset();
       if (closed) return StatusCode.CLOSED;
       if (query.active) return StatusCode.CONFLICT;
-      StatusCode status = session.validatePrepared(sql, session, preparedValidation);
-      if (status.isOk()) status = prepared.open(preparedValidation, result);
-      StatusCode released = preparedValidation.reset();
-      return status.isOk() ? released : status;
+      return prepared.prepare(sql, session, preparedValidation, result);
     }
 
     @Override

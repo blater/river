@@ -7,32 +7,30 @@ final class PreparedStatementChunk {
   static final int SLOT_COUNT = 64;
   // Conservative 64-bit-reference array storage plus object/array headers.
   static final long ACCOUNTED_BYTES = 256L
-      + SLOT_COUNT * (Long.BYTES * 3L + Integer.BYTES * 2L + Byte.BYTES);
+      + SLOT_COUNT * (Long.BYTES * 2L + Integer.BYTES * 2L);
 
-  private final SqlPreparedPlan[] plans = new SqlPreparedPlan[SLOT_COUNT];
+  private final RetainedPreparedTemplate[] templates =
+      new RetainedPreparedTemplate[SLOT_COUNT];
   private final long[] handles = new long[SLOT_COUNT];
-  private final long[] retainedBytes = new long[SLOT_COUNT];
-  private final boolean[] queries = new boolean[SLOT_COUNT];
   private final int[] programReferences = new int[SLOT_COUNT];
   private final int[] nextFree = new int[SLOT_COUNT];
-  private int used;
 
-  void open(
-      int slot, long handle, SqlPreparedPlan plan,
-      boolean query, long bytes) {
-    plans[slot] = plan;
+  void open(int slot, long handle, RetainedPreparedTemplate template) {
+    templates[slot] = template;
     handles[slot] = handle;
-    retainedBytes[slot] = bytes;
-    queries[slot] = query;
-    used++;
   }
 
   SqlPreparedPlan resolve(int slot, long handle, boolean query) {
-    return active(slot, handle) && queries[slot] == query ? plans[slot] : null;
+    SqlPreparedPlan plan = resolve(slot, handle);
+    return plan != null && plan.query() == query ? plan : null;
   }
 
-  long retainedBytes(int slot, long handle) {
-    return active(slot, handle) ? retainedBytes[slot] : 0;
+  SqlPreparedPlan resolve(int slot, long handle) {
+    return active(slot, handle) ? templates[slot].plan : null;
+  }
+
+  RetainedPreparedTemplate template(int slot, long handle) {
+    return active(slot, handle) ? templates[slot] : null;
   }
 
   boolean close(int slot, long handle) {
@@ -48,19 +46,13 @@ final class PreparedStatementChunk {
   SqlPreparedPlan retain(int slot, long handle) {
     if (!active(slot, handle) || programReferences[slot] == Integer.MAX_VALUE) return null;
     programReferences[slot]++;
-    return plans[slot];
+    return templates[slot].plan;
   }
 
   boolean release(int slot, long handle) {
     if (!active(slot, handle) || programReferences[slot] == 0) return false;
     programReferences[slot]--;
     return true;
-  }
-
-  long activeRetainedBytes() {
-    long bytes = 0;
-    for (int slot = 0; slot < SLOT_COUNT; slot++) bytes += retainedBytes[slot];
-    return bytes;
   }
 
   void clear() {
@@ -73,15 +65,13 @@ final class PreparedStatementChunk {
 
   private boolean active(int slot, long handle) {
     return slot >= 0 && slot < SLOT_COUNT
-        && handles[slot] == handle && plans[slot] != null;
+        && handles[slot] == handle && templates[slot] != null;
   }
 
   private void clear(int slot) {
-    if (plans[slot] == null) return;
-    plans[slot] = null;
-    handles[slot] = retainedBytes[slot] = 0;
-    queries[slot] = false;
+    if (templates[slot] == null) return;
+    templates[slot] = null;
+    handles[slot] = 0;
     programReferences[slot] = 0;
-    used--;
   }
 }

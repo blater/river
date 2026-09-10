@@ -23,28 +23,71 @@ import org.junit.jupiter.api.io.TempDir;
 
 final class RetainedPreparedStatementsTest {
   @Test
+  void sharesOnePlanAndReleasesItAfterIndependentHandlesClose(@TempDir Path root)
+      throws Exception {
+    TrackingBudget budget = new TrackingBudget(Long.MAX_VALUE);
+    SessionHandleDirectory directory = new SessionHandleDirectory(budget);
+    RetainedPreparedStatements statements = new RetainedPreparedStatements(
+        budget, directory);
+    try (Fixture fixture = openFixture(root, 0)) {
+      String sql = "UPDATE t SET v=? WHERE id=?";
+      PreparedOpenResult first = new PreparedOpenResult();
+      PreparedOpenResult second = new PreparedOpenResult();
+      SqlPreparedValidationResult validation = new SqlPreparedValidationResult();
+      assertEquals(StatusCode.OK, statements.prepare(
+          sql, fixture.session, validation, first));
+      SqlPreparedPlan plan = statements.resolve(first.handle(), false);
+      assertTrue(plan != null);
+      assertEquals(StatusCode.OK, validation.reset());
+      long retainedAfterFirst = budget.retained;
+
+      validation = new SqlPreparedValidationResult();
+      assertEquals(StatusCode.OK, statements.prepare(
+          sql, fixture.session, validation, second));
+      assertEquals(plan, statements.resolve(second.handle(), false));
+      assertEquals(retainedAfterFirst, budget.retained);
+      assertEquals(StatusCode.OK, validation.reset());
+
+      assertTrue(statements.retain(first.handle()) != null);
+      assertEquals(StatusCode.OK, statements.close(second.handle()));
+      assertEquals(plan, statements.resolve(first.handle(), false));
+      assertEquals(StatusCode.CONFLICT, statements.close(first.handle()));
+      assertEquals(StatusCode.OK, statements.releaseReference(first.handle()));
+      assertEquals(StatusCode.OK, statements.close(first.handle()));
+      assertTrue(budget.retained > 0);
+
+      PreparedOpenResult reopened = new PreparedOpenResult();
+      validation = new SqlPreparedValidationResult();
+      assertEquals(StatusCode.OK, statements.prepare(
+          sql, fixture.session, validation, reopened));
+      assertTrue(statements.resolve(reopened.handle(), false) != plan);
+      assertEquals(StatusCode.OK, validation.reset());
+      assertEquals(StatusCode.OK, statements.clear());
+      assertEquals(StatusCode.OK, directory.clear());
+      assertEquals(0, budget.retained);
+    }
+  }
+
+  @Test
   void boundsOwnershipAndRejectsClosedGeneration(@TempDir Path root) throws Exception {
     TrackingBudget budget = new TrackingBudget(Long.MAX_VALUE);
     SessionHandleDirectory directory = new SessionHandleDirectory(budget);
     RetainedPreparedStatements statements = new RetainedPreparedStatements(
         budget, directory);
     try (Fixture fixture = openFixture(root, 1)) {
-      SqlPreparedValidationResult validation = fixture.validation(
-          "UPDATE t SET v=? WHERE id=?", false, budget);
-      SqlPreparedPlan plan = validation.plan();
+      String sql = "UPDATE t SET v=? WHERE id=?";
       PreparedOpenResult opened = new PreparedOpenResult();
-      assertEquals(StatusCode.OK, statements.open(validation, opened));
-      assertEquals(StatusCode.OK, validation.reset());
-      assertNull(validation.plan());
+      SqlPreparedValidationResult validation = new SqlPreparedValidationResult();
+      assertEquals(StatusCode.OK, statements.prepare(sql, fixture.session, validation, opened));
       long first = opened.handle();
       assertTrue(first > 0);
-      assertEquals(plan, statements.resolve(first, false));
+      SqlPreparedPlan plan = statements.resolve(first, false);
+      assertTrue(plan != null);
       assertNull(statements.resolve(first, true));
       assertEquals(StatusCode.OK, statements.close(first));
       assertNull(statements.resolve(first, false));
-      validation = fixture.validation("UPDATE t SET v=? WHERE id=?", false, budget);
-      assertEquals(StatusCode.OK, statements.open(validation, opened));
-      assertEquals(StatusCode.OK, validation.reset());
+      validation = new SqlPreparedValidationResult();
+      assertEquals(StatusCode.OK, statements.prepare(sql, fixture.session, validation, opened));
       assertNull(statements.resolve(first, false));
       assertEquals(StatusCode.OK, statements.clear());
       assertEquals(StatusCode.OK, directory.clear());
@@ -62,21 +105,53 @@ final class RetainedPreparedStatementsTest {
       PreparedOpenResult opened = new PreparedOpenResult();
       long[] handles = new long[PreparedStatementChunk.SLOT_COUNT * 3];
       for (int index = 0; index < handles.length; index++) {
-        SqlPreparedValidationResult validation = fixture.validation(
-            "SELECT * FROM t", true, budget);
-        assertEquals(StatusCode.OK, statements.open(validation, opened));
-        assertEquals(StatusCode.OK, validation.reset());
+        String sql = "SELECT id AS c" + index + " FROM t";
+        SqlPreparedValidationResult validation = new SqlPreparedValidationResult();
+        assertEquals(StatusCode.OK, statements.prepare(sql, fixture.session, validation, opened));
         handles[index] = opened.handle();
       }
       long highWater = budget.retained;
       for (long handle : handles) assertEquals(StatusCode.OK, statements.close(handle));
       for (int index = 0; index < handles.length; index++) {
-        SqlPreparedValidationResult validation = fixture.validation(
-            "SELECT * FROM t", true, budget);
-        assertEquals(StatusCode.OK, statements.open(validation, opened));
-        assertEquals(StatusCode.OK, validation.reset());
+        String sql = "SELECT id AS c" + index + " FROM t";
+        SqlPreparedValidationResult validation = new SqlPreparedValidationResult();
+        assertEquals(StatusCode.OK, statements.prepare(sql, fixture.session, validation, opened));
       }
       assertEquals(highWater, budget.retained);
+      assertEquals(StatusCode.OK, statements.clear());
+      assertEquals(StatusCode.OK, directory.clear());
+      assertEquals(0, budget.retained);
+    }
+  }
+
+  @Test
+  void rejectedKeyReservationLeavesExistingHandleAndBudgetIntact(@TempDir Path root)
+      throws Exception {
+    TrackingBudget budget = new TrackingBudget(Long.MAX_VALUE);
+    SessionHandleDirectory directory = new SessionHandleDirectory(budget);
+    RetainedPreparedStatements statements = new RetainedPreparedStatements(budget, directory);
+    try (Fixture fixture = openFixture(root, 5)) {
+      PreparedOpenResult opened = new PreparedOpenResult();
+      SqlPreparedValidationResult validation = new SqlPreparedValidationResult();
+      assertEquals(StatusCode.OK,
+          statements.prepare("SELECT id FROM t", fixture.session, validation, opened));
+      long originalHandle = opened.handle();
+      SqlPreparedPlan original = statements.resolve(originalHandle, true);
+      String secondSql = "SELECT v FROM t";
+      SqlPreparedValidationResult measured = fixture.validation(secondSql, true, budget);
+      long planBytes = measured.plan().byteCharge();
+      assertEquals(StatusCode.OK, measured.reset());
+      long retained = budget.retained;
+      // Admit the compiled plan, then reject the additional retained key/entry storage.
+      budget.maximum = retained + planBytes;
+      assertEquals(StatusCode.RESOURCE_EXHAUSTED,
+          statements.prepare(secondSql, fixture.session, validation, opened));
+      assertEquals(0, opened.handle());
+      assertEquals(retained, budget.retained);
+      assertEquals(original, statements.resolve(originalHandle, true));
+      budget.maximum = Long.MAX_VALUE;
+      assertEquals(StatusCode.OK,
+          statements.prepare(secondSql, fixture.session, validation, opened));
       assertEquals(StatusCode.OK, statements.clear());
       assertEquals(StatusCode.OK, directory.clear());
       assertEquals(0, budget.retained);
@@ -89,7 +164,7 @@ final class RetainedPreparedStatementsTest {
     try (Fixture fixture = openFixture(root, 3)) {
       SqlPreparedValidationResult validation = new SqlPreparedValidationResult();
       assertEquals(StatusCode.RESOURCE_EXHAUSTED,
-          fixture.session.validatePrepared("SELECT * FROM t", budget, validation));
+          fixture.session.validatePrepared("SELECT * FROM t", null, budget, validation));
       assertNull(validation.plan());
       assertEquals(0, budget.retained);
     }
@@ -113,7 +188,7 @@ final class RetainedPreparedStatementsTest {
       TrackingBudget limited = new TrackingBudget(shortBytes);
       SqlPreparedValidationResult rejected = new SqlPreparedValidationResult();
       assertEquals(StatusCode.RESOURCE_EXHAUSTED, fixture.session.validatePrepared(
-          "SELECT id AS " + "a".repeat(64) + " FROM t", limited, rejected));
+          "SELECT id AS " + "a".repeat(64) + " FROM t", null, limited, rejected));
       assertNull(rejected.plan());
       assertEquals(0, limited.retained);
     }
@@ -148,7 +223,7 @@ final class RetainedPreparedStatementsTest {
     private SqlPreparedValidationResult validation(
         String sql, boolean queryStatement, SqlRetainedBudget budget) {
       SqlPreparedValidationResult validation = new SqlPreparedValidationResult();
-      assertEquals(StatusCode.OK, session.validatePrepared(sql, budget, validation));
+      assertEquals(StatusCode.OK, session.validatePrepared(sql, null, budget, validation));
       assertEquals(queryStatement, validation.query());
       return validation;
     }
@@ -161,7 +236,7 @@ final class RetainedPreparedStatementsTest {
   }
 
   private static final class TrackingBudget implements SqlRetainedBudget {
-    private final long maximum;
+    private long maximum;
     private long retained;
 
     private TrackingBudget(long maximumBytes) { maximum = maximumBytes; }

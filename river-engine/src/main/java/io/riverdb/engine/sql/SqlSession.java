@@ -50,9 +50,14 @@ public final class SqlSession implements SqlRetainedBudget {
     return deliver(coordinator.execute(sql, parameters, result));
   }
 
+  /**
+   * Internal preparation service. A candidate must be a live plan for the exact
+   * SQL from this session. The caller retains ownership while validation borrows it.
+   */
   public StatusCode validatePrepared(
-      String sql, SqlRetainedBudget budget, SqlPreparedValidationResult result) {
-    return coordinator.validatePrepared(sql, budget, result);
+      String sql, SqlPreparedPlan candidate, SqlRetainedBudget budget,
+      SqlPreparedValidationResult result) {
+    return coordinator.validatePrepared(sql, candidate, budget, result);
   }
 
   public StatusCode executePrepared(

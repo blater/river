@@ -10,15 +10,20 @@ public final class SqlPreparedPlan {
   private final SqlStatementTemplate template;
   private final boolean query;
   private volatile long catalogGeneration;
+  private final long preparationGeneration;
 
   SqlPreparedPlan(
       SqlStatementTemplate statementTemplate,
       boolean queryStatement,
-      long catalogGeneration) {
+      long catalogGeneration, long preparationGeneration) {
     template = statementTemplate;
     query = queryStatement;
     this.catalogGeneration = catalogGeneration;
+    this.preparationGeneration = preparationGeneration;
   }
+
+  /** Published view validated by PREPARE; zero means a private DDL view. */
+  public long preparationGeneration() { return preparationGeneration; }
 
   public SqlStatementTemplate template() { return template; }
 
