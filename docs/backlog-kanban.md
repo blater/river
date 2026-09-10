@@ -9,6 +9,16 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+User-directed INSERT efficiency epic: [tic-6d42](tickets/tic-6d42.md) eliminates
+repeated moderately expensive work by carrying prepared, protected and validated
+results through their valid lifetime. Deliver [tic-a73c](tickets/tic-a73c.md)
+(one insert admission), then [tic-2e91](tickets/tic-2e91.md) (focused key lookup),
+then [tic-8b64](tickets/tic-8b64.md) (lock storage access). The lock story is
+technically independent; this is the measurement order. Finish with the bounded
+storage decision [tic-4f20](tickets/tic-4f20.md), not an automatic clustered-storage
+rewrite. This sequence follows the accepted WAL checkpoint and does not absorb
+the existing commit-pipeline campaign.
+
 Completed user-directed WAL improvement: [`tic-c7e2`](tickets/tic-c7e2.md) narrows
 synchronization to the contiguous pending WAL interval. Interleaved INSERT sync
 latency fell from 113–125 us to 24–25 us; follow-up TPS pairs showed no sustained
