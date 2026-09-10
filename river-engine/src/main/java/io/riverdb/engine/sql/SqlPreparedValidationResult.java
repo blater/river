@@ -26,6 +26,7 @@ public final class SqlPreparedValidationResult {
       SqlStatementTemplate compiled,
       boolean queryStatement,
       long catalogGeneration,
+      long preparationGeneration,
       SqlRetainedBudget owner,
       long bytes) {
     if (compiled == null || catalogGeneration <= 0 || owner == null || bytes <= 0) {
@@ -33,7 +34,7 @@ public final class SqlPreparedValidationResult {
     }
     SqlPreparedPlan prepared;
     try {
-      prepared = new SqlPreparedPlan(compiled, queryStatement, catalogGeneration);
+      prepared = new SqlPreparedPlan(compiled, queryStatement, catalogGeneration, preparationGeneration);
     } catch (OutOfMemoryError error) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -44,6 +45,12 @@ public final class SqlPreparedValidationResult {
     reservationOwner = owner;
     reservedBytes = bytes;
     return StatusCode.OK;
+  }
+
+  void reuse(SqlPreparedPlan prepared) {
+    plan = prepared;
+    parameterCount = prepared.parameterCount();
+    query = prepared.query();
   }
 
   public long transferReservation(SqlRetainedBudget owner) {

@@ -5,6 +5,7 @@ import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.sql.SqlPreparedValidationResult;
 import io.riverdb.engine.sql.SqlPreparedPlan;
 import io.riverdb.engine.sql.SqlRetainedBudget;
+import io.riverdb.engine.sql.SqlSession;
 import java.util.Arrays;
 
 /**
@@ -15,6 +16,7 @@ final class RetainedPreparedStatements {
   private static final long DIRECTORY_HEADER_BYTES = 24;
   private final SqlRetainedBudget budget;
   private final SessionHandleDirectory handles;
+  private final RetainedPreparedTemplates templates;
   private PreparedStatementChunk[] chunks = new PreparedStatementChunk[0];
   private int chunkCount;
   private int freeSlot;
@@ -24,48 +26,51 @@ final class RetainedPreparedStatements {
       SqlRetainedBudget retainedBudget, SessionHandleDirectory handleDirectory) {
     budget = retainedBudget;
     handles = handleDirectory;
+    templates = new RetainedPreparedTemplates(budget);
   }
 
-  StatusCode open(
-      SqlPreparedValidationResult validation, PreparedOpenResult result) {
-    if (validation == null || validation.plan() == null || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    long bytes = validation.transferReservation(budget);
-    if (bytes <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    StatusCode status = StatusCode.OK;
-    if (freeSlot == 0) {
-      status = appendChunk();
-      if (!status.isOk()) {
-        StatusCode cleanup = budget.releaseRetainedBytes(bytes);
-        return cleanup.isOk() ? status : cleanup;
+  StatusCode prepare(
+      String sql, SqlSession session, SqlPreparedValidationResult validation,
+      PreparedOpenResult result) {
+    result.reset();
+    RetainedPreparedTemplate entry = templates.find(sql);
+    SqlPreparedPlan candidate = entry == null ? null : entry.plan;
+    StatusCode status = session.validatePrepared(sql, candidate, budget, validation);
+    if (status.isOk()) {
+      if (validation.plan() == candidate) status = templates.retain(entry);
+      else {
+        status = templates.create(sql, validation);
+        entry = templates.opened();
       }
+      if (status.isOk()) {
+        status = open(entry, result);
+        if (!status.isOk()) {
+          StatusCode released = templates.release(entry);
+          if (!released.isOk()) status = released;
+        }
+      }
+    }
+    StatusCode released = validation.reset();
+    return status.isOk() ? released : status;
+  }
+
+  private StatusCode open(RetainedPreparedTemplate entry, PreparedOpenResult result) {
+    if (freeSlot == 0) {
+      StatusCode status = appendChunk();
+      if (!status.isOk()) return status;
     }
     int encodedSlot = freeSlot;
     int globalSlot = encodedSlot - 1;
-    int chunkIndex = globalSlot / PreparedStatementChunk.SLOT_COUNT;
+    PreparedStatementChunk chunk = chunks[globalSlot / PreparedStatementChunk.SLOT_COUNT];
     int slot = globalSlot % PreparedStatementChunk.SLOT_COUNT;
-    PreparedStatementChunk chunk = chunks[chunkIndex];
-    freeSlot = chunk.nextFree(slot);
     long handle = handles.add(encodedSlot);
-    if (handle == 0) {
-      chunk.nextFree(slot, freeSlot);
-      freeSlot = encodedSlot;
-      StatusCode cleanup = budget.releaseRetainedBytes(bytes);
-      return cleanup.isOk() ? StatusCode.RESOURCE_EXHAUSTED : cleanup;
-    }
-    chunk.open(
-        slot, handle, validation.plan(), validation.query(), bytes);
-    status = result.complete(handle, validation.parameterCount(), validation.query());
+    if (handle == 0) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode status = result.complete(handle, entry.plan.parameterCount(), entry.plan.query());
     if (!status.isOk()) {
-      if (!handles.remove(handle)) return StatusCode.INVARIANT_BROKEN;
-      if (!chunk.close(slot, handle)) return StatusCode.INVARIANT_BROKEN;
-      chunk.nextFree(slot, freeSlot);
-      freeSlot = encodedSlot;
-      StatusCode cleanup = budget.releaseRetainedBytes(bytes);
-      if (!cleanup.isOk()) return cleanup;
-      return status;
+      return handles.remove(handle) ? status : StatusCode.INVARIANT_BROKEN;
     }
+    freeSlot = chunk.nextFree(slot);
+    chunk.open(slot, handle, entry);
     return StatusCode.OK;
   }
 
@@ -79,8 +84,12 @@ final class RetainedPreparedStatements {
   }
 
   SqlPreparedPlan resolve(long handle) {
-    SqlPreparedPlan plan = resolve(handle, false);
-    return plan == null ? resolve(handle, true) : plan;
+    int encodedSlot = handles.resolve(handle);
+    if (encodedSlot <= 0) return null;
+    int globalSlot = encodedSlot - 1;
+    int chunkIndex = globalSlot / PreparedStatementChunk.SLOT_COUNT;
+    return chunkIndex >= chunkCount ? null : chunks[chunkIndex].resolve(
+        globalSlot % PreparedStatementChunk.SLOT_COUNT, handle);
   }
 
   SqlPreparedPlan retain(long handle) {
@@ -110,10 +119,10 @@ final class RetainedPreparedStatements {
     if (chunkIndex >= chunkCount) return StatusCode.INVALID_EXTERNAL_INPUT;
     int slot = globalSlot % PreparedStatementChunk.SLOT_COUNT;
     PreparedStatementChunk chunk = chunks[chunkIndex];
-    long bytes = chunk.retainedBytes(slot, handle);
-    if (bytes == 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    RetainedPreparedTemplate entry = chunk.template(slot, handle);
+    if (entry == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (!chunk.canClose(slot, handle)) return StatusCode.CONFLICT;
-    StatusCode status = budget.releaseRetainedBytes(bytes);
+    StatusCode status = templates.release(entry);
     if (status.isOk() && !chunk.close(slot, handle)) return StatusCode.INVARIANT_BROKEN;
     if (status.isOk()) {
       if (!handles.remove(handle)) return StatusCode.INVARIANT_BROKEN;
@@ -124,13 +133,14 @@ final class RetainedPreparedStatements {
   }
 
   StatusCode clear() {
-    long bytes = directoryBytes;
+    long bytes = directoryBytes + templates.retainedBytes();
     for (int index = 0; index < chunkCount; index++) {
-      bytes += PreparedStatementChunk.ACCOUNTED_BYTES + chunks[index].activeRetainedBytes();
+      bytes += PreparedStatementChunk.ACCOUNTED_BYTES;
     }
     if (bytes == 0) return StatusCode.OK;
     StatusCode status = budget.releaseRetainedBytes(bytes);
     if (!status.isOk()) return status;
+    templates.clearStorage();
     for (int index = 0; index < chunkCount; index++) chunks[index].clear();
     chunks = new PreparedStatementChunk[0];
     chunkCount = 0;
