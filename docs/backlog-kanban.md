@@ -9,6 +9,10 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+Current focused work: [tic-6f28](tickets/tic-6f28.md) removes prepared-close
+acknowledgement round trips and gives programs direct plan references. Protocol
+v5 migrates the server, Java client and external Go adapter together.
+
 Completed repeated preparation sharing: [tic-7a32](tickets/tic-7a32.md) retains
 one plan per live exact SQL/generation within a session, with independent handles.
 PREPARE CPU share fell 16.9% → 3.2%; the longer JVM pair improved 371.7 → 389.8
