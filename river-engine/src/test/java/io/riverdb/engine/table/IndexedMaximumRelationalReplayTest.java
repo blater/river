@@ -118,6 +118,9 @@ final class IndexedMaximumRelationalReplayTest {
       IndexedTransactionSession session, long keyId, TupleShape shape,
       long logicalRowId, long value, ByteBuffer key) {
     int bytes = encode(key, logicalRowId, value);
+    StatusCode status = session.protectTupleKeyForWrite(
+        keyId, key, 0, bytes);
+    if (!status.isOk()) return status;
     return session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT, OWNER, keyId, SCHEMA,
         shape, logicalRowId, key, 0, bytes);

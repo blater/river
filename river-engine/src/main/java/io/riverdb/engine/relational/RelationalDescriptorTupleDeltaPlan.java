@@ -13,8 +13,6 @@ final class RelationalDescriptorTupleDeltaPlan {
   static final int UPDATE = 3;
   private final RelationalDescriptorTupleDeltaStorage storage;
   private final RelationalDescriptorTupleDeltaPreparation preparation;
-  private final RelationalDescriptorTupleDeltaRowBinding rowBinding =
-      new RelationalDescriptorTupleDeltaRowBinding();
   private TableDescriptor table;
   private int kind;
   private int mutationCount;
@@ -43,10 +41,6 @@ final class RelationalDescriptorTupleDeltaPlan {
       TableDescriptor descriptor, SqlValueBuffer before,
       SqlValueBuffer after, long logicalRowId) {
     return preparation.prepare(UPDATE, descriptor, before, after, logicalRowId);
-  }
-
-  StatusCode bindLogicalRowId(long logicalRowId) {
-    return rowBinding.bind(this, logicalRowId);
   }
 
   void reset() {

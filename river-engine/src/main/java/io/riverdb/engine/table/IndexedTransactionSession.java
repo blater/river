@@ -122,7 +122,11 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return state.tupleAccess.descriptorStatus(ownerObjectId, keyId, schemaId, shape);
   }
 
-  /** Stages one physical tuple delta; roots and registry generations are derived at commit. */
+  /**
+   * Stages one physical tuple delta under caller-held protection through transaction completion.
+   * Live indexes require exclusive user-key protection; private builds hold lifecycle protection.
+   * Roots and registry generations are derived at commit.
+   */
   public StatusCode appendTupleMutation(
       int operation, long ownerObjectId, long keyId, long schemaId,
       io.riverdb.base.tuple.TupleShape shape, long logicalRowId,
@@ -402,7 +406,10 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   /** Releases a conditional exact-source tuple guard after current-row rejection. */
   public StatusCode releaseTupleSource() { return state.tupleAccess.source.release(); }
 
-  /** Serializes and validates one SQL-unique user tuple against committed and pending keys. */
+  /**
+   * Validates one SQL-unique user tuple against committed and pending keys.
+   * The mutation owner already holds exclusive user-key protection through transaction completion.
+   */
   public StatusCode validateTupleUniquePrefix(
       long ownerObjectId, long keyId, long schemaId,
       io.riverdb.base.tuple.TupleShape shape,

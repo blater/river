@@ -1,10 +1,12 @@
 ---
 id: tic-a73c
-status: open
+status: in_progress
 type: story
 priority: 1
 delivery: code
 created: 2026-09-10
+branch: ticket/tic-a73c-insert-admission
+base-commit: ad1db42f5d3d9dcdb6789111a99384041ccaec77
 parent: tic-6d42
 deps:
   - tic-c7e2
@@ -15,37 +17,35 @@ deps:
 
 Replace the repeated preparation and validation passes in
 `SqlDescriptorPointInsertExecution` and `RelationalDescriptorBatchInsert` with
-one bounded statement-owned preparation/admission path consumed by staging.
+one statement-owned insert owner. The owner reserves one logical-ID range, then
+evaluates, encodes, checks, plans, protects, validates uniqueness, and stages each
+row exactly once into the transaction's pending mutation storage. Statement
+rollback is owned by `SqlAtomicStatementLifecycle`; pending rows remain
+transaction-local until commit. Single-row foreign keys validate before append;
+multi-row statements validate staged rows after all rows so forward references
+within the statement retain their existing semantics.
 
-Evaluate each row's expressions once and retain the values or encoded form needed
-for insertion and foreign-key validation. Encode row content and plan keys once;
-assign or patch the logical row identity without reevaluating user expressions.
-Accumulate resource requirements from that prepared form and reserve before
-publishing statement mutations. Remove the re-encoding/fingerprint round trip
-used to establish that independently rebuilt rows still match.
-
-Detect intra-statement duplicate keys, acquire transaction-held key protection,
-and check published and transaction-local uniqueness once per admitted key.
-Staging consumes that admission rather than reopening published-index probes or
-reacquiring the same protection through independent layers. Keep the session's
-other mutation callers on the same owning policy; no unchecked alternate insert
-entry point or caller-controlled bypass flag.
+The batch is bound to the active transaction identity and is reset at every
+statement boundary. Staging consumes only the values supplied for the current
+row through the batch owner; there is no second rebuild, fingerprint comparison,
+caller-controlled bypass flag, or unchecked insert entry point. Logical IDs
+reserved for a failed statement may leave internal gaps; this is not a visible
+SQL guarantee and avoids reusing an identity after rollback.
 
 ## Correctness and boundaries
 
-The retained result must remain bounded by existing statement/transaction budgets.
-Account for its actual memory and return the existing resource status before a
-partial statement becomes visible. Keep statement atomicity and existing foreign-key
-ordering, including relationships among rows in the same statement. Preserve null,
-default, check-constraint and generated-value semantics; repeated evaluation must
-not change the meaning of an expression.
+Use the existing transaction mutation and statement-savepoint budgets. A resource
+failure after an earlier row has entered pending storage is rolled back by the
+statement lifecycle before the statement returns. Keep statement atomicity and
+existing foreign-key ordering, including relationships among rows in the same
+statement. Preserve null, default, check-constraint and generated-value
+semantics; each expression is evaluated once.
 
-Admission stays valid only while the transaction retains the necessary protection
-and the prepared row/key is unchanged. Preserve duplicate detection against earlier
-writes in the same transaction, delete/reinsert, nullable unique keys, concurrent
-same-key inserts, cancellation and rollback/savepoint behavior. A wait or retry must
-resume with valid state or explicitly rebuild after invalidation. Do not reuse
-admission across statements through a new cache.
+Admission is valid only during the transaction and statement call that owns it.
+Preserve duplicate detection against earlier writes in the same transaction,
+delete/reinsert, nullable unique keys, concurrent same-key inserts, cancellation
+and rollback/savepoint behavior. A retry starts a fresh statement and rebuilds
+the row from its input; no admission is reused across statements.
 
 ## Acceptance
 
@@ -62,3 +62,58 @@ admission across statements through a new cache.
 
 No B-tree format, lock storage layout, clustered-row implementation, commit
 pipeline or benchmark change. Lower-level probe efficiency belongs to tic-2e91.
+
+
+## Candidate evidence
+
+The session batch retains only its transaction identity, table and row-ID range.
+Existing pending rows/tuple intents own payloads. Remove the receipt, fingerprint,
+separate batch uniqueness table, allocator adapter and logical-ID rebinding pass.
+SQL and direct descriptor inserts use the same owner. The mutation plan acquires
+protection; uniqueness validation and tuple staging consume that contract without
+reacquisition or repeated lock ownership lookups. Private index builds retain
+lifecycle protection. There is no compatibility fallback or second staging API.
+
+Independent review checked INSERT/update/delete/backfill protection, statement
+rollback and deferred FK visibility. The added late-FK test commits an earlier
+transaction write while proving the failed batch leaves no rows. Existing tests
+cover forward self-reference, duplicates, savepoints, replay and resource limits.
+
+The full-suite index-drop test exposed an allocator-only commit after a rejected
+INSERT: row admission rejected its zero version count. The traced failure was
+`SHARED_GROUP/PREFLIGHT_OPERATION_ADMISSION`. Skip row admission when there are
+no row versions; retain the existing allocator WAL and publication path. Independent
+review confirmed zero-version publication and recovery support. The original
+`EmbeddedRiverDropIndexTest` now passes; temporary tracing was removed.
+
+Focused correctness passed with `--no-daemon`: `SqlDescriptorInsertBatchTest`,
+`SqlCompositeForeignKeyTest`, `SqlAtomicStatementLifecycleTest`,
+`RelationalDescriptorRowPathTest`, `RelationalDescriptorTupleDeltaPlanTest`,
+`IndexedRelationalWalHarnessTest` and `IndexedMaximumRelationalReplayTest`.
+Log: `/private/tmp/river-a73c-focused.log`. The index rollback regression rerun
+is `/private/tmp/river-a73c-drop-index.log`.
+
+Slopmark before/after for touched production files is retained in
+`/private/tmp/river-a73c-slopmark.txt`. SQL INSERT execution falls 27.233 → 6.315;
+the batch state falls 14.438 → 8.161; tuple access stays 0. Consolidated batch
+insertion rises 12.427 → 56.737, mainly the analyzer's path count for sequential
+status gates. Review retained the shallow single-pass owner (133 → 91 lines),
+which replaces multiple passes and storage owners, rather than splitting it to
+lower the score. No new technical responsibility or duplicate policy was added.
+
+Final affected-module and policy check passed:
+
+```sh
+GRADLE_USER_HOME=/private/tmp/river-gradle-insert-admission ./gradlew --no-daemon \
+  --project-cache-dir /private/tmp/river-project-cache-insert-admission \
+  :river-engine:test verifySourcePolicy verifyModuleGraph
+```
+
+`BUILD SUCCESSFUL`; log `/private/tmp/river-a73c-engine-final.log`.
+The full engine suite includes the existing large-cardinality SQL tests.
+
+Step 5 should include both the prepared single-row profile and the usual
+multi-row TPC-C work: per-row reservation and pending-key lookup must be measured
+with growing transaction state, as well as the work eliminated here.
+Performance, clean integration checks and promotion remain deferred to step 5.
+No throughput claim or ticket closure follows from correctness alone.

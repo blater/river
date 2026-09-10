@@ -30,24 +30,6 @@ final class RelationalDescriptorTupleDeltaValidation {
     return StatusCode.OK;
   }
 
-  StatusCode admit(
-      TableDescriptor table, RelationalDescriptorTupleDeltaPlan plan,
-      RelationalDescriptorInsertBatch batch) {
-    if (batch == null || !plan.matches(table)
-        || plan.kind() != RelationalDescriptorTupleDeltaPlan.INSERT) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int index = 0; index < plan.keyCount(); index++) {
-      KeyDescriptor key = plan.keyAt(index);
-      if (!key.isUnique() || nullableUnique(plan, index, key)) continue;
-      ByteBuffer user = plan.userKey(index, true);
-      StatusCode status = batch.admitUnique(
-          key.keyId(), user, plan.userLength(index, true));
-      if (!status.isOk()) return status;
-    }
-    return StatusCode.OK;
-  }
-
   private static boolean nullableUnique(
       RelationalDescriptorTupleDeltaPlan plan, int index, KeyDescriptor key) {
     return key.kind() != KeyDescriptor.KIND_PRIMARY

@@ -6,7 +6,6 @@ import io.riverdb.engine.row.StoredTableRowCodec;
 import io.riverdb.engine.row.StoredTableRowEncodeResult;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.storage.heap.HeapRowResult;
-import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import java.nio.ByteBuffer;
 
 /** Reusable direct encoding buffer for one descriptor-row access session. */
@@ -56,14 +55,4 @@ final class RelationalDescriptorRowBuffer {
   ByteBuffer bytes() { return bytes; }
   int length() { return encoded.length(); }
 
-  long contentFingerprint() {
-    long hash = 0xcbf29ce484222325L;
-    int logicalIdStart = StoredTableRowHeaderCodec.HEADER_BYTES - Long.BYTES;
-    for (int index = 0; index < encoded.length(); index++) {
-      if (index >= logicalIdStart && index < StoredTableRowHeaderCodec.HEADER_BYTES) continue;
-      hash ^= Byte.toUnsignedLong(bytes.get(index));
-      hash *= 0x100000001b3L;
-    }
-    return hash;
-  }
 }

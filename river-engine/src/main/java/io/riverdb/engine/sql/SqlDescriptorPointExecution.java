@@ -41,7 +41,7 @@ final class SqlDescriptorPointExecution {
     aggregates = new SqlDescriptorAggregateExecution(
         relationalSession, temporal, shapeBudget);
     insertExecution = new SqlDescriptorPointInsertExecution(
-        session, columns, values, expressions, shapeBudget);
+        session, columns, values, expressions);
     scanExecution = new SqlDescriptorPointScanExecution(
         session, values, columns, projection, predicate, boundPredicate, expressions);
   }

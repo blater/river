@@ -111,6 +111,31 @@ final class SqlCompositeForeignKeyTest {
   }
 
   @Test
+  void failedDeferredForeignKeyBatchKeepsEarlierTransactionWrite(@TempDir Path root) {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE fk_parent (id INTEGER PRIMARY KEY)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE fk_child (id INTEGER PRIMARY KEY,parent_id INTEGER,"
+            + "FOREIGN KEY(parent_id) REFERENCES fk_parent(id))", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO fk_parent VALUES (1)", result));
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION, session.execute(
+        "INSERT INTO fk_child VALUES (10,1),(11,99)", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "SELECT COUNT(*) FROM fk_parent WHERE id=1", result));
+    assertEquals(1, result.value());
+    assertEquals(StatusCode.OK, session.execute(
+        "SELECT COUNT(*) FROM fk_child", result));
+    assertEquals(0, result.value());
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void compositeSelfReferenceCannotRetainTheDisappearingParentKey(@TempDir Path root) {
     RelationalDatabase database = create(root);
     SqlSession session = session(database);

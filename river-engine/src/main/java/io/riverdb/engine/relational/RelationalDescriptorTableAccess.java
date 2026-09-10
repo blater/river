@@ -14,19 +14,19 @@ public final class RelationalDescriptorTableAccess {
   private final RelationalSession owner;
   private final IndexedTransactionSession session;
   private final RelationalDescriptorBatchInsert batchInsert;
+  private final RelationalDescriptorInsertBatch singleInsertBatch =
+      new RelationalDescriptorInsertBatch();
   private final RelationalDescriptorIndexBackfill indexBackfill;
   private final RelationalDescriptorTupleMutations tupleMutations =
       new RelationalDescriptorTupleMutations();
+  private final RelationalDescriptorCheckValidation checks =
+      new RelationalDescriptorCheckValidation();
   private final RelationalDescriptorForeignKeyChecks foreignKeyChecks;
   private final RelationalDescriptorRowAccess rowAccess = new RelationalDescriptorRowAccess();
   private final RelationalDescriptorLockedRows lockedRows;
   private final RelationalDescriptorPrimaryAccess primaryAccess =
       new RelationalDescriptorPrimaryAccess();
-  private final RelationalDescriptorCheckValidation checks =
-      new RelationalDescriptorCheckValidation();
   private final RelationalDescriptorScanAccess scanAccess;
-  private final IndexedLogicalRowIdReservation reserved =
-      new IndexedLogicalRowIdReservation();
   private final RelationalRowIdentityResult resolved = new RelationalRowIdentityResult();
 
   RelationalDescriptorTableAccess(
@@ -60,16 +60,9 @@ public final class RelationalDescriptorTableAccess {
       SchemaPin pin, SqlValueBuffer values, RelationalRowIdentityResult result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    if (!active()) return StatusCode.INVALID_EXTERNAL_INPUT;
-    TableDescriptor table = validTable(pin, values);
-    if (table == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    StatusCode status = prepareInsert(table, values);
-    if (!status.isOk()) return status;
-    long logicalRowId = reserved.firstLogicalRowId();
-    status = rowAccess.encode(table, logicalRowId, values);
-    if (!status.isOk()) return status;
-    status = stageInsert(table, values, logicalRowId);
-    if (status.isOk()) result.set(logicalRowId);
+    StatusCode status = batchInsert.begin(singleInsertBatch, pin, 1);
+    if (status.isOk()) status = batchInsert.insert(singleInsertBatch, pin, values, result);
+    singleInsertBatch.reset();
     return status;
   }
 
@@ -300,33 +293,6 @@ public final class RelationalDescriptorTableAccess {
 
   private StatusCode preflightMutation(TableDescriptor table, int rowBytes) {
     return tupleMutations.preflightSingleRow(session, table, rowBytes);
-  }
-
-  private StatusCode prepareInsert(
-      TableDescriptor table, SqlValueBuffer values) {
-    StatusCode status = rowAccess.reserve(table);
-    if (!status.isOk()) return status;
-    status = rowAccess.encode(table, 1, values);
-    if (!status.isOk()) return status;
-    status = checks.validate(table, values);
-    if (!status.isOk()) return status;
-    status = tupleMutations.planInsert(table, values, 1);
-    if (!status.isOk()) return status;
-    status = preflightMutation(table, rowAccess.length());
-    if (status.isOk()) {
-      status = owner.reserveDescriptorLogicalRowId(table.tableId(), 1, reserved);
-    }
-    if (status.isOk()) status = tupleMutations.bindLogicalRowId(reserved.firstLogicalRowId());
-    return status.isOk() ? tupleMutations.validateInsert(
-        session, table, values, reserved.firstLogicalRowId()) : status;
-  }
-
-  private StatusCode stageInsert(
-      TableDescriptor table, SqlValueBuffer values, long logicalRowId) {
-    StatusCode status = session.insert(
-        RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId,
-        rowAccess.bytes());
-    return status.isOk() ? tupleMutations.stage(session, table, logicalRowId) : status;
   }
 
   private StatusCode prepareUpdate(

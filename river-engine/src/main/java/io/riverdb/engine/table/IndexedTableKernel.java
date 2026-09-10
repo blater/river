@@ -202,7 +202,8 @@ final class IndexedTableKernel extends IndexedKernelVersions {
   }
 
   StatusCode admitOperationPublication() {
-    return versions.admitRows(rowCount + 1, versions.operation().count());
+    int count = versions.operation().count();
+    return count == 0 ? StatusCode.OK : versions.admitRows(rowCount + 1, count);
   }
 
   StatusCode publishOperationRows(long previousRowCount) {
