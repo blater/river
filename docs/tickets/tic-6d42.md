@@ -1,6 +1,6 @@
 ---
 id: tic-6d42
-status: open
+status: in_progress
 type: epic
 priority: 1
 delivery: none
@@ -101,3 +101,19 @@ repeat affected correctness checks after remediation. The architecture decision
 remains provisional until the resulting profiles are available. This explicit
 user instruction supersedes the usual per-feature immediate performance gate;
 no code ticket closes merely because correctness tests pass.
+
+## Candidate branches
+
+The candidates share production base `ad1db42f` and remain separate so step 5
+can attribute and accept each change in order:
+
+| Ticket | Branch | Current checkpoint |
+| --- | --- | --- |
+| tic-a73c | `ticket/tic-a73c-insert-admission` | `b66de835`: full engine and source/module checks passed; independent review accepted. |
+| tic-2e91 | `ticket/tic-2e91-unique-lookup` | `1a1d9084`: format/storage and focused engine tests passed; independent review accepted. |
+| tic-8b64 | `ticket/tic-8b64-lock-storage` | `7c7fee93`: focused and full transaction tests passed; independent review accepted. |
+| tic-4f20 | `ticket/tic-4f20-storage-assessment` | `efb95e00`: source assessment prepared; storage decision awaits step 5 profiles. |
+
+Each branch owns its ticket's implementation evidence. The planning branch is
+`ticket/tic-6d42-insert-efficiency`; it changes no production code. No candidate
+has performance acceptance or an integration tag.

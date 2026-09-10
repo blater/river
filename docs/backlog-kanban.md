@@ -19,6 +19,11 @@ storage decision [tic-4f20](tickets/tic-4f20.md), not an automatic clustered-sto
 rewrite. This sequence follows the accepted WAL checkpoint and does not absorb
 the existing commit-pipeline campaign.
 
+Implementation and correctness checks are complete on separate candidate branches.
+The host is temporarily throttled: performance runs and per-ticket merge/tag/push
+are deferred to step 5, after the user confirms measurement can resume. The epic
+records candidate branches and the ordered validation plan.
+
 Completed user-directed WAL improvement: [`tic-c7e2`](tickets/tic-c7e2.md) narrows
 synchronization to the contiguous pending WAL interval. Interleaved INSERT sync
 latency fell from 113–125 us to 24–25 us; follow-up TPS pairs showed no sustained
