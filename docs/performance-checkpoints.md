@@ -1910,3 +1910,44 @@ deleted. No second commit path was introduced. Scores:
 Decision: accept the one-sync implementation with no TPS speedup claim. WAL v3
 replaces v2 directly and requires fresh database directories. Checkpoint:
 `perf-checkpoint-20260910-atomic-wal-sync`.
+
+
+## 2026-09-10 — single-pass INSERT (`tic-a73c`)
+
+Base production `ad1db42f`; candidate `b66de835` on
+`ticket/tic-a73c-insert-admission`. User-authorized deferred step 5 resumed.
+GraalVM 25.0.4 JVM, four terminals, tiny standard mix, serializable, one warehouse,
+seed42, unchanged durability/resources. Each command uses `tools/tps-test.sh
+--terminals=4 --seed=42 --warmup-seconds=W --measured-seconds=D
+--version=insert-a73c-LABEL --output-dir=/private/tmp/insert-step5/a73c-LABEL`.
+
+| Order | Label | W/D seconds | TPS |
+| --- | --- | --- | ---: |
+| 1 | control-1 | 2/10 | 240.900 |
+| 2 | control-2 | 2/10 | 240.300 |
+| 3 | candidate-1 | 2/10 | 205.500 |
+| 4 | candidate-2 | 2/10 | 199.400 |
+| 5 | control-long-1 | 5/30 | 256.900 |
+| 6 | candidate-long-1 | 5/30 | 262.567 |
+| 7 | control-long-2 | 5/30 | 253.967 |
+| 8 | candidate-long-2 | 5/30 | 264.933 |
+
+All passed invariants, zero retries/errors, reconciliation, capture and cleanup.
+The shorter directional drop prompted longer interleaved controls. It did not
+persist; accept without a general speedup claim. Use the longer configuration
+for the remaining candidates. Raw command/configuration and outcomes are in each
+artifact; console logs `/private/tmp/insert-a73c-LABEL.log`.
+
+Matched four-worker prepared INSERT probes: 15s warmup, 25s load, 20s wall capture;
+7,523.17 → 8,026.01 inserts/s, final row counts passed. Visible descriptor INSERT
+8.082 → 6.142 thread-seconds and published probes 3.750 → 2.434. Inclusive stacks
+overlap and unmounted virtual waits are absent. Source, commands, raw profiles,
+SVGs and cleanup: `/private/tmp/insert-step5/{profile.py,InsertProfile.java}` and
+`a73c-{control,candidate}-profile/`.
+
+Clean checkpoint log `a73c-clean-check.log` initially failed an unchanged tx
+allocation assertion (392 bytes versus 256); isolated and full-suite reruns passed
+unchanged, final `a73c-check-final.log` passed full check/installTps. Independent
+review and slopmark details are in the ticket; BatchInsert score rose under
+consolidation while SQL execution/batch state fell. No threshold was weakened.
+Checkpoint: `perf-checkpoint-20260910-insert-admission`.

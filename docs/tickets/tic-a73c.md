@@ -1,6 +1,6 @@
 ---
 id: tic-a73c
-status: in_progress
+status: closed
 type: story
 priority: 1
 delivery: code
@@ -117,3 +117,31 @@ multi-row TPC-C work: per-row reservation and pending-key lookup must be measure
 with growing transaction state, as well as the work eliminated here.
 Performance, clean integration checks and promotion remain deferred to step 5.
 No throughput claim or ticket closure follows from correctness alone.
+
+
+## Step 5 acceptance — 2026-09-10
+
+Accepted after fresh interleaved measurements. Short 2s-warmup/10s samples were
+240.9 / 240.3 TPS control and 205.5 / 199.4 candidate. That repeated drop triggered
+longer comparisons rather than dismissal. With identical 5s warmup/30s windows,
+interleaved control/candidate/control/candidate results were 256.900, 262.567,
+253.967, 264.933 TPS. No code changed between these comparisons. Longer results
+show no sustained regression; the initial short-window sensitivity remains in
+the evidence and does not establish a throughput improvement claim.
+
+Four-worker INSERT wall profiles show descriptor INSERT falling from 8.082 to
+6.142 accumulated thread-seconds, published probes 3.750 → 2.434 and lock work
+4.905 → 4.304 in matched 20s captures. The 25s workload rates were 7,523.17 and
+8,026.01 inserts/s, with final row counts verified. Inclusive groups overlap;
+unmounted virtual-thread waits are absent. This supports the source-level work
+removal, not exact per-call latency.
+
+Clean checkpoint completed with `--no-daemon`: the first run hit 392 allocated
+bytes in an unchanged transaction allocation test (256-byte allowance). The
+isolated rerun and complete transaction suite passed without changing the test;
+the subsequent full `check :river-bench:installTps` passed. Logs, samples,
+profiles and cleanup receipts are under `/private/tmp/insert-step5` with
+`a73c-` labels; TPS console logs are `/private/tmp/insert-a73c-*.log`.
+All TPS samples passed invariants, zero retries/errors, capture and cleanup.
+
+Checkpoint: `perf-checkpoint-20260910-insert-admission`.
