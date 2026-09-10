@@ -232,6 +232,7 @@ final class SqlJoinViewTest {
     assertEquals(
         StatusCode.OK,
         opened.session().abort(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, opened.session().close());
   }
 
   private static long descriptorId(RelationalSession session, String name) {

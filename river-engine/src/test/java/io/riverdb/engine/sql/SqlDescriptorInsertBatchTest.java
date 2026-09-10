@@ -103,6 +103,7 @@ final class SqlDescriptorInsertBatchTest {
     assertEquals(expectedRows, rows);
     assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
     assertEquals(StatusCode.OK, session.abort(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, session.close());
   }
 
   private static String insertRows(int first, int count) {

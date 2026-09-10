@@ -152,6 +152,7 @@ final class CatalogViewSemanticCorruptionTest {
         relational.indexedSession().insert(key.space(), key.key(), encoded));
     assertEquals(
         StatusCode.OK, relational.commit(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, relational.close());
 
     sql = openSql(database);
     assertEquals(
@@ -227,6 +228,7 @@ final class CatalogViewSemanticCorruptionTest {
         StatusCode.OK,
         relational.indexedSession().update(key.space(), key.key(), encoded));
     assertEquals(StatusCode.OK, relational.commit(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, relational.close());
 
     sql = openSql(database);
     assertEquals(StatusCode.CORRUPTION, sql.execute("DROP TABLE events", result));

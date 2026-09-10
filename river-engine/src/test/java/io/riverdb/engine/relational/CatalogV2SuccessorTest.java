@@ -59,6 +59,7 @@ final class CatalogV2SuccessorTest {
     assertEquals(0, detail.length());
     assertEquals(0, session.indexedSession().pendingMutationCount());
     assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, session.close());
     SchemaPin unchanged = open(second, "items");
     assertEquals(1, unchanged.catalogGeneration());
     assertEquals(0, unchanged.descriptor().secondaryKeyCount());
@@ -103,6 +104,7 @@ final class CatalogV2SuccessorTest {
         removal.prepareDescriptorSuccessor(
             "items", indexed, withoutIndexes(indexed.descriptor()), removalDetail));
     assertEquals(StatusCode.OK, removal.abort(removalOutcome));
+    assertEquals(StatusCode.OK, removal.close());
     assertEquals(StatusCode.OK, indexed.release());
 
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
@@ -173,6 +175,7 @@ final class CatalogV2SuccessorTest {
     assertEquals(StatusCode.OK,
         session.prepareDescriptorTable(name, descriptor, detail), detail.toString());
     assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.close());
   }
 
   private static SchemaPin replace(
@@ -193,6 +196,7 @@ final class CatalogV2SuccessorTest {
         detail.toString());
     if (!commit) {
       assertEquals(StatusCode.OK, session.abort(outcome));
+      assertEquals(StatusCode.OK, session.close());
       return null;
     }
     SchemaPin overlay = new SchemaPin();
@@ -200,6 +204,7 @@ final class CatalogV2SuccessorTest {
     assertTrue(!overlay.isPublished());
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertTrue(overlay.isPublished());
+    assertEquals(StatusCode.OK, session.close());
     return overlay;
   }
 
@@ -211,6 +216,7 @@ final class CatalogV2SuccessorTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, session.resolveDescriptor(name, pin, detail), detail.toString());
     assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, session.close());
     return pin;
   }
 

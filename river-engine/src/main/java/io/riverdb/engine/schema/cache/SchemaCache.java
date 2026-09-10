@@ -221,6 +221,11 @@ public final class SchemaCache {
     return slots.transfer(source, destination, entry);
   }
 
+  /** Shares one live cache pin with an independent caller-owned destination pin. */
+  public synchronized StatusCode share(SchemaPin source, SchemaPin destination) {
+    return slots.share(source, destination, this);
+  }
+
   private static StatusCode fail(StatusDetail detail, StatusCode status, CharSequence message) {
     if (detail != null) detail.set(status).append(message);
     return status;

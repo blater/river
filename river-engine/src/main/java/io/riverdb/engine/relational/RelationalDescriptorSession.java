@@ -20,6 +20,7 @@ final class RelationalDescriptorSession {
       new RelationalDescriptorDropPublications();
   private final SchemaPin namespacePin = new SchemaPin();
   private final StatusDetail namespaceDetail = new StatusDetail(128);
+  private final RelationalDescriptorBindingStorage bindings;
 
   RelationalDescriptorSession(
       RelationalSession relationalSession,
@@ -31,6 +32,7 @@ final class RelationalDescriptorSession {
         owner, indexedSession, databaseServices);
     names = new RelationalDescriptorNames(indexedSession, services);
     prepared = new RelationalPreparedDescriptors(indexedSession, services, names);
+    bindings = new RelationalDescriptorBindingStorage(services, names);
   }
 
   RelationalDescriptorTableAccess rows() {
@@ -103,8 +105,14 @@ final class RelationalDescriptorSession {
   StatusCode resolve(CharSequence name, SchemaPin pin, StatusDetail detail) {
     if (!owner.isTransactionActive()) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = prepared.open(name, pin);
-    if (status == StatusCode.CONFLICT) status = names.open(name, pin, detail);
-    return status;
+    if (status != StatusCode.CONFLICT) return status;
+    if (owner.schemaChangeActive()) return names.open(name, pin, detail);
+    return bindings.resolve(name, pin, detail);
+  }
+
+  /** Drops transaction-retained descriptor bindings before a schema visibility change. */
+  StatusCode clearRetainedBindings() {
+    return bindings.clear();
   }
 
   StatusCode drop(CharSequence name, SchemaPin current, StatusDetail detail) {
@@ -185,7 +193,9 @@ final class RelationalDescriptorSession {
   }
 
   StatusCode closeSession() {
-    return rows.closeSession();
+    StatusCode status = rows.closeSession();
+    if (status.isOk()) status = bindings.close();
+    return status;
   }
 
   StatusCode finish(
@@ -194,7 +204,11 @@ final class RelationalDescriptorSession {
       StatusCode status) {
     StatusCode finished = outcome.finish(
         prepared, session, result, status, drops.active());
-    if (outcome.determinate()) drops.reset();
+    if (outcome.determinate()) {
+      StatusCode cleared = clearRetainedBindings();
+      if (finished.isOk()) finished = cleared;
+      drops.reset();
+    }
     return finished;
   }
 

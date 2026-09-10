@@ -811,6 +811,7 @@ final class SqlNumericKeyTypeTest {
     assertEquals(StatusCode.OK, numeric.release());
     assertEquals(StatusCode.OK, approximate.release());
     assertEquals(StatusCode.OK, session.abort(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, session.close());
   }
 
   private static RelationalDatabase open(Path root) {

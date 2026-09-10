@@ -337,9 +337,14 @@ public final class RelationalSession {
     }
     StatusCode status = schemaGate.beginSchemaChange(this);
     if (status.isOk()) {
+      status = descriptors.clearRetainedBindings();
+    }
+    if (status.isOk()) {
       schemaChangeMutationStart = session.pendingMutationCount();
       schemaChangeActive = true;
       nonDescriptorSchemaPublication = false;
+    } else {
+      schemaGate.completeSchemaChange(this, false);
     }
     return status;
   }
@@ -890,6 +895,7 @@ public final class RelationalSession {
   public StatusCode rollbackToSavepoint(IndexedSavepoint savepoint) {
     StatusCode status = session.rollbackToSavepoint(savepoint);
     if (status.isOk()) descriptors.rollbackTo(session.pendingMutationCount());
+    if (status.isOk()) status = descriptors.clearRetainedBindings();
     if (status.isOk()
         && pendingDropType != PENDING_DROP_NONE
         && session.pendingMutationCount() <= pendingDropMutationStart) {
@@ -1006,13 +1012,7 @@ public final class RelationalSession {
     if (!registeredTransaction || schemaChangeActive) {
       return StatusCode.CONFLICT;
     }
-    StatusCode status = schemaGate.beginSchemaChange(this);
-    if (status.isOk()) {
-      schemaChangeMutationStart = session.pendingMutationCount();
-      schemaChangeActive = true;
-      nonDescriptorSchemaPublication = false;
-    }
-    return status;
+    return acquireSchemaChange();
   }
 
   void releasePersistentSchemaChange() {

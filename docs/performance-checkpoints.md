@@ -2040,3 +2040,84 @@ future replacement needs evidence of material removable cost. Independent source
 assessment and integrator review completed this decision without another code
 path, format migration or speculative framework. Epic and all four children are
 closed. Final checkpoint: `perf-checkpoint-20260910-insert-efficiency`.
+
+
+## 2026-09-10 — transaction-scoped descriptor bindings (`tic-5c21`)
+
+Base `56f73a81`, checkpoint `perf-checkpoint-20260910-insert-efficiency-complete`;
+candidate `2dcf5c22` on `ticket/tic-5c21-transaction-bindings`. One reusable,
+budgeted session workspace retains published table bindings within an admitted
+transaction. DDL/savepoint changes invalidate bindings; terminal outcomes release
+pins; session close releases capacity. No SQL, isolation, durability or workload
+changes. Independent review and focused ownership/DDL/pressure/allocation tests
+passed. Clean full `check` and installTps passed in `clean-check.log` below.
+
+Artifact root: `/private/tmp/river-tic-5c21/`. GraalVM25.0.4 JVM on the same
+macOS26.5.2 arm64 host. No concurrent build or workload during measurements.
+
+River-specific controls/candidates use `tools/tps-test.sh --terminals=4 --seed=42
+--warmup-seconds=5 --measured-seconds=30 --version=LABEL --output-dir=PATH`.
+Tiny standard mix, serializable, unchanged default resources/durability.
+
+| Order | Artifact directory | Version label | TPS |
+| --- | --- | --- | ---: |
+| 1 | control-1 | master-56f73a81-bindings-control-1 | 450.367 |
+| 2 | control-2 | master-56f73a81-bindings-control-2 | 416.500 |
+| 3 | candidate-1 | tic-5c21-candidate-1 | 507.300 |
+| 4 | candidate-2 | tic-5c21-candidate-2 | 423.667 |
+| 5 | control-recheck | master-56f73a81-bindings-control-recheck | 349.900 |
+
+All passed with zero errors and successful invariant, capture, reconciliation
+and cleanup outcomes. Retries in table order were 1, 1, 0, 1, 0 and reconciled
+with server outcomes. The falling unchanged control demonstrates
+substantial variation; do not claim a precise TPS-test speedup. This prompted
+interleaving the relevant full-mix workload below.
+
+External harness command: `~/src/ingres/river-harness/benchmark run river tpcc
+sample all --river-executable=EXE --river-version=LABEL --warmup=15s --duration=30s
+--workers=4 --warehouses=1 --seed=42 --max-retries=20`. READ COMMITTED with explicit
+FOR UPDATE locks, -Xmx1g. Control executable:
+`/private/tmp/river-maria-20260910-final/river-jvm`; candidate:
+`/private/tmp/river-tic-5c21/river-jvm`. Each launcher points to its checkout's
+runnable distribution; neither builds. Labels are
+`master-56f73a81-bindings-full-control-{1,2,recheck}` and
+`tic-5c21-full-candidate-{1,2}`. Reports live under `river-harness/runs`.
+
+| Run order / label | TPS | p99 ms | Retries | Report ID |
+| --- | ---: | ---: | ---: | --- |
+| full-control-1 | 307.178 | 55.050 | 1199 | `river_harness_20260910_140118_58419d83` |
+| full-control-2 | 303.259 | 56.099 | 1199 | `river_harness_20260910_140210_ade5fdb1` |
+| full-candidate-1 | 338.792 | 49.709 | 1312 | `river_harness_20260910_142605_0281c1ab` |
+| full-control-recheck | 286.997 | 63.406 | 1182 | `river_harness_20260910_142657_002df16b` |
+| full-candidate-2 | 332.524 | 52.724 | 1308 | `river_harness_20260910_142749_2aaa9513` |
+
+Every report passed invariants, zero failed/unknown outcomes, graceful shutdown
+and inactive final state. All are eligible with identical comparison key;
+`full-summary.json` retains it. Candidate TPS and p99 improved both times, and
+retry rates per commit remained similar. Accept a local diagnostic improvement
+with no sustained regression; these short samples are not a general performance
+claim or a native/MariaDB comparison.
+
+The separate full-mix CPU/wall profile uses the same workload, warm15/load60,
+with 20-second CPU then 20-second wall capture. Descriptor-resolution inclusive
+CPU share fell 16.061% → 1.839%; name search 8.245% → 0.556%, catalog loading
+7.347% → 1.069%. FK update-check share fell 7.659% → 2.481% through the shared
+resolver. The new binding search is 0.171%. Wall shares agree (descriptor
+resolution 16.235% → 1.345%). These percentages use request/commit-worker stacks,
+overlap and omit unmounted virtual waits; they are not predicted TPS gains.
+
+Profile artifact `river_harness_20260910_142931_16792550` passed correctness and
+cleanup. Its instrumented 315.96 TPS is excluded from timing comparisons.
+Baseline profiles: `/private/tmp/river-maria-20260910-final/`; candidate raw stacks,
+SVGs, configuration, scripts and summary: `/private/tmp/river-tic-5c21/`.
+
+Slopmark and independent review details are in the ticket. The wider test run
+exposed idle helper sessions left open and a sole-owner assumption in a shared
+budget test; callers now close and the pressure test consumes the actual shared
+remainder. No test expectation about database correctness was weakened. The new
+pressure test proves reservation failure leaves no caller pin and retry recovers.
+The O3/PGO native build and actual indexed-INSERT/duplicate/SIGKILL recovery/
+public-stop smoke passed (`native-build.log`, `native-smoke.log` in the artifact
+root). All 100 acknowledged rows recovered; owned data and readiness state were
+removed. Native throughput was not measured.
+Checkpoint: `perf-checkpoint-20260910-transaction-bindings`.

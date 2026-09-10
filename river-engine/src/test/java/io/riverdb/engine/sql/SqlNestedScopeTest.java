@@ -264,6 +264,7 @@ final class SqlNestedScopeTest {
     assertNull(second.table(0));
 
     assertEquals(StatusCode.OK, relational.commit(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, relational.close());
     fixture.close();
   }
 
@@ -381,6 +382,7 @@ final class SqlNestedScopeTest {
     assertEquals(0, SqlNestedRowProvider.block(2_016));
     assertEquals(63, SqlNestedRowProvider.role(2_016));
     assertEquals(StatusCode.OK, relational.commit(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, relational.close());
   }
 
   private static Fixture open(Path root) {

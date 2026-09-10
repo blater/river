@@ -75,6 +75,27 @@ final class SchemaCacheTest {
   }
 
   @Test
+  void sharingAPinKeepsTheEntryPinnedUntilBothOwnersRelease() {
+    TableDescriptor first = descriptor(44, 74, 1);
+    TableDescriptor replacement = descriptor(45, 75, 1);
+    SchemaCache cache = new SchemaCache(1, first.byteCharge());
+    SchemaAdmission admission = new SchemaAdmission();
+    SchemaPin source = new SchemaPin();
+    SchemaPin destination = new SchemaPin();
+
+    assertEquals(StatusCode.OK, cache.reserveSuccessor(first, 0, admission));
+    assertEquals(StatusCode.OK, admission.publish(first, source));
+    assertEquals(StatusCode.OK, cache.share(source, destination));
+    assertEquals(StatusCode.OK, source.release());
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED,
+        cache.reserveSuccessor(replacement, 0, admission));
+    assertEquals(StatusCode.OK, destination.release());
+    assertEquals(StatusCode.OK, cache.reserveSuccessor(replacement, 0, admission));
+    assertEquals(StatusCode.OK, admission.cancel());
+  }
+
+
+  @Test
   void duplicateAndStaleIdentityFailsBeforeReservation() {
     TableDescriptor current = descriptor(11, 5, 4);
     TableDescriptor stale = descriptor(11, 5, 3);
