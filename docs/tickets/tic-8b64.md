@@ -9,7 +9,7 @@ parent: tic-6d42
 deps:
   - tic-c7e2
 branch: ticket/tic-8b64-lock-storage
-base: ad1db42f5d3d9dcdb6789111a99384041ccaec77
+base-commit: ad1db42f5d3d9dcdb6789111a99384041ccaec77
 worktree: /private/tmp/river-lock-storage
 note: focused and full river-tx correctness tests passed; performance validation, acceptance, tag and merge deferred to parent step 5
 ---
@@ -45,3 +45,24 @@ superseded traversal implementation and migrate every River-owned caller.
   checks. No lock grant/fairness or isolation policy change.
 
 Scheduling follows tic-2e91; there is no technical dependency on its code.
+
+## Candidate ready for step 5
+
+One adaptive radix root replaces the fixed-depth directory. Small segment
+ordinals use the root array directly; higher ordinals grow only the necessary
+levels. Removing high segments collapses unneeded levels while retaining the
+base array. There is no secondary hash table, lookup cache or new lock policy.
+The ordinary shallow field lookup is intentionally not cached again.
+
+Independent integrator review checked represented-height bounds, promotion and
+collapse, partial allocation failure and preservation of existing entries. Focused
+`LockSegmentArenaTest` / `LockExactPressureTest` and full `:river-tx:test` passed
+with JDK 25 and `--no-daemon`, in an isolated Gradle home/project cache. Logs:
+`/private/tmp/river-tic-8b64-test/focused-escalated.log` and `full.log` alongside it.
+Touched `LockRadixDirectory` and `LockLongStore` slopmark scores are 0 → 0;
+full before/after artifacts are `/private/tmp/river-tic-8b64-slopmark-baseline-full.txt`
+and `/private/tmp/river-tic-8b64-slopmark-after-full.txt`.
+
+No performance test has been run for this candidate. Keep the ticket open until
+step 5 measures it against the accepted preceding feature, completes integration
+checks and either remediates or accepts it for merge/tag/push.
