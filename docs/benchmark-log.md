@@ -311,3 +311,20 @@ parsing/template construction already completed for another live handle, while
 leaving actual SQL execution and all benchmark work intact. It does not promise
 to remove all preparation time or close the full 4× gap. No implementation or new
 ticket is included in this investigation.
+
+
+## 2026-09-10 — repeated PREPARE implementation
+
+[tic-7a32](tickets/tic-7a32.md), implementation `f90eabf9`, shares session-local
+prepared plans between independent live handles. Matched JVM full-mix 30s
+controls/candidates were 313.0/338.4 versus 377.2/377.6 TPS. The subsequent 60s
+pair was 371.7 versus 389.8 TPS (+4.9%), with lower p99 and retry rate per commit.
+All passed correctness and cleanup. PREPARE's sampled request/commit CPU share
+fell 16.9% → 3.2%; template capture no longer appeared. The larger short-run gain
+is not a general speedup claim. The preceding native/MariaDB comparison remains
+a separate diagnostic; MariaDB was not rerun for this implementation.
+
+Commands, exact versions, report IDs and profile details are in
+[the performance ledger](performance-checkpoints.md) and
+`/private/tmp/river-tic-7a32/`. Workload semantics, transaction boundaries,
+isolation and durability are unchanged.
