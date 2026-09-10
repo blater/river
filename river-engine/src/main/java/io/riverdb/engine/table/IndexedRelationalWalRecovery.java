@@ -63,7 +63,7 @@ final class IndexedRelationalWalRecovery {
       return StatusCode.OK;
     }
     status = replay == null ? StatusCode.FEATURE_NOT_SUPPORTED : replay.apply(
-        mutations, recordStart, record.nextOffset(), commitSequence,
+        mutations, recordStart, record.recordEnd(), commitSequence,
         oldestVisibleCommitSequence, recovery);
     discard();
     return status;

@@ -9,6 +9,12 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+Completed user-directed follow-up: [`tic-9f2c`](tickets/tic-9f2c.md) replaces the
+separate WAL end-marker sync with validated atomic commit groups and one
+durability barrier. Recovery review, clean tests and native crash/restart passed;
+paired TPS samples showed no regression or clear gain. Checkpoint:
+`perf-checkpoint-20260910-atomic-wal-sync`.
+
 User-approved for integration: [`tic-6a91`](tickets/tic-6a91.md) replaces WAL
 channel I/O with bounded memory mappings. Full checks and native crash recovery
 passed. JVM samples improved; native samples remained within their prior range.

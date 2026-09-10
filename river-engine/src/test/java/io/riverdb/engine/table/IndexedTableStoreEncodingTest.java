@@ -49,7 +49,7 @@ final class IndexedTableStoreEncodingTest {
     assertPageImageHeaders(
         bootstrapPayload,
         WalFileHeaderCodec.HEADER_BYTES,
-        bootstrap.nextOffset());
+        bootstrap.recordEnd());
 
     byte[] flushedPages = Files.readAllBytes(root.resolve(IndexedTableStore.FILE_NAME));
     assertEquals(3 * PageCodec.PAGE_BYTES, flushedPages.length);

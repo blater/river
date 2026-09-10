@@ -48,7 +48,17 @@ final class LocalWalReader {
     ByteBuffer payload = wal.readPayloadBuffer();
     payload.clear();
     payload.limit(result.header().payloadBytes());
-    result.set(offset + result.header().totalBytes(), payload);
+    long nextOffset = offset + result.header().totalBytes();
+    long recordEnd = nextOffset;
+    if (nextOffset <= wal.durableEnd() - io.riverdb.format.wal.WalCommitGroupCodec.FOOTER_BYTES) {
+      StatusCode footer = wal.readFooterAt(nextOffset);
+      if (footer.isOk()) {
+        nextOffset += io.riverdb.format.wal.WalCommitGroupCodec.FOOTER_BYTES;
+      } else if (footer != StatusCode.INVALID_EXTERNAL_INPUT) {
+        return footer;
+      }
+    }
+    result.set(recordEnd, nextOffset, payload);
     return StatusCode.OK;
   }
 }

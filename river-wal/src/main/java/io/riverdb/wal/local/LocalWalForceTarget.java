@@ -2,6 +2,7 @@ package io.riverdb.wal.local;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.format.wal.WalCommitGroupCodec;
 
 /**
  * Caller-owned carrier whose coverage is frozen from capture through release or fenced close.
@@ -38,7 +39,9 @@ public final class LocalWalForceTarget {
 
   /** Exact append coverage; a larger forced prefix does not match the caller's retained batch. */
   public boolean matchesAppend(LocalWalGroupAppendResult append) {
-    return startOffset == append.startOffset() && endOffset == append.endOffset()
+    return startOffset == append.startOffset()
+        && append.endOffset() <= Long.MAX_VALUE - WalCommitGroupCodec.FOOTER_BYTES
+        && append.endOffset() + WalCommitGroupCodec.FOOTER_BYTES == endOffset
         && recordCount == append.recordCount();
   }
 

@@ -50,6 +50,9 @@ final class LocalWalQuorumAdmission {
       if (!equivalent.isOk()) {
         return equivalent;
       }
+      if (primary.groupDigest() != follower.groupDigest()) {
+        return StatusCode.CORRUPTION;
+      }
     }
     StatusCode recovery = primary.completeRecovery();
     if (!recovery.isOk()) return recovery;

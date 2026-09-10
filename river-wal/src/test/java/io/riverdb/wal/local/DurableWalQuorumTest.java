@@ -49,9 +49,9 @@ final class DurableWalQuorumTest {
     assertEquals(3, primary.wal.availableDurableNodeCount());
     assertEquals(2, primary.wal.quorumDurableCommitSequence());
     assertEquals(4 * Long.BYTES, primary.wal.replicatedPayloadBytes());
-    assertEquals(primaryForces + 2, primary.counters.forceCalls());
-    assertEquals(followerOneForces + 2, followerOne.counters.forceCalls());
-    assertEquals(followerTwoForces + 2, followerTwo.counters.forceCalls());
+    assertEquals(primaryForces + 1, primary.counters.forceCalls());
+    assertEquals(followerOneForces + 1, followerOne.counters.forceCalls());
+    assertEquals(followerTwoForces + 1, followerTwo.counters.forceCalls());
     assertEquals(primary.wal.durableEnd(), followerOne.wal.durableEnd());
     assertEquals(primary.wal.durableEnd(), followerTwo.wal.durableEnd());
     assertEquals(StatusCode.OK, primary.wal.releaseForcedBatch(force, force.token()));

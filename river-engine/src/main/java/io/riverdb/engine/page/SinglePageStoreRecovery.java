@@ -54,7 +54,7 @@ final class SinglePageStoreRecovery {
             && store.pageHeader.pageId() == SinglePageStore.PAGE_ID
             && store.pageHeader.pageGeneration() == SinglePageStore.PAGE_GENERATION
             && store.pageHeader.recordStart() == offset
-            && store.pageHeader.recordEnd() == store.walReadResult.nextOffset()
+            && store.pageHeader.recordEnd() == store.walReadResult.recordEnd()
             && store.pageHeader.recordEnd() > minimumRecordEnd) latestPageOffset = offset;
       }
       offset = store.walReadResult.nextOffset();

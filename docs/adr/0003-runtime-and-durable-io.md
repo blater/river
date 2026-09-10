@@ -41,19 +41,38 @@ remain long-addressed, and moving a window forces its dirty contents and closes
 its arena. Closing, invalidating or physically resizing a handle releases its
 mappings before closing or truncating the channel.
 
-WAL format v2 uses a 128-byte header. The first 64 bytes identify the WAL; two
-checksummed slots in the remaining bytes record the logical end and slot sequence.
-Mapped capacity is not the log's logical length. Recovery selects the newest
-valid slot and checks every record through that end; zeroed records within that
-range are corruption. Repair publishes a shorter logical end without truncating
-beneath a live mapping. No sidecar file or old-format fallback is retained.
+WAL format v3 uses a 64-byte identity header. Each forced group consists of
+its records followed by a checksummed footer binding the group boundaries,
+record sequence and contents to its predecessor. The footer is appended to the
+same WAL stream before one provider force. Only after that force succeeds may
+River publish the captured durable frontier and acknowledge the transactions.
+There is no independently synchronized end pointer.
 
-Commit forces dirty mapped data, writes the alternate logical-end slot, then
-forces the slot before publishing the durable frontier. The provider also forces
-file metadata when an extent grows or a physical resize occurs. Ordinary commits
-use mapped synchronization (`msync(MS_SYNC)` in the current macOS JVM), not a
-per-commit `F_FULLFSYNC`. This changes the synchronization primitive; successful
-process-recovery tests do not establish equivalent hardware power-loss behavior.
+Record coverage ends before the footer; a reader's next-record offset skips it.
+Persisted page references use record coverage, while replay and forced cursors
+use the next-record offset. The captured force range includes the footer.
+
+Recovery accepts complete validated groups in order. It does not publish
+transaction sequence or identifier maxima from an incomplete group. Before
+admitting writes after recovery, physical tail repair removes any incomplete
+suffix and stale preallocated bytes. Decisionless logical continuations retain
+their existing recovery semantics across complete force groups.
+
+An invalid final group is discarded in full, including an intact footer with
+a torn body: an interrupted sync can persist either part first. A later valid
+group makes preceding damage interior corruption, which recovery rejects.
+Without a separate durable frontier, damage to the final acknowledged group
+cannot always be distinguished from an interrupted final append.
+Group atomicity is a recovery rule, not an assumption that an arbitrary-sized
+filesystem write is atomic. Crash recovery assumes previously synchronized
+bytes remain intact under the platform's durability contract.
+
+Normal commit performs one provider force for the appended group. Moving a
+mapping, growing an extent, creating a file and repairing a tail may require
+additional maintenance synchronization. Ordinary commits use mapped
+synchronization (`msync(MS_SYNC)` in the current macOS JVM), not a per-commit
+`F_FULLFSYNC`. Successful process-recovery tests do not establish equivalent
+hardware power-loss behavior across synchronization primitives.
 
 ## Invariants
 

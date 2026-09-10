@@ -500,7 +500,7 @@ final class IndexedRelationalWalHarnessTest {
     interleaved.header().set(
         1, 0, IndexedTableStore.WAL_FORMAT_ID, IndexedTableStore.WAL_FORMAT_VERSION,
         2, TRANSACTION_ID + 1, 91, 1);
-    interleaved.set(2_000, ByteBuffer.allocate(0));
+    interleaved.set(2_000, 2_000, ByteBuffer.allocate(0));
     check(recovery.applyOperation(
         first.nextOffset(), interleaved, null, 90, Long.MAX_VALUE)
         == StatusCode.CORRUPTION, "interleaved legacy record accepted");
@@ -1324,7 +1324,7 @@ final class IndexedRelationalWalHarnessTest {
     } finally {
       executor.shutdownNow();
     }
-    check(counters.forceCalls() == forces + 2,
+    check(counters.forceCalls() == forces + 1,
         "hybrid cohort force delta " + (counters.forceCalls() - forces));
     check(firstOutcome.state() == TransactionState.COMMITTED
             && secondOutcome.state() == TransactionState.COMMITTED
@@ -1529,7 +1529,7 @@ final class IndexedRelationalWalHarnessTest {
             && second.groupTransaction().state() == TransactionState.COMMITTING,
         "published cohort acknowledged before durability");
     batch.completeDurability(2);
-    check(counters.forceCalls() == forceCalls + 2,
+    check(counters.forceCalls() == forceCalls + 1,
         "split cohort did not use exactly one shared force");
     check(firstRequest.outcome.state() == TransactionState.COMMITTED
             && secondRequest.outcome.state() == TransactionState.COMMITTED,
@@ -2620,7 +2620,7 @@ final class IndexedRelationalWalHarnessTest {
         IndexedRelationalWalCodec.WAL_FORMAT_ID,
         IndexedRelationalWalCodec.WAL_FORMAT_VERSION,
         chunk + 1L, TRANSACTION_ID, commitSequence, decision);
-    result.set(offset + payload.remaining(), payload);
+    result.set(offset + payload.remaining(), offset + payload.remaining(), payload);
     return result;
   }
 

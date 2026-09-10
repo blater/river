@@ -9,6 +9,7 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.format.wal.WalCommitGroupCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.DurableFile;
@@ -37,7 +38,8 @@ final class LocalWalForceTargetTest {
     LocalWalForceTarget target = new LocalWalForceTarget();
     fixture.file.duringForce = () -> {
       assertEquals(first.startOffset(), target.startOffset());
-      assertEquals(last.endOffset(), target.endOffset());
+      assertEquals(
+          last.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, target.endOffset());
       assertEquals(2, target.recordCount());
       assertEquals(2, target.commitSequence());
       assertEquals(GENERATION, target.generation());
@@ -56,7 +58,8 @@ final class LocalWalForceTargetTest {
     assertEquals(StatusCode.OK, wal.forcePending(target));
     assertTrue(target.locallyForced());
     assertTrue(target.durabilityComplete());
-    assertEquals(last.endOffset(), wal.durableEnd());
+    assertEquals(
+        last.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, wal.durableEnd());
     assertEquals(2, wal.currentCommitSequence());
     LocalWalForcedCursor cursor = new LocalWalForcedCursor();
     assertEquals(StatusCode.OK, wal.openForcedCursor(target, target.token(), cursor));
@@ -65,7 +68,8 @@ final class LocalWalForceTargetTest {
     assertEquals(1, read.header().commitSequence());
     assertEquals(StatusCode.OK, cursor.next(read));
     assertEquals(2, read.header().commitSequence());
-    assertEquals(last.endOffset(), read.nextOffset());
+    assertEquals(
+        last.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, read.nextOffset());
     assertEquals(StatusCode.OK, wal.releaseForcedBatch(target, target.token()));
     assertEquals(StatusCode.CONFLICT, wal.releaseForcedBatch(target, target.token()));
     assertEquals(StatusCode.OK, target.reset());
@@ -79,7 +83,8 @@ final class LocalWalForceTargetTest {
     LocalWalForceTarget target = new LocalWalForceTarget();
     fixture.file.forceStatus = StatusCode.IO_FAILURE;
     assertEquals(StatusCode.IO_FAILURE, fixture.wal.forcePending(target));
-    assertEquals(append.endOffset(), target.endOffset());
+    assertEquals(
+        append.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, target.endOffset());
     assertFalse(target.locallyForced());
     assertFalse(target.durabilityComplete());
     assertEquals(append.startOffset(), fixture.wal.durableEnd());
@@ -106,7 +111,8 @@ final class LocalWalForceTargetTest {
     assertEquals(StatusCode.FENCED, fixture.wal.forcePending(target));
     assertTrue(target.locallyForced());
     assertFalse(target.durabilityComplete());
-    assertEquals(append.endOffset(), fixture.wal.durableEnd());
+    assertEquals(
+        append.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, fixture.wal.durableEnd());
     assertEquals(1, fixture.wal.currentCommitSequence());
     assertEquals(StatusCode.FENCED, fixture.wal.releaseForcedBatch(target, target.token()));
     fixture.close();
@@ -200,7 +206,7 @@ final class LocalWalForceTargetTest {
     assertEquals(StatusCode.OK, fixture.wal.releaseForcedBatch(target, target.token()));
     append(fixture.wal, 2);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, fixture.wal.forcePending(target));
-    assertEquals(2, fixture.file.forces);
+    assertEquals(1, fixture.file.forces);
     assertEquals(1, fixture.wal.currentCommitSequence());
     assertEquals(StatusCode.OK, fixture.wal.fencePendingBatch());
     fixture.close();
@@ -233,6 +239,8 @@ final class LocalWalForceTargetTest {
       file = new ObservedFile(operation.file());
       wal = new LocalWal(file, DATABASE, GENERATION, LocalWal.FILE_NAME);
       assertEquals(StatusCode.OK, wal.recoverValidTailForOpen());
+      // Open-time tail repair is maintenance I/O, not part of the force under test.
+      file.forces = 0;
     }
 
     void close() {
