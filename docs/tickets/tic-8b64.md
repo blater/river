@@ -1,6 +1,6 @@
 ---
 id: tic-8b64
-status: open
+status: in_progress
 type: story
 priority: 1
 delivery: code
@@ -8,6 +8,10 @@ created: 2026-09-10
 parent: tic-6d42
 deps:
   - tic-c7e2
+branch: ticket/tic-8b64-lock-storage
+base: ad1db42f5d3d9dcdb6789111a99384041ccaec77
+worktree: /private/tmp/river-lock-storage
+note: correctness pending; performance validation, acceptance, tag and merge deferred to parent step 5
 ---
 # Resolve lock storage once without a fixed-depth lookup for every field
 
