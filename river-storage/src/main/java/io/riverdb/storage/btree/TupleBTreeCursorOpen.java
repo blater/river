@@ -15,7 +15,7 @@ final class TupleBTreeCursorOpen {
     if (!status.isOk() || workspace == null || !TupleBTreeScanValidation.valid(tree, bounds)) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
-    copyBounds(cursor, bounds);
+    copyBounds(cursor, tree, bounds);
     cursor.rootPageId = tree.provider().rootPageId();
     cursor.rootGeneration = tree.provider().rootGeneration();
     status = descend(tree, cursor, workspace);
@@ -34,14 +34,11 @@ final class TupleBTreeCursorOpen {
       TupleBTree tree, TupleBTreeCursor cursor, TupleBTreeTreeWorkspace workspace) {
     if (cursor.direction == TupleBTreeScanBounds.FORWARD) {
       if (cursor.lowerShape == null) return TupleBTreeTraversal.leftmost(tree, workspace);
-      return TupleBTreeTraversal.prefix(
-          tree, cursor.lowerScratch, 0, cursor.lowerLength,
-          cursor.lowerShape.partCount(), workspace);
+      return TupleBTreeTraversal.prefix(tree, cursor.lowerPrefix, workspace);
     }
     if (cursor.upperShape == null) return TupleBTreeTraversal.rightmost(tree, workspace);
-    ByteBuffer upper = cursor.upperUsesLower ? cursor.lowerScratch : cursor.upperScratch;
     return TupleBTreeTraversal.upperPrefix(
-        tree, upper, 0, cursor.upperLength, cursor.upperShape.partCount(), workspace);
+        tree, cursor.upperUsesLower ? cursor.lowerPrefix : cursor.upperPrefix, workspace);
   }
 
   private static StatusCode attach(TupleBTreeCursor cursor, TupleBTree tree, int pageId) {
@@ -61,22 +58,31 @@ final class TupleBTreeCursorOpen {
     cursor.pageStart = cursor.reference.start();
     cursor.header = cursor.workspace.header;
     cursor.limit = cursor.header.entryCount();
-    cursor.index = cursor.direction == TupleBTreeScanBounds.FORWARD ? 0 : cursor.limit - 1;
+    cursor.index = TupleBTreeLeafSearch.initialIndex(cursor);
+    if (cursor.index == Integer.MIN_VALUE) return TupleBTreeProviderAccess.release(
+        tree.provider(), cursor.reference, StatusCode.INVARIANT_BROKEN);
     return StatusCode.OK;
   }
 
-  private static void copyBounds(TupleBTreeCursor cursor, TupleBTreeScanBounds bounds) {
+  private static void copyBounds(
+      TupleBTreeCursor cursor, TupleBTree tree, TupleBTreeScanBounds bounds) {
     cursor.lowerLength = copy(bounds.lower, bounds.lowerOffset, bounds.lowerLength,
         cursor.lowerScratch);
     cursor.lowerShape = bounds.lowerShape;
     cursor.lowerInclusive = bounds.lowerInclusive;
     cursor.upperUsesLower = bounds.lower != null && bounds.lower == bounds.upper
-        && bounds.lowerOffset == bounds.upperOffset && bounds.lowerLength == bounds.upperLength;
+        && bounds.lowerOffset == bounds.upperOffset && bounds.lowerLength == bounds.upperLength
+        && bounds.lowerShape == bounds.upperShape;
     cursor.upperLength = cursor.upperUsesLower ? cursor.lowerLength
         : copy(bounds.upper, bounds.upperOffset, bounds.upperLength, cursor.upperScratch);
     cursor.upperShape = bounds.upperShape;
     cursor.upperInclusive = bounds.upperInclusive;
     cursor.direction = bounds.direction;
+    int fullParts = tree.shape().partCount();
+    if (cursor.lowerShape != null) cursor.lowerPrefix.prepare(
+        cursor.lowerScratch, 0, cursor.lowerLength, cursor.lowerShape.partCount(), fullParts);
+    if (cursor.upperShape != null && !cursor.upperUsesLower) cursor.upperPrefix.prepare(
+        cursor.upperScratch, 0, cursor.upperLength, cursor.upperShape.partCount(), fullParts);
   }
 
   private static int copy(ByteBuffer source, int offset, int length, ByteBuffer target) {

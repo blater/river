@@ -3,8 +3,6 @@ package io.riverdb.storage.btree;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.btree.TupleBTreeLeafEntry;
 import io.riverdb.format.btree.TupleBTreePageCodec;
-import io.riverdb.format.btree.TupleKeyCodec;
-import java.nio.ByteBuffer;
 
 /** Allocation-free bidirectional advancement with inclusive composite bound enforcement. */
 final class TupleBTreeCursorAdvance {
@@ -39,17 +37,16 @@ final class TupleBTreeCursorAdvance {
   /** Returns -1 below the range, zero inside, and 1 above. */
   private static int location(TupleBTreeCursor cursor, TupleBTreeLeafEntry entry) {
     int offset = cursor.pageStart + entry.keyOffset();
+    int lowerCompared = 0;
     if (cursor.lowerShape != null) {
-      int compared = TupleKeyCodec.comparePrefix(
-          cursor.page, offset, entry.keyLength(), cursor.lowerScratch, 0,
-          cursor.lowerLength, cursor.lowerShape.partCount());
-      if (compared < 0 || compared == 0 && !cursor.lowerInclusive) return -1;
+      lowerCompared = cursor.lowerPrefix.comparePhysical(
+          cursor.page, offset, entry.keyLength());
+      if (lowerCompared < 0 || lowerCompared == 0 && !cursor.lowerInclusive) return -1;
     }
     if (cursor.upperShape != null) {
-      ByteBuffer upper = cursor.upperUsesLower ? cursor.lowerScratch : cursor.upperScratch;
-      int compared = TupleKeyCodec.comparePrefix(
-          cursor.page, offset, entry.keyLength(), upper, 0,
-          cursor.upperLength, cursor.upperShape.partCount());
+      int compared = cursor.upperUsesLower
+          ? lowerCompared
+          : cursor.upperPrefix.comparePhysical(cursor.page, offset, entry.keyLength());
       if (compared > 0 || compared == 0 && !cursor.upperInclusive) return 1;
     }
     return 0;

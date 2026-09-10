@@ -247,6 +247,52 @@ final class TupleBTreeTest {
   }
 
   @Test
+  void prefixLookupKeepsNullableCompositePayloadOrderingAndRowSuffixOutOfBounds() {
+    TupleShape shape = shape(new int[] {TEXT, SqlTypeDescriptor.BIGINT});
+    TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(16);
+    TupleBTree tree = new TupleBTree(pages, SCHEMA_ID, shape);
+    TupleBTreeTreeWorkspace workspace = workspace();
+    assertEquals(StatusCode.OK, tree.initialize(workspace));
+    ByteBuffer keys = ByteBuffer.allocate(512);
+    int length = nullableCompositeKey(keys, 0, "a", true, 1);
+    assertEquals(StatusCode.OK, tree.insert(keys, 0, length, workspace));
+    length = nullableCompositeKey(keys, 96, "a", true, 2);
+    assertEquals(StatusCode.OK, tree.insert(keys, 96, length, workspace));
+    length = nullableCompositeKey(keys, 192, "a", false, 3);
+    assertEquals(StatusCode.OK, tree.insert(keys, 192, length, workspace));
+    length = nullableCompositeKey(keys, 288, "ab", true, 4);
+    assertEquals(StatusCode.OK, tree.insert(keys, 288, length, workspace));
+
+    ByteBuffer prefix = ByteBuffer.allocate(256);
+    int prefixOffset = 23;
+    int prefixLength = nullableCompositeUserKey(prefix, prefixOffset, "a", true);
+    TupleBTreeCursor cursor = new TupleBTreeCursor();
+    TupleBTreeLeafEntry entry = new TupleBTreeLeafEntry();
+    assertEquals(StatusCode.OK, cursor.openPrefix(
+        tree, prefix, prefixOffset, prefixLength, shape, workspace));
+    assertEquals(StatusCode.OK, cursor.next(entry));
+    assertEquals(1, entry.logicalRowId());
+    assertEquals(StatusCode.OK, cursor.next(entry));
+    assertEquals(2, entry.logicalRowId());
+    assertEquals(StatusCode.CONFLICT, cursor.next(entry));
+
+    TupleBTreeScanBounds reverse = new TupleBTreeScanBounds();
+    assertEquals(StatusCode.OK, reverse.setExact(
+        prefix, prefixOffset, prefixLength, shape, TupleBTreeScanBounds.REVERSE));
+    assertEquals(StatusCode.OK, cursor.open(tree, reverse, workspace));
+    assertEquals(StatusCode.OK, cursor.next(entry));
+    assertEquals(2, entry.logicalRowId());
+    assertEquals(StatusCode.OK, cursor.next(entry));
+    assertEquals(1, entry.logicalRowId());
+    assertEquals(StatusCode.CONFLICT, cursor.next(entry));
+
+    int absentLength = nullableCompositeUserKey(prefix, prefixOffset, "z", true);
+    assertEquals(StatusCode.OK, cursor.openPrefix(
+        tree, prefix, prefixOffset, absentLength, shape, workspace));
+    assertEquals(StatusCode.CONFLICT, cursor.next(entry));
+  }
+
+  @Test
   void traversesMoreThanEightLevels() {
     TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
     int internalLevels = 9;
@@ -518,6 +564,30 @@ final class TupleBTreeTest {
     assertEquals(StatusCode.OK, builder.addFixed(
         SqlTypeDescriptor.DOUBLE, SqlApproximateNumeric.doubleBits(wide)));
     assertEquals(StatusCode.OK, builder.finishPhysical(rowId));
+    return builder.keyBytes();
+  }
+
+  private static int nullableCompositeKey(
+      ByteBuffer target, int offset, String text, boolean nullable, long rowId) {
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    assertEquals(StatusCode.OK, builder.beginIndex(target, offset, 2));
+    assertEquals(StatusCode.OK, builder.addText(TEXT, text));
+    assertEquals(StatusCode.OK, nullable
+        ? builder.addNull(SqlTypeDescriptor.BIGINT)
+        : builder.addFixed(SqlTypeDescriptor.BIGINT, 3));
+    assertEquals(StatusCode.OK, builder.finishPhysical(rowId));
+    return builder.keyBytes();
+  }
+
+  private static int nullableCompositeUserKey(
+      ByteBuffer target, int offset, String text, boolean nullable) {
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    assertEquals(StatusCode.OK, builder.beginTuple(target, offset, 2));
+    assertEquals(StatusCode.OK, builder.addText(TEXT, text));
+    assertEquals(StatusCode.OK, nullable
+        ? builder.addNull(SqlTypeDescriptor.BIGINT)
+        : builder.addFixed(SqlTypeDescriptor.BIGINT, 3));
+    assertEquals(StatusCode.OK, builder.finishTuple());
     return builder.keyBytes();
   }
 
