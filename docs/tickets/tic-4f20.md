@@ -94,3 +94,9 @@ references, rollback and snapshot visibility, and splits under concurrent access
 A format replacement needs an ADR and independent recovery review, but no
 compatibility path for River's unreleased format. Close this assessment only
 once that measured decision and any resulting bounded ticket are recorded.
+
+The lookup implementation review also found that the old cursor always started
+at the edge of the selected leaf and walked to its bound. `tic-2e91` replaces
+that linear positioning with the existing leaf binary-search owner. This is an
+algorithmic search cost, not evidence that clustered storage is required. Step 5
+must measure the corrected lookup before attributing its former cost to layout.
