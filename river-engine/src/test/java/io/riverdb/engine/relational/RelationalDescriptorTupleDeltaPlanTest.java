@@ -119,9 +119,8 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES, plan.keyCount());
     assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES, plan.mutationCount());
     assertTrue(plan.payloadBytes() >= SqlShapeLimits.MAX_TABLE_INDEXES * 765);
-    assertEquals(StatusCode.OK, plan.bindLogicalRowId(17));
     for (int index = 0; index < plan.keyCount(); index++) {
-      assertEquals(17, TupleKeyCodec.logicalRowId(
+      assertEquals(Long.MAX_VALUE, TupleKeyCodec.logicalRowId(
           plan.bytes(), plan.afterOffsetAt(index), plan.afterLengthAt(index)));
     }
   }

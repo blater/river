@@ -1168,6 +1168,7 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(session.insert(baseSpace, 1, row));
     ByteBuffer tuple = physicalFixedTuple(1, 991);
     requireOk(session.preflightTupleMutations(1, 1, tuple.remaining()));
+    requireOk(session.protectTupleKeyForWrite(1_000, tuple, tuple.position(), tuple.remaining()));
     requireOk(session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT,
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), 1,
@@ -1190,6 +1191,8 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(session.insert(baseSpace, 2, secondRow));
     ByteBuffer secondTuple = physicalFixedTuple(2, 992);
     requireOk(session.preflightTupleMutations(1, 1, secondTuple.remaining()));
+    requireOk(session.protectTupleKeyForWrite(
+        1_000, secondTuple, secondTuple.position(), secondTuple.remaining()));
     requireOk(session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT,
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), 2,
@@ -1207,6 +1210,8 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
     requireOk(session.insert(baseSpace, 2, secondRow));
     requireOk(session.preflightTupleMutations(1, 1, secondTuple.remaining()));
+    requireOk(session.protectTupleKeyForWrite(
+        1_000, secondTuple, secondTuple.position(), secondTuple.remaining()));
     requireOk(session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT,
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), 2,
@@ -1729,6 +1734,7 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
     requireOk(session.insert(baseSpace, 3, row));
     requireOk(session.preflightTupleMutations(1, 1, tuple.remaining()));
+    requireOk(session.protectTupleKeyForWrite(1_000, tuple, tuple.position(), tuple.remaining()));
     requireOk(session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT,
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), 3,
@@ -1736,6 +1742,7 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(session.createSavepoint(savepoint));
     requireOk(session.delete(baseSpace, 3));
     requireOk(session.preflightTupleMutations(1, 0, tuple.remaining()));
+    requireOk(session.protectTupleKeyForWrite(1_000, tuple, tuple.position(), tuple.remaining()));
     requireOk(session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_DELETE,
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), 3,
@@ -1938,6 +1945,7 @@ final class IndexedRelationalWalHarnessTest {
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, KEY_SCHEMA_ID, shape));
     ByteBuffer tuple = physicalFixedTuple(1, 771);
     requireOk(session.preflightTupleMutations(1, 1, tuple.remaining()));
+    requireOk(session.protectTupleKeyForWrite(1_000, tuple, tuple.position(), tuple.remaining()));
     requireOk(session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT, OWNER_OBJECT_ID, 1_000,
         KEY_SCHEMA_ID, shape, 1, tuple, 0, tuple.remaining()));
@@ -2949,6 +2957,7 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(session.insert(baseSpace, key, scalarRow(value)));
     ByteBuffer tuple = physicalFixedTuple(key, value);
     requireOk(session.preflightTupleMutations(1, 1, tuple.remaining()));
+    requireOk(session.protectTupleKeyForWrite(1_000, tuple, tuple.position(), tuple.remaining()));
     requireOk(session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT,
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), key,

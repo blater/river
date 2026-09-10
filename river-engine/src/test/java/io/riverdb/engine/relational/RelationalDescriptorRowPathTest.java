@@ -217,6 +217,8 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.OK,
         session.indexedSession().preflightTupleMutations(1, 0, encoder.length()));
+    assertEquals(StatusCode.OK, session.indexedSession().protectTupleKeyForWrite(
+        table.descriptor().primaryKey().keyId(), encoder.bytes(), 0, encoder.length()));
     assertEquals(StatusCode.OK, session.indexedSession().appendTupleMutation(
         IndexedRelationalMutation.TUPLE_DELETE,
         table.tableId(), table.descriptor().primaryKey().keyId(),
@@ -409,14 +411,10 @@ final class RelationalDescriptorRowPathTest {
     SqlValueBuffer batchFirst = values(201, NULL_ORDINALS);
     SqlValueBuffer batchSecond = values(202, NULL_ORDINALS);
     assertEquals(StatusCode.OK, inserts.begin(batch, table, 2));
-    assertEquals(StatusCode.OK, inserts.admit(batch, table, batchFirst));
-    assertEquals(StatusCode.OK, inserts.admit(batch, table, batchSecond));
-    assertEquals(StatusCode.OK, inserts.reserve(batch, table));
     RelationalRowIdentityResult staged = new RelationalRowIdentityResult();
-    assertEquals(StatusCode.OK, inserts.insert(batch, table, 0, batchFirst, staged));
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, inserts.insert(
-        batch, table, 1, values(999, NULL_ORDINALS),
-        new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, inserts.insert(batch, table, batchFirst, staged));
+    assertEquals(StatusCode.OK, inserts.insert(
+        batch, table, batchSecond, new RelationalRowIdentityResult()));
     assertEquals(StatusCode.OK, session.rollbackToSavepoint(statement));
     batch.reset();
     SqlValueBuffer fetched = emptyValues();
@@ -547,11 +545,9 @@ final class RelationalDescriptorRowPathTest {
     }
     assertEquals(StatusCode.OK, inserts.begin(batch, table, 2));
     assertEquals(StatusCode.OK,
-        inserts.admit(batch, table, values(81, NULL_ORDINALS)));
+        inserts.insert(batch, table, values(81, NULL_ORDINALS), new RelationalRowIdentityResult()));
     assertEquals(StatusCode.OK,
-        inserts.admit(batch, table, values(82, NULL_ORDINALS)));
-    assertEquals(StatusCode.OK,
-        inserts.reserve(batch, table));
+        inserts.insert(batch, table, values(82, NULL_ORDINALS), new RelationalRowIdentityResult()));
     assertEquals(StatusCode.OK, session.abort(outcome));
 
     batch.reset();
@@ -559,15 +555,12 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, inserts.begin(batch, table, 2));
     SqlValueBuffer first = values(81, NULL_ORDINALS);
     SqlValueBuffer second = values(82, NULL_ORDINALS);
-    assertEquals(StatusCode.OK, inserts.admit(batch, table, first));
-    assertEquals(StatusCode.OK, inserts.admit(batch, table, second));
-    assertEquals(StatusCode.OK, inserts.reserve(batch, table));
     RelationalRowIdentityResult firstId = new RelationalRowIdentityResult();
     RelationalRowIdentityResult secondId = new RelationalRowIdentityResult();
     assertEquals(StatusCode.OK,
-        inserts.insert(batch, table, 0, first, firstId));
+        inserts.insert(batch, table, first, firstId));
     assertEquals(StatusCode.OK,
-        inserts.insert(batch, table, 1, second, secondId));
+        inserts.insert(batch, table, second, secondId));
     assertEquals(3, firstId.logicalRowId());
     assertEquals(4, secondId.logicalRowId());
     assertEquals(StatusCode.OK, session.commit(outcome));
@@ -577,7 +570,7 @@ final class RelationalDescriptorRowPathTest {
   }
 
   @Test
-  void insertBatchReceiptRejectsSecondReservationAndChangedEncodedLength(
+  void insertBatchRejectsReuseAfterStatementCompletion(
       @TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
@@ -594,11 +587,10 @@ final class RelationalDescriptorRowPathTest {
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.OK, inserts.begin(batch, table, 1));
-    assertEquals(StatusCode.OK, inserts.admit(batch, table, admitted));
-    assertEquals(StatusCode.OK, inserts.reserve(batch, table));
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, inserts.reserve(batch, table));
+    assertEquals(StatusCode.OK, inserts.insert(batch, table, admitted,
+        new RelationalRowIdentityResult()));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, inserts.insert(
-        batch, table, 0, textValues(91, "a larger admitted payload"),
+        batch, table, textValues(91, "a larger admitted payload"),
         new RelationalRowIdentityResult()));
     assertEquals(StatusCode.OK, session.abort(outcome));
 

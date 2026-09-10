@@ -168,15 +168,7 @@ final class IndexedTupleIndexLifecycleBatch {
   boolean appendsBuilding(int index) {
     return index >= 0 && index < count && operations[index] == APPEND_BUILDING;
   }
-  boolean appendsBuilding(
-      long owner, long keyId, long schemaId, TupleShape shape) {
-    if (shape == null) return false;
-    int index = ordinalByKey.find(keyId);
-    return appendsBuilding(index) && owners[index] == owner
-        && schemaIds[index] == schemaId
-        && shapes[index].descriptorHash() == shape.descriptorHash()
-        && shapes[index].sameDescriptors(shape);
-  }
+
   int count() { return count; }
   long generation() { return generation; }
   int operationAt(int index) { return operations[index]; }

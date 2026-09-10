@@ -38,21 +38,11 @@ final class RelationalDescriptorTupleMutations {
     return plan.delete(table, values, logicalRowId);
   }
 
-  StatusCode bindLogicalRowId(long logicalRowId) { return plan.bindLogicalRowId(logicalRowId); }
-
   StatusCode validateInsert(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer values, long logicalRowId) {
-    return validateInsert(session, table, values, logicalRowId, true);
-  }
-
-  StatusCode validateInsert(
-      IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer values, long logicalRowId, boolean foreignKeys) {
+      long logicalRowId) {
     StatusCode status = protection.protect(session, table, plan);
-    if (status.isOk()) status = unique.validate(session, table, plan, logicalRowId);
-    return status.isOk() && foreignKeys
-        ? foreignValidation.validate(session, table, values) : status;
+    return status.isOk() ? unique.validate(session, table, plan, logicalRowId) : status;
   }
 
   StatusCode validateUpdate(
@@ -61,11 +51,6 @@ final class RelationalDescriptorTupleMutations {
     StatusCode status = unique.validate(session, table, plan, logicalRowId);
     return status.isOk()
         ? foreignValidation.validateUpdate(session, table, before, after) : status;
-  }
-
-  StatusCode validateUniqueAdmission(
-      TableDescriptor table, RelationalDescriptorInsertBatch batch) {
-    return unique.admit(table, plan, batch);
   }
 
   StatusCode validateForeign(

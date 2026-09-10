@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
@@ -50,7 +51,7 @@ final class SqlDescriptorInsertBatchTest {
   }
 
   @Test
-  void admitsWholeBatchBeforeOneConsecutiveIdentityRange(@TempDir Path root) {
+  void failedStatementsRetainOnlyCommittedRows(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
@@ -73,11 +74,11 @@ final class SqlDescriptorInsertBatchTest {
         session.execute("SELECT id FROM batched WHERE id=201", result));
     assertEquals(StatusCode.OK, session.close());
 
-    assertConsecutiveIdentities(database, 65);
+    assertIncreasingIdentities(database, 65);
     assertEquals(StatusCode.OK, database.close());
   }
 
-  private static void assertConsecutiveIdentities(
+  private static void assertIncreasingIdentities(
       RelationalDatabase database, int expectedRows) {
     RelationalSessionOpenResult opened = new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(opened));
@@ -94,7 +95,7 @@ final class SqlDescriptorInsertBatchTest {
     int rows = 0;
     StatusCode status;
     while ((status = session.descriptorRows().nextScan(cursor, values, identity)).isOk()) {
-      if (prior != 0) assertEquals(prior + 1, identity.logicalRowId());
+      if (prior != 0) assertTrue(identity.logicalRowId() > prior);
       prior = identity.logicalRowId();
       rows++;
     }

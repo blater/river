@@ -148,6 +148,8 @@ final class RelationalDescriptorStorageValidationTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.OK,
         session.indexedSession().preflightTupleMutations(1, 1, encoder.length()));
+    assertEquals(StatusCode.OK, session.indexedSession().protectTupleKeyForWrite(
+        pin.descriptor().primaryKey().keyId(), encoder.bytes(), 0, encoder.length()));
     assertEquals(StatusCode.OK, session.indexedSession().appendTupleMutation(
         IndexedRelationalMutation.TUPLE_DELETE,
         pin.tableId(), pin.descriptor().primaryKey().keyId(),

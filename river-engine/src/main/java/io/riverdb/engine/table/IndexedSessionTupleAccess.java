@@ -62,13 +62,8 @@ final class IndexedSessionTupleAccess {
       int operation, long ownerId, long keyId, long schemaId, TupleShape shape,
       long rowId, ByteBuffer key, int offset, int length) {
     if (!acceptsMutations()) return StatusCode.CONFLICT;
-    boolean privateBuild = session.tupleLifecycle().appendsBuilding(
-        ownerId, keyId, schemaId, shape);
-    StatusCode status = privateBuild ? StatusCode.OK
-        : IndexedTupleKeyProtection.protectExclusive(
-            session, keyId, key, offset, length);
-    return status.isOk() ? session.tupleIntents().append(
-        operation, ownerId, keyId, schemaId, shape, rowId, key, offset, length) : status;
+    return session.tupleIntents().append(
+        operation, ownerId, keyId, schemaId, shape, rowId, key, offset, length);
   }
 
   StatusCode preflightLifecycles(int additional) {
@@ -176,8 +171,7 @@ final class IndexedSessionTupleAccess {
         || !IndexedTupleLockKey.valid(key, offset, length)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = lockUniquePrefix(keyId, key, offset, length);
-    if (status.isOk()) status = published.current(
+    StatusCode status = published.current(
         ownerId, keyId, schemaId, shape, key, offset, length, probe);
     return status.isOk() ? session.tupleIntents().uniquePrefixStatus(
         keyId, shape, key, offset, length, rowId,
@@ -207,9 +201,4 @@ final class IndexedSessionTupleAccess {
             || session.tupleLifecycle().acceptsTupleMutations());
   }
 
-  private StatusCode lockUniquePrefix(
-      long keyId, ByteBuffer key, int offset, int length) {
-    return IndexedTupleKeyProtection.protectExclusive(
-        session, keyId, key, offset, length);
-  }
 }

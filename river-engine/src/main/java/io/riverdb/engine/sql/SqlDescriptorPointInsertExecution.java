@@ -22,12 +22,11 @@ final class SqlDescriptorPointInsertExecution {
   SqlDescriptorPointInsertExecution(
       RelationalSession session, SqlDescriptorColumnMapping columnMapping,
       SqlDescriptorMutationValues mutationValues,
-      SqlRowProjectionEvaluator expressionEvaluator,
-      SqlSessionShapeBudget shapeBudget) {
+      SqlRowProjectionEvaluator expressionEvaluator) {
     columns = columnMapping;
     values = mutationValues;
     expressions = expressionEvaluator;
-    batch = new RelationalDescriptorInsertBatch(shapeBudget);
+    batch = new RelationalDescriptorInsertBatch();
     inserts = session.descriptorRows().batchInsert();
   }
 
@@ -39,18 +38,15 @@ final class SqlDescriptorPointInsertExecution {
     if (status.isOk()) status = inserts.begin(batch, pin, command.insertRowCount());
     for (int row = 0; status.isOk() && row < command.insertRowCount(); row++) {
       status = values.buildInsert(command, table, columns, expressions, row);
-      if (status.isOk()) status = inserts.admit(batch, pin, values.mutation());
-    }
-    if (status.isOk()) status = inserts.reserve(batch, pin);
-    for (int row = 0; status.isOk() && row < command.insertRowCount(); row++) {
-      status = values.buildInsert(command, table, columns, expressions, row);
-      if (status.isOk()) status = inserts.insertDeferredForeignKeys(
-          batch, pin, row, values.mutation(), identity);
+      if (status.isOk()) status = inserts.insert(
+          batch, pin, values.mutation(), identity);
       if (status.isOk()) affectedRows++;
     }
-    for (int row = 0; status.isOk() && row < command.insertRowCount(); row++) {
-      status = values.buildInsert(command, table, columns, expressions, row);
-      if (status.isOk()) status = inserts.validateForeignKeys(pin, values.mutation());
+    if (status.isOk() && table.foreignKeyCount() > 0
+        && command.insertRowCount() > 1) {
+      for (int row = 0; status.isOk() && row < command.insertRowCount(); row++) {
+        status = inserts.validateForeignKeys(batch, pin, row, values.mutation());
+      }
     }
     batch.reset();
     return status;
