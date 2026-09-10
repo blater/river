@@ -9,9 +9,11 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
-Current focused work: [tic-6f28](tickets/tic-6f28.md) removes prepared-close
-acknowledgement round trips and gives programs direct plan references. Protocol
-v5 migrates the server, Java client and external Go adapter together.
+Implemented and validated: [tic-6f28](tickets/tic-6f28.md) removes prepared-close
+acknowledgement round trips and gives programs direct plan references. The longer
+JVM pair improved 392.58 -> 429.27 TPS; socket writes per commit fell 29.0%.
+Protocol v5 migrates the server, Java client and external Go adapter together.
+Only harness publication remains pending: that repository has no Git remote.
 
 Completed repeated preparation sharing: [tic-7a32](tickets/tic-7a32.md) retains
 one plan per live exact SQL/generation within a session, with independent handles.

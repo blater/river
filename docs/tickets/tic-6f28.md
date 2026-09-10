@@ -49,3 +49,28 @@ the mechanism. One standalone smoke verifies the coordinated protocol migration.
 Record results, merge/tag/push both repositories, refresh local runnable artifacts.
 Go adapter branch: ticket/tic-6f28-one-way-prepared-close, base 3c5643b,
 worktree /private/tmp/river-harness-one-way-close.
+
+
+## Delivery evidence
+
+Implementation: River `05c0f7e4`; Go adapter `793e80d`, locally integrated on
+harness `main` at `aba7c43`. Full evidence and commands are in
+[performance checkpoints](../performance-checkpoints.md#2026-09-10--one-way-prepared-release-tic-6f28)
+and `/private/tmp/river-tic-6f28`.
+
+- Focused ownership/transport tests and clean River check passed (4m13s).
+- Full Go tests, race tests, vet and build passed. Independent Java boundary
+  review and integrator engine/Go review found no blocking issue.
+- Short JVM controls: 325.31 / 366.91 TPS; candidates: 428.82 / 414.37.
+  Longer adjacent pair: 392.58 -> 429.27 TPS (+9.3%). All correctness and cleanup
+  checks passed. New Order retries increased; the checkpoint records the cost
+  and the limits of the contention inference.
+- JFR socket writes: 92.51 -> 65.65 per committed transaction, including retries
+  (29.0% fewer). Median syscall duration stayed near 3.6 microseconds.
+- O3/PGO build and actual standalone authenticated full-mix smoke passed.
+
+River is accepted for integration under
+`perf-checkpoint-20260910-one-way-prepared-close`. The matching harness is merged
+and tagged locally. The only remaining delivery item is publishing the harness:
+its Git repository has no remote configured, and the user has been asked for the
+URL. Keep this ticket open until that publication is complete.
