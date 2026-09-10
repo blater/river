@@ -1,6 +1,6 @@
 ---
 id: tic-5c21
-status: in_progress
+status: closed
 type: story
 priority: 1
 delivery: code
@@ -99,3 +99,33 @@ new binding storage 15. The session change adds invalidation to its existing sch
 admission/rollback responsibility and removes duplicated persistent admission code;
 it does not acquire a new subsystem responsibility. Raw module reports:
 `/private/tmp/river-tic-5c21/slopmark-{before,after}.txt`.
+
+
+## Performance acceptance
+
+Candidate `2dcf5c22` passed the clean full check and installTps checkpoint:
+`/private/tmp/river-tic-5c21/clean-check.log`. River-specific candidates were
+507.300 / 423.667 TPS against controls 450.367 / 416.500 and a later 349.900
+recheck. Host variation prevents a precise claim from those samples.
+
+The targeted full-mix candidates passed at 338.792 / 332.524 TPS against
+307.178 / 303.259 controls and an interleaved 286.997 control. Candidate p99
+was lower; failed/unknown outcomes remained zero, invariants and cleanup passed.
+The repeat CPU profile reduced descriptor resolution from 16.061% to 1.839% of
+request/commit samples, confirming the intended work removal. Accept this bounded
+change; detailed commands, samples and limitations are in the performance ledger.
+
+The same profile still shows preparation at 16.895% and socket write self time at
+15.141%; these are observations for future investigation, not additional scope
+or additive end-to-end latency percentages.
+
+
+## Delivery
+
+The O3/PGO native build passed (`native-build.log`). The actual executable
+committed and verified 100 indexed rows, rejected a duplicate, recovered all
+acknowledged rows after SIGKILL, and stopped through public `river stop` with
+readiness/data cleanup (`native-smoke.log`), under `/private/tmp/river-tic-5c21/`.
+Native throughput was not measured for this ticket; performance conclusions are
+JVM diagnostics. No remaining blocker. Checkpoint:
+`perf-checkpoint-20260910-transaction-bindings`.

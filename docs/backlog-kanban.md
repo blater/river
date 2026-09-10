@@ -9,6 +9,14 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+Completed transaction-scoped table bindings: [tic-5c21](tickets/tic-5c21.md)
+reuses admitted schema resolution. Full-mix JVM candidates passed at 338.8/332.5
+TPS versus initial controls 307.2/303.3 and an interleaved 287.0. Descriptor lookup
+CPU share fell 16.1% → 1.8%; clean checks and native crash recovery passed.
+Checkpoint: `perf-checkpoint-20260910-transaction-bindings`. The ticket records
+remaining repeated FK discovery, binder-view construction and page-history work
+as separate follow-up candidates; none expands this delivery.
+
 Completed INSERT efficiency epic: [tic-6d42](tickets/tic-6d42.md), including
 [tic-a73c](tickets/tic-a73c.md) (single admission),
 [tic-2e91](tickets/tic-2e91.md) (validated key lookup), and
