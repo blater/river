@@ -117,6 +117,10 @@ public final class RelationalDatabaseServices {
     return cache.owns(pin);
   }
 
+  StatusCode share(SchemaPin source, SchemaPin destination) {
+    return cache.share(source, destination);
+  }
+
   synchronized StatusCode finishDescriptor(
       CatalogPreparedTable prepared, TransactionState outcome) {
     return catalog.finish(prepared, outcome);

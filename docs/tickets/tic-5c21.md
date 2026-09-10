@@ -41,3 +41,61 @@ focused and affected engine tests, slopmark before/after, clean checkpoint and
 matched TPS controls/candidates. Profile the same full mix to verify work removed;
 keep instrumented throughput separate. Finish with one native lifecycle/recovery
 smoke, merge/tag/push and record evidence in the performance ledger.
+
+## Repeated work found during implementation
+
+- `RelationalDescriptorForeignKeyChecks.scan` enumerates every catalog name for
+  parent UPDATE/DELETE, then opens each descriptor to discover references.
+  The full-mix profile attributed 7.66% inclusive CPU to update FK checks.
+  This ticket removes repeated descriptor resolution within that scan. Compiling
+  reverse FK dependencies and avoiding checks when referenced keys are unchanged
+  are separate follow-up work; preserve constraint/DDL semantics.
+- `SqlBindingTableResolver.resolve` calls
+  `RelationalDescriptorJoinTableView.prepare` each time: it clears a binder view,
+  copies every column name/type/nullability and rebuilds index metadata from an
+  immutable descriptor. Consider retaining that derived view with its schema
+  identity later; do not add a second binding cache here.
+- `IndexedPageFrameCache.reclaimHistorical` scans the configured frame array on
+  every commit preflight. It was only 0.35% of sampled full-mix CPU, so it ranks
+  behind catalog work despite its larger share in the single-INSERT profile.
+
+
+## Controls before implementation
+
+At `56f73a81`, unchanged current JVM distribution: four-terminal tiny standard
+mix, serializable, seed42, warm5/duration30 using `tools/tps-test.sh`:
+450.367 / 416.500 TPS, both capture/reconciliation OK. Artifact root
+`/private/tmp/river-tic-5c21/control-{1,2}`; versions
+`master-56f73a81-bindings-control-{1,2}`. Preserve this host variation.
+
+External full-mix controls: four workers, sample/all, READ COMMITTED with explicit
+FOR UPDATE, one warehouse, seed42, max retries20, warm15/duration30: 307.18 / 303.26
+TPS. Both passed invariants, zero failed/unknown outcomes and graceful cleanup.
+Commands and report paths: `/private/tmp/river-tic-5c21/full-control-{1,2}.log`.
+Executable `/private/tmp/river-maria-20260910-final/river-jvm`, versions
+`master-56f73a81-bindings-full-control-{1,2}`. JVM GraalVM25.0.4, -Xmx1g.
+Baseline CPU/wall profiles are from the immediately preceding matched diagnostic
+at the same source in `/private/tmp/river-maria-20260910-final/`.
+
+## Implementation and review
+
+One session-owned `RelationalDescriptorBindingStorage` retains reusable slots and
+published pins, charged to the existing shared shape budget through a runtime
+lease. Transaction completion releases pins; session close releases capacity.
+Cache pin sharing returns independent caller ownership. Schema admission clears
+bindings and active DDL bypasses retention; savepoint rollback invalidates them.
+The persistent schema-change entry point now uses the same admission owner.
+
+Independent review covered DDL overlays, admission exclusion, uncertain terminal
+outcomes and pin lifetimes. Integrator review rejected per-transaction workspace
+allocation, consolidated the budget-release owner, and made internal close retryable.
+Focused visibility, pin lifetime, warmed allocation and pressure/retry tests passed.
+Affected tests that left helper-created sessions open now close them; the savepoint
+budget test fills the actual shared remainder rather than assuming sole ownership.
+No correctness assertion or allocation allowance was weakened.
+
+Slopmark: descriptor session 42.3192 → 42.6587; relational session 96.153 → 101.325;
+new binding storage 15. The session change adds invalidation to its existing schema
+admission/rollback responsibility and removes duplicated persistent admission code;
+it does not acquire a new subsystem responsibility. Raw module reports:
+`/private/tmp/river-tic-5c21/slopmark-{before,after}.txt`.

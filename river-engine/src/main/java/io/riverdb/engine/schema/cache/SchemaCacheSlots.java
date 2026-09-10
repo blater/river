@@ -162,6 +162,22 @@ final class SchemaCacheSlots {
     return StatusCode.OK;
   }
 
+  StatusCode share(SchemaPin source, SchemaPin destination, SchemaCache owner) {
+    if (source == null || destination == null || source.owner() != owner
+        || source.entry() == null || destination.isActive()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    SchemaCacheEntry entry = source.entry();
+    if ((!entry.occupied && !entry.reserved) || entry.pinCount <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (entry.pinCount == Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
+    entry.pinCount++;
+    entry.sequence = scan.nextSequence();
+    destination.attach(owner, entry);
+    return StatusCode.OK;
+  }
+
   private boolean hasCapacity(long charge) {
     if (usedSlots > maximumSlots - reservedSlots - 1) return false;
     if (reservedBytes > maximumBytes - usedBytes) return false;

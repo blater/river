@@ -43,10 +43,9 @@ final class SqlSavepointBudgetBoundaryTest {
     assertEquals(100, result.value());
     long retained = session.retainedShapeBytes();
     assertEquals(retained, lease.reservedBytes());
-    long filler = session.maximumShapeBytes() - retained;
-    assertEquals(StatusCode.OK, session.reserveRetainedBytes(filler));
+    long filler = fillRemainingBudget(session);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.execute("SAVEPOINT fifth", result));
-    assertEquals(session.maximumShapeBytes(), lease.reservedBytes());
+    assertEquals(retained + filler, lease.reservedBytes());
     assertEquals(StatusCode.OK, session.execute("ROLLBACK TO SAVEPOINT fourth", result));
     assertEquals(StatusCode.OK, session.releaseRetainedBytes(filler));
     assertEquals(StatusCode.OK, session.execute("SAVEPOINT fifth", result));
@@ -63,4 +62,17 @@ final class SqlSavepointBudgetBoundaryTest {
     assertEquals(StatusCode.OK, replacement.lease().close());
     assertEquals(StatusCode.OK, database.close());
   }
+
+  private static long fillRemainingBudget(SqlSession session) {
+    long filled = 0;
+    // Other session workspaces share this database budget; consume its actual remainder.
+    for (long bytes = Long.highestOneBit(session.maximumShapeBytes()); bytes != 0; bytes >>>= 1) {
+      StatusCode status = session.reserveRetainedBytes(bytes);
+      if (status.isOk()) filled += bytes;
+      else assertEquals(StatusCode.RESOURCE_EXHAUSTED, status);
+    }
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.reserveRetainedBytes(1));
+    return filled;
+  }
+
 }
