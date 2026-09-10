@@ -9,6 +9,10 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+Current focused performance work: [tic-7a32](tickets/tic-7a32.md) shares repeated
+statement preparation within each session while retaining independent handles,
+schema validity and bounded ownership.
+
 Completed transaction-scoped table bindings: [tic-5c21](tickets/tic-5c21.md)
 reuses admitted schema resolution. Full-mix JVM candidates passed at 338.8/332.5
 TPS versus initial controls 307.2/303.3 and an interleaved 287.0. Descriptor lookup

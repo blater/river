@@ -244,3 +244,70 @@ Profiles, command configuration and source-level diagnostic scripts:
 `/private/tmp/river-maria-20260910-final/`. View `cpu-requests.svg` and
 `wall-requests.svg`; raw collapsed stacks and `profile-summary.json` are alongside.
 No production or harness code changed in this comparison.
+
+## 2026-09-10 — current native River and next repeated-work target
+
+Current `master` `a4567c01`, native O3/PGO `bin/river`. Reused the recorded
+MariaDB 12.3.3 baseline above rather than rerunning it. Same host, sample/all,
+four workers, one warehouse, seed42, max retries20, warm15/load60 and unchanged
+isolation/durability settings and transports.
+
+```sh
+~/src/ingres/river-harness/benchmark run river tpcc sample all \
+  --river-executable=/Users/blater/src/river/bin/river \
+  --river-version=master-a4567c01-native-followup-N \
+  --warmup=15s --duration=60s --workers=4 --warehouses=1 --seed=42 --max-retries=20
+```
+
+| Sample | TPS | p99 ms | Retries | Commits |
+| --- | ---: | ---: | ---: | ---: |
+| River N=1 | 280.862 | 60.260 | 2,328 | 16,839 |
+| River N=2 | 289.743 | 56.001 | 2,308 | 17,374 |
+| Recorded MariaDB 1 | 1,186.158 | 16.327 | 10,285 | 71,170 |
+| Recorded MariaDB 2 | 1,095.424 | 17.498 | 9,652 | 65,726 |
+
+Mean River 285.303 TPS versus recorded MariaDB 1,140.791: approximately 4.00×
+remaining gap. The MariaDB controls are older, so this is a diagnostic comparison,
+not an adjacent pairing or a claim that a particular change caused the ratio.
+Both new runs passed warmup/measurement outcomes, all invariants and graceful
+cleanup with zero failed/unknown transactions. Comparison eligibility/key match
+the stored baseline. Final `river ps` reported no running servers.
+
+Reports below `~/src/ingres/river-harness/runs/`:
+`river_harness_20260910_165243_cca42897` and
+`river_harness_20260910_165407_e95a3858`. Commands and summary:
+`/private/tmp/river-next-repeat-20260910/`.
+
+### Nomination: share already-prepared immutable SQL templates within a session
+
+The latest same-code JVM CPU/wall profile remains
+`/private/tmp/river-tic-5c21/`. Preparation occupies 16.895% of sampled request/
+commit CPU (16.583% wall). Within preparation, parsing takes 6.63% of that same
+CPU denominator, template capture 2.78%, and bound-state reset 2.52%. These are
+statistical, overlapping call-tree shares, not a predicted native TPS gain.
+Other candidates are smaller: FK discovery scan 2.57%, binder-view construction
+0.56%, historical-frame reclamation 0.43% inclusive CPU.
+
+Source tracing identifies a concrete repetition trigger. The common sqlfull
+worker prepares its catalogue through `connection.PrepareContext`, then calls
+`tx.StmtContext` for operations. Installed Go1.27.1 `database/sql/sql.go` passes
+the connection as the statement's non-null `cg`; `Tx.StmtContext` consequently
+calls `ctxDriverPrepare` again. Both MariaDB and River use this common worker.
+River's `EngineSession.prepare` unconditionally calls `validatePrepared`, which
+reparses SQL, resets binding state, estimates retained storage and captures another
+immutable template before `RetainedPreparedStatements.open` allocates a handle.
+
+The proposed River change gives duplicate PREPARE requests independent handles
+sharing one retained template for exact SQL and its valid semantic context.
+Keep lookup/accounting under the existing session prepared-statement owner;
+validate authorization and schema freshness through their existing owners.
+Parameters, execution buffers and result state remain per execution. Close releases
+one handle/reference; final release frees the template reservation. Revalidate on
+schema changes; do not retain a process-wide or unbounded SQL cache. No harness,
+transaction boundary, durability or wire-contract change is required.
+
+This is the strongest currently evidenced repetition-removal candidate. It removes
+parsing/template construction already completed for another live handle, while
+leaving actual SQL execution and all benchmark work intact. It does not promise
+to remove all preparation time or close the full 4× gap. No implementation or new
+ticket is included in this investigation.
