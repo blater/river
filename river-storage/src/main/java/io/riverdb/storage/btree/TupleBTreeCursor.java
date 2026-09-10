@@ -6,6 +6,7 @@ import io.riverdb.format.btree.TupleBTreeLeafEntry;
 import io.riverdb.format.btree.TupleBTreePageCodec;
 import io.riverdb.format.btree.TupleBTreePageHeader;
 import io.riverdb.format.btree.TupleKeyCodec;
+import io.riverdb.format.btree.TupleKeyPrefix;
 import java.nio.ByteBuffer;
 
 /** Caller/session-owned reusable leaf cursor; returned entries borrow its current pinned page. */
@@ -20,6 +21,8 @@ public final class TupleBTreeCursor {
   final TupleBTreeScanBounds convenienceBounds = new TupleBTreeScanBounds();
   final ByteBuffer lowerScratch = ByteBuffer.allocate(TupleKeyCodec.MAX_INDEX_USER_KEY_BYTES);
   final ByteBuffer upperScratch = ByteBuffer.allocate(TupleKeyCodec.MAX_INDEX_USER_KEY_BYTES);
+  final TupleKeyPrefix lowerPrefix = new TupleKeyPrefix();
+  final TupleKeyPrefix upperPrefix = new TupleKeyPrefix();
   ByteBuffer page;
   int pageStart;
   TupleBTreePageHeader header;
@@ -111,6 +114,8 @@ public final class TupleBTreeCursor {
     tree = null;
     TupleBTreeCursorOpen.clear(lowerScratch, lowerLength);
     TupleBTreeCursorOpen.clear(upperScratch, upperLength);
+    lowerPrefix.clear();
+    upperPrefix.clear();
     lowerShape = null;
     lowerLength = 0;
     lowerInclusive = false;

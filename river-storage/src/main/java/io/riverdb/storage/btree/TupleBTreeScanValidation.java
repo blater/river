@@ -11,9 +11,9 @@ final class TupleBTreeScanValidation {
     if (tree == null || bounds == null || bounds.kind == 0
         || (bounds.direction != TupleBTreeScanBounds.FORWARD
         && bounds.direction != TupleBTreeScanBounds.REVERSE)) return false;
-    if (!side(tree, bounds.lower, bounds.lowerOffset, bounds.lowerLength, bounds.lowerShape)
-        || !side(tree, bounds.upper, bounds.upperOffset, bounds.upperLength,
-        bounds.upperShape)) return false;
+    if (!side(tree, bounds.lower, bounds.lowerOffset, bounds.lowerLength, bounds.lowerShape)) {
+      return false;
+    }
     if (bounds.kind == TupleBTreeScanBounds.ALL) {
       return bounds.lower == null && bounds.upper == null;
     }
@@ -22,6 +22,9 @@ final class TupleBTreeScanValidation {
       return same(bounds) && bounds.lowerShape.partCount() == tree.shape().partCount();
     }
     if (bounds.kind == TupleBTreeScanBounds.PREFIX) return same(bounds);
+    if (same(bounds)) return true;
+    if (!side(tree, bounds.upper, bounds.upperOffset, bounds.upperLength,
+        bounds.upperShape)) return false;
     return ordered(bounds);
   }
 

@@ -5,6 +5,7 @@ import io.riverdb.format.btree.TupleBTreeLeafEntry;
 import io.riverdb.format.btree.TupleBTreePageHeader;
 import io.riverdb.format.btree.TupleBTreePageMutationCapability;
 import io.riverdb.format.btree.TupleBTreePageValidationProof;
+import io.riverdb.format.btree.TupleKeyPrefix;
 
 /** Reusable decoded carriers for variable-key page operations. */
 public final class TupleBTreeWorkspace {
@@ -13,4 +14,5 @@ public final class TupleBTreeWorkspace {
   final TupleBTreePageMutationCapability mutation = new TupleBTreePageMutationCapability();
   final TupleBTreeLeafEntry leaf = new TupleBTreeLeafEntry();
   final TupleBTreeInternalEntry internal = new TupleBTreeInternalEntry();
+  final TupleKeyPrefix prefix = new TupleKeyPrefix();
 }

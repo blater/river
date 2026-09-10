@@ -4,11 +4,28 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.format.btree.TupleBTreePageCodec;
 import io.riverdb.format.btree.TupleKeyCodec;
+import io.riverdb.format.btree.TupleKeyPrefix;
 import java.nio.ByteBuffer;
 
 /** Exact and leading-prefix searches over one validated tuple leaf. */
 final class TupleBTreeLeafSearch {
   private TupleBTreeLeafSearch() { }
+
+  static int initialIndex(TupleBTreeCursor cursor) {
+    if (cursor.direction == TupleBTreeScanBounds.FORWARD) {
+      if (cursor.lowerShape == null) return 0;
+      int bound = prefixBoundValidated(
+          cursor.page, cursor.pageStart, cursor.lowerPrefix,
+          cursor.workspace, !cursor.lowerInclusive);
+      return bound < 0 ? Integer.MIN_VALUE : bound;
+    }
+    if (cursor.upperShape == null) return cursor.limit - 1;
+    int bound = prefixBoundValidated(
+        cursor.page, cursor.pageStart,
+        cursor.upperUsesLower ? cursor.lowerPrefix : cursor.upperPrefix,
+        cursor.workspace, cursor.upperInclusive);
+    return bound < 0 ? Integer.MIN_VALUE : bound - 1;
+  }
 
   static StatusCode lookupExact(
       ByteBuffer page, int start, long schemaId, TupleShape shape,
@@ -60,28 +77,26 @@ final class TupleBTreeLeafSearch {
     if (!validPrefix(prefix, prefixOffset, prefixLength, prefixShape, shape)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int first = prefixBound(
-        page, start, prefix, prefixOffset, prefixLength,
-        prefixShape.partCount(), workspace, false);
-    int limit = prefixBound(
-        page, start, prefix, prefixOffset, prefixLength,
-        prefixShape.partCount(), workspace, true);
+    workspace.prefix.prepare(
+        prefix, prefixOffset, prefixLength,
+        prefixShape.partCount(), shape.partCount());
+    int first = prefixBoundValidated(page, start, workspace.prefix, workspace, false);
+    int limit = prefixBoundValidated(page, start, workspace.prefix, workspace, true);
     if (first < 0 || limit < 0) return StatusCode.INVARIANT_BROKEN;
     result.set(first, limit);
     return StatusCode.OK;
   }
 
-  private static int prefixBound(
-      ByteBuffer page, int start, ByteBuffer prefix, int prefixOffset, int prefixLength,
-      int prefixParts, TupleBTreeWorkspace workspace, boolean upper) {
+  static int prefixBoundValidated(
+      ByteBuffer page, int start, TupleKeyPrefix prefix,
+      TupleBTreeWorkspace workspace, boolean upper) {
     int low = 0;
     int high = workspace.header.entryCount();
     while (low < high) {
       int middle = (low + high) >>> 1;
       if (!TupleBTreePageSupport.readLeaf(page, start, middle, workspace)) return -1;
-      int comparison = TupleKeyCodec.comparePrefix(
-          page, start + workspace.leaf.keyOffset(), workspace.leaf.keyLength(),
-          prefix, prefixOffset, prefixLength, prefixParts);
+      int comparison = prefix.comparePhysical(
+          page, start + workspace.leaf.keyOffset(), workspace.leaf.keyLength());
       if (comparison < 0 || upper && comparison == 0) low = middle + 1;
       else high = middle;
     }
