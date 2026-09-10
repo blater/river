@@ -179,7 +179,7 @@ installed start, authenticated JDBC, graceful shutdown and persistent restart.
 ```text
 riverd_version=<distribution-version>
 riverd_contract=riverd-v1
-riverd_protocol=river-v4
+riverd_protocol=river-v5
 riverd_status=OK
 ```
 
@@ -248,3 +248,15 @@ benchmark orchestration are outside this delivery. There are no TLS-disable,
 no-authentication, credential-by-value or secret environment-variable options.
 Keep implementation and review focused on this usable workflow and concrete
 correctness, security and platform requirements.
+
+### Prepared-handle release
+
+River protocol v5 makes `CLOSE_PREPARED` a one-way request. Successful client
+close means the release was written to the connection; it does not wait for an
+acknowledgement. The server processes requests in order, so a later ordinary
+response also confirms that earlier releases were processed. An invalid release
+terminates the connection without sending an unsolicited response.
+
+Closing a prepared handle invalidates that handle immediately on the server.
+Transaction programs retain their plans independently and remain usable until
+closed. Client and server must both use protocol v5.

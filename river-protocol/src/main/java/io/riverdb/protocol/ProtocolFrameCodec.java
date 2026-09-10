@@ -13,9 +13,9 @@ import io.riverdb.engine.api.TransactionProgramArguments;
 import io.riverdb.engine.api.TransactionProgramResult;
 import java.nio.ByteBuffer;
 
-/** Bounded v4 framing over caller-owned buffers. */
+/** Bounded framing over caller-owned buffers. */
 public final class ProtocolFrameCodec {
-  public static final int VERSION = 4;
+  public static final int VERSION = 5;
   public static final int HEADER_BYTES = 32;
   public static final int MAXIMUM_PAYLOAD_BYTES = 16 * 1024;
   public static final int MAXIMUM_FRAME_BYTES = HEADER_BYTES + MAXIMUM_PAYLOAD_BYTES;

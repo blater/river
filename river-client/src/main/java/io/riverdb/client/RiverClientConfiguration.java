@@ -107,7 +107,7 @@ public final class RiverClientConfiguration {
         return StatusCode.CORRUPTION;
       }
       if (!"riverd-client-v1".equals(values[0]) || !"1".equals(values[4])
-          || !"tls-v1.3".equals(values[5]) || !"river-v4".equals(values[6])) {
+          || !"tls-v1.3".equals(values[5]) || !"river-v5".equals(values[6])) {
         return StatusCode.CORRUPTION;
       }
       long high = canonicalLong(values[1]);

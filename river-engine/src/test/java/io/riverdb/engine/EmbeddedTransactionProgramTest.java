@@ -249,7 +249,7 @@ final class EmbeddedTransactionProgramTest {
     assertEquals(StatusCode.OK, source.freeze());
     long program = fixture.prepareProgram(source);
     source.reset();
-    assertEquals(StatusCode.CONFLICT, fixture.session.closePrepared(insert));
+    assertEquals(StatusCode.OK, fixture.session.closePrepared(insert));
     TransactionProgramArguments arguments = new TransactionProgramArguments();
     assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.INTEGER, 19));
     assertEquals(StatusCode.OK, arguments.setFixed(1, SqlTypeDescriptor.BIGINT, 190));
@@ -261,7 +261,7 @@ final class EmbeddedTransactionProgramTest {
     assertEquals(StatusCode.OK, fixture.session.executeProgram(
         program, IsolationLevel.SERIALIZABLE, arguments, new TransactionProgramResult()));
     assertEquals(StatusCode.OK, fixture.session.closeProgram(program));
-    assertEquals(StatusCode.OK, fixture.session.closePrepared(insert));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, fixture.session.closePrepared(insert));
     fixture.close();
   }
 

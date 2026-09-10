@@ -459,7 +459,7 @@ public final class RiverDaemonCredentials {
           "credential-generation=" + material.generation,
           "principal-id=1",
           "transport=tls-v1.3",
-          "protocol=river-v4",
+          "protocol=river-v5",
           "host=" + host,
           "port=" + port,
           "server-certificate-file=" + certificatePath,

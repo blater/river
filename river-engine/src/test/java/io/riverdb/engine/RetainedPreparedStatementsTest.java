@@ -48,12 +48,15 @@ final class RetainedPreparedStatementsTest {
       assertEquals(retainedAfterFirst, budget.retained);
       assertEquals(StatusCode.OK, validation.reset());
 
-      assertTrue(statements.retain(first.handle()) != null);
+      RetainedPreparedTemplate retained = statements.retain(first.handle());
+      assertTrue(retained != null);
       assertEquals(StatusCode.OK, statements.close(second.handle()));
       assertEquals(plan, statements.resolve(first.handle(), false));
-      assertEquals(StatusCode.CONFLICT, statements.close(first.handle()));
-      assertEquals(StatusCode.OK, statements.releaseReference(first.handle()));
       assertEquals(StatusCode.OK, statements.close(first.handle()));
+      assertNull(statements.resolve(first.handle(), false));
+      assertEquals(retainedAfterFirst, budget.retained);
+      assertEquals(StatusCode.OK, statements.releaseReference(retained));
+      assertTrue(budget.retained < retainedAfterFirst);
       assertTrue(budget.retained > 0);
 
       PreparedOpenResult reopened = new PreparedOpenResult();

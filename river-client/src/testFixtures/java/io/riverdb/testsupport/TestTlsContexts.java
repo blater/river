@@ -177,7 +177,7 @@ public final class TestTlsContexts {
     appendLine(body, "credential-generation=" + credentialGeneration);
     appendLine(body, "principal-id=1");
     appendLine(body, "transport=tls-v1.3");
-    appendLine(body, "protocol=river-v4");
+    appendLine(body, "protocol=river-v5");
     // The static fixture certificate carries the localhost DNS SAN used by the
     // endpoint-identifying client connector.
     appendLine(body, "host=localhost");

@@ -422,7 +422,7 @@ riverd_runtime_file=/absolute/path/.river/run/<sha256-datadir>.properties
 riverd_listen_address=127.0.0.1
 riverd_listen_port=9191
 riverd_pid=12345
-riverd_protocol=river-v4
+riverd_protocol=river-v5
 riverd_transport=tls-v1.3
 riverd_client_config=/absolute/path/security/client.properties
 riverd_server_certificate_sha256=...
@@ -452,7 +452,7 @@ eventually exits 1. Provably pre-commit prefix/partial-record failure performs
 the ADR's exact reverse cleanup and emits no later ready record.
 
 `riverd version` prints the exact ADR 0014 keys for River release version,
-`riverd-v1`, `river-v4`, and `riverd_status=OK`. The distribution manifest is
+`riverd-v1`, `river-v5`, and `riverd_status=OK`. The distribution manifest is
 the source of the release version; it must not inspect Git or the source
 checkout at runtime. Successful stop prints only its normalized datadir,
 verified PID, and `riverd_status=OK` after process exit and matching-record
@@ -845,7 +845,7 @@ After the installed command passes its real lifecycle test:
 2. Start `riverd start -D <harness-owned-run-directory> --port=0` as a
    foreground child and parse the documented readiness contract.
 3. Load the pinned certificate and token paths from that contract, establish
-   TLS 1.3, export `EXPORTER-River-Authentication`, and complete protocol-v4
+   TLS 1.3, export `EXPORTER-River-Authentication`, and complete protocol-v5
    `AUTHENTICATE` before opening a session. There is no plain fallback.
 4. Record the version label and child PID in evidence.
 5. Run `riverd stop -D` against the same data directory, wait for the recorded
@@ -862,7 +862,7 @@ After the installed command passes its real lifecycle test:
    preserved. It is not a public lifecycle or compatibility path.
 
 The native River v4 Go transport is a separate migration boundary. It may
-remain only while River explicitly owns protocol v4 as the supported client
+remain only while River explicitly owns protocol v5 as the supported client
 contract. Replace it with a standard PostgreSQL-compatible Go driver when
 River's PostgreSQL wire compatibility is delivered; do not mix that future
 work into the launcher slice.

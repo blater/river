@@ -2196,3 +2196,85 @@ passed `sample all --warmup=1s --duration=3s --workers=1 --warehouses=1 --seed=4
 --max-retries=3 --no-report`, including authenticated lifecycle, post-run
 validation and public shutdown (`native-smoke.log`). This smoke is functionality
 evidence only. Checkpoint: `perf-checkpoint-20260910-shared-preparation`.
+
+
+## 2026-09-10 — one-way prepared release (tic-6f28)
+
+River implementation `05c0f7e4`, based on pushed/tagged `822fdf05`
+(`perf-checkpoint-20260910-shared-preparation`), branch
+`ticket/tic-6f28-one-way-prepared-close`. Matching Go adapter: `793e80d`,
+based on `3c5643b`, in the separate river-harness repository.
+
+Protocol v5 removes the CLOSE_PREPARED response. Java and Go share their existing
+send paths; a later ordinary response remains the ordering barrier. Invalid
+releases terminate the connection without an unsolicited reply. Programs retain
+shared plan entries directly, so releasing public handles no longer pins them or
+invalidates a live program. No SQL, mix, transaction, TLS or durability changes.
+For a successful ten-line New Order this removes 46 awaited replies: 140 becomes
+94 exchanges (MariaDB's corresponding count is 95, including its extra begin
+exchange). This is a protocol count, not a MariaDB timing comparison.
+
+Evidence root: `/private/tmp/river-tic-6f28`. JVM: GraalVM 25.0.4, `-Xmx1g`,
+macOS arm64. Launchers: `river-control` and `river-candidate`. Command:
+`benchmark run river tpcc sample all --river-executable=EXE
+--river-version=LABEL --warmup=15s --duration=DURATION --workers=4
+--warehouses=1 --seed=42 --max-retries=20`. READ COMMITTED with explicit FOR UPDATE;
+local durable WAL acknowledgement unchanged. Controls use the original v4 harness;
+candidates use the rebuilt v5 adapter. The workload comparison keys match within
+each duration group. Builds, profiling and owned workloads did not overlap timed
+samples. Labels/configuration/full paths are retained in `samples.json` and logs.
+
+| Sample, in run order | Duration | TPS | p99 ms | Retries | Report ID |
+| --- | ---: | ---: | ---: | ---: | --- |
+| control-1 | 30s | 325.311 | 52.658 | 1220 | `river_harness_20260910_205141_50b773ac` |
+| control-2 | 30s | 366.908 | 44.892 | 1367 | `river_harness_20260910_205232_37959f39` |
+| candidate-1 | 30s | 428.819 | 39.748 | 2008 | `river_harness_20260910_210510_b246af8e` |
+| candidate-2 | 30s | 414.368 | 42.140 | 2085 | `river_harness_20260910_210601_bba87122` |
+| long-control | 60s | 392.583 | 40.894 | 2879 | `river_harness_20260910_210707_b4e340ad` |
+| long-candidate | 60s | 429.269 | 40.436 | 4271 | `river_harness_20260910_210832_f6b6a0e1` |
+
+The short means improved 21.8%; the adjacent longer pair improved 9.3%.
+Use the longer pair as the more conservative local diagnostic, not a general
+speedup claim. Every run passed warmup/measurement with zero failed or unknown
+outcomes, successful invariants, graceful stop and inactive final state.
+New Order retries per commit increased: the longer pair was 0.122 -> 0.166.
+All retries remain in New Order; other categories had none. Removing the close
+waits advances the next transaction sooner, increasing overlap; the retry rise
+is consistent with that contention effect. The artifact does not split retry
+status codes, so it does not prove a particular lock conflict cause. Mean latency
+improved 10.143 -> 9.276 ms and p99 40.894 -> 40.436 ms after retry cost. Accept
+this measured tradeoff; do not hide retries or broaden this ticket into lock policy.
+
+Socket-write JFR repeats the same four-worker 15s/30s workload with threshold-zero
+`jdk.SocketWrite`, no event stacks. Original recording/summary:
+`/private/tmp/river-write-rootcause-20260910`; candidate: `socket-candidate/` below
+the current evidence root. Measurement-window writes fell from 92.514 to 65.650
+per committed transaction (29.0% fewer, including retries), or 81.777 to 55.917 per
+attempt. Total accumulated write time was 5.324 -> 4.188 seconds, despite more
+commits in the candidate capture. Median write duration stayed near 3.6 microseconds.
+The improvement removes repeated small writes; it does not make each syscall
+fundamentally faster. Raw JFR and analysis scripts are retained; the large derived
+JSON event dump was removed. Instrumented TPS is excluded from timing comparisons.
+
+Focused Java tests passed for program lifetime, retained budget release, no-response
+ordering, invalid release termination and transport write failure/payload erasure.
+Independent Luna/high review found no blocking Java boundary issue; the integrator
+reviewed engine lifetime and Go transport changes. Full Go tests, race tests, vet
+and build passed. River `clean check :river-bench:installTps` passed in 4m13s.
+Slopmark: SessionEndpoint 63.3503 -> 63.4064; RiverClientWireExchange 0 -> 12.6303;
+other touched scores unchanged. The added branch chooses whether to read a response
+inside the existing transport owner; no extra executor or responsibility was added.
+Plan ownership uses fewer arrays and no per-handle program reference inventory.
+
+
+The approved O3/PGO standalone build passed in 1m55s using
+`-PriverPgoProfile=/private/tmp/river-native-final.iprof`. The actual executable
+passed the authenticated `sample all` smoke (1 worker, warmup 1s, duration 3s,
+1 warehouse, seed 42, maximum retries 3, no report), including post-run validation
+and shutdown. Logs: `native-build.log`, `native-smoke.log`. Native smoke TPS is
+not compared with the JVM measurements.
+
+River checkpoint: `perf-checkpoint-20260910-one-way-prepared-close`.
+The matching harness change is merged locally on `main` at `aba7c43` and has the
+same annotated tag. Its repository has no remote configured; publication remains
+pending the user's remote URL. This does not prevent local use of the v5 adapter.

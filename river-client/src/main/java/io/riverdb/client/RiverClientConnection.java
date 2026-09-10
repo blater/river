@@ -316,9 +316,7 @@ public final class RiverClientConnection implements RiverDatabase {
       if (handle <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
       if (!active) return StatusCode.CLOSED;
       if (query.active) return StatusCode.CONFLICT;
-      StatusCode status = exchangePrepared(
-          ProtocolMessageType.CLOSE_PREPARED, handle, null);
-      return status.isOk() ? response.status() : status;
+      return exchangePrepared(ProtocolMessageType.CLOSE_PREPARED, handle, null);
     }
 
     @Override
