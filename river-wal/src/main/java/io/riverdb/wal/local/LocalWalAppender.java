@@ -39,8 +39,10 @@ final class LocalWalAppender {
     }
     int recordBytes = WalRecordCodec.encodedBytes(reservation.payloadBytes());
     ByteBuffer appendRecord = wal.appendRecordBuffer();
+    long journalSequence = wal.nextJournalSequenceValue();
+    wal.beginPendingGroup(journalSequence);
     status = WalRecordCodec.encodeReserved(
-        wal.nextJournalSequenceValue(),
+        journalSequence,
         transactionId,
         commitSequence,
         decisionCode,
@@ -50,6 +52,7 @@ final class LocalWalAppender {
         appendRecord,
         wal.appendChecksum());
     if (status.isOk()) {
+      wal.includePendingRecord(appendRecord, recordBytes, journalSequence);
       status = wal.writeAppendRecord(wal.tailEnd(), appendRecord, recordBytes);
     }
     if (!status.isOk()) {

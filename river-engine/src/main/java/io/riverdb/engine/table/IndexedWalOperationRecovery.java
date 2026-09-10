@@ -38,7 +38,7 @@ final class IndexedWalOperationRecovery {
     }
     if (decision != 1) return StatusCode.CORRUPTION;
     return operation == IndexedWalCodec.OPERATION_TYPE_PAGE_IMAGES
-        ? pages.apply(payload, start, record.nextOffset(), commit, generation)
+        ? pages.apply(payload, start, record.recordEnd(), commit, generation)
         : StatusCode.CORRUPTION;
   }
 

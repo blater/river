@@ -29,6 +29,7 @@ final class LocalWalDecisionBatchAppender {
     long offset = wal.tailEnd();
     long firstSequence = wal.nextJournalSequenceValue();
     int transaction = 0;
+    wal.beginPendingGroup(firstSequence);
     for (int record = 0; record < batch.recordCount(); record++) {
       int payloadBytes = batch.payloadBytes(record);
       ByteBuffer payload = wal.prepareAppendPayload(payloadBytes);
@@ -51,6 +52,7 @@ final class LocalWalDecisionBatchAppender {
       if (!status.isOk()) return fail(wal, offset != wal.tailEnd(), status);
       int recordBytes = WalRecordCodec.encodedBytes(payloadBytes);
       result.markStorageMayHaveChanged();
+      wal.includePendingRecord(wal.appendRecordBuffer(), recordBytes, firstSequence + record);
       status = wal.writeAppendRecord(offset, wal.appendRecordBuffer(), recordBytes);
       if (!status.isOk()) return fail(wal, true, status);
       offset += recordBytes;

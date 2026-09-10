@@ -8,7 +8,9 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.format.wal.WalCommitGroupCodec;
 import io.riverdb.format.wal.WalFileHeaderCodec;
+import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.DurableFile;
@@ -50,7 +52,161 @@ final class LocalWalTest {
     assertArrayEquals(expected, actual);
     assertEquals(41, read.header().transactionId());
     assertEquals(43, read.header().commitSequence());
-    assertEquals(appended.endOffset(), read.nextOffset());
+    assertEquals(appended.endOffset(), read.recordEnd());
+    assertEquals(
+        appended.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, read.nextOffset());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void validFinalFooterWithTornBodyDiscardsWholeGroup(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalAppendResult appended = appendAndForce(wal, 41, 1, new byte[] {1, 2, 3});
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, FileIoMode.MAPPED, operation));
+    DurableFile raw = operation.file();
+    IoResult io = new IoResult();
+    assertEquals(
+        StatusCode.OK,
+        raw.write(appended.startOffset() + WalRecordCodec.HEADER_BYTES,
+            ByteBuffer.wrap(new byte[] {0}), io));
+    assertEquals(StatusCode.OK, raw.force(ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.OK, raw.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    assertEquals(WalFileHeaderCodec.HEADER_BYTES, wal.tailEnd());
+    assertEquals(1, wal.nextJournalSequence());
+    assertEquals(1, wal.nextCommitSequence());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void corruptInteriorGroupWithValidFooterIsRejected(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalAppendResult first = appendAndForce(wal, 43, 1, new byte[] {4, 5, 6});
+    appendAndForce(wal, 44, 2, new byte[] {7, 8, 9});
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, FileIoMode.MAPPED, operation));
+    DurableFile raw = operation.file();
+    IoResult io = new IoResult();
+    assertEquals(
+        StatusCode.OK,
+        raw.write(first.startOffset() + WalRecordCodec.HEADER_BYTES,
+            ByteBuffer.wrap(new byte[] {9}), io));
+    assertEquals(StatusCode.OK, raw.force(ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.OK, raw.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    LocalWalOpenResult corrupted = new LocalWalOpenResult();
+    assertEquals(StatusCode.CORRUPTION,
+        LocalWal.open(directory, DATABASE, GENERATION, corrupted));
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void corruptInteriorFooterRejectsLaterCompleteGroup(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalAppendResult first = appendAndForce(wal, 51, 1, new byte[] {1});
+    appendAndForce(wal, 52, 2, new byte[] {2});
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, FileIoMode.MAPPED, operation));
+    DurableFile raw = operation.file();
+    IoResult io = new IoResult();
+    assertEquals(StatusCode.OK,
+        raw.write(first.endOffset(), ByteBuffer.wrap(new byte[] {0}), io));
+    assertEquals(StatusCode.OK, raw.force(ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.OK, raw.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    LocalWalOpenResult corrupted = new LocalWalOpenResult();
+    assertEquals(StatusCode.CORRUPTION,
+        LocalWal.open(directory, DATABASE, GENERATION, corrupted));
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void footerAfterLargeGroupCrossesMappedWindowAndRecovers(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalGroupAppendResult appended = new LocalWalGroupAppendResult();
+    assertEquals(StatusCode.OK, wal.appendGroupUnforced(
+        new RepeatedBatch(256, 64 * 1024), 71, 1, 7, 1, appended));
+    assertTrue(appended.endOffset() > 16L * 1024 * 1024);
+    LocalWalForceTarget forced = new LocalWalForceTarget();
+    assertEquals(StatusCode.OK, wal.forcePending(forced));
+    assertEquals(256, forced.recordCount());
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    assertEquals(257, wal.nextJournalSequence());
+    assertEquals(2, wal.nextCommitSequence());
+    LocalWalReadResult read = new LocalWalReadResult();
+    assertEquals(StatusCode.OK, wal.read(appended.startOffset(), read));
+    assertEquals(1, read.header().journalSequence());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void repairedShorterTailDoesNotResurrectStaleSuffix(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalAppendResult first = appendAndForce(wal, 81, 1, new byte[] {1});
+    appendAndForce(wal, 82, 2, new byte[] {2});
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, FileIoMode.MAPPED, operation));
+    DurableFile raw = operation.file();
+    assertEquals(StatusCode.OK,
+        raw.truncate(first.endOffset() + WalCommitGroupCodec.FOOTER_BYTES));
+    assertEquals(StatusCode.OK, raw.force(ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.OK, raw.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    assertEquals(1, wal.currentCommitSequence());
+    LocalWalAppendResult replacement = appendAndForce(wal, 83, 2, new byte[] {3});
+    assertEquals(first.endOffset() + WalCommitGroupCodec.FOOTER_BYTES,
+        replacement.startOffset());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    assertEquals(2, wal.currentCommitSequence());
+    assertEquals(3, wal.nextJournalSequence());
+    LocalWalReadResult read = new LocalWalReadResult();
+    assertEquals(StatusCode.OK, wal.read(replacement.startOffset(), read));
+    assertEquals(83, read.header().transactionId());
+    assertEquals((byte) 3, read.payload().get(0));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }
@@ -120,36 +276,41 @@ final class LocalWalTest {
   }
 
   @Test
-  void truncatesInvalidTailAndContinuesSequence(@TempDir Path root) {
+  void truncatesIncompleteTailAndContinuesSequence(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     LocalWalAppendResult first = new LocalWalAppendResult();
     LocalWalReservation reservation = reserve(wal, new byte[] {1, 2, 3});
     assertEquals(StatusCode.OK, wal.publish(reservation, 1, 0, 0, 1, 1, first));
+    reservation = reserve(wal, new byte[] {8, 8, 8, 8, 8});
+    LocalWalAppendResult incomplete = new LocalWalAppendResult();
+    assertEquals(StatusCode.OK, wal.appendUnforced(
+        reservation, 2, 0, 0, 1, 1, incomplete));
+    assertEquals(StatusCode.OK, wal.fencePendingBatch());
+    assertEquals(StatusCode.OK, wal.close());
+
+    wal = openWal(directory);
+    assertEquals(
+        first.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, wal.tailEnd());
+    assertEquals(2, wal.nextJournalSequence());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        wal.read(wal.durableEnd(), new LocalWalReadResult()));
+    LocalWalAppendResult second = new LocalWalAppendResult();
+    reservation.reset();
+    reservation = reserve(wal, new byte[] {4, 5});
+    assertEquals(StatusCode.OK, wal.publish(reservation, 2, 0, 0, 1, 1, second));
+    assertEquals(2, second.journalSequence());
+    LocalWalAppendResult third = new LocalWalAppendResult();
+    reservation = reserve(wal, new byte[] {6, 7});
+    assertEquals(StatusCode.OK, wal.publish(reservation, 3, 0, 0, 1, 1, third));
+    assertEquals(3, third.journalSequence());
     assertEquals(StatusCode.OK, wal.close());
 
     DirectoryOperationResult operation = new DirectoryOperationResult();
     assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, FileIoMode.MAPPED, operation));
     DurableFile raw = operation.file();
     IoResult io = new IoResult();
-    assertEquals(
-        StatusCode.OK,
-        raw.write(first.endOffset(), ByteBuffer.wrap(new byte[] {8, 8, 8, 8, 8}), io));
-    assertEquals(StatusCode.OK, raw.force(ForceMode.CONTENT_AND_METADATA));
-    assertEquals(StatusCode.OK, raw.close());
-
-    wal = openWal(directory);
-    assertEquals(first.endOffset(), wal.tailEnd());
-    assertEquals(2, wal.nextJournalSequence());
-    LocalWalAppendResult second = new LocalWalAppendResult();
-    reservation.reset();
-    reservation = reserve(wal, new byte[] {4, 5});
-    assertEquals(StatusCode.OK, wal.publish(reservation, 2, 0, 0, 1, 1, second));
-    assertEquals(2, second.journalSequence());
-    assertEquals(StatusCode.OK, wal.close());
-
-    assertEquals(StatusCode.OK, directory.reopen(LocalWal.FILE_NAME, FileIoMode.MAPPED, operation));
-    raw = operation.file();
     assertEquals(
         StatusCode.OK,
         raw.write(second.startOffset() + 64, ByteBuffer.wrap(new byte[] {0}), io));
@@ -213,11 +374,13 @@ final class LocalWalTest {
     assertEquals(StatusCode.OK, wal.forcePending(forced));
     assertEquals(3, forced.recordCount());
     assertEquals(firstStart, forced.startOffset());
-    assertEquals(appended.endOffset(), forced.endOffset());
+    assertEquals(
+        appended.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, forced.endOffset());
     assertEquals(3, forced.commitSequence());
-    assertEquals(appended.endOffset(), wal.durableEnd());
+    assertEquals(
+        appended.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, wal.durableEnd());
     assertEquals(3, wal.currentCommitSequence());
-    assertEquals(initialForces + 2, counters.forceCalls());
+    assertEquals(initialForces + 1, counters.forceCalls());
 
     LocalWalReadResult forcedRead = new LocalWalReadResult();
     LocalWalForcedCursor cursor = new LocalWalForcedCursor();
@@ -292,7 +455,8 @@ final class LocalWalTest {
       assertEquals(index == 2 ? 11 : 0, read.header().commitSequence());
       expectedOffset = read.nextOffset();
     }
-    assertEquals(appended.endOffset(), expectedOffset);
+    assertEquals(
+        appended.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, expectedOffset);
     assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
@@ -318,7 +482,7 @@ final class LocalWalTest {
     long forces = counters.forceCalls();
     LocalWalForceTarget forced = new LocalWalForceTarget();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
-    assertEquals(forces + 2, counters.forceCalls());
+    assertEquals(forces + 1, counters.forceCalls());
     assertEquals(6, forced.recordCount());
     LocalWalReadResult read = new LocalWalReadResult();
     LocalWalForcedCursor cursor = new LocalWalForcedCursor();
@@ -423,7 +587,8 @@ final class LocalWalTest {
       assertEquals(index == 3 ? 7 : 0, read.header().commitSequence());
       offset = read.nextOffset();
     }
-    assertEquals(decided.endOffset(), offset);
+    assertEquals(
+        decided.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, offset);
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }
@@ -460,7 +625,8 @@ final class LocalWalTest {
       assertEquals(0, read.header().commitSequence());
       offset = read.nextOffset();
     }
-    assertEquals(appended.endOffset(), offset);
+    assertEquals(
+        appended.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, offset);
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }
@@ -565,6 +731,18 @@ final class LocalWalTest {
     return reservation;
   }
 
+  private static LocalWalAppendResult appendAndForce(
+      LocalWal wal, long transactionId, long commitSequence, byte[] payload) {
+    LocalWalReservation reservation = reserve(wal, payload);
+    LocalWalAppendResult appended = new LocalWalAppendResult();
+    assertEquals(StatusCode.OK, wal.appendUnforced(
+        reservation, transactionId, commitSequence, 1, 7, 1, appended));
+    LocalWalForceTarget forced = new LocalWalForceTarget();
+    assertEquals(StatusCode.OK, wal.forcePending(forced));
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
+    return appended;
+  }
+
   private static long causeDelta(
       LocalWalMetrics after, LocalWalMetrics before, LocalWalForceCause cause) {
     return after.forceCount(cause) - before.forceCount(cause);
@@ -598,6 +776,28 @@ final class LocalWalTest {
     @Override
     public StatusCode encodePayload(int record, ByteBuffer target) {
       target.put(payloads[record]);
+      return StatusCode.OK;
+    }
+  }
+
+  private static final class RepeatedBatch implements LocalWalRecordBatch {
+    private final int records;
+    private final byte[] payload;
+
+    RepeatedBatch(int records, int payloadBytes) {
+      this.records = records;
+      payload = new byte[payloadBytes];
+    }
+
+    @Override
+    public int recordCount() { return records; }
+
+    @Override
+    public int payloadBytes(int record) { return payload.length; }
+
+    @Override
+    public StatusCode encodePayload(int record, ByteBuffer target) {
+      target.put(payload);
       return StatusCode.OK;
     }
   }

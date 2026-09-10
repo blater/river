@@ -90,6 +90,7 @@ final class LocalWalRecordBatchAppender {
 
     long offset = wal.tailEnd();
     long firstSequence = wal.nextJournalSequenceValue();
+    wal.beginPendingGroup(firstSequence);
     for (int record = 0; record < records; record++) {
       int payloadBytes = batch.payloadBytes(record);
       ByteBuffer payload = wal.prepareAppendPayload(payloadBytes);
@@ -110,11 +111,12 @@ final class LocalWalRecordBatchAppender {
           wal.appendRecordBuffer(),
           wal.appendChecksum());
       if (!status.isOk()) return fail(wal, offset != wal.tailEnd(), status);
-      int recordBytes = WalRecordCodec.encodedBytes(payloadBytes);
+      int encodedBytes = WalRecordCodec.encodedBytes(payloadBytes);
       result.markStorageMayHaveChanged();
-      status = wal.writeAppendRecord(offset, wal.appendRecordBuffer(), recordBytes);
+      wal.includePendingRecord(wal.appendRecordBuffer(), encodedBytes, firstSequence + record);
+      status = wal.writeAppendRecord(offset, wal.appendRecordBuffer(), encodedBytes);
       if (!status.isOk()) return fail(wal, true, status);
-      offset += recordBytes;
+      offset += encodedBytes;
     }
     wal.acceptRecordBatchAppend(
         result, transactionId, finalBatch ? commitSequence : 0, end, records);

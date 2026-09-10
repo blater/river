@@ -6,6 +6,8 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.format.wal.WalFileHeader;
 import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.format.wal.WalFileHeaderDecodeResult;
+import io.riverdb.format.wal.WalCommitGroupCodec;
+import io.riverdb.format.wal.WalCommitGroupHeader;
 import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.format.wal.WalRecordHeader;
 import io.riverdb.platform.file.DirectoryOperationResult;
@@ -24,7 +26,6 @@ public final class LocalWal {
   public static final String FILE_NAME = "river.wal";
 
   private DurableFile file;
-  private LocalWalMappedTail mappedTail = new LocalWalMappedTail();
   private final DatabaseIncarnation databaseIncarnation;
   private WalGeneration walGeneration;
   private String fileName;
@@ -32,9 +33,11 @@ public final class LocalWal {
   private final ByteBuffer appendPayload;
   private final ByteBuffer readRecord;
   private final ByteBuffer readPayload;
+  private final LocalWalCommitGroup commitGroup = new LocalWalCommitGroup();
   private final IoResult ioResult = new IoResult();
   private final FileSizeResult fileSizeResult = new FileSizeResult();
   private final WalRecordHeader recoveryHeader = new WalRecordHeader();
+  private final WalCommitGroupHeader recoveryFooter = new WalCommitGroupHeader();
   private final LocalWalForceTarget publishForceTarget = new LocalWalForceTarget();
   private final LocalWalBatchAdmissionResult batchAdmissionResult =
       new LocalWalBatchAdmissionResult();
@@ -47,6 +50,9 @@ public final class LocalWal {
   private long nextReservationToken = 1;
   private long lastCommitSequence;
   private long lastAppendedCommitSequence;
+  private long retainedMaximumTransactionId;
+  private long recoveryCommitSequence;
+  private long recoveryMaximumTransactionId;
   private long pendingStart;
   private long maximumTransactionId = 1;
   private long activeReservationToken;
@@ -519,6 +525,7 @@ public final class LocalWal {
     activeForceTarget = null;
     pendingStart = 0;
     pendingRecordCount = 0;
+    commitGroup.resetPending();
     return StatusCode.OK;
   }
 
@@ -568,6 +575,21 @@ public final class LocalWal {
         || firstJournalSequence <= 0 || firstJournalSequence >= nextJournalSequence) {
       return StatusCode.CONFLICT;
     }
+    int predecessorDigest;
+    if (startOffset == WalFileHeaderCodec.HEADER_BYTES) {
+      predecessorDigest = 0;
+    } else {
+      long footerOffset = startOffset - WalCommitGroupCodec.FOOTER_BYTES;
+      if (footerOffset < WalFileHeaderCodec.HEADER_BYTES) return StatusCode.CONFLICT;
+      status = readFooterAt(footerOffset, startOffset);
+      if (!status.isOk()) return status == StatusCode.INVALID_EXTERNAL_INPUT
+          ? StatusCode.CONFLICT : status;
+      if (recoveryFooter.groupStart() > footerOffset
+          || recoveryFooter.groupBytes() != startOffset - recoveryFooter.groupStart()) {
+        return StatusCode.CONFLICT;
+      }
+      predecessorDigest = footerDigest();
+    }
     long offset = startOffset;
     long sequence = firstJournalSequence;
     while (offset < tailEnd) {
@@ -584,10 +606,32 @@ public final class LocalWal {
     if (offset != tailEnd || sequence != nextJournalSequence) {
       return StatusCode.CORRUPTION;
     }
+    status = maximumTransactionIdBefore(startOffset);
+    if (!status.isOk()) return status;
     status = truncateTail(startOffset, firstJournalSequence);
-    if (status.isOk()) recoveryTailOpen = false;
+    if (status.isOk()) {
+      commitGroup.setDigest(predecessorDigest);
+      maximumTransactionId = retainedMaximumTransactionId;
+      recoveryTailOpen = false;
+    }
     else failed = true;
     return status;
+  }
+
+  private StatusCode maximumTransactionIdBefore(long endOffset) {
+    long maximum = 1;
+    long offset = WalFileHeaderCodec.HEADER_BYTES;
+    while (offset < endOffset) {
+      StatusCode status = read(offset, suffixReadResult);
+      if (!status.isOk()) return status;
+      if (suffixReadResult.nextOffset() <= offset || suffixReadResult.nextOffset() > endOffset) {
+        return StatusCode.CORRUPTION;
+      }
+      maximum = Math.max(maximum, suffixReadResult.header().transactionId());
+      offset = suffixReadResult.nextOffset();
+    }
+    retainedMaximumTransactionId = maximum;
+    return StatusCode.OK;
   }
 
   /** Ends the startup-only recovered-tail repair window without changing bytes. */
@@ -659,11 +703,15 @@ public final class LocalWal {
   }
 
   private StatusCode truncateTail(long validEnd, long sequence) {
-    StatusCode status = forceFile(LocalWalForceCause.RECOVERY_MAINTENANCE, validEnd, validEnd);
+    StatusCode status = file.truncate(validEnd);
+    if (status.isOk()) {
+      status = forceFile(LocalWalForceCause.RECOVERY_MAINTENANCE, validEnd);
+    }
     if (status.isOk()) {
       tailEnd = validEnd;
       durableEnd = validEnd;
       nextJournalSequence = sequence;
+      commitGroup.resetPending();
     }
     return status;
   }
@@ -690,10 +738,11 @@ public final class LocalWal {
   private boolean validDecision(
       long transactionId,
       long commitSequence,
-      int decisionCode) {
+      int decisionCode,
+      long priorCommitSequence) {
     return switch (decisionCode) {
       case 0 -> commitSequence == 0;
-      case 1 -> transactionId > 0 && commitSequence > lastAppendedCommitSequence;
+      case 1 -> transactionId > 0 && commitSequence > priorCommitSequence;
       case 2 -> transactionId > 0 && commitSequence == 0;
       default -> false;
     };
@@ -754,12 +803,6 @@ public final class LocalWal {
     return file.size(fileSizeResult);
   }
 
-  StatusCode loadMappedTail() {
-    return mappedTail.load(file, fileSizeResult.sizeBytes());
-  }
-
-  long logicalFileSizeBytes() { return mappedTail.logicalEnd(); }
-
   long fileSizeBytes() {
     return fileSizeResult.sizeBytes();
   }
@@ -776,6 +819,10 @@ public final class LocalWal {
     return recoveryHeader;
   }
 
+  WalCommitGroupHeader recoveryFooter() {
+    return recoveryFooter;
+  }
+
   java.util.zip.CRC32C recoveryChecksum() {
     return checksum;
   }
@@ -784,22 +831,87 @@ public final class LocalWal {
     return readExact(offset, target);
   }
 
+  StatusCode readFooterAt(long offset) {
+    return readFooterAt(offset, durableEnd);
+  }
+
+  StatusCode readFooterAt(long offset, long limit) {
+    if (offset < WalFileHeaderCodec.HEADER_BYTES
+        || limit < WalCommitGroupCodec.FOOTER_BYTES
+        || offset > limit - WalCommitGroupCodec.FOOTER_BYTES) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    ByteBuffer footer = commitGroup.footer();
+    footer.clear();
+    footer.limit(WalCommitGroupCodec.FOOTER_BYTES);
+    StatusCode status = readExact(offset, footer);
+    if (!status.isOk()) return status;
+    footer.flip();
+    if (!WalCommitGroupCodec.matchesMagic(footer)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode decoded = WalCommitGroupCodec.decodeHeader(footer, recoveryFooter, checksum);
+    if (decoded.isOk()) footer.position(0);
+    return decoded;
+  }
+
+  int footerDigest() {
+    return WalCommitGroupCodec.chainDigest(commitGroup.footer());
+  }
+
+  int groupDigest() {
+    return commitGroup.digest();
+  }
+
+  void beginRecoveryGroup() {
+    commitGroup.begin(0);
+    recoveryCommitSequence = lastAppendedCommitSequence;
+    recoveryMaximumTransactionId = maximumTransactionId;
+  }
+
+  void includeRecoveryRecord(ByteBuffer record, int recordBytes) {
+    commitGroup.includeRaw(record, recordBytes);
+  }
+
+  boolean validRecoveryFooter(long groupStart, long recordBytes, long recordCount,
+      long firstSequence, long lastSequence) {
+    return validRecoveryFooterRecords(groupStart, recordBytes, recordCount,
+        firstSequence, lastSequence)
+        && recoveryFooter.previousDigest() == commitGroup.digest();
+  }
+
+  boolean validRecoveryFooterRecords(long groupStart, long recordBytes, long recordCount,
+      long firstSequence, long lastSequence) {
+    return recoveryFooter.groupStart() == groupStart
+        && recoveryFooter.recordBytes() == recordBytes
+        && recoveryFooter.recordCount() == recordCount
+        && recoveryFooter.firstJournalSequence() == firstSequence
+        && recoveryFooter.lastJournalSequence() == lastSequence
+        && recoveryFooter.groupChecksum() == commitGroup.checksumValue();
+  }
+
+  void commitRecoveredGroup() {
+    lastAppendedCommitSequence = recoveryCommitSequence;
+    lastCommitSequence = recoveryCommitSequence;
+    maximumTransactionId = recoveryMaximumTransactionId;
+    commitGroup.setDigest(footerDigest());
+  }
+
   StatusCode truncateTailForRecovery(long validEnd, long sequence) {
     return truncateTail(validEnd, sequence);
   }
 
   boolean validDecisionForRecovery(WalRecordHeader header) {
-    return validDecision(
-        header.transactionId(), header.commitSequence(), header.decisionCode());
+    return validDecision(header.transactionId(), header.commitSequence(),
+        header.decisionCode(), recoveryCommitSequence);
   }
 
   void acceptRecoveredRecord(WalRecordHeader header) {
     if (header.decisionCode() == 1) {
-      lastCommitSequence = header.commitSequence();
-      lastAppendedCommitSequence = lastCommitSequence;
+      recoveryCommitSequence = header.commitSequence();
     }
-    if (header.transactionId() > maximumTransactionId) {
-      maximumTransactionId = header.transactionId();
+    if (header.transactionId() > recoveryMaximumTransactionId) {
+      recoveryMaximumTransactionId = header.transactionId();
     }
   }
 
@@ -807,6 +919,7 @@ public final class LocalWal {
     tailEnd = offset;
     durableEnd = offset;
     nextJournalSequence = sequence;
+    commitGroup.resetPending();
   }
 
   boolean ownsReservation(LocalWalReservation reservation) {
@@ -814,7 +927,8 @@ public final class LocalWal {
   }
 
   boolean validDecisionForAppend(long transactionId, long commitSequence, int decisionCode) {
-    return validDecision(transactionId, commitSequence, decisionCode);
+    return validDecision(
+        transactionId, commitSequence, decisionCode, lastAppendedCommitSequence);
   }
 
   ByteBuffer appendRecordBuffer() {
@@ -830,6 +944,48 @@ public final class LocalWal {
     appendPayload.clear();
     appendPayload.limit(payloadBytes);
     return appendPayload;
+  }
+
+  void beginPendingGroup(long firstSequence) {
+    if (pendingRecordCount == 0) {
+      commitGroup.begin(firstSequence);
+    }
+  }
+
+  void includePendingRecord(ByteBuffer record, int recordBytes, long sequence) {
+    commitGroup.include(record, recordBytes, sequence);
+  }
+
+  private StatusCode appendPendingFooter(LocalWalForceTarget target) {
+    if (pendingRecordCount <= 0 || commitGroup.recordBytes() <= 0
+        || tailEnd > Long.MAX_VALUE - WalCommitGroupCodec.FOOTER_BYTES
+        || target.endOffset() != tailEnd + WalCommitGroupCodec.FOOTER_BYTES) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = WalCommitGroupCodec.encodeReserved(
+        pendingStart,
+        commitGroup.recordBytes(),
+        pendingRecordCount,
+        commitGroup.firstSequence(),
+        commitGroup.lastSequence(),
+        commitGroup.digest(),
+        commitGroup.checksumValue(),
+        commitGroup.footer(),
+        checksum);
+    if (!status.isOk()) return status;
+    status = writeAppendFooter(tailEnd);
+    if (!status.isOk()) return status;
+    commitGroup.setPendingDigest(WalCommitGroupCodec.chainDigest(commitGroup.footer()));
+    tailEnd = target.endOffset();
+    return StatusCode.OK;
+  }
+
+  private StatusCode writeAppendFooter(long offset) {
+    ioResult.reset();
+    StatusCode status = file.write(offset, commitGroup.footer(), ioResult);
+    commitGroup.footer().position(0);
+    return status.isOk() && ioResult.bytesTransferred() != WalCommitGroupCodec.FOOTER_BYTES
+        ? StatusCode.IO_FAILURE : status;
   }
 
   long pendingRecordCountValue() {
@@ -850,17 +1006,14 @@ public final class LocalWal {
   }
 
   StatusCode forceAppendFile(LocalWalForceTarget target, LocalWalForceCause cause) {
+    StatusCode status = appendPendingFooter(target);
+    if (!status.isOk()) return status;
     return forceFile(cause, target.endOffset() - target.startOffset());
   }
 
   private StatusCode forceFile(LocalWalForceCause cause, long coveredBytes) {
-    return forceFile(cause, coveredBytes, tailEnd);
-  }
-
-  private StatusCode forceFile(LocalWalForceCause cause, long coveredBytes, long logicalEnd) {
     long started = System.nanoTime();
     StatusCode status = file.force(ForceMode.CONTENT_AND_METADATA);
-    if (status.isOk()) status = mappedTail.persist(file, logicalEnd);
     forceMetrics.record(cause, coveredBytes, System.nanoTime() - started, status);
     return status;
   }
@@ -872,9 +1025,13 @@ public final class LocalWal {
   StatusCode captureForceTarget(LocalWalForceTarget target) {
     if (target.retained()) return StatusCode.CONFLICT;
     if (nextForceToken == 0) return StatusCode.RESOURCE_EXHAUSTED;
+    if (tailEnd > Long.MAX_VALUE - WalCommitGroupCodec.FOOTER_BYTES) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     long token = nextForceToken;
     nextForceToken = token == Long.MAX_VALUE ? 0 : token + 1;
-    target.capture(this, token, pendingStart, tailEnd, pendingRecordCount,
+    target.capture(this, token, pendingStart, tailEnd + WalCommitGroupCodec.FOOTER_BYTES,
+        pendingRecordCount,
         lastAppendedCommitSequence);
     activeForceTarget = target;
     forceInProgress = true;
@@ -884,6 +1041,7 @@ public final class LocalWal {
   void markForced(LocalWalForceTarget target) {
     durableEnd = target.endOffset();
     lastCommitSequence = target.commitSequence();
+    commitGroup.commitPendingDigest();
     target.completeLocalForce();
   }
 
@@ -908,13 +1066,13 @@ public final class LocalWal {
     file = replacement.file;
     fileName = nextFileName;
     walGeneration = nextGeneration;
-    mappedTail = replacement.mappedTail;
     tailEnd = replacement.tailEnd;
     durableEnd = replacement.durableEnd;
     nextJournalSequence = replacement.nextJournalSequence;
     nextReservationToken = replacement.nextReservationToken;
     lastCommitSequence = replacement.lastCommitSequence;
     lastAppendedCommitSequence = replacement.lastAppendedCommitSequence;
+    commitGroup.setDigest(replacement.commitGroup.digest());
     maximumTransactionId = replacement.maximumTransactionId;
     copiedPayloadBytes += replacement.copiedPayloadBytes;
     return previousFile.close();

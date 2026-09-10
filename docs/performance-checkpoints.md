@@ -1745,3 +1745,62 @@ Decision: accept the local stop/list delivery. Linux/Windows native execution
 remains unclaimed under the existing pre-alpha validation boundary. Next is
 tic-b1a1: release.sh, GitHub Actions release assets and the Homebrew tap, using
 NQL's existing approach.
+
+## 2026-09-10 — atomic WAL sync (`tic-9f2c`)
+
+Base: master `84e31c80`, tag `perf-checkpoint-20260910-mapped-wal`.
+Branch: `ticket/tic-9f2c-wal-atomic-sync`; isolated worktree
+`/private/tmp/river-wal-atomic-sync`. Baselines were captured before production
+edits, using the existing built distribution in `/Users/blater/src/river`.
+
+Command (each run serial, same GraalVM 25.0.4):
+
+```sh
+RIVER_JAVA=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Contents/Home/bin/java \
+  tools/tps-test.sh --terminals=4 --warmup-seconds=2 --measured-seconds=10 \
+  --version=tic-9f2c-baseline-N --output-dir=/private/tmp/wal-atomic-baseline-N
+```
+
+Baseline samples: **211.4**, **202.9** committed transactions/s. Both report
+`status=OK` and `server_performance_capture_status=OK`; commands, raw telemetry,
+correctness and cleanup results are retained in the artifact directories and
+`/private/tmp/wal-atomic-baseline-{1,2}.log`. This is River-specific diagnostic
+evidence, not an external harness or cross-database comparison.
+Candidate samples with the same command and `candidate-N` labels: **206.6**,
+**212.3** TPS. All four samples passed, with zero retries/errors and successful
+deadlock reconciliation and performance capture. Candidate artifacts and logs
+use `/private/tmp/wal-atomic-candidate-{1,2}` and the corresponding `.log` paths.
+These short samples show no regression or clear TPS gain; the ranges overlap.
+
+The clean `check :river-bench:installTps :river-server-app:nativeCompile` passed,
+with `--no-daemon --no-build-cache`, GraalVM 25.0.4, O3 and the existing
+`-PriverPgoProfile=/private/tmp/river-native-final.iprof`. Log:
+`/private/tmp/wal-atomic-clean-check.log`. The real native executable committed
+100 rows, survived SIGKILL/restart with every row and value intact, then passed
+public stop and readiness cleanup. Evidence:
+`/private/tmp/wal-atomic-validation/native-crash-smoke.log`.
+
+The same instrumented one-worker INSERT probe used in the preceding elapsed
+investigation observed **30,297 msync calls for 30,296 measured commits**, including
+the final validation commit: one sync per commit instead of two. All 120,792
+rows passed the final count check. Mean sync time was 105.221 us/call and
+105.224 us/measured commit, versus the preceding 57.243 us/call and
+114.488 us/commit. Halving the call count did not halve aggregate sync cost.
+Instrumented throughput was 3,029.51 inserts/s versus 2,249.68 previously;
+these are diagnostic probes, not repeatable throughput claims. Scripts, raw
+trace, timer snapshots and summary:
+`/private/tmp/wal-atomic-validation/insert-sync`. Both probes used 30s warmup and
+10s measurement with the same method tracing and unchanged syscall timer.
+All owned servers stopped and temporary database directories were removed.
+
+Independent recovery review accepted force ownership, whole-group recovery,
+suffix repair, error propagation, quorum history and the explicit distinction
+between record end and next-record offset. Slopmark LocalWal 148.722 → 159.756
+triggered a cohesion review: new methods remain in the WAL ownership boundary,
+with reusable framing state in LocalWalCommitGroup and the old mapped-tail class
+deleted. No second commit path was introduced. Scores:
+`/private/tmp/wal-atomic-slopmark-{before,after}.txt`.
+
+Decision: accept the one-sync implementation with no TPS speedup claim. WAL v3
+replaces v2 directly and requires fresh database directories. Checkpoint:
+`perf-checkpoint-20260910-atomic-wal-sync`.

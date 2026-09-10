@@ -38,7 +38,7 @@ final class IndexedVacuumWalRecovery {
           : StatusCode.CORRUPTION;
     }
     return decision == 1 ? applyCommit(
-        payload, record.nextOffset(), record.header().transactionId(),
+        payload, record.recordEnd(), record.header().transactionId(),
         commitSequence, publishedCommitSequence) : StatusCode.CORRUPTION;
   }
 
