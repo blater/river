@@ -11,7 +11,7 @@ deps:
 branch: ticket/tic-8b64-lock-storage
 base: ad1db42f5d3d9dcdb6789111a99384041ccaec77
 worktree: /private/tmp/river-lock-storage
-note: correctness pending; performance validation, acceptance, tag and merge deferred to parent step 5
+note: focused and full river-tx correctness tests passed; performance validation, acceptance, tag and merge deferred to parent step 5
 ---
 # Resolve lock storage once without a fixed-depth lookup for every field
 
