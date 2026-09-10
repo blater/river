@@ -585,30 +585,55 @@ public final class FaultingDurableDirectory implements DurableDirectory {
         if (!status.isOk()) {
           return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
         }
-        long started = generation;
-        status = before(DirectoryOperation.FILE_FORCE, 0, entry.volatileSize);
+        if (mode == null) {
+          return record(DirectoryOperation.FILE_FORCE,
+              StatusCode.INVALID_EXTERNAL_INPUT, DirectoryDurability.NOT_APPLIED);
+        }
+        return forceInternal(0, entry.volatileSize, mode);
+      }
+    }
+
+    /** Range-force adapter used by WAL tests; preserves the same fault hooks as full force. */
+    @Override
+    public StatusCode force(long startInclusive, long endExclusive, ForceMode mode) {
+      synchronized (FaultingDurableDirectory.this) {
+        StatusCode status = checkState();
         if (!status.isOk()) {
           return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
         }
-        FaultAction action = decision.action();
-        if (action == FaultAction.FORCE_FAILURE || action == FaultAction.DISK_FULL) {
-          status = action == FaultAction.DISK_FULL
-              ? StatusCode.RESOURCE_EXHAUSTED
-              : StatusCode.IO_FAILURE;
-          return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
+        if (mode == null || startInclusive < 0 || endExclusive <= startInclusive) {
+          return record(DirectoryOperation.FILE_FORCE,
+              StatusCode.INVALID_EXTERNAL_INPUT, DirectoryDurability.NOT_APPLIED);
         }
-        entry.publishContent(mode);
-        status = after(DirectoryOperation.FILE_FORCE, 0, entry.volatileSize);
-        DirectoryDurability durability;
-        if (generation != started) {
-          durability = DirectoryDurability.UNKNOWN;
-        } else if (mode == ForceMode.CONTENT_AND_METADATA) {
-          durability = DirectoryDurability.DURABLE;
-        } else {
-          durability = DirectoryDurability.VISIBLE_NOT_DURABLE;
-        }
-        return record(DirectoryOperation.FILE_FORCE, status, durability);
+        return forceInternal(startInclusive, endExclusive, mode);
       }
+    }
+
+    private StatusCode forceInternal(
+        long startInclusive, long endExclusive, ForceMode mode) {
+      long effectiveStart = Math.min(startInclusive, entry.volatileSize);
+      long effectiveEnd = Math.min(endExclusive, entry.volatileSize);
+      int span = (int) (effectiveEnd - effectiveStart);
+      long started = generation;
+      StatusCode status = before(DirectoryOperation.FILE_FORCE, effectiveStart, span);
+      if (!status.isOk()) {
+        return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
+      }
+      FaultAction action = decision.action();
+      if (action == FaultAction.FORCE_FAILURE || action == FaultAction.DISK_FULL) {
+        status = action == FaultAction.DISK_FULL
+            ? StatusCode.RESOURCE_EXHAUSTED
+            : StatusCode.IO_FAILURE;
+        return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
+      }
+      entry.publishContent(startInclusive, endExclusive, mode);
+      status = after(DirectoryOperation.FILE_FORCE, effectiveStart, span);
+      DirectoryDurability durability = generation != started
+          ? DirectoryDurability.UNKNOWN
+          : mode == ForceMode.CONTENT_AND_METADATA
+              ? DirectoryDurability.DURABLE
+              : DirectoryDurability.VISIBLE_NOT_DURABLE;
+      return record(DirectoryOperation.FILE_FORCE, status, durability);
     }
 
     @Override
@@ -711,14 +736,19 @@ public final class FaultingDurableDirectory implements DurableDirectory {
       durableDirectory = volatileDirectory;
     }
 
-    private void publishContent(ForceMode mode) {
+    private void publishContent(long startInclusive, long endExclusive, ForceMode mode) {
+      int start = (int) Math.min(Math.max(0, startInclusive), volatileSize);
+      int end = (int) Math.min(endExclusive, volatileSize);
+      if (end < start) end = start;
       switch (mode) {
         case CONTENT -> {
-          int publishedSize = Math.min(volatileSize, durableSize);
-          System.arraycopy(volatileBytes, 0, durableBytes, 0, publishedSize);
+          int publishedEnd = Math.min(end, durableSize);
+          if (publishedEnd > start) {
+            System.arraycopy(volatileBytes, start, durableBytes, start, publishedEnd - start);
+          }
         }
         case CONTENT_AND_METADATA -> {
-          System.arraycopy(volatileBytes, 0, durableBytes, 0, volatileSize);
+          System.arraycopy(volatileBytes, start, durableBytes, start, end - start);
           if (durableSize > volatileSize) {
             Arrays.fill(durableBytes, volatileSize, durableSize, (byte) 0);
           }

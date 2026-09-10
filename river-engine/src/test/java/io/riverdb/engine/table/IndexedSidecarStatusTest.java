@@ -121,6 +121,11 @@ final class IndexedSidecarStatusTest {
     }
 
     @Override
+    public StatusCode force(long startInclusive, long endExclusive, ForceMode mode) {
+      return StatusCode.OK;
+    }
+
+    @Override
     public StatusCode truncate(long sizeBytes) {
       return failTruncate ? StatusCode.IO_FAILURE : StatusCode.OK;
     }

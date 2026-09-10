@@ -314,6 +314,19 @@ final class EmbeddedCatalogDurabilityOverlapTest {
       return fail ? StatusCode.IO_FAILURE : delegate.force(mode);
     }
 
+    @Override public StatusCode force(long startInclusive, long endExclusive, ForceMode mode) {
+      entered.countDown();
+      try {
+        if (!release.await(15, TimeUnit.SECONDS)) return StatusCode.IO_FAILURE;
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return StatusCode.CANCELLED;
+      }
+      return fail
+          ? StatusCode.IO_FAILURE
+          : delegate.force(startInclusive, endExclusive, mode);
+    }
+
     @Override public StatusCode read(long offset, ByteBuffer target, IoResult result) {
       return delegate.read(offset, target, result);
     }

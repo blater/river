@@ -172,6 +172,16 @@ final class LocalWalTest {
   }
 
   @Test
+  void footerStraddlesFourKiBMappingBoundary(@TempDir Path root) {
+    assertFooterStraddlesBoundary(root, 4 * 1024L);
+  }
+
+  @Test
+  void footerStraddlesSixteenMiBMappingBoundary(@TempDir Path root) {
+    assertFooterStraddlesBoundary(root, 16L * 1024 * 1024);
+  }
+
+  @Test
   void repairedShorterTailDoesNotResurrectStaleSuffix(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
@@ -743,6 +753,61 @@ final class LocalWalTest {
     return appended;
   }
 
+  private static void assertFooterStraddlesBoundary(Path root, long boundary) {
+    long footerStart = boundary - WalCommitGroupCodec.FOOTER_BYTES / 2;
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    BoundaryGroup group = appendUntilFooterStart(wal, footerStart, 1 * 1024 * 1024);
+    assertEquals(footerStart, group.recordEnd);
+
+    LocalWalForceTarget forced = new LocalWalForceTarget();
+    assertEquals(StatusCode.OK, wal.forcePending(forced));
+    assertEquals(group.firstStart, forced.startOffset());
+    assertEquals(footerStart + WalCommitGroupCodec.FOOTER_BYTES, forced.endOffset());
+    assertEquals(group.recordCount, forced.recordCount());
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(forced, forced.token()));
+    assertEquals(
+        footerStart + WalCommitGroupCodec.FOOTER_BYTES, wal.durableEnd());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    assertEquals(group.recordCount + 1, wal.nextJournalSequence());
+    LocalWalReadResult read = new LocalWalReadResult();
+    long offset = group.firstStart;
+    for (int index = 0; index < group.recordCount; index++) {
+      assertEquals(StatusCode.OK, wal.read(offset, read));
+      offset = read.nextOffset();
+    }
+    assertEquals(footerStart + WalCommitGroupCodec.FOOTER_BYTES, offset);
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  private static BoundaryGroup appendUntilFooterStart(
+      LocalWal wal, long footerStart, int maximumPayloadBytes) {
+    long offset = wal.tailEnd();
+    long firstStart = 0;
+    int recordCount = 0;
+    while (offset < footerStart) {
+      long remaining = footerStart - offset;
+      int payloadBytes = (int) Math.min(
+          maximumPayloadBytes, remaining - WalRecordCodec.HEADER_BYTES);
+      if (payloadBytes < 0) {
+        throw new AssertionError("boundary cannot hold a complete WAL record");
+      }
+      LocalWalReservation reservation = reserve(wal, new byte[payloadBytes]);
+      LocalWalAppendResult appended = new LocalWalAppendResult();
+      assertEquals(StatusCode.OK, wal.appendUnforced(
+          reservation, 1_000L + recordCount, 0, 0, 1, 1, appended));
+      if (recordCount == 0) firstStart = appended.startOffset();
+      offset = appended.endOffset();
+      recordCount++;
+    }
+    return new BoundaryGroup(firstStart, offset, recordCount);
+  }
+
   private static long causeDelta(
       LocalWalMetrics after, LocalWalMetrics before, LocalWalForceCause cause) {
     return after.forceCount(cause) - before.forceCount(cause);
@@ -799,6 +864,18 @@ final class LocalWalTest {
     public StatusCode encodePayload(int record, ByteBuffer target) {
       target.put(payload);
       return StatusCode.OK;
+    }
+  }
+
+  private static final class BoundaryGroup {
+    private final long firstStart;
+    private final long recordEnd;
+    private final int recordCount;
+
+    BoundaryGroup(long firstStart, long recordEnd, int recordCount) {
+      this.firstStart = firstStart;
+      this.recordEnd = recordEnd;
+      this.recordCount = recordCount;
     }
   }
 

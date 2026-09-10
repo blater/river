@@ -1008,13 +1008,20 @@ public final class LocalWal {
   StatusCode forceAppendFile(LocalWalForceTarget target, LocalWalForceCause cause) {
     StatusCode status = appendPendingFooter(target);
     if (!status.isOk()) return status;
-    return forceFile(cause, target.endOffset() - target.startOffset());
+    return forceRangeFile(cause, target.startOffset(), target.endOffset());
   }
 
   private StatusCode forceFile(LocalWalForceCause cause, long coveredBytes) {
     long started = System.nanoTime();
     StatusCode status = file.force(ForceMode.CONTENT_AND_METADATA);
     forceMetrics.record(cause, coveredBytes, System.nanoTime() - started, status);
+    return status;
+  }
+
+  private StatusCode forceRangeFile(LocalWalForceCause cause, long startOffset, long endOffset) {
+    long started = System.nanoTime();
+    StatusCode status = file.force(startOffset, endOffset, ForceMode.CONTENT_AND_METADATA);
+    forceMetrics.record(cause, endOffset - startOffset, System.nanoTime() - started, status);
     return status;
   }
 

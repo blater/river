@@ -97,6 +97,30 @@ final class LocalWalForceTargetTest {
   }
 
   @Test
+  void successiveForcesSubmitOnlyTheirPendingIntervals(@TempDir Path root) {
+    Fixture fixture = new Fixture(root);
+    LocalWalAppendResult first = append(fixture.wal, 1);
+    LocalWalForceTarget target = new LocalWalForceTarget();
+    assertEquals(StatusCode.OK, fixture.wal.forcePending(target));
+    assertEquals(first.startOffset(), fixture.file.lastForceStart);
+    assertEquals(
+        first.endOffset() + WalCommitGroupCodec.FOOTER_BYTES,
+        fixture.file.lastForceEnd);
+    assertEquals(StatusCode.OK, fixture.wal.releaseForcedBatch(target, target.token()));
+
+    LocalWalAppendResult second = append(fixture.wal, 2);
+    assertEquals(StatusCode.OK, fixture.wal.forcePending(target));
+    assertEquals(
+        first.endOffset() + WalCommitGroupCodec.FOOTER_BYTES,
+        fixture.file.lastForceStart);
+    assertEquals(
+        second.endOffset() + WalCommitGroupCodec.FOOTER_BYTES,
+        fixture.file.lastForceEnd);
+    assertEquals(StatusCode.OK, fixture.wal.releaseForcedBatch(target, target.token()));
+    fixture.close();
+  }
+
+  @Test
   void fencingDuringIoCannotCloseTheFileOrTurnLocalSuccessIntoAcknowledgement(
       @TempDir Path root) {
     Fixture fixture = new Fixture(root);
@@ -255,6 +279,8 @@ final class LocalWalForceTargetTest {
     StatusCode forceStatus = StatusCode.OK;
     int forces;
     int closes;
+    long lastForceStart;
+    long lastForceEnd;
 
     ObservedFile(DurableFile file) { delegate = file; }
     public StatusCode read(long position, ByteBuffer target, IoResult result) {
@@ -265,8 +291,19 @@ final class LocalWalForceTargetTest {
     }
     public StatusCode force(ForceMode mode) {
       forces++;
+      lastForceStart = 0;
+      lastForceEnd = Long.MAX_VALUE;
       if (duringForce != null && forces == 1) duringForce.run();
       return forceStatus.isOk() ? delegate.force(mode) : forceStatus;
+    }
+    @Override
+    public StatusCode force(long startInclusive, long endExclusive, ForceMode mode) {
+      forces++;
+      lastForceStart = startInclusive;
+      lastForceEnd = endExclusive;
+      if (duringForce != null && forces == 1) duringForce.run();
+      return forceStatus.isOk()
+          ? delegate.force(startInclusive, endExclusive, mode) : forceStatus;
     }
     public StatusCode truncate(long size) { return delegate.truncate(size); }
     public StatusCode size(FileSizeResult result) { return delegate.size(result); }

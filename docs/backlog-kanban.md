@@ -9,6 +9,12 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+Completed user-directed WAL improvement: [`tic-c7e2`](tickets/tic-c7e2.md) narrows
+synchronization to the contiguous pending WAL interval. Interleaved INSERT sync
+latency fell from 113–125 us to 24–25 us; follow-up TPS pairs showed no sustained
+regression. Clean checks and native crash recovery passed. Checkpoint:
+`perf-checkpoint-20260910-wal-range-sync`.
+
 Completed user-directed follow-up: [`tic-9f2c`](tickets/tic-9f2c.md) replaces the
 separate WAL end-marker sync with validated atomic commit groups and one
 durability barrier. Recovery review, clean tests and native crash/restart passed;

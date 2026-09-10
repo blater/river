@@ -90,6 +90,14 @@ final class ApfsRiverFile implements RiverFile {
   }
 
   @Override
+  public synchronized StatusCode force(long startOffset, long endOffset, ForceMode mode) {
+    if (startOffset < 0 || endOffset <= startOffset) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return force(mode);
+  }
+
+  @Override
   public synchronized StatusCode truncate(long sizeBytes) {
     if (sizeBytes < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode admission = admission();

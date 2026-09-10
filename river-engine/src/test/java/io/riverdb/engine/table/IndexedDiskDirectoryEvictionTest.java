@@ -177,6 +177,9 @@ final class IndexedDiskDirectoryEvictionTest {
       return delegate.write(position, source, result);
     }
     @Override public StatusCode force(ForceMode mode) { return delegate.force(mode); }
+    @Override public StatusCode force(long startInclusive, long endExclusive, ForceMode mode) {
+      return delegate.force(startInclusive, endExclusive, mode);
+    }
     @Override public StatusCode truncate(long size) { return delegate.truncate(size); }
     @Override public StatusCode size(FileSizeResult result) { return delegate.size(result); }
     @Override public StatusCode close() { return delegate.close(); }
