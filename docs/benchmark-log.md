@@ -135,3 +135,112 @@ is not evidence of equivalent hardware power-loss protection. The complete
 configuration, single-INSERT timing, correctness results and source-level
 compiler diagnosis are recorded in the
 [performance checkpoint](performance-checkpoints.md#2026-09-09--mapped-wal-tic-6a91).
+
+
+## 2026-09-10 — completed INSERT efficiency versus MariaDB
+
+River `master` at `56f73a81` (`perf-checkpoint-20260910-insert-efficiency-complete`),
+native O3/PGO `bin/river`, versus Homebrew MariaDB 12.3.3. Same Apple M1,
+macOS 26.5.2 arm64 host. No concurrent build, profile or second workload.
+The harness artifact reports build `94fb63a24d28ca6f0e9a15b45322fb4d3240e963+dirty`;
+all samples used that same runnable harness without edits.
+
+Matched sample/all mix (45/43/4/4/4), four workers, one warehouse, seed42,
+20 maximum retries, 15-second warmup and 60-second measurement. Both bindings
+use READ COMMITTED with explicit FOR UPDATE locks. River uses loopback TCP/TLS;
+MariaDB uses a Unix socket. MariaDB retains `innodb_flush_log_at_trx_commit=1`
+and `innodb_snapshot_isolation=1`; River retains local durable WAL acknowledgement.
+The OS synchronization primitives and transports remain different; this is a
+whole-configuration diagnostic, not verified equivalent power-loss protection.
+
+Executed sequentially MariaDB/River/River/MariaDB:
+
+```sh
+~/src/ingres/river-harness/benchmark run mariadb tpcc sample all \
+  --warmup=15s --duration=60s --workers=4 --warehouses=1 --seed=42 --max-retries=20
+
+~/src/ingres/river-harness/benchmark run river tpcc sample all \
+  --river-executable=/Users/blater/src/river/bin/river \
+  --river-version=master-56f73a81-native-comparison-N \
+  --warmup=15s --duration=60s --workers=4 --warehouses=1 --seed=42 --max-retries=20
+```
+
+`N` is 1 or 2 for the River sample.
+
+| Order | Target | Commits | TPS | p99 ms | Retries |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 | MariaDB | 71,170 | 1,186.158 | 16.327 | 10,285 |
+| 2 | River native | 13,371 | 223.108 | 78.971 | 1,785 |
+| 3 | River native | 13,280 | 221.406 | 76.022 | 1,903 |
+| 4 | MariaDB | 65,726 | 1,095.424 | 17.498 | 9,652 |
+
+Arithmetic means: River 222.257 TPS; MariaDB 1,140.791 TPS, a 5.133× ratio.
+River reaches 19.5% of MariaDB throughput in these samples. Both River samples
+are close; MariaDB varies by about 8% between samples. Two observations per target
+are diagnostic, not a confidence interval or general throughput claim. These
+figures cannot be compared with `tools/tps-test.sh` scores.
+
+All four artifacts are eligible with the same comparison key
+`0f9fba963bebb12b563b1fd707b82bcc18b66b16cdaf23be538c4b28cef12011`.
+Warmup and measurement have zero failed/unknown transactions; all invariants pass.
+All servers stopped gracefully and returned to inactive state. Retries per commit
+were River 0.134/0.143 and MariaDB 0.145/0.147; retry frequency alone does not
+explain the throughput gap. In the first pair, New Order mean latency was
+31.93 ms versus 6.17 ms, Payment 4.25 versus 0.92 ms, Delivery 23.00 versus
+3.81 ms, and Stock Level 10.84 versus 0.48 ms. Low-frequency query costs deserve
+attention too, but New Order has much greater workload weight.
+
+Artifacts under `~/src/ingres/river-harness/runs/`, in run order:
+
+- `river_harness_20260910_134541_595395ef`
+- `river_harness_20260910_134718_68bddb1a`
+- `river_harness_20260910_134841_b7b3392c`
+- `river_harness_20260910_135003_86da4ed0`
+
+Commands/logs and compact summary: `/private/tmp/river-maria-20260910-final/`.
+
+### Next nominated change: reuse admitted table bindings
+
+A separate current-code JVM run used the same workload and GraalVM 25.0.4 with
+`-Xmx1g`. Async-profiler captured 20 seconds CPU at 10ms and then 20 seconds wall
+at 1ms during measurement. It passed invariants, zero failed/unknown outcomes and
+graceful cleanup. Its 276.92 TPS is instrumented JVM evidence and is excluded
+from the native/MariaDB comparison. Artifact:
+`river_harness_20260910_135240_35f993df`.
+
+Of 2,559 CPU samples in request-dispatch and commit-worker stacks, descriptor
+resolution (`RelationalDescriptorNames.open`) accounts for 16.06% inclusive:
+name-map search 8.25%, catalog head/manifest loading 7.35%. Preparation occupies
+18.60%; INSERT execution 12.78%; historical-frame reclamation only 0.35%.
+The separately sampled wall proportions agree approximately (16.24%, 18.70%,
+11.51%, 0.35%). Inclusive groups overlap and cannot be added. These percentages
+exclude other process stacks and unmounted virtual-thread waits; they are neither
+exact method elapsed times nor predicted TPS gains. Native attribution still
+needs confirmation during any candidate validation.
+
+Source confirms `RelationalDescriptorNames.find` scans the durable name-map rows,
+and `CatalogTableOpener.load` reads the head and manifest before looking up an
+already cached descriptor. The earlier `tic-186e` moved these reads into the owning
+transaction to remove an unrelated durability wait; it did not eliminate repeated
+resolution. The existing schema gate and pins provide a concrete lifetime boundary.
+
+Nominate one bounded change: resolve a table once within the admitted relational
+transaction, retain its validated object/schema binding under the existing memory
+budget, and reuse it for subsequent preparation/execution/FK lookups. Keep private
+DDL overlays authoritative; invalidate affected bindings on DDL and savepoint
+rollback, release at transaction end, and preserve durability dependencies and
+pin ownership. Begin with transaction lifetime rather than a global SQL cache or
+cross-transaction invalidation framework. Replace repeated lookup for admitted
+bindings without changing SQL, transaction structure, isolation or durability.
+
+This targets a substantial measured cost across common operations. It does not
+promise to remove the entire 16% or close the 5× gap. Compare matched controls and
+candidate profiles/TPS before accepting it. Frame-history reclamation remains a
+smaller follow-up: its full-cache scan is visible in single-INSERT work, but is
+only 0.35% in this full-mix profile. Preparation beyond catalog binding and socket
+write overhead are separate later candidates, not additions to the first change.
+
+Profiles, command configuration and source-level diagnostic scripts:
+`/private/tmp/river-maria-20260910-final/`. View `cpu-requests.svg` and
+`wall-requests.svg`; raw collapsed stacks and `profile-summary.json` are alongside.
+No production or harness code changed in this comparison.
