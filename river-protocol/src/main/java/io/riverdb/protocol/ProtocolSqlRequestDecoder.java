@@ -5,7 +5,7 @@ import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.RetainedMemoryLease;
 import java.nio.ByteBuffer;
 
-/** Session-owned strict decoder for one v4 SQL request payload. */
+/** Session-owned strict decoder for one SQL request payload. */
 public final class ProtocolSqlRequestDecoder {
   private static final int REQUEST_HEADER_BYTES = Integer.BYTES + Short.BYTES * 2
       + ProtocolTransactionDiagnosticContext.BYTES;

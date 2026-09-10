@@ -6,7 +6,7 @@ import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.TransactionProgramArguments;
 import java.nio.ByteBuffer;
 
-/** Encodes one v4 SQL text plus typed-parameter request without intermediate storage. */
+/** Encodes one SQL text plus typed-parameter request without intermediate storage. */
 final class ProtocolSqlRequestEncoder {
   private static final int REQUEST_HEADER_BYTES = Integer.BYTES + Short.BYTES * 2
       + ProtocolTransactionDiagnosticContext.BYTES;

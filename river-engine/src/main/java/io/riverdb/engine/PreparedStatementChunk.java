@@ -7,12 +7,11 @@ final class PreparedStatementChunk {
   static final int SLOT_COUNT = 64;
   // Conservative 64-bit-reference array storage plus object/array headers.
   static final long ACCOUNTED_BYTES = 256L
-      + SLOT_COUNT * (Long.BYTES * 2L + Integer.BYTES * 2L);
+      + SLOT_COUNT * (Long.BYTES * 2L + Integer.BYTES);
 
   private final RetainedPreparedTemplate[] templates =
       new RetainedPreparedTemplate[SLOT_COUNT];
   private final long[] handles = new long[SLOT_COUNT];
-  private final int[] programReferences = new int[SLOT_COUNT];
   private final int[] nextFree = new int[SLOT_COUNT];
 
   void open(int slot, long handle, RetainedPreparedTemplate template) {
@@ -34,24 +33,8 @@ final class PreparedStatementChunk {
   }
 
   boolean close(int slot, long handle) {
-    if (!active(slot, handle) || programReferences[slot] != 0) return false;
+    if (!active(slot, handle)) return false;
     clear(slot);
-    return true;
-  }
-
-  boolean canClose(int slot, long handle) {
-    return active(slot, handle) && programReferences[slot] == 0;
-  }
-
-  SqlPreparedPlan retain(int slot, long handle) {
-    if (!active(slot, handle) || programReferences[slot] == Integer.MAX_VALUE) return null;
-    programReferences[slot]++;
-    return templates[slot].plan;
-  }
-
-  boolean release(int slot, long handle) {
-    if (!active(slot, handle) || programReferences[slot] == 0) return false;
-    programReferences[slot]--;
     return true;
   }
 
@@ -72,6 +55,5 @@ final class PreparedStatementChunk {
     if (templates[slot] == null) return;
     templates[slot] = null;
     handles[slot] = 0;
-    programReferences[slot] = 0;
   }
 }

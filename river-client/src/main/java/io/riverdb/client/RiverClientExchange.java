@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.protocol.ProtocolMessageType;
 
-/** Encodes one request and validates its ordered response. */
+/** Encodes one request for the ordered transport. */
 final class RiverClientExchange {
   private RiverClientExchange() { }
 

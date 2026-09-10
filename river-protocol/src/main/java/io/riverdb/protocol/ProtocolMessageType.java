@@ -1,6 +1,6 @@
 package io.riverdb.protocol;
 
-/** Ordered v4 request operations supported by the River network boundary. */
+/** Ordered request operations supported by the River network boundary. */
 public enum ProtocolMessageType {
   HELLO(1, false),
   AUTHENTICATE(2, true),

@@ -168,6 +168,26 @@ final class SessionEndpointAuthenticationTest {
     }
   }
 
+  @Test
+  void rejectedPreparedReleaseNeverEncodesAResponse() {
+    SessionEndpoint endpoint = endpoint(new UnusedDatabase(), 105);
+    ProtocolFrameCodec codec = new ProtocolFrameCodec();
+    ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(StatusCode.OK, codec.encodePreparedRequest(
+        request, ProtocolMessageType.CLOSE_PREPARED, 1, 7, null, 0, 0, 0));
+    assertEquals(StatusCode.CONFLICT, endpoint.process(request, response));
+    assertEquals(0, response.remaining());
+    for (int index = ProtocolFrameCodec.HEADER_BYTES; index < request.limit(); index++) {
+      assertEquals(0, request.get(index));
+    }
+    assertEquals(StatusCode.OK, codec.encodeRequest(request, ProtocolMessageType.HELLO, 2));
+    request.putInt(8, ProtocolMessageType.CLOSE_PREPARED.wireCode());
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, endpoint.process(request, response));
+    assertEquals(0, response.remaining());
+    assertEquals(StatusCode.OK, endpoint.close());
+  }
+
   private static SessionEndpoint endpoint(RiverDatabase database, long connection) {
     byte[] token = new byte[TokenProof.MINIMUM_TOKEN_BYTES];
     Arrays.fill(token, (byte) 9);

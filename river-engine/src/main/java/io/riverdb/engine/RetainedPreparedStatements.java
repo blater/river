@@ -92,23 +92,20 @@ final class RetainedPreparedStatements {
         globalSlot % PreparedStatementChunk.SLOT_COUNT, handle);
   }
 
-  SqlPreparedPlan retain(long handle) {
+  RetainedPreparedTemplate retain(long handle) {
     int encodedSlot = handles.resolve(handle);
     if (encodedSlot <= 0) return null;
     int globalSlot = encodedSlot - 1;
     int chunkIndex = globalSlot / PreparedStatementChunk.SLOT_COUNT;
-    return chunkIndex >= chunkCount ? null : chunks[chunkIndex].retain(
+    if (chunkIndex >= chunkCount) return null;
+    RetainedPreparedTemplate entry = chunks[chunkIndex].template(
         globalSlot % PreparedStatementChunk.SLOT_COUNT, handle);
+    if (entry == null || !templates.retain(entry).isOk()) return null;
+    return entry;
   }
 
-  StatusCode releaseReference(long handle) {
-    int encodedSlot = handles.resolve(handle);
-    if (encodedSlot <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    int globalSlot = encodedSlot - 1;
-    int chunkIndex = globalSlot / PreparedStatementChunk.SLOT_COUNT;
-    return chunkIndex < chunkCount && chunks[chunkIndex].release(
-        globalSlot % PreparedStatementChunk.SLOT_COUNT, handle)
-        ? StatusCode.OK : StatusCode.INVARIANT_BROKEN;
+  StatusCode releaseReference(RetainedPreparedTemplate entry) {
+    return entry == null ? StatusCode.INVALID_EXTERNAL_INPUT : templates.release(entry);
   }
 
   StatusCode close(long handle) {
@@ -121,7 +118,6 @@ final class RetainedPreparedStatements {
     PreparedStatementChunk chunk = chunks[chunkIndex];
     RetainedPreparedTemplate entry = chunk.template(slot, handle);
     if (entry == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (!chunk.canClose(slot, handle)) return StatusCode.CONFLICT;
     StatusCode status = templates.release(entry);
     if (status.isOk() && !chunk.close(slot, handle)) return StatusCode.INVARIANT_BROKEN;
     if (status.isOk()) {

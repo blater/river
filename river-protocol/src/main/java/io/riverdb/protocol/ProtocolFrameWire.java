@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/** Shared v4 frame-header validation and emission. */
+/** Shared frame-header validation and emission. */
 final class ProtocolFrameWire {
   static final int ROLE_REQUEST = 1;
   static final int ROLE_RESPONSE = 2;

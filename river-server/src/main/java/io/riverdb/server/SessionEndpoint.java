@@ -101,8 +101,9 @@ public final class SessionEndpoint {
   }
 
   /**
-   * Processes exactly one complete frame. OK means a response was encoded; the
-   * operation status is carried inside that response.
+   * Processes exactly one complete frame. OK carries an encoded response, except
+   * one-way prepared release, which leaves the response empty. A non-OK status
+   * terminates the connection without publishing a response.
    */
   public StatusCode process(ByteBuffer request, ByteBuffer response) {
     pendingResponse = 0;
@@ -122,6 +123,9 @@ public final class SessionEndpoint {
       if (!erased.isOk()) {
         return erased;
       }
+      if (type == ProtocolMessageType.CLOSE_PREPARED) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
       return codec.encodeStatusResponse(
           response, type, frame.requestId(), StatusCode.INVALID_EXTERNAL_INPUT, state == QUERY);
     }
@@ -137,7 +141,7 @@ public final class SessionEndpoint {
       case PREPARE -> prepare(response);
       case EXECUTE_PREPARED -> executePrepared(response);
       case BEGIN_PREPARED_QUERY -> beginPreparedQuery(response);
-      case CLOSE_PREPARED -> closePrepared(response);
+      case CLOSE_PREPARED -> closePrepared();
       case PREPARE_PROGRAM -> prepareProgram(response);
       case EXECUTE_PROGRAM -> executeProgram(response);
       case CLOSE_PROGRAM -> closeProgram(response);
@@ -387,14 +391,14 @@ public final class SessionEndpoint {
     return encodeQuery(response, frame.type(), frame.requestId(), status);
   }
 
-  private StatusCode closePrepared(ByteBuffer response) {
+  private StatusCode closePrepared() {
     StatusCode status = requirePreparedInSession();
     try {
       if (status.isOk()) status = session.closePrepared(preparedRequest.handle());
     } finally {
       preparedRequest.reset();
     }
-    return codec.encodeStatusResponse(response, frame.type(), frame.requestId(), status, false);
+    return status;
   }
 
   private StatusCode prepareProgram(ByteBuffer response) {

@@ -8,7 +8,7 @@ import io.riverdb.protocol.ProtocolMessageType;
 import java.io.IOException;
 import java.util.Arrays;
 
-/** Sends one encoded request and completes its matching ordered response. */
+/** Sends one encoded request and reads its response when the protocol requires one. */
 final class RiverClientWireExchange {
   private static final int STANDARD = 0;
   private static final int PROGRAM_OPEN = 1;
@@ -49,8 +49,9 @@ final class RiverClientWireExchange {
         }
       }
       connection.bytesSent += requestBytes;
-      StatusCode status = read(
-          connection, type, requestId, responseKind, opened, result);
+      boolean expectsResponse = type != ProtocolMessageType.CLOSE_PREPARED;
+      StatusCode status = expectsResponse
+          ? read(connection, type, requestId, responseKind, opened, result) : StatusCode.OK;
       if (!status.isOk()) {
         if (responseKind != PROGRAM_RESULT || status != StatusCode.RESOURCE_EXHAUSTED
             || !connection.responseFullyRead) return connection.fail(status);
@@ -61,7 +62,8 @@ final class RiverClientWireExchange {
       }
       connection.nextRequestId++;
       connection.completedRequests++;
-      connection.lastStatus = responseStatus(connection, responseKind);
+      connection.lastStatus = expectsResponse
+          ? responseStatus(connection, responseKind) : StatusCode.OK;
       return StatusCode.OK;
     } catch (IOException failure) {
       return connection.fail(

@@ -7,14 +7,13 @@ import io.riverdb.engine.sql.SqlPreparedPlan;
 import io.riverdb.engine.sql.SqlProgramMemoryLease;
 import io.riverdb.engine.sql.SqlRetainedBudget;
 
-/** One canonical program graph with authoritative references to its prepared plans. */
+/** One canonical program graph with authoritative references to prepared templates. */
 final class RetainedTransactionProgram implements RetainedMemoryLease {
   private static final long REFERENCE_HEADER_BYTES = 128L;
   private final RetainedPreparedStatements prepared;
   private final SqlProgramMemoryLease memory;
   private final TransactionProgram program;
-  private SqlPreparedPlan[] plans = new SqlPreparedPlan[0];
-  private long[] statementHandles = new long[0];
+  private RetainedPreparedTemplate[] entries = new RetainedPreparedTemplate[0];
   private int retainedReferences;
   private long graphBytes;
   private long referenceBytes;
@@ -32,23 +31,22 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int steps = source.stepCount();
-    long bytes = REFERENCE_HEADER_BYTES + (long) steps * Long.BYTES * 2;
+    long bytes = REFERENCE_HEADER_BYTES + (long) steps * Long.BYTES;
     StatusCode status = memory.resize(bytes);
     if (!status.isOk()) return status;
     referenceBytes = bytes;
     try {
-      plans = new SqlPreparedPlan[steps];
-      statementHandles = new long[steps];
+      entries = new RetainedPreparedTemplate[steps];
     } catch (OutOfMemoryError failure) {
       return failed(StatusCode.RESOURCE_EXHAUSTED);
     }
     for (int step = 0; step < steps; step++) {
       long handle = source.preparedHandle(step);
-      SqlPreparedPlan plan = prepared.retain(handle);
-      if (plan == null) return failed(StatusCode.INVALID_EXTERNAL_INPUT);
+      RetainedPreparedTemplate entry = prepared.retain(handle);
+      if (entry == null) return failed(StatusCode.INVALID_EXTERNAL_INPUT);
       retainedReferences++;
-      plans[step] = plan;
-      statementHandles[step] = handle;
+      entries[step] = entry;
+      SqlPreparedPlan plan = entry.plan;
       if (plan.catalogGeneration() <= 0
           || step > 0 && plan.catalogGeneration() != catalogGeneration) {
         return failed(StatusCode.PROGRAM_STALE);
@@ -66,7 +64,7 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
   }
 
   TransactionProgram program() { return program; }
-  SqlPreparedPlan plan(int step) { return plans[step]; }
+  SqlPreparedPlan plan(int step) { return entries[step].plan; }
   long catalogGeneration() { return catalogGeneration; }
 
   StatusCode close() {
@@ -76,8 +74,7 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
     if (!status.isOk()) return status;
     status = memory.resize(0);
     if (!status.isOk()) return status;
-    plans = new SqlPreparedPlan[0];
-    statementHandles = new long[0];
+    entries = new RetainedPreparedTemplate[0];
     catalogGeneration = 0;
     referenceBytes = 0;
     return StatusCode.OK;
@@ -98,8 +95,7 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
 
   private StatusCode failed(StatusCode primary) {
     StatusCode released = releaseReferences();
-    plans = new SqlPreparedPlan[0];
-    statementHandles = new long[0];
+    entries = new RetainedPreparedTemplate[0];
     catalogGeneration = 0;
     StatusCode memoryStatus = memory.resize(0);
     referenceBytes = memoryStatus.isOk() ? 0 : referenceBytes;
@@ -110,7 +106,7 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
   private StatusCode releaseReferences() {
     StatusCode status = StatusCode.OK;
     while (retainedReferences > 0) {
-      StatusCode released = prepared.releaseReference(statementHandles[--retainedReferences]);
+      StatusCode released = prepared.releaseReference(entries[--retainedReferences]);
       if (status.isOk()) status = released;
     }
     return status;

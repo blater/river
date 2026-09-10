@@ -165,6 +165,10 @@ final class RiverClientConnectionTest {
     ProgramOpenResult programOpen = new ProgramOpenResult();
     assertEquals(StatusCode.OK, session.prepareProgram(program, programOpen));
     assertEquals(2, programOpen.requiredArgumentSlots());
+    long received = client.bytesReceived();
+    assertEquals(StatusCode.OK, session.closePrepared(update.handle()));
+    assertEquals(StatusCode.OK, session.closePrepared(select.handle()));
+    assertEquals(received, client.bytesReceived());
 
     TransactionProgramArguments arguments = new TransactionProgramArguments();
     assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.BIGINT, 25));
@@ -178,14 +182,55 @@ final class RiverClientConnectionTest {
     assertEquals(1, result.affectedRows(0));
     assertEquals(1, result.rowCount());
     assertEquals(125, result.valueAt(0, 0));
-    assertEquals(StatusCode.CONFLICT, session.closePrepared(update.handle()));
     assertEquals(StatusCode.OK, session.closeProgram(programOpen.handle()));
-    assertEquals(StatusCode.OK, session.closePrepared(update.handle()));
-    assertEquals(StatusCode.OK, session.closePrepared(select.handle()));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, client.close());
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void invalidPreparedReleaseTerminatesTheConnection(@TempDir Path root) {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    RiverClientConnection client = connect(server);
+    SessionOpenResult sessionResult = new SessionOpenResult();
+    assertEquals(StatusCode.OK, client.createSession(sessionResult));
+    RiverSession session = sessionResult.session();
+    long received = client.bytesReceived();
+    assertEquals(StatusCode.OK, session.closePrepared(Long.MAX_VALUE));
+    assertEquals(received, client.bytesReceived());
+    assertFalse(session.execute("SELECT 1", new CommandResult()).isOk());
+    assertTrue(client.closed);
+    assertEquals(received, client.bytesReceived());
+    client.close();
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void preparedReleaseWriteFailureBreaksConnectionAndErasesPayload() {
+    java.net.Socket socket = new java.net.Socket();
+    RiverClientConnection client = new RiverClientConnection(socket,
+        new java.io.ByteArrayInputStream(new byte[0]), new OutputStream() {
+          @Override
+          public void write(int value) throws IOException {
+            throw new IOException("write failed");
+          }
+        });
+    assertEquals(StatusCode.OK, client.codec.encodePreparedRequest(
+        client.request, ProtocolMessageType.CLOSE_PREPARED, 1, 7, null, 0, 0, 0));
+    int end = client.request.limit();
+    assertEquals(StatusCode.IO_FAILURE, RiverClientWireExchange.standard(
+        client, ProtocolMessageType.CLOSE_PREPARED, 1));
+    assertTrue(client.closed);
+    assertEquals(0, client.completedRequests());
+    for (int index = ProtocolFrameCodec.HEADER_BYTES; index < end; index++) {
+      assertEquals(0, client.request.array()[index]);
+    }
   }
 
   @Test

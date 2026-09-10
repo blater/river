@@ -25,8 +25,10 @@ final class ServerRequestDispatch {
     }
     try {
       if (!status.isOk()) return status;
-      output.write(responses.bytes(), 0, responses.buffer().remaining());
-      output.flush();
+      if (responses.buffer().hasRemaining()) {
+        output.write(responses.bytes(), 0, responses.buffer().remaining());
+        output.flush();
+      }
       return StatusCode.OK;
     } finally {
       endpoint.releasePublishedHighWater();
