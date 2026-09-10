@@ -46,57 +46,81 @@ Record the evidence, recommendation and any resulting ticket. No TPS increase is
 expected from this decision ticket and no routine build matrix is required for
 a documentation-only result.
 
-## Provisional source assessment — before step 5
+## Source assessment
 
-At `ad1db42f`, an ordinary descriptor INSERT encodes a base row and stages it under
-`RelationalDescriptorKeyspace.baseRows(tableId)` with an internal logical row ID.
-`IndexedTransactionWriteSet.insert` reserves/locks that scalar key and records a
-pending base-row mutation. `RelationalDescriptorTupleDeltaStaging` separately
-stages a tuple key for the primary key and each maintained secondary index.
-Tuple payloads carry the logical row ID as a suffix. Consequently, the example
-with only a primary key has a base-row mutation and a primary-key tuple mutation;
-adding one secondary index adds another tuple mutation and its key protection.
-These are logical mutation counts, not counts of physical page writes or syncs.
+At `df88f18c`, an ordinary descriptor INSERT encodes a base row and stages it
+under `RelationalDescriptorKeyspace.baseRows(tableId)` with an internal logical
+row ID. `IndexedTransactionWriteSet.insert` reserves and locks that scalar key
+and records the pending base-row mutation. `RelationalDescriptorTupleDeltaStaging`
+then stages one tuple mutation for the primary key and one for each maintained
+secondary index. Tuple payloads carry the logical row ID as a suffix. Therefore
+the primary-only workload has one logical base-row mutation plus one primary-key
+tuple mutation; the secondary workload adds one tuple mutation and its key
+protection. These logical counts are not physical page-write or sync counts.
 
-The prepared logical commit subsequently enters shared-group preflight and append
-through `IndexedGroupCommitBatch`. `IndexedRelationalTupleApply` resolves each
-index registry, copies each staged key into reusable application storage, applies
-it and stages the resulting registry state. This split is a real ownership and
-visibility boundary: an SQL-time page position is not automatically valid when
-physical application occurs. A bounded copy that crosses this lifetime boundary
-must not be removed merely to obtain a lower copy count.
+At application, `IndexedRelationalTupleApply` resolves each index registry,
+copies each staged key into reusable application storage, applies the mutation,
+and stages the resulting registry state. The copy crosses a real ownership and
+visibility boundary: an SQL-time page position cannot be retained through lock
+wait, client work or durable publication. `IndexedGroupCommitBatch` subsequently
+publishes the prepared group and forces its WAL/pages. Those staged boundaries
+are required by River's snapshot, rollback and recovery model; they are not
+evidence that every physical write is caused by the base-row representation.
 
-Two distinct architecture choices must remain separate:
+Clustered primary-key rows and immediate leaf mutation remain separate choices.
+Clustering could remove the separate primary-key-to-logical-row lookup, but it
+changes leaf size, fanout and split behavior. Secondary entries would still need
+either stable logical-row identity or primary-key references; the latter make
+primary-key updates rewrite secondary entries. Immediate leaf mutation could
+avoid a later search, but would need a new uncommitted-state, undo, snapshot and
+publication design. A leaf latch cannot span a lock wait or durable commit.
 
-- Cluster primary-key rows: putting the row in the primary tree could remove the
-  separate primary-key-to-logical-row lookup/mutation. It also changes leaf size,
-  fanout and split cost. Secondary indexes must identify either a stable logical
-  row or a primary key. Stable identity requires a resolution path; primary-key
-  references make primary-key updates affect secondary entries and their size.
-  Neither cost is eliminated by relabelling the representation.
-- Mutate a located leaf immediately: this can avoid a later search, but changes
-  how uncommitted state, undo, snapshots and publication work. A latch cannot be
-  carried across client think time, a lock wait or durable commit. Preserving
-  River's current staged publication may instead favor finding the leaf once
-  during application; that does not require clustered storage.
+## Step 5 evidence
 
-Provisional recommendation: keep both changes out of steps 1–3. Consolidate
-admission and remove repeated validation/search and lock bookkeeping first.
-There is no post-change performance evidence yet, so no new storage-format
-implementation ticket or final retain/replace decision is justified at this
-stage. This is not a claim that the current layout is efficient.
+The matched profiles used the same checkout (`df88f18c`), four workers, 15-second
+warmup, 25-second measurement and 20-second wall profile. The primary-only run
+committed 234,003 rows at 9,360.04 inserts/s; the one-secondary run committed
+216,680 rows at 8,667.09 inserts/s. Both row-count checks passed and both owned
+servers and data were cleaned up.
 
-Step 5 must inspect the remaining base-row, primary-tuple and secondary-tuple
-application costs and identify whether search, representation, copies, page
-mutation or publication dominates. If a replacement is warranted, its ticket
-must cover one coherent write/read/recovery path, primary-key changes, secondary
-references, rollback and snapshot visibility, and splits under concurrent access.
-A format replacement needs an ADR and independent recovery review, but no
-compatibility path for River's unreleased format. Close this assessment only
-once that measured decision and any resulting bounded ticket are recorded.
+The profiled primary-only versus secondary totals, in estimated thread seconds,
+were:
 
-The lookup implementation review also found that the old cursor always started
-at the edge of the selected leaf and walked to its bound. `tic-2e91` replaces
-that linear positioning with the existing leaf binary-search owner. This is an
-algorithmic search cost, not evidence that clustered storage is required. Step 5
-must measure the corrected lookup before attributing its former cost to layout.
+| Group | Primary only | One secondary |
+| --- | ---: | ---: |
+| locks | 1.904 | 2.990 |
+| scalar compilation | 0.755 | 0.680 |
+| tuple compilation | 2.123 | 3.238 |
+| sync | 4.116 | 3.810 |
+| row insert | 0.631 | 0.660 |
+
+The secondary index therefore increases the expected tuple and lock work, while
+the primary-only mapping is not isolated as the dominant cost. The largest
+visible samples remain sync and ordinary writes, with page-history reclamation,
+tuple compilation and lock work also present. These groups overlap in the
+profile; they must not be summed into a serial per-row cost. The wall samples
+also have different row/tree growth and do not expose waits spent inside virtual
+threads, so they establish direction and scope rather than a universal
+throughput claim.
+
+The source-level mutation count explains why the secondary run cannot be used as
+evidence for a clustered replacement by itself: it deliberately performs one
+additional logical index mutation. Physical writes include WAL, page images,
+history reclamation and publication work, and are not one-for-one with those
+logical mutations. Page splits remain part of each tree's ownership and fanout
+behavior. The corrected `tic-2e91` leaf binary positioning also removes the old
+linear-bound search cost; that change does not require clustered rows.
+
+## Decision
+
+Retain the separate logical base-row and tuple-index layout for now. The matched
+profiles do not identify the primary-key mapping as a material dominant cost, so
+there is no justified format rewrite or implementation ticket. Continue to treat
+the staged publication and bounded application copy as semantic boundaries.
+
+Any future replacement would need to preserve stable logical row identity,
+primary-key update handling for secondary references, snapshot visibility,
+rollback, WAL/recovery and split correctness in one end-to-end write/read path.
+It would be justified only by repeatable matched evidence isolating that mapping
+as the dominant removable cost after accounting for sync, publication, lock
+waits, tuple work and tree growth. No such evidence is present here.
