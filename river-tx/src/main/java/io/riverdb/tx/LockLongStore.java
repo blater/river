@@ -5,8 +5,7 @@ import io.riverdb.base.error.StatusCode;
 /** Lazy segmented primitive-long values addressed through a 64-bit radix directory. */
 final class LockLongStore {
   private static final long SEGMENT_BYTES = 24L + 8L * LockSegmentArena.SEGMENT_ENTRIES;
-  static final long FIRST_SEGMENT_GROWTH_BYTES =
-      LockRadixDirectory.MAXIMUM_NEW_PATH_BYTES + SEGMENT_BYTES;
+  static final long FIRST_SEGMENT_GROWTH_BYTES = SEGMENT_BYTES;
   private final LockRadixDirectory segments;
   private final LockSegmentArena arena;
 
