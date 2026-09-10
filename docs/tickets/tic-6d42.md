@@ -104,8 +104,9 @@ no code ticket closes merely because correctness tests pass.
 
 ## Candidate branches
 
-The candidates share production base `ad1db42f` and remain separate so step 5
-can attribute and accept each change in order:
+These pre-measurement candidates share production base `ad1db42f`. Step 5 was
+authorized on 2026-09-10 and is now running in dependency order. Each ticket and
+the performance ledger record its subsequent acceptance and integration point.
 
 | Ticket | Branch | Current checkpoint |
 | --- | --- | --- |
@@ -115,5 +116,4 @@ can attribute and accept each change in order:
 | tic-4f20 | `ticket/tic-4f20-storage-assessment` | `efb95e00`: source assessment prepared; storage decision awaits step 5 profiles. |
 
 Each branch owns its ticket's implementation evidence. The planning branch is
-`ticket/tic-6d42-insert-efficiency`; it changes no production code. No candidate
-has performance acceptance or an integration tag.
+`ticket/tic-6d42-insert-efficiency`; it changes no production code.
