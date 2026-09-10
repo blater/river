@@ -1,6 +1,6 @@
 ---
 id: tic-6d42
-status: in_progress
+status: closed
 type: epic
 priority: 1
 delivery: none
