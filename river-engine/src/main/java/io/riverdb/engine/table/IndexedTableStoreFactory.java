@@ -22,8 +22,8 @@ final class IndexedTableStoreFactory {
       WalGeneration generation,
       DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
-    if (providerLease == null || !providerLease.active()
-        || !validInput(directory, wal, database, generation, result)) {
+    if (!validInput(
+        directory, wal, database, generation, providerLease, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     DatabaseStoreLease storeLease = new DatabaseStoreLease();
@@ -79,8 +79,8 @@ final class IndexedTableStoreFactory {
       DatabaseProviderLease providerLease,
       boolean createWhenMissing,
       IndexedTableStoreOpenResult result) {
-    if (providerLease == null || !providerLease.active()
-        || !validInput(directory, wal, database, generation, result)) {
+    if (!validInput(
+        directory, wal, database, generation, providerLease, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     DatabaseStoreLease storeLease = new DatabaseStoreLease();
@@ -135,7 +135,8 @@ final class IndexedTableStoreFactory {
       DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
     if (providerLease == null || !providerLease.active()
-        || !validCheckpoint(checkpoint, database)) {
+        || checkpoint == null || !checkpoint.isAvailable()
+        || !checkpoint.database().equals(database)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     WalGeneration generation = checkpoint.walGeneration();
@@ -191,11 +192,16 @@ final class IndexedTableStoreFactory {
     return release.isOk() ? status : release;
   }
 
-  private static boolean validCheckpoint(
-      CheckpointState checkpoint, DatabaseIncarnation database) {
-    return checkpoint != null
-        && checkpoint.isAvailable()
-        && checkpoint.database().equals(database);
+  private static boolean validInput(
+      DurableDirectory directory,
+      LocalWal wal,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      DatabaseProviderLease providerLease,
+      IndexedTableStoreOpenResult result) {
+    return providerLease != null
+        && providerLease.active()
+        && validInput(directory, wal, database, generation, result);
   }
 
   private static boolean validInput(
