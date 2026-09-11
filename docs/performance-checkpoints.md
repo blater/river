@@ -2603,3 +2603,32 @@ validation.
 Evidence: `/private/tmp/river-score-20260911/integration-first46-check.log` and
 `integration-first46-scores.json`. Checkpoint:
 `perf-checkpoint-20260911-score-first46`.
+
+
+## 2026-09-11: fault fixtures, native bindings, benchmark metrics and listing
+
+Five independently merged slices bring the accepted total to 51: tic-90d4
+(`bee220fb`), tic-5f87 (`dc4c1c87`), tic-8c5e (`ba04b7ac`), tic-0788
+(`6c56d705`) and tic-486d (`bdde7493`). Luna/high implemented; Sol/high and
+the lead reviewed. Tickets retain scores, focused checks and individual evidence.
+All original high-scoring test files are now below 90.
+
+External sample/all light diagnostics passed at 281.52, 268.58, 271.98 and
+286.58 TPS, with zero failed/unknown outcomes, valid invariants and graceful
+cleanup. The metrics ticket instead used its actual Java TPS consumer:
+393.800 control / 468.500 candidate TPS, with clean accounting and cleanup.
+These harnesses are not compared with each other; no speedup is claimed.
+
+The clean full build ran its test tasks in 4m21s and failed only the source-policy
+check on a raw Unicode escape in the Linux filename test. Replacing that literal
+with an equivalent NUL escape (`44e3e5f6`) preserved bytecode; the full check and
+JVM installation then passed in six seconds. O3/PGO native compilation passed in
+1m44s. The actual rebuilt executable passed start, ps, generated credential
+loading, authenticated create/insert/select and endpoint stop.
+
+The unchanged full scan reports 2,631 Java files, 31 remaining at or above 90,
+no new offenders and no incomplete scores. Evidence below
+`/private/tmp/river-score-20260911`: `integration-first51-check.log`,
+`integration-first51-check-final.log`, `integration-first51-native.log`,
+`integration-first51-native-smoke.log`, `integration-first51-scores.json`.
+Checkpoint: `perf-checkpoint-20260911-score-first51`.

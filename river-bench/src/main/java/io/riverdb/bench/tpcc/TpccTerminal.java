@@ -82,7 +82,7 @@ final class TpccTerminal implements AutoCloseable {
       if (metrics != null) {
         if ("40001".equals(failure.getSQLState())
             && TpccStatusCodes.decode(failure) == null) {
-          metrics.unclassifiedRetryFailure(measuredFailure);
+          metrics.retry().unclassifiedRetryFailure(measuredFailure);
         }
         metrics.failure(type, failedAt - start, measuredFailure);
         recordProtocol(
@@ -104,8 +104,8 @@ final class TpccTerminal implements AutoCloseable {
     long requests = session.completedRequests() - requestsBefore;
     long sent = session.bytesSent() - sentBefore;
     long received = session.bytesReceived() - receivedBefore;
-    if (measured) metrics.protocol(type, requests, sent, received);
-    else metrics.drainProtocol(type, requests, sent, received);
+    if (measured) metrics.protocol().record(type, requests, sent, received);
+    else metrics.protocol().recordDrain(type, requests, sent, received);
   }
 
   private TpccTransactionType choose() {

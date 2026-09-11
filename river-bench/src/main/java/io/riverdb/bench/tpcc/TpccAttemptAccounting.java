@@ -54,7 +54,7 @@ final class TpccAttemptAccounting implements TpccRetryObserver {
     attempt = attemptNumber;
     currentAttemptId = nextAttemptId();
     session.beginDiagnosticAttempt(currentAttemptId, metricsEpoch);
-    if (metrics != null) metrics.attemptStarted(type, currentAttemptId, measured());
+    if (metrics != null) metrics.retry().attemptStarted(type, currentAttemptId, measured());
   }
 
   @Override
@@ -65,7 +65,7 @@ final class TpccAttemptAccounting implements TpccRetryObserver {
       throw new IllegalStateException("invalid retryable outcome correlation");
     }
     if (metrics != null) {
-      metrics.retryableOutcome(
+      metrics.retry().retryableOutcome(
           type, status, clientWillRetry, measuredOutcome,
           currentAttemptId, logicalSequence, terminal, attempt,
           session.diagnosticStepTag());

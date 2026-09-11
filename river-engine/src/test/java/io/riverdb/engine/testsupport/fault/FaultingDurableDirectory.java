@@ -22,15 +22,12 @@ import java.util.Arrays;
  * not a model of page cache, controller cache, torn directory blocks, or device power removal.
  */
 public final class FaultingDurableDirectory implements DurableDirectory {
-  private final Entry[] entries;
+  private final FaultingDurableEntry[] entries;
   private final int maxFileBytes;
   private final int maxOpenHandles;
-  private final FaultInjector injector;
-  private final DirectoryFaultPoints points;
-  private final FaultDecision decision = new FaultDecision();
+  private final FaultingDurableFaultBoundary faults;
   private int entryCount;
   private int openHandles;
-  private long operationSequence;
   private long generation = 1;
   private boolean running = true;
 
@@ -40,11 +37,10 @@ public final class FaultingDurableDirectory implements DurableDirectory {
       int maxOpenHandles,
       FaultInjector injector,
       DirectoryFaultPoints points) {
-    entries = new Entry[Math.max(0, maxEntries)];
+    entries = new FaultingDurableEntry[Math.max(0, maxEntries)];
     this.maxFileBytes = Math.max(0, maxFileBytes);
     this.maxOpenHandles = Math.max(0, maxOpenHandles);
-    this.injector = injector;
-    this.points = points;
+    faults = new FaultingDurableFaultBoundary(injector, points);
   }
 
   @Override
@@ -76,56 +72,56 @@ public final class FaultingDurableDirectory implements DurableDirectory {
       DirectoryOperationResult result) {
     result.reset();
     if (!running) {
-      return record(operation, StatusCode.RETRY, result.durability());
+      return StatusCode.RETRY;
     }
     if (!validName(name)) {
-      return record(operation, StatusCode.INVALID_EXTERNAL_INPUT, result.durability());
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     long started = generation;
-    StatusCode status = before(operation, 0, 0);
+    StatusCode status = faults.before(this, operation, 0, 0);
     if (!status.isOk()) {
       unknownIfGenerationChanged(started, result);
-      return record(operation, status, result.durability());
+      return status;
     }
-    FaultAction action = decision.action();
+    FaultAction action = faults.action();
     if (action == FaultAction.DISK_FULL) {
-      return record(operation, StatusCode.RESOURCE_EXHAUSTED, result.durability());
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (find(name) != null) {
-      return record(operation, StatusCode.CONFLICT, result.durability());
+      return StatusCode.CONFLICT;
     }
     if (!directory && openHandles == maxOpenHandles) {
-      return record(operation, StatusCode.RESOURCE_EXHAUSTED, result.durability());
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
-    Entry entry = allocate();
+    FaultingDurableEntry entry = allocate();
     if (entry == null) {
-      return record(operation, StatusCode.RESOURCE_EXHAUSTED, result.durability());
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
     entry.prepare(name, directory);
     DurableFile file = null;
     if (!directory) {
       openHandles++;
-      file = new Handle(entry, generation);
+      file = new FaultingDurableFile(this, faults, entry, generation);
     }
     result.set(file, DirectoryDurability.VISIBLE_NOT_DURABLE);
-    status = after(operation, 0, 0);
+    status = faults.after(this, operation, 0, 0);
     unknownIfGenerationChanged(started, result);
-    return record(operation, status, result.durability());
+    return status;
   }
 
   @Override
   public synchronized StatusCode list(DirectoryListResult result) {
     result.reset();
     if (!running) {
-      return record(DirectoryOperation.LIST, StatusCode.RETRY, DirectoryDurability.NOT_APPLIED);
+      return StatusCode.RETRY;
     }
     long started = generation;
-    StatusCode status = before(DirectoryOperation.LIST, 0, entryCount);
+    StatusCode status = faults.before(this, DirectoryOperation.LIST, 0, entryCount);
     if (!status.isOk()) {
-      return record(DirectoryOperation.LIST, status, DirectoryDurability.NOT_APPLIED);
+      return status;
     }
     for (int index = 0; index < entryCount; index++) {
-      Entry entry = entries[index];
+      FaultingDurableEntry entry = entries[index];
       if (entry.volatileName == null) {
         continue;
       }
@@ -133,15 +129,15 @@ public final class FaultingDurableDirectory implements DurableDirectory {
           entry.volatileName,
           entry.volatileDirectory ? DirectoryEntryType.DIRECTORY : DirectoryEntryType.FILE);
       if (!status.isOk()) {
-        return record(DirectoryOperation.LIST, status, namespaceDurability());
+        return status;
       }
     }
     result.finish(generation);
-    status = after(DirectoryOperation.LIST, 0, result.size());
+    status = faults.after(this, DirectoryOperation.LIST, 0, result.size());
     if (generation != started) {
       result.reset();
     }
-    return record(DirectoryOperation.LIST, status, namespaceDurability());
+    return status;
   }
 
   @Override
@@ -168,34 +164,34 @@ public final class FaultingDurableDirectory implements DurableDirectory {
     result.reset();
     DirectoryOperation operation = DirectoryOperation.RENAME;
     if (!running) {
-      return record(operation, StatusCode.RETRY, result.durability());
+      return StatusCode.RETRY;
     }
     if (!validName(sourceName) || !validName(destinationName)) {
-      return record(operation, StatusCode.INVALID_EXTERNAL_INPUT, result.durability());
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     long started = generation;
-    StatusCode status = before(operation, 0, 0);
+    StatusCode status = faults.before(this, operation, 0, 0);
     if (!status.isOk()) {
       unknownIfGenerationChanged(started, result);
-      return record(operation, status, result.durability());
+      return status;
     }
-    Entry source = find(sourceName);
-    Entry destination = find(destinationName);
+    FaultingDurableEntry source = find(sourceName);
+    FaultingDurableEntry destination = find(destinationName);
     if (source == null
         || source == destination
         || replace && (source.volatileDirectory
             || destination != null && destination.volatileDirectory)
         || !replace && destination != null) {
-      return record(operation, StatusCode.CONFLICT, result.durability());
+      return StatusCode.CONFLICT;
     }
     if (destination != null) {
       destination.volatileName = null;
     }
     source.volatileName = destinationName;
     result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE);
-    status = after(operation, 0, 0);
+    status = faults.after(this, operation, 0, 0);
     unknownIfGenerationChanged(started, result);
-    return record(operation, status, result.durability());
+    return status;
   }
 
   @Override
@@ -203,26 +199,26 @@ public final class FaultingDurableDirectory implements DurableDirectory {
     result.reset();
     DirectoryOperation operation = DirectoryOperation.REMOVE;
     if (!running) {
-      return record(operation, StatusCode.RETRY, result.durability());
+      return StatusCode.RETRY;
     }
     if (!validName(entryName)) {
-      return record(operation, StatusCode.INVALID_EXTERNAL_INPUT, result.durability());
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     long started = generation;
-    StatusCode status = before(operation, 0, 0);
+    StatusCode status = faults.before(this, operation, 0, 0);
     if (!status.isOk()) {
       unknownIfGenerationChanged(started, result);
-      return record(operation, status, result.durability());
+      return status;
     }
-    Entry entry = find(entryName);
+    FaultingDurableEntry entry = find(entryName);
     if (entry == null) {
-      return record(operation, StatusCode.CONFLICT, result.durability());
+      return StatusCode.CONFLICT;
     }
     entry.volatileName = null;
     result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE);
-    status = after(operation, 0, 0);
+    status = faults.after(this, operation, 0, 0);
     unknownIfGenerationChanged(started, result);
-    return record(operation, status, result.durability());
+    return status;
   }
 
   @Override
@@ -233,23 +229,23 @@ public final class FaultingDurableDirectory implements DurableDirectory {
     result.reset();
     DirectoryOperation operation = DirectoryOperation.TRUNCATE;
     if (!running) {
-      return record(operation, StatusCode.RETRY, result.durability());
+      return StatusCode.RETRY;
     }
     if (!validName(fileName) || sizeBytes < 0 || sizeBytes > maxFileBytes) {
-      return record(operation, StatusCode.INVALID_EXTERNAL_INPUT, result.durability());
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     long started = generation;
-    StatusCode status = before(operation, sizeBytes, 0);
+    StatusCode status = faults.before(this, operation, sizeBytes, 0);
     if (!status.isOk()) {
       unknownIfGenerationChanged(started, result);
-      return record(operation, status, result.durability());
+      return status;
     }
-    Entry entry = find(fileName);
+    FaultingDurableEntry entry = find(fileName);
     if (entry == null || entry.volatileDirectory) {
-      return record(operation, StatusCode.CONFLICT, result.durability());
+      return StatusCode.CONFLICT;
     }
     if (openHandles == maxOpenHandles) {
-      return record(operation, StatusCode.RESOURCE_EXHAUSTED, result.durability());
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (sizeBytes < entry.volatileSize) {
       Arrays.fill(entry.volatileBytes, (int) sizeBytes, entry.volatileSize, (byte) 0);
@@ -258,10 +254,12 @@ public final class FaultingDurableDirectory implements DurableDirectory {
     }
     entry.volatileSize = (int) sizeBytes;
     openHandles++;
-    result.set(new Handle(entry, generation), DirectoryDurability.VISIBLE_NOT_DURABLE);
-    status = after(operation, sizeBytes, 0);
+    result.set(
+        new FaultingDurableFile(this, faults, entry, generation),
+        DirectoryDurability.VISIBLE_NOT_DURABLE);
+    status = faults.after(this, operation, sizeBytes, 0);
     unknownIfGenerationChanged(started, result);
-    return record(operation, status, result.durability());
+    return status;
   }
 
   @Override
@@ -269,28 +267,28 @@ public final class FaultingDurableDirectory implements DurableDirectory {
     result.reset();
     DirectoryOperation operation = DirectoryOperation.DIRECTORY_FORCE;
     if (!running) {
-      return record(operation, StatusCode.RETRY, result.durability());
+      return StatusCode.RETRY;
     }
     long started = generation;
-    StatusCode status = before(operation, 0, 0);
+    StatusCode status = faults.before(this, operation, 0, 0);
     if (!status.isOk()) {
       unknownIfGenerationChanged(started, result);
-      return record(operation, status, result.durability());
+      return status;
     }
-    FaultAction action = decision.action();
+    FaultAction action = faults.action();
     if (action == FaultAction.FORCE_FAILURE || action == FaultAction.DISK_FULL) {
       status = action == FaultAction.DISK_FULL
           ? StatusCode.RESOURCE_EXHAUSTED
           : StatusCode.IO_FAILURE;
-      return record(operation, status, result.durability());
+      return status;
     }
     for (int index = 0; index < entryCount; index++) {
       entries[index].publishNamespace();
     }
     result.set(null, DirectoryDurability.DURABLE);
-    status = after(operation, 0, 0);
+    status = faults.after(this, operation, 0, 0);
     unknownIfGenerationChanged(started, result);
-    return record(operation, status, result.durability());
+    return status;
   }
 
   @Override
@@ -299,32 +297,32 @@ public final class FaultingDurableDirectory implements DurableDirectory {
     result.reset();
     DirectoryOperation operation = DirectoryOperation.REOPEN;
     if (!running) {
-      return record(operation, StatusCode.RETRY, result.durability());
+      return StatusCode.RETRY;
     }
     if (!validName(fileName)) {
-      return record(operation, StatusCode.INVALID_EXTERNAL_INPUT, result.durability());
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     long started = generation;
-    StatusCode status = before(operation, 0, 0);
+    StatusCode status = faults.before(this, operation, 0, 0);
     if (!status.isOk()) {
       unknownIfGenerationChanged(started, result);
-      return record(operation, status, result.durability());
+      return status;
     }
-    Entry entry = find(fileName);
+    FaultingDurableEntry entry = find(fileName);
     if (entry == null || entry.volatileDirectory) {
-      return record(operation, StatusCode.CONFLICT, result.durability());
+      return StatusCode.CONFLICT;
     }
     if (openHandles == maxOpenHandles) {
-      return record(operation, StatusCode.RESOURCE_EXHAUSTED, result.durability());
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
     openHandles++;
     DirectoryDurability durability = fileName.equals(entry.durableName)
         ? DirectoryDurability.DURABLE
         : DirectoryDurability.VISIBLE_NOT_DURABLE;
-    result.set(new Handle(entry, generation), durability);
-    status = after(operation, 0, 0);
+    result.set(new FaultingDurableFile(this, faults, entry, generation), durability);
+    status = faults.after(this, operation, 0, 0);
     unknownIfGenerationChanged(started, result);
-    return record(operation, status, result.durability());
+    return status;
   }
 
   /** Abruptly discards volatile images and invalidates every open handle. */
@@ -344,48 +342,11 @@ public final class FaultingDurableDirectory implements DurableDirectory {
     return generation;
   }
 
-  private StatusCode before(DirectoryOperation operation, long position, int requestedBytes) {
-    return boundary(operation, FaultBoundary.BEFORE, position, requestedBytes);
-  }
-
-  private StatusCode after(DirectoryOperation operation, long position, int requestedBytes) {
-    return boundary(operation, FaultBoundary.AFTER, position, requestedBytes);
-  }
-
-  private StatusCode boundary(
-      DirectoryOperation operation,
-      FaultBoundary boundary,
-      long position,
-      int requestedBytes) {
-    FaultOperation faultOperation = faultOperation(operation);
-    injector.evaluate(
-        points.point(operation, boundary),
-        faultOperation,
-        boundary,
-        ++operationSequence,
-        position,
-        requestedBytes,
-        decision);
-    FaultAction action = decision.action();
-    if (!action.isCompatibleWith(faultOperation, boundary)) {
-      return StatusCode.INVARIANT_BROKEN;
-    }
-    if (action == FaultAction.DELAY) {
-      return boundary == FaultBoundary.BEFORE ? StatusCode.RETRY : StatusCode.OK;
-    }
-    if (action == FaultAction.CANCEL) {
-      return StatusCode.CANCELLED;
-    }
-    if (action == FaultAction.CRASH) {
-      performCrash();
-      return StatusCode.IO_FAILURE;
-    }
-    if (action == FaultAction.RESTART) {
-      performCrash();
+  void crashFromFault(boolean restart) {
+    performCrash();
+    if (restart) {
       running = true;
-      return StatusCode.CANCELLED;
     }
-    return StatusCode.OK;
   }
 
   private void performCrash() {
@@ -403,44 +364,22 @@ public final class FaultingDurableDirectory implements DurableDirectory {
     }
   }
 
-  private StatusCode record(
-      DirectoryOperation operation,
-      StatusCode status,
-      DirectoryDurability durability) {
-    return status;
-  }
-
-  private DirectoryDurability namespaceDurability() {
-    for (int index = 0; index < entryCount; index++) {
-      Entry entry = entries[index];
-      if (!same(entry.volatileName, entry.durableName)
-          || entry.volatileDirectory != entry.durableDirectory) {
-        return DirectoryDurability.VISIBLE_NOT_DURABLE;
-      }
-    }
-    return DirectoryDurability.DURABLE;
-  }
-
-  private Entry allocate() {
+  private FaultingDurableEntry allocate() {
     if (entryCount == entries.length) {
       return null;
     }
-    Entry entry = new Entry(maxFileBytes);
+    FaultingDurableEntry entry = new FaultingDurableEntry(maxFileBytes);
     entries[entryCount++] = entry;
     return entry;
   }
 
-  private Entry find(String name) {
+  private FaultingDurableEntry find(String name) {
     for (int index = 0; index < entryCount; index++) {
       if (name.equals(entries[index].volatileName)) {
         return entries[index];
       }
     }
     return null;
-  }
-
-  private static boolean same(String first, String second) {
-    return first == null ? second == null : first.equals(second);
   }
 
   private static boolean validName(String name) {
@@ -453,318 +392,19 @@ public final class FaultingDurableDirectory implements DurableDirectory {
         && !name.equals("..");
   }
 
-  private static int limitedTransfer(int available, long requestedLimit) {
-    return (int) Math.max(0, Math.min(available, requestedLimit));
+  boolean isLive(long openedGeneration) {
+    return running && openedGeneration == generation;
   }
 
-  static FaultOperation faultOperation(DirectoryOperation operation) {
-    return switch (operation) {
-      case CREATE_DIRECTORY -> FaultOperation.DIRECTORY_CREATE;
-      case CREATE_FILE -> FaultOperation.FILE_CREATE;
-      case LIST -> FaultOperation.DIRECTORY_LIST;
-      case RENAME -> FaultOperation.FILE_RENAME;
-      case REMOVE -> FaultOperation.FILE_REMOVE;
-      case TRUNCATE -> FaultOperation.NAMED_TRUNCATE;
-      case FILE_READ -> FaultOperation.DIRECTORY_FILE_READ;
-      case FILE_WRITE -> FaultOperation.DIRECTORY_FILE_WRITE;
-      case FILE_FORCE -> FaultOperation.DIRECTORY_FILE_FORCE;
-      case DIRECTORY_FORCE -> FaultOperation.DIRECTORY_FORCE;
-      case REOPEN -> FaultOperation.DIRECTORY_REOPEN;
-    };
+  boolean closeHandle(long openedGeneration) {
+    if (openedGeneration != generation) {
+      return false;
+    }
+    openHandles--;
+    return true;
   }
 
-  private final class Handle implements DurableFile {
-    private final Entry entry;
-    private final long openedGeneration;
-    private boolean closed;
 
-    private Handle(Entry entry, long openedGeneration) {
-      this.entry = entry;
-      this.openedGeneration = openedGeneration;
-    }
 
-    @Override
-    public StatusCode read(long position, ByteBuffer target, IoResult result) {
-      synchronized (FaultingDurableDirectory.this) {
-        result.reset();
-        StatusCode status = checkState();
-        if (!status.isOk()) {
-          return record(DirectoryOperation.FILE_READ, status, DirectoryDurability.NOT_APPLIED);
-        }
-        if (position < 0 || position > entry.volatileSize) {
-          return record(
-              DirectoryOperation.FILE_READ,
-              StatusCode.INVALID_EXTERNAL_INPUT,
-              DirectoryDurability.NOT_APPLIED);
-        }
-        status = before(DirectoryOperation.FILE_READ, position, target.remaining());
-        if (!status.isOk()) {
-          return record(DirectoryOperation.FILE_READ, status, DirectoryDurability.NOT_APPLIED);
-        }
-        int transferred = Math.min(target.remaining(), entry.volatileSize - (int) position);
-        FaultAction action = decision.action();
-        if (action == FaultAction.SHORT_READ) {
-          transferred = limitedTransfer(transferred, decision.argument());
-        }
-        int xor = action == FaultAction.CORRUPT_READ
-                || action == FaultAction.DETECTED_CORRUPTION
-            ? (int) (decision.argument() == 0 ? 1 : decision.argument())
-            : 0;
-        for (int index = 0; index < transferred; index++) {
-          target.put((byte) (entry.volatileBytes[(int) position + index] ^ xor));
-        }
-        result.setBytesTransferred(transferred);
-        status = action == FaultAction.DETECTED_CORRUPTION
-            ? StatusCode.CORRUPTION
-            : StatusCode.OK;
-        if (status.isOk()) {
-          status = after(DirectoryOperation.FILE_READ, position, transferred);
-        }
-        return record(DirectoryOperation.FILE_READ, status, DirectoryDurability.NOT_APPLIED);
-      }
-    }
 
-    @Override
-    public StatusCode write(long position, ByteBuffer source, IoResult result) {
-      synchronized (FaultingDurableDirectory.this) {
-        result.reset();
-        StatusCode status = checkState();
-        if (!status.isOk()) {
-          return record(DirectoryOperation.FILE_WRITE, status, DirectoryDurability.NOT_APPLIED);
-        }
-        if (position < 0 || position > maxFileBytes) {
-          return record(
-              DirectoryOperation.FILE_WRITE,
-              StatusCode.INVALID_EXTERNAL_INPUT,
-              DirectoryDurability.NOT_APPLIED);
-        }
-        int requested = source.remaining();
-        status = before(DirectoryOperation.FILE_WRITE, position, requested);
-        if (!status.isOk()) {
-          return record(DirectoryOperation.FILE_WRITE, status, DirectoryDurability.NOT_APPLIED);
-        }
-        FaultAction action = decision.action();
-        int available = maxFileBytes - (int) position;
-        int transferred = Math.min(requested, available);
-        status = requested > available ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.OK;
-        if (action == FaultAction.SHORT_WRITE) {
-          transferred = limitedTransfer(transferred, decision.argument());
-        } else if (action == FaultAction.PARTIAL_WRITE || action == FaultAction.TORN_WRITE) {
-          transferred = limitedTransfer(transferred, decision.argument());
-          status = StatusCode.IO_FAILURE;
-        } else if (action == FaultAction.DISK_FULL) {
-          transferred = limitedTransfer(transferred, decision.argument());
-          status = StatusCode.RESOURCE_EXHAUSTED;
-        }
-        source.get(entry.volatileBytes, (int) position, transferred);
-        entry.volatileSize = Math.max(entry.volatileSize, (int) position + transferred);
-        result.setBytesTransferred(transferred);
-        if (action == FaultAction.TORN_WRITE) {
-          System.arraycopy(
-              entry.volatileBytes,
-              (int) position,
-              entry.durableBytes,
-              (int) position,
-              transferred);
-          entry.durableSize = Math.max(entry.durableSize, (int) position + transferred);
-        }
-        if (status.isOk()) {
-          status = after(DirectoryOperation.FILE_WRITE, position, transferred);
-        }
-        return record(
-            DirectoryOperation.FILE_WRITE,
-            status,
-            DirectoryDurability.VISIBLE_NOT_DURABLE);
-      }
-    }
-
-    @Override
-    public StatusCode force(ForceMode mode) {
-      synchronized (FaultingDurableDirectory.this) {
-        StatusCode status = checkState();
-        if (!status.isOk()) {
-          return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
-        }
-        if (mode == null) {
-          return record(DirectoryOperation.FILE_FORCE,
-              StatusCode.INVALID_EXTERNAL_INPUT, DirectoryDurability.NOT_APPLIED);
-        }
-        return forceInternal(0, entry.volatileSize, mode);
-      }
-    }
-
-    /** Range-force adapter used by WAL tests; preserves the same fault hooks as full force. */
-    @Override
-    public StatusCode force(long startInclusive, long endExclusive, ForceMode mode) {
-      synchronized (FaultingDurableDirectory.this) {
-        StatusCode status = checkState();
-        if (!status.isOk()) {
-          return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
-        }
-        if (mode == null || startInclusive < 0 || endExclusive <= startInclusive) {
-          return record(DirectoryOperation.FILE_FORCE,
-              StatusCode.INVALID_EXTERNAL_INPUT, DirectoryDurability.NOT_APPLIED);
-        }
-        return forceInternal(startInclusive, endExclusive, mode);
-      }
-    }
-
-    private StatusCode forceInternal(
-        long startInclusive, long endExclusive, ForceMode mode) {
-      long effectiveStart = Math.min(startInclusive, entry.volatileSize);
-      long effectiveEnd = Math.min(endExclusive, entry.volatileSize);
-      int span = (int) (effectiveEnd - effectiveStart);
-      long started = generation;
-      StatusCode status = before(DirectoryOperation.FILE_FORCE, effectiveStart, span);
-      if (!status.isOk()) {
-        return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
-      }
-      FaultAction action = decision.action();
-      if (action == FaultAction.FORCE_FAILURE || action == FaultAction.DISK_FULL) {
-        status = action == FaultAction.DISK_FULL
-            ? StatusCode.RESOURCE_EXHAUSTED
-            : StatusCode.IO_FAILURE;
-        return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
-      }
-      entry.publishContent(startInclusive, endExclusive, mode);
-      status = after(DirectoryOperation.FILE_FORCE, effectiveStart, span);
-      DirectoryDurability durability = generation != started
-          ? DirectoryDurability.UNKNOWN
-          : mode == ForceMode.CONTENT_AND_METADATA
-              ? DirectoryDurability.DURABLE
-              : DirectoryDurability.VISIBLE_NOT_DURABLE;
-      return record(DirectoryOperation.FILE_FORCE, status, durability);
-    }
-
-    @Override
-    public StatusCode truncate(long sizeBytes) {
-      synchronized (FaultingDurableDirectory.this) {
-        StatusCode status = checkState();
-        if (!status.isOk()) {
-          return record(DirectoryOperation.TRUNCATE, status, DirectoryDurability.NOT_APPLIED);
-        }
-        if (sizeBytes < 0 || sizeBytes > maxFileBytes) {
-          return record(
-              DirectoryOperation.TRUNCATE,
-              StatusCode.INVALID_EXTERNAL_INPUT,
-              DirectoryDurability.NOT_APPLIED);
-        }
-        long started = generation;
-        status = before(DirectoryOperation.TRUNCATE, sizeBytes, 0);
-        if (!status.isOk()) {
-          return record(DirectoryOperation.TRUNCATE, status, DirectoryDurability.NOT_APPLIED);
-        }
-        if (sizeBytes < entry.volatileSize) {
-          Arrays.fill(entry.volatileBytes, (int) sizeBytes, entry.volatileSize, (byte) 0);
-        } else if (sizeBytes > entry.volatileSize) {
-          Arrays.fill(entry.volatileBytes, entry.volatileSize, (int) sizeBytes, (byte) 0);
-        }
-        entry.volatileSize = (int) sizeBytes;
-        status = after(DirectoryOperation.TRUNCATE, sizeBytes, 0);
-        DirectoryDurability durability = generation == started
-            ? DirectoryDurability.VISIBLE_NOT_DURABLE
-            : DirectoryDurability.UNKNOWN;
-        return record(DirectoryOperation.TRUNCATE, status, durability);
-      }
-    }
-
-    @Override
-    public StatusCode size(FileSizeResult result) {
-      synchronized (FaultingDurableDirectory.this) {
-        StatusCode status = checkState();
-        if (!status.isOk()) {
-          return status;
-        }
-        result.setSizeBytes(entry.volatileSize);
-        return StatusCode.OK;
-      }
-    }
-
-    @Override
-    public StatusCode close() {
-      synchronized (FaultingDurableDirectory.this) {
-        if (closed) {
-          return StatusCode.CLOSED;
-        }
-        closed = true;
-        if (openedGeneration != generation) {
-          return StatusCode.CANCELLED;
-        }
-        openHandles--;
-        return StatusCode.OK;
-      }
-    }
-
-    private StatusCode checkState() {
-      if (closed) {
-        return StatusCode.CLOSED;
-      }
-      return running && openedGeneration == generation
-          ? StatusCode.OK
-          : StatusCode.CANCELLED;
-    }
-  }
-
-  private static final class Entry {
-    private final byte[] volatileBytes;
-    private final byte[] durableBytes;
-    private String volatileName;
-    private String durableName;
-    private boolean volatileDirectory;
-    private boolean durableDirectory;
-    private int volatileSize;
-    private int durableSize;
-
-    private Entry(int maxFileBytes) {
-      volatileBytes = new byte[maxFileBytes];
-      durableBytes = new byte[maxFileBytes];
-    }
-
-    private void prepare(String name, boolean directory) {
-      volatileName = name;
-      durableName = null;
-      volatileDirectory = directory;
-      durableDirectory = false;
-      volatileSize = 0;
-      durableSize = 0;
-      Arrays.fill(volatileBytes, (byte) 0);
-      Arrays.fill(durableBytes, (byte) 0);
-    }
-
-    private void publishNamespace() {
-      durableName = volatileName;
-      durableDirectory = volatileDirectory;
-    }
-
-    private void publishContent(long startInclusive, long endExclusive, ForceMode mode) {
-      int start = (int) Math.min(Math.max(0, startInclusive), volatileSize);
-      int end = (int) Math.min(endExclusive, volatileSize);
-      if (end < start) end = start;
-      switch (mode) {
-        case CONTENT -> {
-          int publishedEnd = Math.min(end, durableSize);
-          if (publishedEnd > start) {
-            System.arraycopy(volatileBytes, start, durableBytes, start, publishedEnd - start);
-          }
-        }
-        case CONTENT_AND_METADATA -> {
-          System.arraycopy(volatileBytes, start, durableBytes, start, end - start);
-          if (durableSize > volatileSize) {
-            Arrays.fill(durableBytes, volatileSize, durableSize, (byte) 0);
-          }
-          durableSize = volatileSize;
-        }
-      }
-    }
-
-    private void restoreDurable() {
-      volatileName = durableName;
-      volatileDirectory = durableDirectory;
-      System.arraycopy(durableBytes, 0, volatileBytes, 0, durableSize);
-      if (volatileSize > durableSize) {
-        Arrays.fill(volatileBytes, durableSize, volatileSize, (byte) 0);
-      }
-      volatileSize = durableSize;
-    }
-  }
 }
