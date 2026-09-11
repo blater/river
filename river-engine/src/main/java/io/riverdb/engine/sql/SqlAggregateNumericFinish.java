@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.ExactDecimalAverage;
 import io.riverdb.base.type.ExactDecimal128;
 import io.riverdb.base.type.ExactDecimal128Arithmetic;
 import io.riverdb.base.type.SqlApproximateNumeric;
@@ -95,7 +96,7 @@ final class SqlAggregateNumericFinish {
       int slot,
       int input,
       int result) {
-    if (!ExactDecimal.average(
+    if (!ExactDecimalAverage.compute(
         highs[slot], values[slot], counts[slot], scale(input), result,
         decimal, compactScratch)) return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
     values[slot] = decimal.value;

@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.ExactDecimalAverage;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
@@ -379,7 +380,7 @@ final class SqlPointAggregateExecution {
     int inputScale = SqlTypeDescriptor.typeId(inputDescriptor)
             == SqlTypeDescriptor.TYPE_ID_DECIMAL
         ? SqlTypeDescriptor.parameterTwo(inputDescriptor) : 0;
-    return ExactDecimal.average(
+    return ExactDecimalAverage.compute(
         state.high,
         state.aggregate,
         state.count,

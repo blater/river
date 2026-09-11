@@ -60,7 +60,7 @@ final class ExactDecimalTest {
       low += value;
       high += Long.compareUnsigned(low, previous) < 0 ? 1 : 0;
     }
-    assertTrue(ExactDecimal.average(
+    assertTrue(ExactDecimalAverage.compute(
         high,
         low,
         10,
@@ -70,13 +70,13 @@ final class ExactDecimalTest {
         scratch));
     assertEquals(value, result.value);
 
-    assertTrue(ExactDecimal.average(
+    assertTrue(ExactDecimalAverage.compute(
         0, 3, 2, 0, SqlTypeDescriptor.decimal(18, 0), result, scratch));
     assertEquals(2, result.value);
-    assertTrue(ExactDecimal.average(
+    assertTrue(ExactDecimalAverage.compute(
         -1, -3, 2, 0, SqlTypeDescriptor.decimal(18, 0), result, scratch));
     assertEquals(-2, result.value);
-    assertTrue(ExactDecimal.average(
+    assertTrue(ExactDecimalAverage.compute(
         0, 1, 2, 0, SqlTypeDescriptor.decimal(18, 0), result, scratch));
     assertEquals(0, result.value);
   }
@@ -341,7 +341,7 @@ final class ExactDecimalTest {
       boolean fits = fits(expected, targetDescriptor);
       assertEquals(
           fits,
-          ExactDecimal.average(
+          ExactDecimalAverage.compute(
               sum.shiftRight(64).longValue(),
               sum.longValue(),
               count,
