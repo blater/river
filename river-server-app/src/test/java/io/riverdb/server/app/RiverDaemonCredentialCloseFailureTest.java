@@ -91,7 +91,10 @@ final class RiverDaemonCredentialCloseFailureTest {
     return (RiverFile) Proxy.newProxyInstance(
         RiverDaemonCredentialCloseFailureTest.class.getClassLoader(),
         new Class<?>[] {RiverFile.class},
-        (proxy, method, args) -> "close".equals(method.getName())
-            ? StatusCode.IO_FAILURE : method.invoke(delegate, args));
+        (proxy, method, args) -> {
+          if (!"close".equals(method.getName())) return method.invoke(delegate, args);
+          StatusCode close = (StatusCode) method.invoke(delegate, args);
+          return close.isOk() ? StatusCode.IO_FAILURE : close;
+        });
   }
 }
