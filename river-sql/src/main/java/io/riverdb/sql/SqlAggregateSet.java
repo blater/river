@@ -2,9 +2,12 @@ package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Command-owned selected-output mapping for a deduplicated aggregate set. */
-final class SqlAggregateSet {
+public final class SqlAggregateSet {
+  SqlAggregateSet() { }
+
   static final int MAXIMUM_INVOCATIONS = SqlShapeLimits.MAX_AGGREGATES;
 
   int[] kinds = new int[8];
@@ -57,11 +60,29 @@ final class SqlAggregateSet {
     return true;
   }
 
-  int invocationCount() { return invocationCount; }
-  int outputCount() { return outputCount; }
-  int kind(int invocation) { return kinds[invocation]; }
-  int operandProjection(int invocation) { return operandProjections[invocation]; }
-  int outputInvocation(int output) {
-    return outputInvocations[output];
+  void materializeOperandlessOutputs(SqlProjectionList projections, int projectionCount) {
+    for (int invocation = 0; invocation < invocationCount; invocation++) {
+      if (operandProjections[invocation] >= 0) continue;
+      int output = outputProjection(invocation, projectionCount);
+      if (output >= 0) {
+        projections.expression(output).replaceWithLiteral(1, SqlTypeDescriptor.BIGINT);
+      }
+    }
+  }
+
+  private int outputProjection(int invocation, int projectionCount) {
+    int groups = projectionCount - outputCount;
+    for (int output = 0; output < outputCount; output++) {
+      if (outputInvocations[output] == invocation) return groups + output;
+    }
+    return -1;
+  }
+
+  public int invocationCount() { return invocationCount; }
+  public int outputCount() { return outputCount; }
+  public int kind(int invocation) { return invocation >= 0 && invocation < invocationCount ? kinds[invocation] : 0; }
+  public int operandProjection(int invocation) { return invocation >= 0 && invocation < invocationCount ? operandProjections[invocation] : -1; }
+  public int outputInvocation(int output) {
+    return output >= 0 && output < outputCount ? outputInvocations[output] : -1;
   }
 }

@@ -114,7 +114,7 @@ final class SqlBlockStagePlan {
   }
 
   private StatusCode outputOrder(SqlCommand command, boolean distinct) {
-    return command.isOrdered() && !distinct
+    return (command.orderBy().count() > 0) && !distinct
         ? append(SORT, command.isDescendingOrder() ? -1 : 1) : StatusCode.OK;
   }
 
@@ -124,17 +124,17 @@ final class SqlBlockStagePlan {
         ? append(HAVING, predicates) : StatusCode.OK;
     if (!status.isOk()) return status;
     if (SqlBinder.isScalarAggregate(command.type())) {
-      return append(AGGREGATE, command.aggregateInvocationCount());
+      return append(AGGREGATE, command.aggregates().invocationCount());
     }
     if (SqlBinder.isGroupAggregate(command.type())) {
-      return append(GROUP, command.aggregateInvocationCount());
+      return append(GROUP, command.aggregates().invocationCount());
     }
     return distinct ? append(DISTINCT, command.columnCount()) : StatusCode.OK;
   }
 
   private StatusCode inputOrder(SqlCommand command, boolean distinct) {
     if (!SqlBinder.isGroupAggregate(command.type()) && !distinct) return StatusCode.OK;
-    long detail = distinct && command.isOrdered()
+    long detail = distinct && (command.orderBy().count() > 0)
         ? command.isDescendingOrder() ? -1 : 1 : 0;
     return append(SORT, detail);
   }

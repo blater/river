@@ -11,7 +11,7 @@ final class SqlBlockOutputOrder {
 
   StatusCode beginOutput(
       SqlCommand command, SqlBlockSchema schema, SqlBlockRowStore output) {
-    if (!command.isOrdered()) return output.begin(schema, -1, false);
+    if (!(command.orderBy().count() > 0)) return output.begin(schema, -1, false);
     int count = appendOrder(command, schema);
     return count < 0 ? StatusCode.INVALID_EXTERNAL_INPUT
         : output.begin(schema, columns, descending, count);
@@ -19,19 +19,19 @@ final class SqlBlockOutputOrder {
 
   StatusCode beginOperands(
       SqlCommand command, SqlBlockSchema schema, SqlBlockRowStore output) {
-    if (command.groupExpressionCount() > 0) {
+    if (command.grouping().count() > 0) {
       return beginGroups(command, schema, output);
     }
     if (command.type() == SqlCommandType.DISTINCT_SCAN) {
       return beginDistinct(command, schema, output);
     }
-    return command.aggregateInvocationCount() == 0
+    return command.aggregates().invocationCount() == 0
         ? beginOutput(command, schema, output) : output.begin(schema, -1, false);
   }
 
   private StatusCode beginGroups(
       SqlCommand command, SqlBlockSchema schema, SqlBlockRowStore output) {
-    int count = command.groupExpressionCount();
+    int count = command.grouping().count();
     for (int index = 0; index < count; index++) {
       columns[index] = index;
       descending[index] = false;
@@ -41,7 +41,7 @@ final class SqlBlockOutputOrder {
 
   private StatusCode beginDistinct(
       SqlCommand command, SqlBlockSchema schema, SqlBlockRowStore output) {
-    int count = command.isOrdered() ? appendOrder(command, schema) : 0;
+    int count = (command.orderBy().count() > 0) ? appendOrder(command, schema) : 0;
     if (count < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     for (int column = 0; column < schema.count(); column++) {
       if (!contains(count, column)) {
@@ -53,10 +53,10 @@ final class SqlBlockOutputOrder {
   }
 
   private int appendOrder(SqlCommand command, SqlBlockSchema schema) {
-    int count = command.orderExpressionCount();
+    int count = command.orderBy().count();
     for (int expression = 0; expression < count; expression++) {
       columns[expression] = projection(command, schema, expression);
-      descending[expression] = command.isDescendingOrder(expression);
+      descending[expression] = command.orderBy().descending(expression);
       if (columns[expression] < 0 || contains(expression, columns[expression])) return -1;
     }
     return count;
@@ -71,15 +71,15 @@ final class SqlBlockOutputOrder {
 
   private static int projection(
       SqlCommand command, SqlBlockSchema schema, int expression) {
-    if (command.orderColumnTableName(expression).length() > 0) {
+    if (command.orderBy().qualifier(expression).length() > 0) {
       int projection = SqlProjectionBinder.resolveOrderProjection(command, expression);
       return projection < schema.count() ? projection : -1;
     }
-    int order = schema.find(command.orderColumnName(expression));
+    int order = schema.find(command.orderBy().name(expression));
     if (order >= 0) return order;
     for (int projection = 0; projection < command.columnCount(); projection++) {
       if (SqlBindingNames.same(
-          command.columnName(projection), command.orderColumnName(expression))) {
+          command.columnName(projection), command.orderBy().name(expression))) {
         return projection;
       }
     }

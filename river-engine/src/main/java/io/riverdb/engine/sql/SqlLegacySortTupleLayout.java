@@ -35,11 +35,11 @@ final class SqlLegacySortTupleLayout {
 
   private StatusCode configureGroups(SqlCommand command, int keys) {
     int part = 0;
-    for (; part < command.orderExpressionCount(); part++) {
+    for (; part < command.orderBy().count(); part++) {
       int key = groupOrderKey(command, part);
       if (key < 0 || contains(part, key)) return StatusCode.INVALID_EXTERNAL_INPUT;
       lanes[part] = key;
-      descending[part] = command.isDescendingOrder(part);
+      descending[part] = command.orderBy().descending(part);
     }
     for (int key = 0; key < keys; key++) {
       if (!contains(part, key)) {
@@ -53,30 +53,30 @@ final class SqlLegacySortTupleLayout {
   private StatusCode configureOutputs(
       SqlCommand command, int keys, int projections) {
     for (int part = 0; part < keys; part++) {
-      int lane = command.isOrdered() ? outputOrderKey(command, part) : part;
+      int lane = (command.orderBy().count() > 0) ? outputOrderKey(command, part) : part;
       if (lane < 0 || lane >= projections || contains(part, lane)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       lanes[part] = lane;
-      descending[part] = command.isOrdered() && command.isDescendingOrder(part);
+      descending[part] = (command.orderBy().count() > 0) && command.orderBy().descending(part);
     }
     return StatusCode.OK;
   }
 
   private int groupOrderKey(SqlCommand command, int order) {
-    int outputs = command.columnCount() - command.aggregateOutputCount();
+    int outputs = command.columnCount() - command.aggregates().outputCount();
     for (int output = 0; output < outputs; output++) {
-      if (same(command.orderColumnName(order), command.columnOutputName(output))) {
+      if (same(command.orderBy().name(order), command.columnOutputName(output))) {
         return SqlGroupExpressions.groupKey(command, output);
       }
     }
-    return SqlGroupExpressions.namedGroupKey(command, command.orderColumnName(order));
+    return SqlGroupExpressions.namedGroupKey(command, command.orderBy().name(order));
   }
 
   private static int outputOrderKey(SqlCommand command, int order) {
     for (int output = 0; output < command.columnCount(); output++) {
-      if (same(command.orderColumnName(order), command.columnOutputName(output))
-          || same(command.orderColumnName(order), command.columnName(output))) return output;
+      if (same(command.orderBy().name(order), command.columnOutputName(output))
+          || same(command.orderBy().name(order), command.columnName(output))) return output;
     }
     return -1;
   }

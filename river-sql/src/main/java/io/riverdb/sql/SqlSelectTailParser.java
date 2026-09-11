@@ -40,8 +40,8 @@ final class SqlSelectTailParser {
     if (result.type() != SqlCommandType.SCAN
         && result.type() != SqlCommandType.SELECT
         || result.joinChain() != null
-        || result.aggregateInvocationCount() != 0
-        || result.groupExpressionCount() != 0) {
+        || result.aggregates().invocationCount() != 0
+        || result.grouping().count() != 0) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     result.setSelectForUpdate();

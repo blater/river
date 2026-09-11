@@ -11,7 +11,7 @@ final class SqlDescriptorScanMaterialization {
   SqlDescriptorScanMaterialization(SqlDescriptorScanContext owner) { context = owner; }
 
   StatusCode prepare(SqlCommand command, TableDescriptor table, SqlPhysicalPlan plan) {
-    boolean ordered = command.isOrdered();
+    boolean ordered = (command.orderBy().count() > 0);
     if (context.scalarAggregate && (ordered || context.subqueries.active())) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }

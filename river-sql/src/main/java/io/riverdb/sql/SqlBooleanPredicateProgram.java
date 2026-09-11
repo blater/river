@@ -298,7 +298,7 @@ public final class SqlBooleanPredicateProgram {
       if (Byte.toUnsignedInt(scalarOperators[node]) != SqlScalarExpression.COLUMN) {
         continue;
       }
-      SqlIdentifier qualifier = command.projectionSymbolTable((int) scalarOperands[node]);
+      SqlIdentifier qualifier = command.projections().symbolTable((int) scalarOperands[node]);
       if (qualifier == null || qualifier.length() == 0) return false;
     }
     return true;

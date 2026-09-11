@@ -145,7 +145,7 @@ final class SqlDescriptorPredicateBindings implements SqlDescriptorIndexCandidat
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     int symbol = (int) program.programOperand(leaf, side, 0);
-    int column = table.findColumn(command.predicateSymbolName(symbol));
+    int column = table.findColumn(command.projections().symbolName(symbol));
     if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     values.column(leaf, column);
     values.descriptor(leaf, table.typeDescriptorAt(column));
@@ -164,7 +164,7 @@ final class SqlDescriptorPredicateBindings implements SqlDescriptorIndexCandidat
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     int symbol = (int) program.programOperand(leaf, columnProgram, 0);
-    int column = table.findColumn(command.predicateSymbolName(symbol));
+    int column = table.findColumn(command.projections().symbolName(symbol));
     int literalType = program.programDescriptor(leaf, literalProgram, 0);
     if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (!SqlTypeDescriptor.canCompare(table.typeDescriptorAt(column), literalType)) {

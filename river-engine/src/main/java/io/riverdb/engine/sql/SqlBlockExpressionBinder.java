@@ -160,9 +160,9 @@ final class SqlBlockExpressionBinder {
       int node,
       SqlBlockSchema child) {
     int symbol = (int) expression.operand(node);
-    CharSequence name = command == null ? null : command.projectionSymbolName(symbol);
+    CharSequence name = command == null ? null : command.projections().symbolName(symbol);
     if (name == null) return -1;
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
     if (qualifier == null || qualifier.length() > 0
         && !SqlBindingNames.matchesTable(command, qualifier)) return -1;
     return child.find(name);

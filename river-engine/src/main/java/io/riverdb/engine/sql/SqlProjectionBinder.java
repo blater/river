@@ -71,11 +71,11 @@ final class SqlProjectionBinder {
   }
 
   StatusCode bindOrder(SqlCommand command, BoundSqlStatement bound) {
-    CharSequence qualifier = command.orderColumnTableName(0);
+    CharSequence qualifier = command.orderBy().qualifier(0);
     if (qualifier.length() > 0 && !SqlBindingNames.matchesTable(command, qualifier)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int column = bound.table.findColumn(command.orderColumnName());
+    int column = bound.table.findColumn(command.orderBy().name(0));
     int aliasProjection = resolveOrderProjection(command, 0);
     if (aliasProjection == AMBIGUOUS_ALIAS
         || aliasProjection >= 0
@@ -142,9 +142,9 @@ final class SqlProjectionBinder {
   }
 
   static int resolveOrderProjection(SqlCommand command, int expression) {
-    CharSequence qualifier = command.orderColumnTableName(expression);
+    CharSequence qualifier = command.orderBy().qualifier(expression);
     if (qualifier.length() == 0) return resolveOrderAlias(command, expression);
-    CharSequence name = command.orderColumnName(expression);
+    CharSequence name = command.orderBy().name(expression);
     for (int projection = 0; projection < command.columnCount(); projection++) {
       if (SqlBindingNames.same(command.columnTableName(projection), qualifier)
           && SqlBindingNames.same(command.columnName(projection), name)) return projection;
@@ -156,7 +156,7 @@ final class SqlProjectionBinder {
     int resolved = -1;
     for (int index = 0; index < command.columnCount(); index++) {
       if (!SqlBindingNames.same(
-          command.columnOutputName(index), command.orderColumnName(expression))) {
+          command.columnOutputName(index), command.orderBy().name(expression))) {
         continue;
       }
       if (resolved >= 0 || command.isNullProjection(index)) {

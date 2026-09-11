@@ -256,7 +256,7 @@ public final class SqlQuery {
           && command.type() != SqlCommandType.SELECT
           && command.type() != SqlCommandType.JOIN_SCAN
           || command.isSelectAll() || command.columnCount() != 1
-          || command.isOrdered()) {
+          || (command.orderBy().count() > 0)) {
         return StatusCode.FEATURE_NOT_SUPPORTED;
       }
     }

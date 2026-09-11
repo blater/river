@@ -21,8 +21,8 @@ final class SqlDerivedColumnResolver {
       if (expression.isNullLiteral()) return 1;
       if (!expression.isDirectColumnReference()) return 2;
       int symbol = (int) expression.operand(0);
-      SqlIdentifier table = source.projectionSymbolTable(symbol);
-      SqlIdentifier column = source.projectionSymbolName(symbol);
+      SqlIdentifier table = source.projections().symbolTable(symbol);
+      SqlIdentifier column = source.projections().symbolName(symbol);
       if (table == null || column == null || !validQualifier(table, source)) {
         return -1;
       }

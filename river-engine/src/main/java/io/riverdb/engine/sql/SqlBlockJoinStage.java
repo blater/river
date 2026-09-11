@@ -58,12 +58,12 @@ final class SqlBlockJoinStage {
       int block, SqlBlockRowStore output, SqlBlockRow sourceRow) {
     SqlCommand command = bound.blockPlans().command(block);
     long resultLimit = command.rowLimit();
-    boolean aggregates = command.aggregateInvocationCount() > 0;
+    boolean aggregates = command.aggregates().invocationCount() > 0;
     long outputLimit = aggregates ? Long.MAX_VALUE : resultLimit;
     long inputLimit = resultLimit == 0 ? 0
-        : aggregates || command.isOrdered() ? Long.MAX_VALUE : resultLimit;
+        : aggregates || (command.orderBy().count() > 0) ? Long.MAX_VALUE : resultLimit;
     SqlBlockSchema schema = bound.blockPlans().operandSchema(block);
-    if (command.aggregateInvocationCount() == 0) {
+    if (command.aggregates().invocationCount() == 0) {
       schema = bound.blockPlans().schema(block);
     }
     StatusCode status = outputOrder.beginOperands(command, schema, output);

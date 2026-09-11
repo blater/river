@@ -20,7 +20,7 @@ final class SqlAggregateInvocationBody {
   StatusCode parse(
       CharSequence sql, SqlCommand command, int requestedKind, boolean grouped) {
     int output = command.columnCount();
-    boolean first = command.aggregateInvocationCount() == 0;
+    boolean first = command.aggregates().invocationCount() == 0;
     StatusCode status = input.requireCharacter(sql, '(');
     int kind = status.isOk()
         ? SqlAggregateInvocationKind.consume(input, sql, requestedKind)

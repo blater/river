@@ -46,8 +46,8 @@ final class SqlDerivedPredicateReferences {
       if (predicates.programOperator(leaf, program, node)
           != SqlScalarExpression.COLUMN) continue;
       int symbol = (int) predicates.programOperand(leaf, program, node);
-      SqlIdentifier table = block.projectionSymbolTable(symbol);
-      SqlIdentifier name = block.projectionSymbolName(symbol);
+      SqlIdentifier table = block.projections().symbolTable(symbol);
+      SqlIdentifier name = block.projections().symbolName(symbol);
       if (table == null || name == null
           || !SqlDerivedColumnResolver.validQualifier(table, block)
           || inner != null && SqlDerivedColumnResolver.outputIndex(inner, name) < 0) {
@@ -66,7 +66,7 @@ final class SqlDerivedPredicateReferences {
     for (int node = 0; node < predicates.programNodeCount(leaf, program); node++) {
       if (predicates.programOperator(leaf, program, node)
           != SqlScalarExpression.COLUMN) continue;
-      SqlIdentifier name = command.projectionSymbolName(
+      SqlIdentifier name = command.projections().symbolName(
           (int) predicates.programOperand(leaf, program, node));
       if (name != null && SqlDerivedColumnResolver.sameName(name, output)) return true;
     }

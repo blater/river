@@ -22,16 +22,16 @@ final class SqlDescriptorSetColumns {
       SqlCommand command, SqlScalarExpression expression, CharSequence name) {
     if (expression == null || !expression.isDirectColumnReference()) return false;
     int symbol = (int) expression.operand(0);
-    return SqlDescriptorPrimaryPredicate.same(command.projectionSymbolName(symbol), name);
+    return SqlDescriptorPrimaryPredicate.same(command.projections().symbolName(symbol), name);
   }
 
   private static int symbol(SqlCommand command, TableDescriptor table, int symbol) {
     if (symbol < 0) return -1;
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
     if (qualifier.length() != 0
         && !SqlDescriptorPrimaryPredicate.same(qualifier, command.tableName())
         && !(command.tableAlias().length() > 0
             && SqlDescriptorPrimaryPredicate.same(qualifier, command.tableAlias()))) return -1;
-    return table.findColumn(command.projectionSymbolName(symbol));
+    return table.findColumn(command.projections().symbolName(symbol));
   }
 }

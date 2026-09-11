@@ -153,27 +153,27 @@ final class SqlBlockPlanStages {
       SqlBlockSchema output) {
     if (joins == null) return StatusCode.FEATURE_NOT_SUPPORTED;
     StatusCode status = joins.bind(bound, plans, block, output);
-    if (status.isOk() && bound.command.aggregateInvocationCount() > 0) {
+    if (status.isOk() && bound.command.aggregates().invocationCount() > 0) {
       plans.operandSchema(block).copyFrom(output);
       status = aggregates.bindJoined(
           bound.command,
           plans.operandSchema(block),
           output,
           bound,
-          bound.command.groupExpressionCount() > 0);
+          bound.command.grouping().count() > 0);
     }
     return status;
   }
 
   private StatusCode validateOrder(
       BoundSqlStatement bound, int block, SqlBlockSchema output) {
-    if (block != 0 || !bound.command.isOrdered()) return StatusCode.OK;
-    if (bound.command.orderColumnTableName(0).length() > 0) {
+    if (block != 0 || !(bound.command.orderBy().count() > 0)) return StatusCode.OK;
+    if (bound.command.orderBy().qualifier(0).length() > 0) {
       int projection = SqlProjectionBinder.resolveOrderProjection(bound.command, 0);
       return projection >= 0 && projection < output.count()
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return output.find(bound.command.orderColumnName()) < 0
+    return output.find(bound.command.orderBy().name(0)) < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.OK;
   }
 

@@ -95,7 +95,7 @@ final class SqlScanPreparation {
     plan.setFilterCount(bound.predicateCount);
     int groupedColumn = distinct ? bound.distinctColumn : bound.groupColumn;
     int aggregateColumn = distinct ? -1 : bound.groupAggregateColumn;
-    boolean ordered = bound.command.groupExpressionCount() == 1
+    boolean ordered = bound.command.grouping().count() == 1
         && (groupedColumn == 0
         || groupedColumn > 0
             && bound.table.hasIndexOn(groupedColumn)
@@ -134,7 +134,7 @@ final class SqlScanPreparation {
         bound.projectedColumns, bound.projectedTypeDescriptors,
         bound.projectedColumnCount, command);
     int groupOutputs = bound.command.columnCount()
-        - bound.command.aggregateOutputCount();
+        - bound.command.aggregates().outputCount();
     for (int output = 0; output < groupOutputs; output++) {
       int key = SqlGroupExpressions.groupKey(bound.command, output);
       int column = bound.projectionPrograms.rawColumn(key);
@@ -142,8 +142,8 @@ final class SqlScanPreparation {
           ? bound.table.isNullable(column)
           : SqlResultNullability.program(bound, key));
     }
-    for (int output = 0; output < bound.command.aggregateOutputCount(); output++) {
-      int invocation = bound.command.aggregateOutputInvocation(output);
+    for (int output = 0; output < bound.command.aggregates().outputCount(); output++) {
+      int invocation = bound.command.aggregates().outputInvocation(output);
       int kind = bound.aggregates.kind(invocation);
       plan.setResultNullable(groupOutputs + output,
           kind != SqlAggregateKind.COUNT && kind != SqlAggregateKind.COUNT_VALUE

@@ -50,10 +50,10 @@ final class SqlCreateTableConstraints {
   private StatusCode parseBody(
       CharSequence sql, SqlCommand command, CharSequence constraintName) {
     int kind = kind(sql);
-    StatusCode status = command.beginTableConstraint(kind);
+    StatusCode status = command.tableConstraints.begin(kind);
     if (!status.isOk()) return status;
     if (constraintName != null) {
-      command.writableTableConstraintName().copyFrom(constraintName);
+      command.tableConstraints.name().copyFrom(constraintName);
     }
     if (kind == SqlTableConstraintSet.CHECK) return checks.parse(sql, command);
     if (kind != SqlTableConstraintSet.UNIQUE) status = input.requireKeyword(sql, "KEY");
@@ -64,7 +64,7 @@ final class SqlCreateTableConstraints {
     if (kind != SqlTableConstraintSet.FOREIGN) return keyParts.append(command, count);
     status = input.requireKeyword(sql, "REFERENCES");
     if (status.isOk()) {
-      status = input.identifier(sql, command.writableTableConstraintReferenceTable());
+      status = input.identifier(sql, command.tableConstraints.table());
     }
     int targets = status.isOk() ? keyParts.parseTargets(sql, command, count) : -1;
     return targets == count ? StatusCode.OK

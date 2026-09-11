@@ -41,7 +41,7 @@ final class SqlDescriptorProjectionShape {
   }
 
   int orderColumn(SqlCommand command, TableDescriptor table) {
-    int source = table.findColumn(command.orderColumnName());
+    int source = table.findColumn(command.orderBy().name(0));
     if (source >= 0) return source;
     int projection = orderAlias(command, 0);
     return projection < 0 ? -2 : projection;
@@ -80,14 +80,14 @@ final class SqlDescriptorProjectionShape {
   }
 
   private StatusCode prepareOrder(SqlCommand command, TableDescriptor table) {
-    orderCount = command.orderExpressionCount();
+    orderCount = command.orderBy().count();
     StatusCode status = reserveOrder(orderCount);
     for (int expression = 0; status.isOk() && expression < orderCount; expression++) {
-      int source = table.findColumn(command.orderColumnName(expression));
+      int source = table.findColumn(command.orderBy().name(expression));
       if (source < 0) source = orderAlias(command, expression);
       if (source < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
       orderColumns[expression] = source;
-      descending[expression] = command.isDescendingOrder(expression);
+      descending[expression] = command.orderBy().descending(expression);
     }
     return status;
   }
@@ -96,7 +96,7 @@ final class SqlDescriptorProjectionShape {
     int found = -1;
     for (int projection = 0; projection < count; projection++) {
       if (!SqlDescriptorPrimaryPredicate.same(
-          command.columnOutputName(projection), command.orderColumnName(expression))) continue;
+          command.columnOutputName(projection), command.orderBy().name(expression))) continue;
       if (found >= 0 || columns[projection] < 0) return -1;
       found = columns[projection];
     }
@@ -108,12 +108,12 @@ final class SqlDescriptorProjectionShape {
     if (command.isNullProjection(projection)) return -1;
     int symbol = command.directProjectionSymbol(projection);
     if (symbol < 0) return -2;
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
     if (qualifier.length() != 0
         && !SqlDescriptorPrimaryPredicate.same(qualifier, command.tableName())
         && !(command.tableAlias().length() > 0
             && SqlDescriptorPrimaryPredicate.same(qualifier, command.tableAlias()))) return -2;
-    int column = table.findColumn(command.projectionSymbolName(symbol));
+    int column = table.findColumn(command.projections().symbolName(symbol));
     return column < 0 ? -2 : column;
   }
 }

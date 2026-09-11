@@ -150,10 +150,10 @@ final class SqlTemplateQueryShape {
 
   private StatusCode restoreOrder(SqlCommand target) {
     for (int order = 0; order < orderColumns.length; order++) {
-      SqlIdentifier name = target.writableNextOrderColumnName();
+      SqlIdentifier name = target.orderBy.append();
       if (name == null) return StatusCode.RESOURCE_EXHAUSTED;
       name.copyFrom(orderColumns[order]);
-      target.writableOrderColumnTableName(order).copyFrom(orderTables[order]);
+      target.orderBy.qualifier(order).copyFrom(orderTables[order]);
       target.setDescendingOrder(order, orderDescending[order]);
     }
     return StatusCode.OK;
@@ -161,13 +161,13 @@ final class SqlTemplateQueryShape {
 
   private StatusCode restoreAggregates(SqlCommand target) {
     for (int invocation = 0; invocation < aggregateKinds.length; invocation++) {
-      if (target.appendAggregateInvocation(
+      if (target.aggregates.appendInvocation(
           aggregateKinds[invocation], aggregateOperands[invocation]) != invocation) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
     }
     for (int output : aggregateOutputs) {
-      if (!target.appendAggregateOutput(output)) return StatusCode.RESOURCE_EXHAUSTED;
+      if (!target.aggregates.appendOutput(output)) return StatusCode.RESOURCE_EXHAUSTED;
     }
     return StatusCode.OK;
   }
@@ -176,7 +176,7 @@ final class SqlTemplateQueryShape {
     for (int group = 0; group < groupExpressions.length; group++) {
       StatusCode status = groupExpressions[group].restore(target.scalarExpression);
       if (!status.isOk()) return status;
-      status = target.appendGroupExpression(groupProjections[group], target.scalarExpression);
+      status = target.grouping.append(groupProjections[group], target.scalarExpression);
       if (!status.isOk()) return status;
       target.grouping.setOperandProjection(group, groupOperandProjections[group]);
     }

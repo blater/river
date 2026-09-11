@@ -31,7 +31,7 @@ final class SqlUnionLeafExecution {
     if (source.finalized()) {
       return appendStreaming(Long.MAX_VALUE, input, output);
     }
-    return command.isOrdered()
+    return (command.orderBy().count() > 0)
         ? appendOrdered(command, input, output)
         : appendStreaming(command.rowLimit(), input, output);
   }

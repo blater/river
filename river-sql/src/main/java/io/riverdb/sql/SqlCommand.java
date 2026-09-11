@@ -3,7 +3,6 @@ package io.riverdb.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.text.Utf8Text;
-import io.riverdb.base.type.SqlTypeDescriptor;
 import java.nio.ByteBuffer;
 
 /** Caller-owned parsed SQL command for the first executable point-statement subset. */
@@ -45,6 +44,7 @@ public final class SqlCommand {
       new SqlMutationExpressions();
   final SqlAggregateSet aggregates = new SqlAggregateSet();
   final SqlGroupingList grouping = new SqlGroupingList();
+  final SqlCommandColumnConstraints columnConstraints = new SqlCommandColumnConstraints();
   final SqlTableConstraintSet tableConstraints = new SqlTableConstraintSet();
   final SqlBooleanPredicateProgram wherePredicates =
       new SqlBooleanPredicateProgram();
@@ -54,29 +54,15 @@ public final class SqlCommand {
   SqlIdentifier[] columnNames = new SqlIdentifier[8];
   SqlIdentifier[] columnTableNames = new SqlIdentifier[8];
   SqlIdentifier[] columnAliases = new SqlIdentifier[8];
-  SqlIdentifier[] columnReferenceTableNames = new SqlIdentifier[8];
-  SqlIdentifier[] columnReferenceColumnNames = new SqlIdentifier[8];
   final SqlOrderByList orderBy = new SqlOrderByList();
   final SqlInsertRows inserts = new SqlInsertRows();
   long[] updateHighs = new long[8];
   long[] updateValues = new long[8];
-  long[] columnDefaultHighs = new long[8];
-  long[] columnDefaultValues = new long[8];
-  byte[] columnDefaultKinds = new byte[8];
-  int[] columnTypeDescriptors = new int[8];
-  long[] columnCheckHighs = new long[8];
-  long[] columnCheckValues = new long[8];
-  int[] columnCheckTypeDescriptors = new int[8];
-  SqlComparison[] columnCheckComparisons = new SqlComparison[8];
   boolean[] nullUpdates = new boolean[8];
   boolean[] defaultUpdates = new boolean[8];
   int[] updateTypeDescriptors = new int[8];
   int[] updateOperators = new int[8];
   boolean[] nullProjections = new boolean[8];
-  boolean[] columnNotNull = new boolean[8];
-  boolean[] columnDefaults = new boolean[8];
-  boolean[] columnUnique = new boolean[8];
-  boolean[] columnReferences = new boolean[8];
   final byte[] textBytes = new byte[MAXIMUM_TEXT_BYTES];
   SqlCommandType type;
   long key;
@@ -92,8 +78,6 @@ public final class SqlCommand {
   boolean readCommittedTransaction;
   boolean serializableTransaction;
   boolean descendingOrder;
-  boolean primaryKeyIdentity;
-  int primaryKeyIdentityColumn = -1;
   int insertRowCount;
   int insertColumnCount;
   int updateColumnCount;
@@ -109,10 +93,16 @@ public final class SqlCommand {
       columnNames[index] = new SqlIdentifier();
       columnTableNames[index] = new SqlIdentifier();
       columnAliases[index] = new SqlIdentifier();
-      columnReferenceTableNames[index] = new SqlIdentifier();
-      columnReferenceColumnNames[index] = new SqlIdentifier();
     }
   }
+
+  /** Borrowed parsed metadata; copy retained values before command reuse. */
+  public SqlMutationExpressions mutationExpressions() { return mutationExpressions; }
+  public SqlAggregateSet aggregates() { return aggregates; }
+  public SqlGroupingList grouping() { return grouping; }
+  public SqlOrderByList orderBy() { return orderBy; }
+  public SqlTableConstraintSet tableConstraints() { return tableConstraints; }
+  public SqlProjectionList projections() { return projections; }
 
   public void reset() {
     SqlCommandReset.reset(this);
@@ -123,63 +113,9 @@ public final class SqlCommand {
     joinChain = null;
   }
 
-  StatusCode lowerJoinAggregateSource(SqlCommand root) {
-    for (int invocation = 0; invocation < aggregates.invocationCount(); invocation++) {
-      if (aggregates.operandProjection(invocation) >= 0) continue;
-      int output = aggregateOutputProjection(invocation);
-      if (output >= 0) {
-        projections.expression(output).replaceWithLiteral(1, SqlTypeDescriptor.BIGINT);
-      }
-    }
-    for (int group = 0; group < grouping.count(); group++) {
-      int projection = grouping.projection(group);
-      if (projection < 0) {
-        projection = columnCount;
-        SqlIdentifier column = writableNextColumnName();
-        if (column == null) return StatusCode.RESOURCE_EXHAUSTED;
-        SqlScalarExpression destination = projections.expression(projection);
-        StatusCode status = destination.copyFrom(grouping.expression(group));
-        if (!status.isOk()) return status;
-        int symbol = destination.isDirectColumnReference()
-            ? (int) destination.operand(0) : -1;
-        SqlIdentifier name = symbol < 0 ? null : projections.symbolName(symbol);
-        if (name != null) column.copyFrom(name);
-      }
-      root.grouping.setOperandProjection(group, projection);
-    }
-    aggregates.reset();
-    grouping.reset();
-    booleanHavingPredicates.reset();
-    orderBy.reset();
-    descendingOrder = false;
-    rowLimit = Long.MAX_VALUE;
-    type = SqlCommandType.JOIN_SCAN;
-    return StatusCode.OK;
-  }
-
-  private int aggregateOutputProjection(int invocation) {
-    int groups = columnCount - aggregates.outputCount();
-    for (int output = 0; output < aggregates.outputCount(); output++) {
-      if (aggregates.outputInvocation(output) == invocation) return groups + output;
-    }
-    return -1;
-  }
-
-  void lowerJoinAggregateRoot() {
-    wherePredicates.reset();
-    if (joinChain != null) joinChain.clearPredicates();
-    type = SqlAggregateCommandType.route(
-        aggregateKind(0), groupExpressionCount() > 0);
-  }
-
   /** Copies one parsed query block into statement-owned execution scratch. */
   public StatusCode copyBlockFrom(SqlCommand source) {
-    if (source == null || !source.isAvailable()) {
-      reset();
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = copyQueryFrom(source);
-    return status.isOk() ? finish() : status;
+    return SqlCommandQueryState.copyBlock(this, source);
   }
 
   void set(SqlCommandType commandType, long primaryKey, long rowValue) {
@@ -324,7 +260,7 @@ public final class SqlCommand {
     if (columnCount >= maximum || !SqlCommandCapacity.ensureColumns(this, columnCount + 1)) {
       return null;
     }
-    columnTypeDescriptors[columnCount] = SqlTypeDescriptor.BIGINT;
+    columnConstraints.initializeColumn(columnCount);
     return columnNames[columnCount++];
   }
 
@@ -361,16 +297,12 @@ public final class SqlCommand {
     return SqlCommandProjectionView.setColumn(this, index, table, name);
   }
 
-  StatusCode setProjectionNull(int index) {
-    return SqlCommandProjectionView.setNull(this, index);
-  }
-
   void markLastColumnNotNull() {
-    SqlCommandColumnConstraints.markNotNull(this);
+    columnConstraints.markNotNull(columnCount);
   }
 
   void markPrimaryKeyIdentity() {
-    SqlCommandColumnConstraints.markIdentity(this);
+    columnConstraints.markIdentity(columnCount);
   }
 
   void markLastColumnDefault(long value) {
@@ -378,47 +310,36 @@ public final class SqlCommand {
   }
 
   void markLastColumnDefault(long high, long value) {
-    SqlCommandColumnConstraints.markDefault(this, high, value);
+    columnConstraints.markDefault(columnCount, high, value);
   }
 
   void markLastColumnCurrentDefault(int kind) {
-    SqlCommandColumnConstraints.markCurrentDefault(this, kind);
-  }
-
-  void markLastColumnVarchar(int maximumScalars) {
-    SqlCommandColumnConstraints.markVarchar(this, maximumScalars);
+    columnConstraints.markCurrentDefault(columnCount, kind);
   }
 
   void markLastColumnType(int descriptor) {
-    SqlCommandColumnConstraints.markType(this, descriptor);
+    columnConstraints.markType(columnCount, descriptor);
   }
 
   StatusCode markLastColumnUnique() {
-    return SqlCommandColumnConstraints.markUnique(this);
+    return columnConstraints.markUnique(columnCount);
   }
-
-  StatusCode beginTableConstraint(int kind) { return tableConstraints.begin(kind); }
-  StatusCode addTableConstraintPart(CharSequence part, CharSequence target) {
-    return tableConstraints.addPart(part, target);
-  }
-  SqlIdentifier writableTableConstraintName() { return tableConstraints.name(); }
-  SqlIdentifier writableTableConstraintReferenceTable() { return tableConstraints.table(); }
 
   SqlIdentifier writableLastColumnReferenceTableName() {
-    return SqlCommandColumnConstraints.referenceTable(this);
+    return columnConstraints.referenceTable(columnCount);
   }
 
   SqlIdentifier writableLastColumnReferenceColumnName() {
-    return SqlCommandColumnConstraints.referenceColumn(this);
+    return columnConstraints.referenceColumn(columnCount);
   }
 
   StatusCode markLastColumnReference() {
-    return SqlCommandColumnConstraints.markReference(this);
+    return columnConstraints.markReference(columnCount);
   }
 
   void markLastColumnCheck(
       SqlComparison comparison, long high, long value, int descriptor) {
-    SqlCommandColumnConstraints.markCheck(this, comparison, high, value, descriptor);
+    columnConstraints.markCheck(columnCount, comparison, high, value, descriptor);
   }
 
   long storeText(char[] source, int offset, int length) {
@@ -465,13 +386,6 @@ public final class SqlCommand {
     SqlIdentifier current = orderBy.name(0);
     return current == null ? orderBy.append() : current;
   }
-
-  SqlIdentifier writableNextOrderColumnName() { return orderBy.append(); }
-
-  SqlIdentifier writableOrderColumnTableName(int expression) {
-    return orderBy.qualifier(expression);
-  }
-
 
   public SqlCommandType type() {
     return type;
@@ -544,26 +458,6 @@ public final class SqlCommand {
     return booleanHavingPredicates;
   }
 
-  public SqlIdentifier predicateSymbolTable(int index) {
-    return SqlCommandProjectionView.symbolTable(this, index);
-  }
-
-  public SqlIdentifier predicateSymbolName(int index) {
-    return SqlCommandProjectionView.symbolName(this, index);
-  }
-
-  public int projectionSymbolCount() {
-    return SqlCommandProjectionView.symbolCount(this);
-  }
-
-  public SqlIdentifier projectionSymbolTable(int index) {
-    return SqlCommandProjectionView.symbolTable(this, index);
-  }
-
-  public SqlIdentifier projectionSymbolName(int index) {
-    return SqlCommandProjectionView.symbolName(this, index);
-  }
-
   public int directProjectionSymbol(int index) {
     return SqlCommandProjectionView.directSymbol(this, index);
   }
@@ -585,115 +479,87 @@ public final class SqlCommand {
   }
 
   public boolean columnIsNotNull(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnNotNull[index];
+    return columnConstraints.columnIsNotNull(columnCount, index);
   }
 
   public boolean columnHasDefault(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnDefaults[index];
+    return columnConstraints.columnHasDefault(columnCount, index);
   }
 
   public long columnDefaultValue(int index) {
-    return columnHasDefault(index) ? columnDefaultValues[index] : 0;
+    return columnConstraints.columnDefaultValue(columnCount, index);
   }
 
   public long columnDefaultHigh(int index) {
-    return columnHasDefault(index) ? columnDefaultHighs[index] : 0;
+    return columnConstraints.columnDefaultHigh(columnCount, index);
   }
 
   public int columnDefaultKind(int index) {
-    return columnHasDefault(index)
-        ? Byte.toUnsignedInt(columnDefaultKinds[index]) : 0;
+    return columnConstraints.columnDefaultKind(columnCount, index);
   }
 
   public boolean columnIsVarchar(int index) {
-    return index >= 0
-        && index < columnCount
-        && SqlTypeDescriptor.typeId(columnTypeDescriptors[index])
-            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
+    return columnConstraints.columnIsVarchar(columnCount, index);
   }
 
   public int columnTypeDescriptor(int index) {
-    return index >= 0 && index < columnCount ? columnTypeDescriptors[index] : 0;
+    return columnConstraints.columnTypeDescriptor(columnCount, index);
   }
 
   public boolean columnIsUnique(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnUnique[index];
+    return columnConstraints.columnIsUnique(columnCount, index);
   }
 
   public boolean hasUniqueColumns() {
-    return SqlCommandColumnConstraints.any(columnUnique, columnCount);
+    return columnConstraints.hasUniqueColumns(columnCount);
   }
 
   public boolean columnHasReference(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnReferences[index];
+    return columnConstraints.columnHasReference(columnCount, index);
   }
 
   public SqlIdentifier columnReferenceTableName(int index) {
-    return columnHasReference(index) ? columnReferenceTableNames[index] : null;
+    return columnConstraints.columnReferenceTableName(columnCount, index);
   }
 
   public SqlIdentifier columnReferenceColumnName(int index) {
-    return columnHasReference(index) ? columnReferenceColumnNames[index] : null;
+    return columnConstraints.columnReferenceColumnName(columnCount, index);
   }
 
   public boolean hasReferences() {
-    return SqlCommandColumnConstraints.any(columnReferences, columnCount);
+    return columnConstraints.hasReferences(columnCount);
   }
 
   public boolean hasPrimaryKeyIdentity() {
-    return primaryKeyIdentity;
+    return columnConstraints.hasPrimaryKeyIdentity();
   }
 
   int primaryKeyIdentityColumn() {
-    return primaryKeyIdentityColumn;
+    return columnConstraints.primaryKeyIdentityColumn();
   }
 
   void markColumnNotNull(int index) {
-    if (index >= 0 && index < columnCount) columnNotNull[index] = true;
+    columnConstraints.markNotNull(columnCount, index);
   }
 
   public boolean columnHasCheck(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnCheckComparisons[index] != null;
+    return columnConstraints.columnHasCheck(columnCount, index);
   }
 
   public SqlComparison columnCheckComparison(int index) {
-    return columnHasCheck(index) ? columnCheckComparisons[index] : null;
+    return columnConstraints.columnCheckComparison(columnCount, index);
   }
 
   public long columnCheckValue(int index) {
-    return columnHasCheck(index) ? columnCheckValues[index] : 0;
+    return columnConstraints.columnCheckValue(columnCount, index);
   }
 
   public long columnCheckHigh(int index) {
-    return columnHasCheck(index) ? columnCheckHighs[index] : 0;
+    return columnConstraints.columnCheckHigh(columnCount, index);
   }
 
   public int columnCheckTypeDescriptor(int index) {
-    return columnHasCheck(index) ? columnCheckTypeDescriptors[index] : 0;
-  }
-
-  public int tableConstraintCount() { return tableConstraints.count(); }
-  public int tableConstraintKind(int index) { return tableConstraints.kind(index); }
-  public SqlIdentifier tableConstraintName(int index) { return tableConstraints.name(index); }
-  public int tableConstraintPartCount(int index) { return tableConstraints.partCount(index); }
-  public SqlIdentifier tableConstraintPartName(int index, int part) {
-    return tableConstraints.part(index, part);
-  }
-  public SqlIdentifier tableConstraintReferenceTableName(int index) {
-    return tableConstraints.table(index);
-  }
-  public SqlIdentifier tableConstraintReferencePartName(int index, int part) {
-    return tableConstraints.target(index, part);
+    return columnConstraints.columnCheckTypeDescriptor(columnCount, index);
   }
 
   public SqlIdentifier columnTableName(int index) {
@@ -716,21 +582,6 @@ public final class SqlCommand {
     return SqlCommandProjectionView.isNull(this, index);
   }
 
-  public SqlIdentifier orderColumnName() {
-    return orderBy.name(0);
-  }
-
-  public int orderExpressionCount() { return orderBy.count(); }
-  public SqlIdentifier orderColumnName(int expression) { return orderBy.name(expression); }
-  public SqlIdentifier orderColumnTableName(int expression) {
-    return orderBy.qualifier(expression);
-  }
-
-
-  public boolean isOrdered() {
-    return orderBy.count() > 0;
-  }
-
   void setDescendingOrder(boolean descending) {
     descendingOrder = descending;
     orderBy.descending(0, descending);
@@ -748,10 +599,6 @@ public final class SqlCommand {
   void setDescendingOrder(int expression, boolean descending) {
     orderBy.descending(expression, descending);
     if (expression == 0) descendingOrder = descending;
-  }
-
-  public boolean isDescendingOrder(int expression) {
-    return orderBy.descending(expression);
   }
 
   public long key() {
@@ -785,30 +632,6 @@ public final class SqlCommand {
 
   public int updateExpression(int index) {
     return updateHasExpression(index) ? (int) updateValue(index) : -1;
-  }
-
-  public int mutationExpressionCount() {
-    return SqlCommandExpressionView.mutationCount(this);
-  }
-
-  public int mutationExpressionNodeCount(int expression) {
-    return SqlCommandExpressionView.mutationNodes(this, expression);
-  }
-
-  public int mutationExpressionOperator(int expression, int node) {
-    return SqlCommandExpressionView.mutationOperator(this, expression, node);
-  }
-
-  public long mutationExpressionOperand(int expression, int node) {
-    return SqlCommandExpressionView.mutationOperand(this, expression, node);
-  }
-
-  public long mutationExpressionOperandHigh(int expression, int node) {
-    return SqlCommandExpressionView.mutationOperandHigh(this, expression, node);
-  }
-
-  public int mutationExpressionTypeDescriptor(int expression, int node) {
-    return SqlCommandExpressionView.mutationDescriptor(this, expression, node);
   }
 
   public int updateOperator(int index) {
@@ -886,14 +709,6 @@ public final class SqlCommand {
     return SqlCommandUpdateView.typeDescriptor(this, index);
   }
 
-  public long scanLowerInclusive() {
-    return scanLowerInclusive;
-  }
-
-  public long scanUpperExclusive() {
-    return scanUpperExclusive;
-  }
-
   public boolean isBoundedScan() {
     return boundedScan;
   }
@@ -904,47 +719,6 @@ public final class SqlCommand {
 
   public boolean isSelectAll() {
     return selectAll;
-  }
-
-  int appendAggregateInvocation(int kind, int operandProjection) {
-    return aggregates.appendInvocation(kind, operandProjection);
-  }
-
-  boolean appendAggregateOutput(int invocation) {
-    return aggregates.appendOutput(invocation);
-  }
-
-  public int aggregateInvocationCount() {
-    return SqlCommandExpressionView.aggregateCount(this);
-  }
-
-  public int aggregateOutputCount() {
-    return SqlCommandExpressionView.aggregateOutputs(this);
-  }
-
-  public int aggregateKind(int invocation) {
-    return SqlCommandExpressionView.aggregateKind(this, invocation);
-  }
-
-  public int aggregateOperandProjection(int invocation) {
-    return SqlCommandExpressionView.aggregateOperand(this, invocation);
-  }
-
-  public int aggregateOutputInvocation(int output) {
-    return SqlCommandExpressionView.aggregateOutput(this, output);
-  }
-
-  StatusCode appendGroupExpression(int projection, SqlScalarExpression expression) {
-    return grouping.append(projection, expression);
-  }
-
-  public int groupExpressionCount() { return grouping.count(); }
-  public int groupProjection(int expression) { return grouping.projection(expression); }
-  public int groupOperandProjection(int expression) {
-    return grouping.operandProjection(expression);
-  }
-  public SqlScalarExpression groupExpression(int expression) {
-    return grouping.expression(expression);
   }
 
   public boolean isSerializableTransaction() {

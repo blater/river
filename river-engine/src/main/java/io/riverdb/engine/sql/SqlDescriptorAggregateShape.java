@@ -16,14 +16,14 @@ final class SqlDescriptorAggregateShape {
       TableDescriptor table,
       SqlDescriptorSetMaterialization materialization) {
     bound.reset();
-    StatusCode status = bound.reserve(command.aggregateInvocationCount());
+    StatusCode status = bound.reserve(command.aggregates().invocationCount());
     for (int invocation = 0;
-        status.isOk() && invocation < command.aggregateInvocationCount(); invocation++) {
-      int projection = command.aggregateOperandProjection(invocation);
+        status.isOk() && invocation < command.aggregates().invocationCount(); invocation++) {
+      int projection = command.aggregates().operandProjection(invocation);
       int column = projection < 0 ? -1 : materialization.aggregateLane(invocation);
       int input = column < 0
           ? SqlTypeDescriptor.BIGINT : materialization.descriptor(column);
-      int kind = command.aggregateKind(invocation);
+      int kind = command.aggregates().kind(invocation);
       status = validate(kind, projection, column, input);
       int result = status.isOk()
           ? SqlProjectionBinder.aggregateResultDescriptor(kind, input) : 0;

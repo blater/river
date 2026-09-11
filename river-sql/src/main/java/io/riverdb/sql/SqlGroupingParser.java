@@ -15,13 +15,13 @@ final class SqlGroupingParser {
   }
 
   StatusCode parse(CharSequence sql, SqlCommand command) {
-    int outputs = command.columnCount() - command.aggregateOutputCount();
+    int outputs = command.columnCount() - command.aggregates().outputCount();
     StatusCode status;
     do {
       scratch.reset();
       status = expressions.parseScratch(sql, command, scratch);
       int projection = status.isOk() ? matchingProjection(command, outputs) : -1;
-      if (status.isOk()) status = command.appendGroupExpression(projection, scratch);
+      if (status.isOk()) status = command.grouping.append(projection, scratch);
     } while (status.isOk() && input.consumeCharacter(sql, ','));
     for (int output = 0; status.isOk() && output < outputs; output++) {
       if (!groupedProjection(command, output)) status = StatusCode.INVALID_EXTERNAL_INPUT;

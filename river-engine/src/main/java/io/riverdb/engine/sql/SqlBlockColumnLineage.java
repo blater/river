@@ -21,7 +21,7 @@ final class SqlBlockColumnLineage {
       SqlScalarExpression expression = command.projectionExpression(column);
       if (expression == null || !expression.isDirectColumnReference()) return -1;
       int symbol = (int) expression.operand(0);
-      CharSequence name = command.projectionSymbolName(symbol);
+      CharSequence name = command.projections().symbolName(symbol);
       SqlBlockSchema child = block + 1 < plans.count()
           ? plans.schema(block + 1) : plans.baseSchema();
       column = name == null ? -1 : child.find(name);
@@ -33,7 +33,7 @@ final class SqlBlockColumnLineage {
   private static boolean projectionOnly(SqlCommand command) {
     SqlCommandType type = command == null ? null : command.type();
     return (type == SqlCommandType.SELECT || type == SqlCommandType.SCAN)
-        && command.aggregateInvocationCount() == 0
+        && command.aggregates().invocationCount() == 0
         && command.rowLimit() == Long.MAX_VALUE;
   }
 }

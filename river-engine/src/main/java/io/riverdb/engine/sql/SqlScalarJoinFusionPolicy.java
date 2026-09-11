@@ -12,18 +12,18 @@ final class SqlScalarJoinFusionPolicy {
     SqlCommand root = plans.command(0);
     SqlCommand join = plans.command(1);
     if (join.type() != SqlCommandType.JOIN_SCAN
-        || join.isOrdered()
+        || (join.orderBy().count() > 0)
         || join.rowLimit() != Long.MAX_VALUE
-        || join.aggregateInvocationCount() != 0
+        || join.aggregates().invocationCount() != 0
         || !SqlBinder.isScalarAggregate(root.type())
-        || root.groupExpressionCount() != 0
-        || root.aggregateInvocationCount() == 0
+        || root.grouping().count() != 0
+        || root.aggregates().invocationCount() == 0
         || root.wherePredicates().leafCount() != 0) {
       return false;
     }
     for (int invocation = 0;
-        invocation < root.aggregateInvocationCount(); invocation++) {
-      int source = root.aggregateOperandProjection(invocation);
+        invocation < root.aggregates().invocationCount(); invocation++) {
+      int source = root.aggregates().operandProjection(invocation);
       int lane = bound.aggregates.operandLane(invocation);
       if (source >= 0 && (!root.aggregateOperandExpression(source).isDirectColumnReference()
           || lane < 0 || bound.projectionPrograms.rawColumn(lane) < 0)) {

@@ -83,6 +83,6 @@ final class SqlBlockGroupedAggregateExecution {
   }
 
   private int groupCount() {
-    return bound.command.groupExpressionCount();
+    return bound.command.grouping().count();
   }
 }

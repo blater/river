@@ -50,7 +50,7 @@ final class SqlRowProjectionProgramBinder {
   StatusCode bindGroupKey(
       SqlCommand command, BoundSqlStatement bound, int group) {
     join = false;
-    SqlScalarExpression expression = command.groupExpression(group);
+    SqlScalarExpression expression = command.grouping().expression(group);
     return bindProgram(command, bound, expression, group);
   }
 
@@ -293,8 +293,8 @@ final class SqlRowProjectionProgramBinder {
 
   private static int resolveSymbol(
       SqlCommand command, BoundSqlStatement bound, int symbol) {
-    CharSequence name = command.projectionSymbolName(symbol);
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    CharSequence name = command.projections().symbolName(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
     if (name == null || qualifier == null
         || qualifier.length() > 0
             && !SqlBindingNames.matchesTable(command, qualifier)) {

@@ -17,8 +17,8 @@ final class SqlJoinRoleResolver {
     role = -1;
     column = -1;
     SqlJoinChain joins = command.joinChain();
-    CharSequence name = command.projectionSymbolName(symbol);
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    CharSequence name = command.projections().symbolName(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
     if (joins == null || name == null || qualifier == null
         || visibleRoles < 1 || visibleRoles > joins.roleCount()) return false;
     for (int candidate = 0; candidate < visibleRoles; candidate++) {

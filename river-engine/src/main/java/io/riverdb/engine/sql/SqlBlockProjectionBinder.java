@@ -42,16 +42,16 @@ final class SqlBlockProjectionBinder {
       bound.projectedTypeDescriptors[lane] = descriptor;
     }
     int lane = visible;
-    for (int order = 0; order < command.orderExpressionCount(); order++) {
+    for (int order = 0; order < command.orderBy().count(); order++) {
       if (visibleOrder(command, order) || priorOrder(command, order)) continue;
-      int column = child.find(command.orderColumnName(order));
+      int column = child.find(command.orderBy().name(order));
       if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
       int descriptor = child.descriptor(column);
       bound.projectionPrograms.append(
           lane, SqlScalarExpression.COLUMN, column, descriptor);
       bound.projectionPrograms.finish(lane, descriptor, column);
       output.setColumn(
-          lane, command.orderColumnName(order), descriptor, child.nullable(column));
+          lane, command.orderBy().name(order), descriptor, child.nullable(column));
       bound.projectedColumns[lane] = column;
       bound.projectedTypeDescriptors[lane] = descriptor;
       lane++;
@@ -65,21 +65,21 @@ final class SqlBlockProjectionBinder {
   }
 
   private static int orderContributorCount(SqlCommand command, SqlBlockSchema child) {
-    if (!command.isOrdered()) return 0;
+    if (!(command.orderBy().count() > 0)) return 0;
     int count = 0;
-    for (int order = 0; order < command.orderExpressionCount(); order++) {
+    for (int order = 0; order < command.orderBy().count(); order++) {
       if (visibleOrder(command, order) || priorOrder(command, order)) continue;
-      if (child.find(command.orderColumnName(order)) < 0) return -1;
+      if (child.find(command.orderBy().name(order)) < 0) return -1;
       count++;
     }
     return count;
   }
 
   private static boolean visibleOrder(SqlCommand command, int order) {
-    if (command.orderColumnTableName(order).length() > 0) {
+    if (command.orderBy().qualifier(order).length() > 0) {
       return SqlProjectionBinder.resolveOrderProjection(command, order) >= 0;
     }
-    CharSequence name = command.orderColumnName(order);
+    CharSequence name = command.orderBy().name(order);
     for (int projection = 0; projection < command.columnCount(); projection++) {
       if (SqlBindingNames.same(command.columnOutputName(projection), name)
           || SqlBindingNames.same(command.columnName(projection), name)) return true;
@@ -90,9 +90,9 @@ final class SqlBlockProjectionBinder {
   private static boolean priorOrder(SqlCommand command, int order) {
     for (int prior = 0; prior < order; prior++) {
       if (SqlBindingNames.same(
-              command.orderColumnTableName(prior), command.orderColumnTableName(order))
+              command.orderBy().qualifier(prior), command.orderBy().qualifier(order))
           && SqlBindingNames.same(
-              command.orderColumnName(prior), command.orderColumnName(order))) return true;
+              command.orderBy().name(prior), command.orderBy().name(order))) return true;
     }
     return false;
   }

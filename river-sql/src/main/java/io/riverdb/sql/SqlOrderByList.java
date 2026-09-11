@@ -4,7 +4,9 @@ import io.riverdb.base.sql.SqlShapeLimits;
 import java.util.Arrays;
 
 /** Reusable actual-count ORDER BY identifiers and directions. */
-final class SqlOrderByList {
+public final class SqlOrderByList {
+  SqlOrderByList() { }
+
   private SqlIdentifier[] names = names(8);
   private SqlIdentifier[] qualifiers = names(8);
   private boolean[] descending = new boolean[8];
@@ -39,12 +41,12 @@ final class SqlOrderByList {
     return true;
   }
 
-  int count() { return count; }
-  SqlIdentifier name(int index) { return index >= 0 && index < count ? names[index] : null; }
-  SqlIdentifier qualifier(int index) {
+  public int count() { return count; }
+  public SqlIdentifier name(int index) { return index >= 0 && index < count ? names[index] : null; }
+  public SqlIdentifier qualifier(int index) {
     return index >= 0 && index < count ? qualifiers[index] : null;
   }
-  boolean descending(int index) { return index >= 0 && index < count && descending[index]; }
+  public boolean descending(int index) { return index >= 0 && index < count && descending[index]; }
   void descending(int index, boolean value) { if (index >= 0 && index < count) descending[index] = value; }
 
   private boolean ensure(int required) {

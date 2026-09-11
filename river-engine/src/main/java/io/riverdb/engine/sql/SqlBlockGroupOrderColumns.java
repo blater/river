@@ -8,21 +8,21 @@ final class SqlBlockGroupOrderColumns {
   private SqlBlockGroupOrderColumns() { }
 
   static int hiddenCount(SqlCommand command) {
-    if (command.groupExpressionCount() == 0) return 0;
+    if (command.grouping().count() == 0) return 0;
     int count = 0;
-    for (int order = 0; order < command.orderExpressionCount(); order++) {
-      CharSequence name = command.orderColumnName(order);
+    for (int order = 0; order < command.orderBy().count(); order++) {
+      CharSequence name = command.orderBy().name(order);
       if (!selected(command, name) && !prior(command, order, name)) count++;
     }
     return count;
   }
 
   static int group(SqlCommand command, CharSequence name) {
-    for (int group = 0; group < command.groupExpressionCount(); group++) {
-      SqlScalarExpression expression = command.groupExpression(group);
+    for (int group = 0; group < command.grouping().count(); group++) {
+      SqlScalarExpression expression = command.grouping().expression(group);
       if (expression == null || !expression.isDirectColumnReference()) continue;
       int symbol = (int) expression.operand(0);
-      if (SqlBindingNames.same(command.projectionSymbolName(symbol), name)) return group;
+      if (SqlBindingNames.same(command.projections().symbolName(symbol), name)) return group;
     }
     return -1;
   }
@@ -37,7 +37,7 @@ final class SqlBlockGroupOrderColumns {
 
   private static boolean prior(SqlCommand command, int order, CharSequence name) {
     for (int prior = 0; prior < order; prior++) {
-      if (SqlBindingNames.same(command.orderColumnName(prior), name)) return true;
+      if (SqlBindingNames.same(command.orderBy().name(prior), name)) return true;
     }
     return false;
   }

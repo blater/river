@@ -47,8 +47,8 @@ final class SqlDescriptorLifecycleAdmission {
   }
 
   private static boolean constraintsReady(SqlCommand command) {
-    for (int index = 0; index < command.tableConstraintCount(); index++) {
-      int kind = command.tableConstraintKind(index);
+    for (int index = 0; index < command.tableConstraints().count(); index++) {
+      int kind = command.tableConstraints().kind(index);
       if (kind == SqlCommand.CONSTRAINT_CHECK && !retainedColumnCheck(command, index)) {
         return false;
       }
@@ -65,8 +65,8 @@ final class SqlDescriptorLifecycleAdmission {
     if (expression == null || expression.nodeCount() != 1
         || expression.operator(0) != SqlScalarExpression.COLUMN) return false;
     int symbol = (int) expression.operand(0);
-    CharSequence table = command.projectionSymbolTable(symbol);
-    CharSequence name = command.projectionSymbolName(symbol);
+    CharSequence table = command.projections().symbolTable(symbol);
+    CharSequence name = command.projections().symbolName(symbol);
     return table != null && table.length() == 0 && name != null
         && SqlDescriptorPrimaryPredicate.same(name, command.columnName(owner))
         && SqlTypeDescriptor.typeId(command.columnCheckTypeDescriptor(owner))
@@ -76,8 +76,8 @@ final class SqlDescriptorLifecycleAdmission {
   }
 
   private static boolean retainedColumnCheck(SqlCommand command, int constraint) {
-    if (command.tableConstraintPartCount(constraint) != 1) return false;
-    CharSequence name = command.tableConstraintPartName(constraint, 0);
+    if (command.tableConstraints().partCount(constraint) != 1) return false;
+    CharSequence name = command.tableConstraints().part(constraint, 0);
     for (int column = 0; column < command.columnCount(); column++) {
       if (command.columnHasCheck(column)
           && SqlDescriptorPrimaryPredicate.same(name, command.columnName(column))) return true;

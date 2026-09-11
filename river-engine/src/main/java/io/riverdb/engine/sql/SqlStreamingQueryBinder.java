@@ -67,7 +67,7 @@ final class SqlStreamingQueryBinder {
           ? binder.bindJoin(bound.command, bound, context)
           : binder.bindJoinProjection(bound.command, bound, context);
     }
-    if (status.isOk() && bound.command.isOrdered()) {
+    if (status.isOk() && (bound.command.orderBy().count() > 0)) {
       status = binder.bindJoinOrder(bound.command, bound);
     }
     if (status.isOk()) status = queries.configureJoin();
@@ -95,7 +95,7 @@ final class SqlStreamingQueryBinder {
   StatusCode data(SqlCommandType type) {
     StatusCode status = bindRoot();
     if (status.isOk()) status = binder.bindDataCommand(bound.command, bound.query, bound);
-    if (status.isOk() && bound.command.isOrdered()) {
+    if (status.isOk() && (bound.command.orderBy().count() > 0)) {
       status = binder.bindOrder(bound.command, bound);
     }
     if (status.isOk()) status = queries.prepareProjectionPrograms();

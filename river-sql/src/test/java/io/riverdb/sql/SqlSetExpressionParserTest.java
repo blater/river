@@ -83,8 +83,8 @@ final class SqlSetExpressionParserTest {
     assertName("item", query.setOrderColumnName(0));
     assertTrue(query.isSetOrderDescending(0));
     assertEquals(7, query.setRowLimit());
-    assertFalse(query.block(0).isOrdered());
-    assertFalse(query.block(1).isOrdered());
+    assertFalse((query.block(0).orderBy().count() > 0));
+    assertFalse((query.block(1).orderBy().count() > 0));
     assertEquals(Long.MAX_VALUE, query.block(0).rowLimit());
     assertEquals(Long.MAX_VALUE, query.block(1).rowLimit());
 
@@ -109,7 +109,7 @@ final class SqlSetExpressionParserTest {
             query,
             result));
 
-    assertTrue(query.block(1).isOrdered());
+    assertTrue((query.block(1).orderBy().count() > 0));
     assertTrue(query.block(1).isDescendingOrder());
     assertEquals(2, query.block(1).rowLimit());
     assertEquals(1, query.setOrderExpressionCount());

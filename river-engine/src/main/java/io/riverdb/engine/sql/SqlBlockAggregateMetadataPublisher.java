@@ -16,8 +16,8 @@ final class SqlBlockAggregateMetadataPublisher {
       BoundSqlStatement bound,
       boolean grouped,
       SqlBlockExpressionBinder expressions) {
-    int groups = grouped ? command.columnCount() - command.aggregateOutputCount() : 0;
-    int columns = groups + command.aggregateOutputCount();
+    int groups = grouped ? command.columnCount() - command.aggregates().outputCount() : 0;
+    int columns = groups + command.aggregates().outputCount();
     int hidden = SqlBlockGroupOrderColumns.hiddenCount(command);
     StatusCode status = bound.reserveProjectionColumns(columns + hidden);
     if (!status.isOk()) return status;
@@ -41,7 +41,7 @@ final class SqlBlockAggregateMetadataPublisher {
       int descriptor = bound.projectionPrograms.resultDescriptor(group);
       int source = bound.projectionPrograms.rawColumn(group);
       boolean nullable = source >= 0 ? child.nullable(source)
-          : expressions.nullable(command, command.groupExpression(group), child);
+          : expressions.nullable(command, command.grouping().expression(group), child);
       output.setColumn(
           outputColumn, command.columnOutputName(outputColumn), descriptor, nullable);
       bound.projectedTypeDescriptors[outputColumn] = descriptor;
@@ -50,8 +50,8 @@ final class SqlBlockAggregateMetadataPublisher {
 
   private static void publishAggregates(
       SqlCommand command, SqlBlockSchema output, BoundSqlStatement bound, int groups) {
-    for (int outputColumn = 0; outputColumn < command.aggregateOutputCount(); outputColumn++) {
-      int invocation = command.aggregateOutputInvocation(outputColumn);
+    for (int outputColumn = 0; outputColumn < command.aggregates().outputCount(); outputColumn++) {
+      int invocation = command.aggregates().outputInvocation(outputColumn);
       int aggregateColumn = groups + outputColumn;
       int aggregateKind = bound.aggregates.kind(invocation);
       output.setColumn(
@@ -75,8 +75,8 @@ final class SqlBlockAggregateMetadataPublisher {
       int columns,
       SqlBlockExpressionBinder expressions) {
     int privateColumn = columns;
-    for (int order = 0; order < command.orderExpressionCount(); order++) {
-      CharSequence name = command.orderColumnName(order);
+    for (int order = 0; order < command.orderBy().count(); order++) {
+      CharSequence name = command.orderBy().name(order);
       if (SqlBlockGroupOrderColumns.selected(command, name)
           || output.find(name) >= 0) continue;
       int group = SqlBlockGroupOrderColumns.group(command, name);
@@ -86,7 +86,7 @@ final class SqlBlockAggregateMetadataPublisher {
       output.setColumn(
           privateColumn++, name, descriptor,
           source >= 0 ? child.nullable(source)
-              : expressions.nullable(command, command.groupExpression(group), child));
+              : expressions.nullable(command, command.grouping().expression(group), child));
     }
     bound.projectedColumnCount = columns;
     return output.status();

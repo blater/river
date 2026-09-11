@@ -9,8 +9,8 @@ final class SqlAggregateInvocationRegistration {
   static StatusCode append(
       SqlCommand command, int kind, int inputColumn,
       boolean grouped, boolean first) {
-    int invocation = command.appendAggregateInvocation(kind, inputColumn);
-    if (invocation < 0 || !command.appendAggregateOutput(invocation)) {
+    int invocation = command.aggregates.appendInvocation(kind, inputColumn);
+    if (invocation < 0 || !command.aggregates.appendOutput(invocation)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (first) command.set(SqlAggregateCommandType.route(kind, grouped), 0, 0);

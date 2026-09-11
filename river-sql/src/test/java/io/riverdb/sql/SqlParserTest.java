@@ -79,8 +79,8 @@ final class SqlParserTest {
                 + "INNER JOIN stock s ON s.s_i_id=ol.ol_i_id",
             query,
             command));
-    assertEquals(2, query.block(0).aggregateInvocationCount());
-    assertEquals(2, query.block(0).aggregateOutputCount());
+    assertEquals(2, query.block(0).aggregates().invocationCount());
+    assertEquals(2, query.block(0).aggregates().outputCount());
     assertEquals(2, query.block(1).columnCount());
 
     assertEquals(
@@ -102,7 +102,7 @@ final class SqlParserTest {
                 + "GROUP BY s.s_i_id ORDER BY n DESC LIMIT 1",
             query,
             command));
-    assertEquals(0, query.block(0).groupOperandProjection(0));
+    assertEquals(0, query.block(0).grouping().operandProjection(0));
 
     assertEquals(
         StatusCode.OK,
@@ -111,10 +111,10 @@ final class SqlParserTest {
                 + "GROUP BY l.a,r.b HAVING b=100",
             query,
             command));
-    assertEquals(2, query.block(0).groupExpressionCount());
+    assertEquals(2, query.block(0).grouping().count());
     assertEquals(3, query.block(1).columnCount());
-    assertEquals(1, query.block(0).groupOperandProjection(0));
-    assertEquals(2, query.block(0).groupOperandProjection(1));
+    assertEquals(1, query.block(0).grouping().operandProjection(0));
+    assertEquals(2, query.block(0).grouping().operandProjection(1));
 
     assertEquals(
         StatusCode.OK,
@@ -152,7 +152,7 @@ final class SqlParserTest {
             command));
     assertTrue(command.isSelectForUpdate());
     assertEquals(1, command.rowLimit());
-    assertTrue(command.isOrdered());
+    assertTrue((command.orderBy().count() > 0));
     assertEquals(StatusCode.OK, copied.copyBlockFrom(command));
     assertTrue(copied.isSelectForUpdate());
     command.reset();
@@ -281,8 +281,8 @@ final class SqlParserTest {
             "SELECT a.key FROM accounts a JOIN regions r ON a.key=r.id "
                 + "ORDER BY a.key",
             command));
-    assertEquals("a", command.orderColumnTableName(0).toString());
-    assertEquals("key", command.orderColumnName(0).toString());
+    assertEquals("a", command.orderBy().qualifier(0).toString());
+    assertEquals("key", command.orderBy().name(0).toString());
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -492,7 +492,7 @@ final class SqlParserTest {
         SqlScalarExpression.LITERAL,
         SqlScalarExpression.LITERAL,
         SqlScalarExpression.ADD);
-    assertEquals(9, command.mutationExpressionOperand(command.updateExpression(0), 0));
+    assertEquals(9, command.mutationExpressions().operand(command.updateExpression(0), 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -755,14 +755,14 @@ final class SqlParserTest {
     assertName("seen_year", command.columnAlias(1));
     assertName("tomorrow", command.columnAlias(2));
     assertName("rendered", command.columnAlias(4));
-    assertName("tomorrow", command.orderColumnName());
+    assertName("tomorrow", command.orderBy().name(0));
 
     SqlScalarExpression direct = command.projectionExpression(0);
     assertTrue(direct.isDirectColumnReference());
     assertEquals(SqlScalarExpression.COLUMN, direct.operator(0));
     int id = command.directProjectionSymbol(0);
-    assertName("id", command.projectionSymbolName(id));
-    assertName("m", command.projectionSymbolTable(id));
+    assertName("id", command.projections().symbolName(id));
+    assertName("m", command.projections().symbolTable(id));
     assertName("id", command.columnName(0));
 
     SqlScalarExpression extract = command.projectionExpression(1);
@@ -843,7 +843,7 @@ final class SqlParserTest {
             "SELECT id, day+1 AS tomorrow FROM moments ORDER BY tomorrow DESC",
             command));
     assertTrue(command.isDescendingOrder());
-    assertName("tomorrow", command.orderColumnName());
+    assertName("tomorrow", command.orderBy().name(0));
     assertPostfix(
         command.projectionExpression(1),
         SqlScalarExpression.COLUMN,
@@ -1038,8 +1038,8 @@ final class SqlParserTest {
         parser.parse(
             "SELECT MAX(day) FROM moments HAVING MAX(day)>DATE '2024-01-01'",
             command));
-    assertEquals(1, command.aggregateInvocationCount());
-    assertEquals(1, command.aggregateOutputCount());
+    assertEquals(1, command.aggregates().invocationCount());
+    assertEquals(1, command.aggregates().outputCount());
 
     assertEquals(
         StatusCode.OK,
@@ -1073,12 +1073,12 @@ final class SqlParserTest {
             + "SUM(day)=0 AND AVG(day)=0 AND MIN(day)=0 AND MAX(day)=0 AND "
             + "MIN(observed)=0 AND MAX(observed)=0";
     assertEquals(StatusCode.OK, parser.parse(eightInvocations, command));
-    assertEquals(8, command.aggregateInvocationCount());
+    assertEquals(8, command.aggregates().invocationCount());
     assertEquals(8, command.booleanHavingPredicates().leafCount());
     assertEquals(
         StatusCode.OK,
         parser.parse(eightInvocations + " AND SUM(observed)=0", command));
-    assertEquals(9, command.aggregateInvocationCount());
+    assertEquals(9, command.aggregates().invocationCount());
 
     StringBuilder ninthPredicate = new StringBuilder(
         "SELECT COUNT(*) FROM moments HAVING COUNT(*)=0");
@@ -2014,10 +2014,10 @@ final class SqlParserTest {
         "SELECT COUNT(DISTINCT s.i_id), SUM(s.i_id) FROM stock s "
             + "INNER JOIN order_line ol ON ol.ol_i_id=s.i_id", command));
     assertEquals(SqlCommandType.JOIN_SCAN, command.type());
-    assertEquals(2, command.aggregateOutputCount());
-    assertEquals(2, command.aggregateInvocationCount());
-    assertEquals(SqlAggregateKind.COUNT_DISTINCT, command.aggregateKind(0));
-    assertEquals(SqlAggregateKind.SUM, command.aggregateKind(1));
+    assertEquals(2, command.aggregates().outputCount());
+    assertEquals(2, command.aggregates().invocationCount());
+    assertEquals(SqlAggregateKind.COUNT_DISTINCT, command.aggregates().kind(0));
+    assertEquals(SqlAggregateKind.SUM, command.aggregates().kind(1));
   }
 
 }

@@ -57,7 +57,7 @@ final class SqlDerivedReferenceValidator {
       CharSequence output) {
     for (int node = 0; node < expression.nodeCount(); node++) {
       if (expression.operator(node) != SqlScalarExpression.COLUMN) continue;
-      SqlIdentifier name = command.projectionSymbolName(
+      SqlIdentifier name = command.projections().symbolName(
           (int) expression.operand(node));
       if (name != null && SqlDerivedColumnResolver.sameName(name, output)) {
         return true;
@@ -69,13 +69,13 @@ final class SqlDerivedReferenceValidator {
   private static boolean validProjectionReferences(
       SqlCommand block, SqlCommand inner) {
     if (loweredJoinAggregate(block, inner)) {
-      for (int group = 0; group < block.groupExpressionCount(); group++) {
-        int projection = block.groupOperandProjection(group);
+      for (int group = 0; group < block.grouping().count(); group++) {
+        int projection = block.grouping().operandProjection(group);
         if (projection < 0 || projection >= inner.columnCount()) return false;
       }
       for (int invocation = 0;
-          invocation < block.aggregateInvocationCount(); invocation++) {
-        int lane = block.aggregateOperandProjection(invocation);
+          invocation < block.aggregates().invocationCount(); invocation++) {
+        int lane = block.aggregates().operandProjection(invocation);
         if (lane >= inner.columnCount()) return false;
       }
       return true;
@@ -89,8 +89,8 @@ final class SqlDerivedReferenceValidator {
       }
     }
     for (int invocation = 0;
-        invocation < block.aggregateInvocationCount(); invocation++) {
-      int lane = block.aggregateOperandProjection(invocation);
+        invocation < block.aggregates().invocationCount(); invocation++) {
+      int lane = block.aggregates().operandProjection(invocation);
       if (lane < 0) continue;
       if (!validExpressionReferences(
           block, inner, block.aggregateOperandExpression(lane))) {
@@ -106,15 +106,15 @@ final class SqlDerivedReferenceValidator {
         && block.joinChain() != null
         && inner.joinChain() != null
         && inner.type() == SqlCommandType.JOIN_SCAN
-        && block.aggregateInvocationCount() > 0;
+        && block.aggregates().invocationCount() > 0;
   }
 
   private static boolean countOutput(SqlCommand block, int projection) {
-    int output = projection - (block.columnCount() - block.aggregateOutputCount());
-    if (output < 0 || output >= block.aggregateOutputCount()) return false;
-    int invocation = block.aggregateOutputInvocation(output);
+    int output = projection - (block.columnCount() - block.aggregates().outputCount());
+    if (output < 0 || output >= block.aggregates().outputCount()) return false;
+    int invocation = block.aggregates().outputInvocation(output);
     return invocation >= 0
-        && block.aggregateKind(invocation) == SqlAggregateKind.COUNT;
+        && block.aggregates().kind(invocation) == SqlAggregateKind.COUNT;
   }
 
   private static boolean validExpressionReferences(
@@ -125,8 +125,8 @@ final class SqlDerivedReferenceValidator {
     for (int node = 0; node < expression.nodeCount(); node++) {
       if (expression.operator(node) != SqlScalarExpression.COLUMN) continue;
       int symbol = (int) expression.operand(node);
-      SqlIdentifier table = block.projectionSymbolTable(symbol);
-      SqlIdentifier name = block.projectionSymbolName(symbol);
+      SqlIdentifier table = block.projections().symbolTable(symbol);
+      SqlIdentifier name = block.projections().symbolName(symbol);
       if (table == null || name == null
           || !SqlDerivedColumnResolver.validQualifier(table, block)
           || inner != null && !outputContains(inner, name)) {
@@ -137,10 +137,10 @@ final class SqlDerivedReferenceValidator {
   }
 
   private static boolean validOrder(SqlCommand block, SqlCommand inner) {
-    if (inner == null || !block.isOrdered()) return true;
+    if (inner == null || !(block.orderBy().count() > 0)) return true;
     for (int expression = 0;
-        expression < block.orderExpressionCount(); expression++) {
-      CharSequence name = block.orderColumnName(expression);
+        expression < block.orderBy().count(); expression++) {
+      CharSequence name = block.orderBy().name(expression);
       if (!outputContains(inner, name)
           && SqlDerivedColumnResolver.outputIndex(block, name) < 0) return false;
     }

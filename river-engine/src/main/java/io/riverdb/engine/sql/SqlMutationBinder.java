@@ -10,10 +10,10 @@ final class SqlMutationBinder {
   private final SqlInsertMutationBinder inserts = new SqlInsertMutationBinder();
 
   StatusCode bindUpdate(SqlCommand command, BoundSqlStatement bound) {
-    int capacity = Math.max(command.updateColumnCount(), command.mutationExpressionCount());
+    int capacity = Math.max(command.updateColumnCount(), command.mutationExpressions().programCount());
     StatusCode reserved = bound.reserveMutationColumns(capacity);
     if (!reserved.isOk()) return reserved;
-    bound.projectionPrograms.beginMutations(command.mutationExpressionCount());
+    bound.projectionPrograms.beginMutations(command.mutationExpressions().programCount());
     for (int index = 0; index < command.updateColumnCount(); index++) {
       StatusCode status = bindUpdateColumn(command, bound, index);
       if (!status.isOk()) {
@@ -30,7 +30,7 @@ final class SqlMutationBinder {
 
   StatusCode bindDescriptorExpressions(
       SqlCommand command, BoundSqlStatement bound, boolean columnsAllowed) {
-    int count = command.mutationExpressionCount();
+    int count = command.mutationExpressions().programCount();
     StatusCode status = bound.reserveMutationColumns(count);
     if (status.isOk()) bound.projectionPrograms.beginMutations(count);
     for (int expression = 0; status.isOk() && expression < count; expression++) {

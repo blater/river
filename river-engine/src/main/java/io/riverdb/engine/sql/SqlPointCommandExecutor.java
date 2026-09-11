@@ -71,7 +71,7 @@ final class SqlPointCommandExecutor {
     if (status.isOk() && !boundPredicate
         && (bound.command.type() == SqlCommandType.INSERT
             || bound.command.type() == SqlCommandType.UPDATE)
-        && bound.command.mutationExpressionCount() > 0) {
+        && bound.command.mutationExpressions().programCount() > 0) {
       status = descriptorExecution.prepareBinding(bound.table);
       if (status.isOk()) {
         status = binder.bindDescriptorMutationExpressions(
@@ -81,7 +81,7 @@ final class SqlPointCommandExecutor {
     }
     if (status == StatusCode.CONFLICT
         && bound.command.type() == SqlCommandType.JOIN_SCAN
-        && bound.command.isOrdered()) {
+        && (bound.command.orderBy().count() > 0)) {
       status = bound.query.promoteRootBlockPipeline(bound.command);
       return status.isOk() ? executePromoted(result) : finish(status);
     }

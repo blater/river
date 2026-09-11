@@ -9,7 +9,7 @@ final class SqlQueryPipelineRouting {
     if (graph.count() > 0 && sourceBlockCount > 1) return true;
     for (int index = 0; index < sourceBlockCount; index++) {
       if (index > 0
-          && (blocks[index].isOrdered()
+          && ((blocks[index].orderBy().count() > 0)
               || blocks[index].rowLimit() != Long.MAX_VALUE)) return true;
       SqlCommandType type = blocks[index].type();
       if (type == SqlCommandType.JOIN_SCAN

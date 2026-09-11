@@ -16,16 +16,16 @@ final class SqlOrderByParser {
     StatusCode status = input.requireKeyword(sql, "BY");
     int expression = 0;
     do {
-      SqlIdentifier name = status.isOk() ? command.writableNextOrderColumnName() : null;
+      SqlIdentifier name = status.isOk() ? command.orderBy.append() : null;
       status = name == null ? StatusCode.RESOURCE_EXHAUSTED : input.identifier(sql, name);
       if (status.isOk() && input.consumeCharacter(sql, '.')) {
-        SqlIdentifier qualifier = command.writableOrderColumnTableName(expression);
+        SqlIdentifier qualifier = command.orderBy.qualifier(expression);
         qualifier.copyFrom(name);
         name.reset();
         status = input.identifier(sql, name);
       }
       if (status.isOk() && !names.valid(
-          command, command.orderColumnTableName(expression), name)) {
+          command, command.orderBy().qualifier(expression), name)) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
       boolean descending = false;

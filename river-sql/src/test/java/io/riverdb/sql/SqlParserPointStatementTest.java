@@ -393,8 +393,8 @@ final class SqlParserPointStatementTest {
             "SELECT COUNT(DISTINCT a.balance) AS unique_balance FROM accounts a",
             command));
     assertEquals(SqlCommandType.COUNT_DISTINCT, command.type());
-    assertEquals(SqlAggregateKind.COUNT_DISTINCT, command.aggregateKind(0));
-    assertEquals(0, command.aggregateOperandProjection(0));
+    assertEquals(SqlAggregateKind.COUNT_DISTINCT, command.aggregates().kind(0));
+    assertEquals(0, command.aggregates().operandProjection(0));
     assertName("balance", command.columnName(0));
     assertName("unique_balance", command.columnAlias(0));
     assertEquals(
@@ -478,7 +478,7 @@ final class SqlParserPointStatementTest {
                 + "GROUP BY region HAVING MAX(observed AT TIME ZONE '+01:00')>="
                 + "TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00+00:00'",
             command));
-    assertEquals(2, command.aggregateInvocationCount());
+    assertEquals(2, command.aggregates().invocationCount());
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT SUM(*) FROM accounts", command));
@@ -627,9 +627,9 @@ final class SqlParserPointStatementTest {
             "SELECT key, value FROM accounts ORDER BY value ASC LIMIT 7",
             command));
     assertEquals(SqlCommandType.SCAN, command.type());
-    assertEquals(true, command.isOrdered());
+    assertEquals(true, (command.orderBy().count() > 0));
     assertEquals(false, command.isDescendingOrder());
-    assertName("value", command.orderColumnName());
+    assertName("value", command.orderBy().name(0));
     assertEquals(7, command.rowLimit());
     assertEquals(
         StatusCode.OK,
@@ -668,7 +668,7 @@ final class SqlParserPointStatementTest {
         StatusCode.OK,
         parser.parse("SELECT key FROM accounts ORDER BY key DESC", command));
     assertTrue(command.isDescendingOrder());
-    assertName("key", command.orderColumnName());
+    assertName("key", command.orderBy().name(0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -699,10 +699,10 @@ final class SqlParserPointStatementTest {
         0, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0);
     int onRight = (int) command.joinChain().onPredicates(0).programOperand(
         0, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
-    assertName("accounts", command.predicateSymbolTable(onLeft));
-    assertName("region", command.predicateSymbolName(onLeft));
-    assertName("regions", command.predicateSymbolTable(onRight));
-    assertName("id", command.predicateSymbolName(onRight));
+    assertName("accounts", command.projections().symbolTable(onLeft));
+    assertName("region", command.projections().symbolName(onLeft));
+    assertName("regions", command.projections().symbolTable(onRight));
+    assertName("id", command.projections().symbolName(onRight));
     assertName("accounts", command.columnTableName(0));
     assertName("key", command.columnName(0));
     assertName("regions", command.columnTableName(1));
@@ -827,7 +827,7 @@ final class SqlParserPointStatementTest {
     assertEquals(2, command.updateColumnCount());
     assertTrue(command.updateHasExpression(0));
     assertTrue(command.updateHasExpression(1));
-    assertEquals(2, command.mutationExpressionCount());
+    assertEquals(2, command.mutationExpressions().programCount());
     assertMutationPostfix(
         command,
         command.updateExpression(0),
@@ -909,7 +909,7 @@ final class SqlParserPointStatementTest {
         SqlScalarExpression.ADD);
     assertEquals(
         Long.MIN_VALUE,
-        command.mutationExpressionOperand(command.updateExpression(0), 0));
+        command.mutationExpressions().operand(command.updateExpression(0), 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(

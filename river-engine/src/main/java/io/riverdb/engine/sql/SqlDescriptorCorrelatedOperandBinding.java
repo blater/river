@@ -35,8 +35,8 @@ final class SqlDescriptorCorrelatedOperandBinding {
       kind = SqlDescriptorCorrelatedBindings.NULL;
     } else if (operator == SqlScalarExpression.COLUMN) {
       int symbol = (int) operand;
-      CharSequence qualifier = command.predicateSymbolTable(symbol);
-      CharSequence name = command.predicateSymbolName(symbol);
+      CharSequence qualifier = command.projections().symbolTable(symbol);
+      CharSequence name = command.projections().symbolName(symbol);
       if (qualifier.length() == 0) {
         column = child.findColumn(name);
         if (column >= 0) {

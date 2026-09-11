@@ -313,7 +313,7 @@ final class SqlPointAggregateExecution {
   }
 
   private StatusCode publish(SqlExecutionResult result) {
-    int invocation = bound.command.aggregateOutputInvocation(0);
+    int invocation = bound.command.aggregates().outputInvocation(0);
     projectedValues[0] = accumulators.value(invocation);
     bound.projectedTypeDescriptors[0] = bound.aggregates.resultDescriptor(invocation);
     result.setProjection(

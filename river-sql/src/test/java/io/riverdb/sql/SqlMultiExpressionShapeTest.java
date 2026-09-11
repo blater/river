@@ -16,28 +16,28 @@ final class SqlMultiExpressionShapeTest {
     assertEquals(StatusCode.OK, parser.parse(
         "SELECT a,b,COUNT(*),SUM(c),MAX(d) FROM t GROUP BY a,b "
             + "HAVING SUM(c)>1 ORDER BY a,b", command));
-    assertEquals(3, command.aggregateOutputCount());
-    assertEquals(3, command.aggregateInvocationCount());
-    assertEquals(2, command.groupExpressionCount());
-    assertEquals(0, command.groupProjection(0));
-    assertEquals(1, command.groupProjection(1));
+    assertEquals(3, command.aggregates().outputCount());
+    assertEquals(3, command.aggregates().invocationCount());
+    assertEquals(2, command.grouping().count());
+    assertEquals(0, command.grouping().projection(0));
+    assertEquals(1, command.grouping().projection(1));
     assertEquals(StatusCode.OK, parser.parse(
         "SELECT COUNT(*),SUM(c) FROM t GROUP BY a+1,a+1 HAVING SUM(c)>1", command));
-    assertEquals(2, command.aggregateOutputCount());
-    assertEquals(2, command.groupExpressionCount());
-    assertEquals(-1, command.groupProjection(0));
-    assertEquals(-1, command.groupProjection(1));
+    assertEquals(2, command.aggregates().outputCount());
+    assertEquals(2, command.grouping().count());
+    assertEquals(-1, command.grouping().projection(0));
+    assertEquals(-1, command.grouping().projection(1));
     assertTrue(SqlAggregateExpressionParser.same(
-        command, command.groupExpression(0), command.groupExpression(1)));
+        command, command.grouping().expression(0), command.grouping().expression(1)));
     assertEquals(StatusCode.OK, parser.parse(
         "SELECT a,b FROM t GROUP BY a,b HAVING b>1 ORDER BY a,b", command));
     assertEquals(SqlCommandType.DISTINCT_SCAN, command.type());
-    assertEquals(2, command.groupExpressionCount());
+    assertEquals(2, command.grouping().count());
     assertEquals(1, command.booleanHavingPredicates().programOperand(
         0, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0));
     assertEquals(StatusCode.OK, parser.parse(
         "SELECT a,a FROM t GROUP BY a ORDER BY a", command));
-    assertEquals(1, command.groupExpressionCount());
+    assertEquals(1, command.grouping().count());
     assertEquals(StatusCode.OK, parser.parse(
         "SELECT COUNT(*) FROM t GROUP BY a,b HAVING b=2", command));
     assertEquals(1, command.booleanHavingPredicates().programOperand(
@@ -73,9 +73,9 @@ final class SqlMultiExpressionShapeTest {
     for (int count : boundaries) {
       assertEquals(StatusCode.OK, parser.parse(select(count), command));
       assertEquals(count, command.columnCount());
-      assertEquals(count, command.orderExpressionCount());
-      assertTrue(command.isDescendingOrder(0));
-      assertFalse(command.isDescendingOrder(count - 1));
+      assertEquals(count, command.orderBy().count());
+      assertTrue(command.orderBy().descending(0));
+      assertFalse(command.orderBy().descending(count - 1));
     }
     assertEquals(StatusCode.RESOURCE_EXHAUSTED,
         parser.parse(select(SqlShapeLimits.MAX_RESULT_COLUMNS + 1), command));

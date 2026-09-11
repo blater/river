@@ -29,14 +29,14 @@ final class SqlDescriptorSubqueryProjection {
     }
     int symbol = command.directProjectionSymbol(0);
     if (symbol < 0) return StatusCode.FEATURE_NOT_SUPPORTED;
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
     if (qualifier.length() != 0
         && !SqlDescriptorPrimaryPredicate.same(qualifier, command.tableName())
         && !(command.tableAlias().length() > 0
             && SqlDescriptorPrimaryPredicate.same(qualifier, command.tableAlias()))) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    column = table.findColumn(command.projectionSymbolName(symbol));
+    column = table.findColumn(command.projections().symbolName(symbol));
     if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     descriptor = table.typeDescriptorAt(column);
     return kind == SqlQuery.SUBQUERY_EXISTS

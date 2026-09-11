@@ -163,7 +163,7 @@ final class SqlBlockStageRunner {
       return status;
     }
     StatusCode status = joinStage.materialize(block, output, sourceRow);
-    if (!status.isOk() || bound.command.aggregateInvocationCount() == 0) {
+    if (!status.isOk() || bound.command.aggregates().invocationCount() == 0) {
       finalStore = status.isOk() ? output : null;
       return status;
     }
@@ -173,7 +173,7 @@ final class SqlBlockStageRunner {
   private StatusCode aggregateJoin(
       int block, SqlBlockRowStore input, SqlBlockRowStore operands) {
     SqlBlockRowStore output = alternate(input, operands);
-    StatusCode status = bound.command.groupExpressionCount() > 0
+    StatusCode status = bound.command.grouping().count() > 0
         ? groupedStage.execute(block, operands, output)
         : scalarStage.executeJoined(block, operands, output);
     finalStore = status.isOk() ? output : null;

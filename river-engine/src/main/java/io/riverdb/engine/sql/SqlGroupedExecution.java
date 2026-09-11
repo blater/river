@@ -84,7 +84,7 @@ final class SqlGroupedExecution {
     if (status.isOk() && (SqlBinder.isGroupAggregate(query.root().type())
         || query.root().type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN)) {
       int keys = SqlBinder.isGroupAggregate(query.root().type())
-          ? bound.command.groupExpressionCount() : bound.projectedColumnCount;
+          ? bound.command.grouping().count() : bound.projectedColumnCount;
       status = groupKeys.prepare(bound, keys);
     }
     return status.isOk() ? having.prepare(
@@ -258,7 +258,7 @@ final class SqlGroupedExecution {
   }
 
   private StatusCode publish(SqlScanRowResult result) {
-    int groups = bound.command.columnCount() - bound.command.aggregateOutputCount();
+    int groups = bound.command.columnCount() - bound.command.aggregates().outputCount();
     int count = bound.projectedColumnCount;
     projected.reset(count);
     if (!projected.status().isOk()) return projected.status();
@@ -270,8 +270,8 @@ final class SqlGroupedExecution {
       if (groupKeys.group().nullValue(key)) projected.setNull(output);
       else projected.setDecimal128(output, highs[output], values[output]);
     }
-    for (int output = 0; output < bound.command.aggregateOutputCount(); output++) {
-      int invocation = bound.command.aggregateOutputInvocation(output);
+    for (int output = 0; output < bound.command.aggregates().outputCount(); output++) {
+      int invocation = bound.command.aggregates().outputInvocation(output);
       int lane = groups + output;
       values[lane] = accumulators.value(invocation);
       highs[lane] = accumulators.highValue(invocation);
@@ -291,9 +291,9 @@ final class SqlGroupedExecution {
       }
     }
     for (int output = 0;
-        status.isOk() && output < bound.command.aggregateOutputCount(); output++) {
+        status.isOk() && output < bound.command.aggregates().outputCount(); output++) {
       status = publishAggregateText(result, groups + output,
-          bound.command.aggregateOutputInvocation(output));
+          bound.command.aggregates().outputInvocation(output));
     }
     return status;
   }

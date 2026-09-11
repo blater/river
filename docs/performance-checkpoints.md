@@ -2840,3 +2840,52 @@ Previous first62 post-merge smoke used freshly rebuilt master705488d5 and
 passed sample/all, one worker, seed42, retries20, 1s warmup/3s measured:
 `river_harness_20260911_135046_0c20fe5d`, valid invariants and graceful cleanup.
 Log: `/private/tmp/river-m5-main/postmerge-smoke.log`.
+
+
+## 2026-09-11: SQL command ownership (tic-055b)
+
+Final source `7591c25d`, stable base `832ae0d4`. Existing column constraints
+own their metadata/growth/reset; existing query-copy state owns block admission
+and completion. One stateless join-aggregate lowering operation owns the complete
+root/source graph rewrite. Existing metadata owners expose readers directly;
+all River callers migrate and superseded forwards/helpers are removed. Borrowed
+parser lifetimes and bound execution copies remain unchanged. Constraint ownership
+adds one object per command construction; no new per-row buffers or allocation.
+Independent source, architecture and relational review approved.
+
+Score-only forwarding attempts were insufficient; adding graph rewrite access to
+the parser triggered a new high score and was replaced by the coherent lowering
+owner. Unchanged final scan: 2,640 complete files, 18 at or above90, no new high
+files. Command128.210→89.884, constraints76.421, lowering0, query state59.466,
+parser67.508. Existing high callers retain their responsibilities and scores.
+Scan: `/private/tmp/river-055b-scores.json`. Final focused113 tests plus SQL
+invocation/module gates passed: `/private/tmp/river-055b-final-tests.log`.
+Clean `check :river-bench:installTps` with --no-daemon passed in2m53s:
+1,955 tests, zero failures/errors, 18 existing skips.
+
+M5/GraalVM25.0.4 JVM, -Xmx1g, sample/all, four workers, one warehouse, seed42,
+retries20, 5s warmup/30s measured. Control version
+`store-cleanup-832ae0d4-m5-jvm`; candidate `tic-055b-7591c25d-m5-jvm`.
+Exact commands, clean/install logs, frozen candidate and extracted samples:
+`/private/tmp/river-m5-055b-evidence/`.
+
+| Variant | TPS | p99 ms | Retries | Report ID |
+| --- | ---: | ---: | ---: | --- |
+| control | 542.15 | 32.981 | 2756 | `river_harness_20260911_150808_e81a3feb` |
+| candidate | 517.67 | 35.946 | 2584 | `river_harness_20260911_150847_2ff42410` |
+| candidate | 487.20 | 35.815 | 2379 | `river_harness_20260911_150926_beba86b1` |
+| control | 385.52 | 47.383 | 1951 | `river_harness_20260911_151005_f9df7ce9` |
+
+Reports remain below `/Users/blater/src/ingres/river-harness/runs/`. All four
+passed warmup/measured outcome gates, invariants, manifest checksums and graceful
+cleanup. All are comparison-eligible with identical key
+`c43b7664cc83be6b10b08711e25bd592b252ad3fbf865ffc3014d97c0e1312e6`.
+Candidate TPS/p99 remain within adjacent control variation; no speedup or repeated
+regression is established. Accept the cleanup and promote at
+`perf-checkpoint-20260911-sql-command-ownership-m5`.
+Native compilation remains blocked on unchanged master under `tic-ae17`.
+
+Previous indexed-store post-merge smoke used freshly rebuilt master832ae0d4 and
+passed sample/all, one worker, seed42, retries20, 1s warmup/3s measured:
+`river_harness_20260911_142401_62e1fbd9`, valid invariants and graceful cleanup.
+Log: `/private/tmp/river-m5-main/postmerge-9e2f-smoke.log`.

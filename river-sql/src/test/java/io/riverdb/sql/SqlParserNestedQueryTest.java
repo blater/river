@@ -46,7 +46,7 @@ final class SqlParserNestedQueryTest {
         SqlScalarExpression.EXTRACT,
         copied.projectionExpression(0).operator(1));
     int copiedId = copied.directProjectionSymbol(1);
-    assertName("id", copied.projectionSymbolName(copiedId));
+    assertName("id", copied.projections().symbolName(copiedId));
 
     SqlCommand outer = new SqlCommand();
     SqlCommand view = new SqlCommand();
@@ -59,7 +59,7 @@ final class SqlParserNestedQueryTest {
     assertEquals(StatusCode.OK, query.compileView(outer, view, compiled));
     int day = compiled.directProjectionSymbol(0);
     assertTrue(compiled.projectionExpression(0).isDirectColumnReference());
-    assertName("day", compiled.projectionSymbolName(day));
+    assertName("day", compiled.projections().symbolName(day));
 
     assertEquals(
         StatusCode.OK,
@@ -70,7 +70,7 @@ final class SqlParserNestedQueryTest {
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.EXTRACT);
     int observed = (int) compiled.projectionExpression(0).operand(0);
-    assertName("observed", compiled.projectionSymbolName(observed));
+    assertName("observed", compiled.projections().symbolName(observed));
 
     assertEquals(
         StatusCode.OK,
@@ -246,7 +246,7 @@ final class SqlParserNestedQueryTest {
                 + "ORDER BY d",
             query,
             compiled));
-    assertName("d", compiled.orderColumnName());
+    assertName("d", compiled.orderBy().name(0));
 
     assertEquals(
         StatusCode.OK,
@@ -335,7 +335,7 @@ final class SqlParserNestedQueryTest {
     assertName("amount", compiled.columnName(1));
     assertName("amount", predicateColumnName(compiled, 0));
     assertName("category", predicateColumnName(compiled, 1));
-    assertName("id", compiled.orderColumnName());
+    assertName("id", compiled.orderBy().name(0));
 
     assertEquals(
         StatusCode.OK,
@@ -400,7 +400,7 @@ final class SqlParserNestedQueryTest {
     assertEquals(1, predicateValue(command, 1));
     assertName("id", predicateColumnName(command, 2));
     assertEquals(5, predicateValue(command, 2));
-    assertName("region", command.orderColumnName());
+    assertName("region", command.orderBy().name(0));
     assertTrue(command.isDescendingOrder());
     assertEquals(2, command.rowLimit());
     assertEquals(
@@ -417,7 +417,7 @@ final class SqlParserNestedQueryTest {
     assertName("balance", predicateColumnName(command, 0));
     assertName("balance", predicateColumnName(command, 1));
     assertName("id", predicateColumnName(command, 2));
-    assertName("id", command.orderColumnName());
+    assertName("id", command.orderBy().name(0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -767,7 +767,7 @@ final class SqlParserNestedQueryTest {
         SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
     assertFalse(query.block(0).wherePredicates().leafNegated(0));
     assertName("accounts", command.tableName());
-    assertName("id", command.orderColumnName());
+    assertName("id", command.orderBy().name(0));
     assertName("lookup", query.block(query.edgeChild(0)).tableName());
     assertEquals(
         StatusCode.OK,

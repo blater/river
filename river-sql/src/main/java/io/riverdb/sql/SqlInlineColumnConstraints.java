@@ -34,12 +34,12 @@ final class SqlInlineColumnConstraints {
   private StatusCode single(
       SqlCommand command, int kind, CharSequence table, CharSequence target) {
     long checkpoint = command.tableConstraints.checkpoint();
-    StatusCode status = command.beginTableConstraint(kind);
+    StatusCode status = command.tableConstraints.begin(kind);
     if (status.isOk() && table != null) {
-      command.writableTableConstraintReferenceTable().copyFrom(table);
+      command.tableConstraints.table().copyFrom(table);
     }
     status = status.isOk()
-        ? command.addTableConstraintPart(
+        ? command.tableConstraints.addPart(
             command.columnName(command.columnCount() - 1), target) : status;
     if (!status.isOk()) command.tableConstraints.rollback(checkpoint);
     return status;

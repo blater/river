@@ -62,7 +62,7 @@ final class SqlDescriptorPointExecution {
       case INSERT -> insertExecution.execute(command, pin);
       case UPDATE -> update(command);
       case DELETE -> delete(command);
-      case SELECT, SCAN -> command.aggregateInvocationCount() == 0
+      case SELECT, SCAN -> command.aggregates().invocationCount() == 0
           ? select(command, result) : aggregates.execute(command, pin, result);
       case COUNT, COUNT_VALUE, COUNT_DISTINCT, SUM, AVG, MIN, MAX ->
           aggregates.execute(command, pin, result);
@@ -138,7 +138,7 @@ final class SqlDescriptorPointExecution {
 
   private StatusCode select(SqlCommand command, SqlExecutionResult result) {
     TableDescriptor table = pin.descriptor();
-    if (command.isOrdered() || command.aggregateInvocationCount() != 0) {
+    if ((command.orderBy().count() > 0) || command.aggregates().invocationCount() != 0) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     StatusCode status = primary.bind(command, table);

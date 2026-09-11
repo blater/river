@@ -21,24 +21,24 @@ final class SqlBlockAggregateBinder {
       SqlBlockSchema output,
       BoundSqlStatement bound,
       boolean grouped) {
-    int lanes = grouped ? command.groupExpressionCount() : 0;
-    for (int invocation = 0; invocation < command.aggregateInvocationCount(); invocation++) {
-      int lane = command.aggregateOperandProjection(invocation);
+    int lanes = grouped ? command.grouping().count() : 0;
+    for (int invocation = 0; invocation < command.aggregates().invocationCount(); invocation++) {
+      int lane = command.aggregates().operandProjection(invocation);
       if (lane >= lanes) lanes = lane + 1;
     }
     bound.projectionPrograms.begin(lanes);
     StatusCode status = bound.projectionPrograms.status();
-    if (status.isOk()) status = bound.aggregates.reserve(command.aggregateInvocationCount());
+    if (status.isOk()) status = bound.aggregates.reserve(command.aggregates().invocationCount());
     if (status.isOk() && grouped) {
       for (int expression = 0;
-          status.isOk() && expression < command.groupExpressionCount(); expression++) {
+          status.isOk() && expression < command.grouping().count(); expression++) {
         status = expressions.bind(
-            command, command.groupExpression(expression), expression, child, bound);
+            command, command.grouping().expression(expression), expression, child, bound);
       }
     }
     for (int invocation = 0;
-        status.isOk() && invocation < command.aggregateInvocationCount(); invocation++) {
-      int lane = command.aggregateOperandProjection(invocation);
+        status.isOk() && invocation < command.aggregates().invocationCount(); invocation++) {
+      int lane = command.aggregates().operandProjection(invocation);
       if (lane >= 0) status = bindLane(command, child, bound, lane);
       if (status.isOk()) status = bindInvocation(command, bound, invocation);
     }
@@ -55,10 +55,10 @@ final class SqlBlockAggregateBinder {
       SqlBlockSchema output,
       BoundSqlStatement bound,
       boolean grouped) {
-    StatusCode status = bound.aggregates.reserve(command.aggregateInvocationCount());
+    StatusCode status = bound.aggregates.reserve(command.aggregates().invocationCount());
     for (int invocation = 0;
-        status.isOk() && invocation < command.aggregateInvocationCount(); invocation++) {
-      int lane = command.aggregateOperandProjection(invocation);
+        status.isOk() && invocation < command.aggregates().invocationCount(); invocation++) {
+      int lane = command.aggregates().operandProjection(invocation);
       int input = lane < 0 ? SqlTypeDescriptor.BIGINT : child.descriptor(lane);
       status = SqlBlockAggregateInvocationBinder.bind(command, bound, invocation, lane, input);
     }
@@ -76,18 +76,18 @@ final class SqlBlockAggregateBinder {
       SqlBlockSchema output,
       BoundSqlStatement bound,
       boolean grouped) {
-    int lanes = grouped ? command.groupExpressionCount() : 0;
+    int lanes = grouped ? command.grouping().count() : 0;
     bound.projectionPrograms.begin(loweredLaneCount(command, lanes));
     StatusCode status = bound.projectionPrograms.status();
     for (int lane = 0; status.isOk() && lane < lanes; lane++) {
-      int source = command.groupOperandProjection(lane);
+      int source = command.grouping().operandProjection(lane);
       if (source < 0 || source >= child.count()) return StatusCode.INVALID_EXTERNAL_INPUT;
       status = appendColumnLane(bound, lane, source, child.descriptor(source));
     }
-    if (status.isOk()) status = bound.aggregates.reserve(command.aggregateInvocationCount());
+    if (status.isOk()) status = bound.aggregates.reserve(command.aggregates().invocationCount());
     for (int invocation = 0;
-        status.isOk() && invocation < command.aggregateInvocationCount(); invocation++) {
-      int source = command.aggregateOperandProjection(invocation);
+        status.isOk() && invocation < command.aggregates().invocationCount(); invocation++) {
+      int source = command.aggregates().operandProjection(invocation);
       int lane = source < 0 ? -1 : existingLane(bound, lanes, source);
       if (source >= 0 && lane < 0) {
         if (source >= child.count()) return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -131,8 +131,8 @@ final class SqlBlockAggregateBinder {
   private static int loweredLaneCount(SqlCommand command, int groups) {
     int count = groups;
     for (int invocation = 0;
-        invocation < command.aggregateInvocationCount(); invocation++) {
-      int source = command.aggregateOperandProjection(invocation);
+        invocation < command.aggregates().invocationCount(); invocation++) {
+      int source = command.aggregates().operandProjection(invocation);
       if (source < 0 || groupSource(command, groups, source)
           || priorAggregateSource(command, invocation, source)) continue;
       count++;
@@ -141,12 +141,12 @@ final class SqlBlockAggregateBinder {
   }
 
   static int requiredOperandLanes(SqlCommand command) {
-    int groups = command.groupExpressionCount();
+    int groups = command.grouping().count();
     if (command.joinChain() != null) return loweredLaneCount(command, groups);
     int lanes = groups;
     for (int invocation = 0;
-        invocation < command.aggregateInvocationCount(); invocation++) {
-      int operand = command.aggregateOperandProjection(invocation);
+        invocation < command.aggregates().invocationCount(); invocation++) {
+      int operand = command.aggregates().operandProjection(invocation);
       if (operand >= lanes) lanes = operand + 1;
     }
     return lanes;
@@ -155,7 +155,7 @@ final class SqlBlockAggregateBinder {
   private static boolean groupSource(
       SqlCommand command, int groups, int source) {
     for (int group = 0; group < groups; group++) {
-      if (command.groupOperandProjection(group) == source) return true;
+      if (command.grouping().operandProjection(group) == source) return true;
     }
     return false;
   }
@@ -163,7 +163,7 @@ final class SqlBlockAggregateBinder {
   private static boolean priorAggregateSource(
       SqlCommand command, int invocation, int source) {
     for (int prior = 0; prior < invocation; prior++) {
-      if (command.aggregateOperandProjection(prior) == source) return true;
+      if (command.aggregates().operandProjection(prior) == source) return true;
     }
     return false;
   }
@@ -179,7 +179,7 @@ final class SqlBlockAggregateBinder {
 
   private StatusCode bindInvocation(
       SqlCommand command, BoundSqlStatement bound, int invocation) {
-    int lane = command.aggregateOperandProjection(invocation);
+    int lane = command.aggregates().operandProjection(invocation);
     int input = lane < 0
         ? SqlTypeDescriptor.BIGINT : bound.projectionPrograms.resultDescriptor(lane);
     return SqlBlockAggregateInvocationBinder.bind(command, bound, invocation, lane, input);

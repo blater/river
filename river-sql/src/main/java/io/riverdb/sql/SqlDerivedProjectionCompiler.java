@@ -81,8 +81,8 @@ final class SqlDerivedProjectionCompiler {
       int descriptor,
       SqlCommand destination,
       SqlScalarExpression target) {
-    SqlIdentifier table = block.projectionSymbolTable(symbol);
-    SqlIdentifier name = block.projectionSymbolName(symbol);
+    SqlIdentifier table = block.projections().symbolTable(symbol);
+    SqlIdentifier name = block.projections().symbolName(symbol);
     if (table == null || name == null
         || !SqlDerivedColumnResolver.validQualifier(table, block)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -155,8 +155,8 @@ final class SqlDerivedProjectionCompiler {
       SqlCommand destination,
       SqlScalarExpression target) {
     int symbol = (int) expression.operand(node);
-    SqlIdentifier table = block.projectionSymbolTable(symbol);
-    SqlIdentifier name = block.projectionSymbolName(symbol);
+    SqlIdentifier table = block.projections().symbolTable(symbol);
+    SqlIdentifier name = block.projections().symbolName(symbol);
     if (table == null || name == null
         || !SqlDerivedColumnResolver.validQualifier(table, block)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

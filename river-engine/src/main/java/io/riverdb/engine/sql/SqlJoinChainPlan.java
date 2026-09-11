@@ -273,7 +273,7 @@ final class SqlJoinChainPlan {
     if (status.isOk() && where > 0) {
       status = append(FILTER, where, FILTERED, -1);
     }
-    if (status.isOk() && command.isOrdered()) {
+    if (status.isOk() && (command.orderBy().count() > 0)) {
       status = append(
           SORT, command.isDescendingOrder() ? -1 : 1, SORTED, -1);
     }

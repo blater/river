@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 
 /** Bounded retained names and ordered parts for CREATE TABLE constraints. */
-final class SqlTableConstraintSet {
+public final class SqlTableConstraintSet {
   static final int PRIMARY = 1;
   static final int UNIQUE = 2;
   static final int FOREIGN = 3;
@@ -84,15 +84,15 @@ final class SqlTableConstraintSet {
 
   SqlIdentifier name() { return names[count - 1]; }
   SqlIdentifier table() { return tables[count - 1]; }
-  int count() { return count; }
-  int kind(int index) { return valid(index) ? kinds[index] : 0; }
-  int partCount(int index) { return valid(index) ? counts[index] : 0; }
-  SqlIdentifier name(int index) { return valid(index) ? names[index] : null; }
-  SqlIdentifier table(int index) { return valid(index) ? tables[index] : null; }
-  SqlIdentifier part(int index, int part) {
+  public int count() { return count; }
+  public int kind(int index) { return valid(index) ? kinds[index] : 0; }
+  public int partCount(int index) { return valid(index) ? counts[index] : 0; }
+  public SqlIdentifier name(int index) { return valid(index) ? names[index] : null; }
+  public SqlIdentifier table(int index) { return valid(index) ? tables[index] : null; }
+  public SqlIdentifier part(int index, int part) {
     return SqlTableConstraintArrays.value(parts, starts, counts, count, index, part);
   }
-  SqlIdentifier target(int index, int part) {
+  public SqlIdentifier target(int index, int part) {
     return SqlTableConstraintArrays.value(targets, starts, counts, count, index, part);
   }
 

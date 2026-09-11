@@ -20,25 +20,25 @@ final class SqlTableConstraintParserTest {
             + "REFERENCES parent (tenant, member), "
             + "CONSTRAINT ck_order CHECK (tenant < member))",
         command));
-    assertEquals(4, command.tableConstraintCount());
+    assertEquals(4, command.tableConstraints().count());
     assertConstraint(0, SqlCommand.CONSTRAINT_PRIMARY_KEY, "pk_membership", "tenant", "member");
     assertConstraint(1, SqlCommand.CONSTRAINT_UNIQUE, "uq_parent",
         "parent_tenant", "parent_member");
     assertConstraint(2, SqlCommand.CONSTRAINT_FOREIGN_KEY, "fk_parent",
         "parent_tenant", "parent_member");
-    assertEquals("parent", command.tableConstraintReferenceTableName(2).toString());
-    assertEquals("tenant", command.tableConstraintReferencePartName(2, 0).toString());
+    assertEquals("parent", command.tableConstraints().table(2).toString());
+    assertEquals("tenant", command.tableConstraints().target(2, 0).toString());
     assertConstraint(3, SqlCommand.CONSTRAINT_CHECK, "ck_order", "tenant", "member");
   }
 
   @Test
   void acceptsOneColumnNoPrimaryAndConstantCheck() {
     assertEquals(StatusCode.OK, parser.parse("CREATE TABLE singleton (value VARCHAR(7))", command));
-    assertEquals(0, command.tableConstraintCount());
+    assertEquals(0, command.tableConstraints().count());
     assertEquals(StatusCode.OK,
         parser.parse("CREATE TABLE always_valid (value BIGINT, CHECK (1 = 1))", command));
-    assertEquals(1, command.tableConstraintCount());
-    assertEquals(0, command.tableConstraintPartCount(0));
+    assertEquals(1, command.tableConstraints().count());
+    assertEquals(0, command.tableConstraints().partCount(0));
   }
 
   @Test
@@ -81,15 +81,15 @@ final class SqlTableConstraintParserTest {
     sql.append("))");
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, parser.parse(sql, command));
     assertEquals(StatusCode.OK, parser.parse("CREATE TABLE recovered (value BIGINT)", command));
-    assertEquals(0, command.tableConstraintCount());
+    assertEquals(0, command.tableConstraints().count());
   }
 
   private void assertConstraint(int index, int kind, String name, String... parts) {
-    assertEquals(kind, command.tableConstraintKind(index));
-    assertEquals(name, command.tableConstraintName(index).toString());
-    assertEquals(parts.length, command.tableConstraintPartCount(index));
+    assertEquals(kind, command.tableConstraints().kind(index));
+    assertEquals(name, command.tableConstraints().name(index).toString());
+    assertEquals(parts.length, command.tableConstraints().partCount(index));
     for (int part = 0; part < parts.length; part++) {
-      assertEquals(parts[part], command.tableConstraintPartName(index, part).toString());
+      assertEquals(parts[part], command.tableConstraints().part(index, part).toString());
     }
   }
 

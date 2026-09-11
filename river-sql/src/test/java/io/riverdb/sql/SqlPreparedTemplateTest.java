@@ -51,8 +51,8 @@ final class SqlPreparedTemplateTest {
         parameters.set(1, SqlTypeDescriptor.INTEGER, 0, 7, false, 0));
     assertEquals(StatusCode.OK, parameters.materialize(invocationQuery, invocation));
     assertTrue(invocation.updateHasExpression(0));
-    assertEquals(SqlScalarExpression.LITERAL, invocation.mutationExpressionOperator(0, 1));
-    assertEquals(25, invocation.mutationExpressionOperand(0, 1));
+    assertEquals(SqlScalarExpression.LITERAL, invocation.mutationExpressions().operator(0, 1));
+    assertEquals(25, invocation.mutationExpressions().operand(0, 1));
     assertEquals(SqlScalarExpression.LITERAL, invocation.wherePredicates().programOperator(
         0, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0));
     assertEquals(7, invocation.wherePredicates().programOperand(
@@ -62,8 +62,8 @@ final class SqlPreparedTemplateTest {
     invocation.reset();
     assertEquals(StatusCode.OK, captured.value().restore(invocationQuery, invocation));
     assertTrue(invocation.updateHasExpression(0));
-    assertEquals(SqlScalarExpression.PARAMETER, invocation.mutationExpressionOperator(0, 1));
-    assertEquals(0, invocation.mutationExpressionOperand(0, 1));
+    assertEquals(SqlScalarExpression.PARAMETER, invocation.mutationExpressions().operator(0, 1));
+    assertEquals(0, invocation.mutationExpressions().operand(0, 1));
     assertEquals(SqlScalarExpression.PARAMETER, invocation.wherePredicates().programOperator(
         0, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0));
     assertEquals(1, invocation.wherePredicates().programOperand(
@@ -89,11 +89,11 @@ final class SqlPreparedTemplateTest {
     assertEquals(StatusCode.OK, captured.value().restore(restoredQuery, restored));
     assertEquals(2, captured.value().parameterCount());
     assertEquals(parsed.type(), restored.type());
-    assertEquals(parsed.aggregateInvocationCount(), restored.aggregateInvocationCount());
-    assertEquals(parsed.aggregateOutputCount(), restored.aggregateOutputCount());
-    assertEquals(parsed.groupExpressionCount(), restored.groupExpressionCount());
-    assertEquals(parsed.orderExpressionCount(), restored.orderExpressionCount());
-    assertEquals(parsed.isDescendingOrder(0), restored.isDescendingOrder(0));
+    assertEquals(parsed.aggregates().invocationCount(), restored.aggregates().invocationCount());
+    assertEquals(parsed.aggregates().outputCount(), restored.aggregates().outputCount());
+    assertEquals(parsed.grouping().count(), restored.grouping().count());
+    assertEquals(parsed.orderBy().count(), restored.orderBy().count());
+    assertEquals(parsed.orderBy().descending(0), restored.orderBy().descending(0));
     assertEquals(parsed.booleanHavingPredicates().leafCount(),
         restored.booleanHavingPredicates().leafCount());
   }

@@ -23,8 +23,8 @@ final class SqlDescriptorSetBinding {
     }
     int lane = keys;
     for (int invocation = 0;
-        status.isOk() && invocation < command.aggregateInvocationCount(); invocation++) {
-      int projection = command.aggregateOperandProjection(invocation);
+        status.isOk() && invocation < command.aggregates().invocationCount(); invocation++) {
+      int projection = command.aggregates().operandProjection(invocation);
       aggregateLanes[invocation] = projection < 0 ? -1 : lane;
       if (projection >= 0) status = expressions.bind(
           command, command.aggregateOperandExpression(projection), lane++, input, bound);
@@ -53,14 +53,14 @@ final class SqlDescriptorSetBinding {
   int laneCount() { return laneCount; }
 
   private static SqlScalarExpression keyExpression(SqlCommand command, int key) {
-    return command.groupExpressionCount() > 0
-        ? command.groupExpression(key) : command.projectionExpression(key);
+    return command.grouping().count() > 0
+        ? command.grouping().expression(key) : command.projectionExpression(key);
   }
 
   private static int aggregateOperandCount(SqlCommand command) {
     int count = 0;
-    for (int invocation = 0; invocation < command.aggregateInvocationCount(); invocation++) {
-      if (command.aggregateOperandProjection(invocation) >= 0) count++;
+    for (int invocation = 0; invocation < command.aggregates().invocationCount(); invocation++) {
+      if (command.aggregates().operandProjection(invocation) >= 0) count++;
     }
     return count;
   }

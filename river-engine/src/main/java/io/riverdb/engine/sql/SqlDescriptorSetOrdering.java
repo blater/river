@@ -10,12 +10,12 @@ final class SqlDescriptorSetOrdering {
 
   static StatusCode configure(
       SqlCommand command, SqlDescriptorSetStorage storage, int keyCount) {
-    if (!command.isOrdered()) {
+    if (!(command.orderBy().count() > 0)) {
       for (int key = 0; key < keyCount; key++) storage.sort[key] = key;
       java.util.Arrays.fill(storage.descending, 0, keyCount, false);
       return StatusCode.OK;
     }
-    int ordered = command.orderExpressionCount();
+    int ordered = command.orderBy().count();
     if (ordered > keyCount) return StatusCode.FEATURE_NOT_SUPPORTED;
     for (int part = 0; part < ordered; part++) {
       int key = orderKey(command, part);
@@ -23,7 +23,7 @@ final class SqlDescriptorSetOrdering {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       storage.sort[part] = key;
-      storage.descending[part] = command.isDescendingOrder(part);
+      storage.descending[part] = command.orderBy().descending(part);
     }
     int part = ordered;
     for (int key = 0; key < keyCount; key++) {
@@ -40,23 +40,23 @@ final class SqlDescriptorSetOrdering {
   }
 
   private static int orderKey(SqlCommand command, int order) {
-    if (command.groupExpressionCount() == 0) return projectionKey(command, order);
-    int outputs = command.columnCount() - command.aggregateOutputCount();
+    if (command.grouping().count() == 0) return projectionKey(command, order);
+    int outputs = command.columnCount() - command.aggregates().outputCount();
     for (int output = 0; output < outputs; output++) {
-      if (same(command.orderColumnName(order), command.columnOutputName(output))) {
+      if (same(command.orderBy().name(order), command.columnOutputName(output))) {
         return groupKey(command, output);
       }
     }
-    for (int key = 0; key < command.groupExpressionCount(); key++) {
+    for (int key = 0; key < command.grouping().count(); key++) {
       if (SqlDescriptorSetColumns.named(
-          command, command.groupExpression(key), command.orderColumnName(order))) return key;
+          command, command.grouping().expression(key), command.orderBy().name(order))) return key;
     }
     return -1;
   }
 
   private static int projectionKey(SqlCommand command, int order) {
     for (int output = 0; output < command.columnCount(); output++) {
-      if (same(command.orderColumnName(order), command.columnOutputName(output))) return output;
+      if (same(command.orderBy().name(order), command.columnOutputName(output))) return output;
     }
     return -1;
   }

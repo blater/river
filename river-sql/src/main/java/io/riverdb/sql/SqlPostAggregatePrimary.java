@@ -58,7 +58,7 @@ final class SqlPostAggregatePrimary {
     if (command == null) return StatusCode.FEATURE_NOT_SUPPORTED;
     int kind = aggregateKind(sql);
     int slot = kind == 0 ? aliasSlot(sql) : -1;
-    int groupOutputs = command.columnCount() - command.aggregateOutputCount();
+    int groupOutputs = command.columnCount() - command.aggregates().outputCount();
     int groupKey = kind == 0
         ? SqlGroupExpressions.groupKey(command, grouped, slot, identifier) : -1;
     boolean groupValue = groupKey >= 0;
@@ -86,8 +86,8 @@ final class SqlPostAggregatePrimary {
   private int selectedInvocation(int slot, int groupOutputs) {
     if (slot < 0 || grouped && slot < groupOutputs) return slot;
     int output = grouped ? slot - groupOutputs : slot;
-    return output < command.aggregateOutputCount()
-        ? command.aggregateOutputInvocation(output) : -1;
+    return output < command.aggregates().outputCount()
+        ? command.aggregates().outputInvocation(output) : -1;
   }
 
   private int repeatedInvocation(CharSequence sql, int requestedKind) {
@@ -106,9 +106,9 @@ final class SqlPostAggregatePrimary {
     }
     if (!input.consumeCharacter(sql, ')')) return invalid();
     for (int invocation = 0;
-        invocation < command.aggregateInvocationCount(); invocation++) {
-      if (command.aggregateKind(invocation) != kind) continue;
-      int projection = command.aggregateOperandProjection(invocation);
+        invocation < command.aggregates().invocationCount(); invocation++) {
+      if (command.aggregates().kind(invocation) != kind) continue;
+      int projection = command.aggregates().operandProjection(invocation);
       if (countStar && projection < 0
           || !countStar && projection >= 0
               && SqlAggregateExpressionParser.same(
@@ -122,7 +122,7 @@ final class SqlPostAggregatePrimary {
       return -1;
     }
     if (!countStar) command.aggregateOperandExpression(projection).copyFrom(repeated);
-    int invocation = command.appendAggregateInvocation(kind, projection);
+    int invocation = command.aggregates.appendInvocation(kind, projection);
     if (invocation < 0) status = StatusCode.RESOURCE_EXHAUSTED;
     return invocation;
   }
@@ -132,8 +132,8 @@ final class SqlPostAggregatePrimary {
     for (int candidate = first; candidate < SqlCommand.MAXIMUM_PROJECTIONS; candidate++) {
       boolean occupied = false;
       for (int invocation = 0;
-          invocation < command.aggregateInvocationCount(); invocation++) {
-        if (command.aggregateOperandProjection(invocation) == candidate) {
+          invocation < command.aggregates().invocationCount(); invocation++) {
+        if (command.aggregates().operandProjection(invocation) == candidate) {
           occupied = true;
           break;
         }

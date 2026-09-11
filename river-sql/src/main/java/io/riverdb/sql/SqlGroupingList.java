@@ -4,7 +4,9 @@ import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.error.StatusCode;
 
 /** Reusable expressions and selected-output mappings forming one GROUP BY tuple. */
-final class SqlGroupingList {
+public final class SqlGroupingList {
+  SqlGroupingList() { }
+
   private int[] projections = new int[8];
   private int[] operandProjections = new int[8];
   private SqlScalarExpression[] expressions = expressions(8);
@@ -48,17 +50,17 @@ final class SqlGroupingList {
     return true;
   }
 
-  int count() { return count; }
-  int projection(int expression) {
+  public int count() { return count; }
+  public int projection(int expression) {
     return expression >= 0 && expression < count ? projections[expression] : -1;
   }
-  int operandProjection(int expression) {
+  public int operandProjection(int expression) {
     return expression >= 0 && expression < count ? operandProjections[expression] : -1;
   }
   void setOperandProjection(int expression, int projection) {
     if (expression >= 0 && expression < count) operandProjections[expression] = projection;
   }
-  SqlScalarExpression expression(int index) {
+  public SqlScalarExpression expression(int index) {
     return index >= 0 && index < count ? expressions[index] : null;
   }
   boolean contains(int projection) {
