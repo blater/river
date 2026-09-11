@@ -85,13 +85,16 @@ final class SqlBooleanScalarBinder {
     }
     if (operator == SqlScalarExpression.NULL) {
       int typed = descriptor == 0 ? SqlTypeDescriptor.BIGINT : descriptor;
-      return push(target, leaf, program, operator, 0, typed, descriptor == 0);
+      return push(
+          target, leaf, program, operator, 0, 0, typed, descriptor == 0,
+          SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
     }
     if (SqlRowExpressionTypes.leaf(operator)) {
       return SqlTypeDescriptor.isValid(descriptor)
           ? push(
               target, leaf, program, operator,
-              operandHigh, operand, descriptor, false)
+              operandHigh, operand, descriptor, false,
+              SqlBoundBooleanPredicateProgram.SCOPE_LEFT)
           : StatusCode.DATATYPE_MISMATCH;
     }
     if (SqlRowExpressionTypes.unary(operator)
@@ -130,10 +133,10 @@ final class SqlBooleanScalarBinder {
         leaf,
         program,
         operator,
+        ((long) column) >> 63,
         column,
         query.block(sourceBlock).table(sourceRole).typeDescriptor(column),
-        false,
-        SqlNestedRowProvider.scope(sourceBlock, sourceRole));
+        false, SqlNestedRowProvider.scope(sourceBlock, sourceRole));
   }
 
   private StatusCode aggregate(
@@ -153,7 +156,9 @@ final class SqlBooleanScalarBinder {
     if (directTextOnly(source, leaf, program, descriptor)) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    return push(target, leaf, program, operator, operand, descriptor, false);
+    return push(
+        target, leaf, program, operator, operand >> 63, operand, descriptor, false,
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
   }
 
   private StatusCode group(
@@ -174,7 +179,9 @@ final class SqlBooleanScalarBinder {
     if (directTextOnly(source, leaf, program, descriptor)) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    return push(target, leaf, program, operator, ordinal, descriptor, false);
+    return push(
+        target, leaf, program, operator, ((long) ordinal) >> 63, ordinal, descriptor, false,
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
   }
 
   private static boolean directTextOnly(
@@ -210,7 +217,8 @@ final class SqlBooleanScalarBinder {
         : schema == null
             ? statement.table.typeDescriptor(column) : schema.descriptor(column);
     return push(
-        target, leaf, program, operator, column, descriptor, false, scope);
+        target, leaf, program, operator, ((long) column) >> 63,
+        column, descriptor, false, scope);
   }
 
   private StatusCode unary(
@@ -278,49 +286,6 @@ final class SqlBooleanScalarBinder {
       return true;
     }
     return false;
-  }
-
-  private StatusCode push(
-      SqlBoundBooleanPredicateProgram target,
-      int leaf,
-      int program,
-      int operator,
-      long operand,
-      int descriptor,
-      boolean untypedNull) {
-    return push(
-        target, leaf, program, operator,
-        operand >> 63, operand, descriptor, untypedNull,
-        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
-  }
-
-  private StatusCode push(
-      SqlBoundBooleanPredicateProgram target,
-      int leaf,
-      int program,
-      int operator,
-      long operand,
-      int descriptor,
-      boolean untypedNull,
-      int scope) {
-    return push(
-        target, leaf, program, operator,
-        operand >> 63, operand, descriptor, untypedNull, scope);
-  }
-
-  private StatusCode push(
-      SqlBoundBooleanPredicateProgram target,
-      int leaf,
-      int program,
-      int operator,
-      long operandHigh,
-      long operand,
-      int descriptor,
-      boolean untypedNull) {
-    return push(
-        target, leaf, program, operator,
-        operandHigh, operand, descriptor, untypedNull,
-        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
   }
 
   private StatusCode push(
