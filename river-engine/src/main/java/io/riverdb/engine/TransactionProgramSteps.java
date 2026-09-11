@@ -104,11 +104,7 @@ final class TransactionProgramSteps {
     status = result.beginStepResult(step, action, available ? 1 : 0);
     if (status.isOk() && available) {
       reader.pointTo(execution);
-      status = values.captureDataflow(program, step, reader, reader.columnCount());
-      if (status.isOk() && program.captureCount(step) > 0) {
-        status = values.captureOutput(
-            program, step, reader, reader.columnCount(), result);
-      }
+      captureSingleton(program, step, result);
     }
     if (status.isOk() && !available && action == TransactionProgramAction.EXACT_ONE) {
       status = StatusCode.CARDINALITY_VIOLATION;
@@ -126,11 +122,7 @@ final class TransactionProgramSteps {
     status = result.beginStepResult(step, action, available ? 1 : 0);
     if (status.isOk() && available) {
       reader.pointTo(row);
-      status = values.captureDataflow(program, step, reader, reader.columnCount());
-      if (status.isOk() && program.captureCount(step) > 0) {
-        status = values.captureOutput(
-            program, step, reader, reader.columnCount(), result);
-      }
+      captureSingleton(program, step, result);
     }
     if (status.isOk() && available && nextRow()) status = StatusCode.CARDINALITY_VIOLATION;
     if (status.isOk() && !available && action == TransactionProgramAction.EXACT_ONE) {
@@ -141,6 +133,15 @@ final class TransactionProgramSteps {
     if (!status.isOk()) return Integer.MIN_VALUE;
     return !available && program.emptyTarget(step) >= 0
         ? program.emptyTarget(step) : step + 1;
+  }
+
+  private void captureSingleton(
+      TransactionProgram program, int step, TransactionProgramResult result) {
+    status = values.captureDataflow(program, step, reader, reader.columnCount());
+    if (status.isOk() && program.captureCount(step) > 0) {
+      status = values.captureOutput(
+          program, step, reader, reader.columnCount(), result);
+    }
   }
 
   private int executeRowSet(
