@@ -23,7 +23,7 @@ final class WindowsDirectoryInspection {
 
   static StatusCode verifyPrivate(MemorySegment handle, Stat stat) {
     if (!stat.directory || stat.reparse) return StatusCode.CONFLICT;
-    int security = WindowsFileBridge.verifyOwnerAndDacl(handle, true);
+    int security = WindowsSecurityPolicy.verifyOwnerAndDacl(handle, true);
     return security == WindowsFileBridge.STATUS_SUCCESS ? StatusCode.OK
         : security == WindowsFileBridge.STATUS_ACCESS_DENIED ? StatusCode.ACCESS_DENIED
         : WindowsRiverDaemonFileSystem.status(security);
@@ -31,7 +31,7 @@ final class WindowsDirectoryInspection {
 
   static StatusCode verifyAncestor(MemorySegment handle, Stat stat) {
     if (!stat.directory || stat.reparse) return StatusCode.CONFLICT;
-    int security = WindowsFileBridge.verifyOwnerAndDacl(handle, false);
+    int security = WindowsSecurityPolicy.verifyOwnerAndDacl(handle, false);
     return security == WindowsFileBridge.STATUS_SUCCESS ? StatusCode.OK
         : security == WindowsFileBridge.STATUS_ACCESS_DENIED
             || security == WindowsFileBridge.ERROR_ACCESS_DENIED ? StatusCode.ACCESS_DENIED
@@ -41,7 +41,7 @@ final class WindowsDirectoryInspection {
   static StatusCode verifyFile(MemorySegment handle, Stat stat) {
     if (!stat.regular || stat.reparse) return StatusCode.CONFLICT;
     if (stat.links != 1) return StatusCode.ACCESS_DENIED;
-    int security = WindowsFileBridge.verifyOwnerAndDacl(handle, true);
+    int security = WindowsSecurityPolicy.verifyOwnerAndDacl(handle, true);
     return security == WindowsFileBridge.STATUS_SUCCESS ? StatusCode.OK
         : security == WindowsFileBridge.STATUS_ACCESS_DENIED ? StatusCode.ACCESS_DENIED
         : WindowsRiverDaemonFileSystem.status(security);
