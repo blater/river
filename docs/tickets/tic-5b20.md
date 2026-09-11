@@ -1,6 +1,6 @@
 ---
 id: tic-5b20
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code

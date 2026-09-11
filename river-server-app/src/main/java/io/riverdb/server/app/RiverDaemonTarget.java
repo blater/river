@@ -1,7 +1,6 @@
 package io.riverdb.server.app;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.platform.riverd.FileIdentity;
 import io.riverdb.platform.riverd.RiverDaemonFileSystem;
 import io.riverdb.platform.riverd.RiverDirectory;
@@ -54,11 +53,12 @@ final class RiverDaemonTarget {
       status = StatusCode.CORRUPTION;
     }
     if (status.isOk()) {
-      status = verifyInstance(directory, owner);
+      status = RiverDaemonTargetBinding.verifyInstance(directory, owner);
     }
     if (!status.isOk()) return close(lockFile, directory, status);
 
-    RuntimeValues runtime = readRuntime(filesystem, runtimeRoot, datadir, owner);
+    RiverDaemonTargetBinding.BoundRuntime runtime =
+        RiverDaemonTargetBinding.readBoundRuntime(filesystem, runtimeRoot, datadir, owner);
     if (!runtime.status.isOk()) return close(lockFile, directory, runtime.status);
     RiverDaemonTarget target = new RiverDaemonTarget();
     target.filesystem = filesystem;
@@ -90,22 +90,32 @@ final class RiverDaemonTarget {
     if (!lockRead.status.isOk()) return lockRead.status;
     RiverDaemonIdentityRecords.LockRecord currentOwner =
         RiverDaemonIdentityRecords.parseLock(lockRead.bytes);
-    if (currentOwner == null || !sameOwner(owner, currentOwner)) return StatusCode.NOT_OWNER;
-    StatusCode status = verifyInstance(directory, currentOwner);
+    if (currentOwner == null || !RiverDaemonTargetBinding.sameOwner(owner, currentOwner)) {
+      return StatusCode.NOT_OWNER;
+    }
+    StatusCode status = RiverDaemonTargetBinding.verifyInstance(directory, currentOwner);
     if (!status.isOk()) return status == StatusCode.CORRUPTION ? status : StatusCode.NOT_OWNER;
     if (requireRuntime) {
-      RuntimeValues current = readRuntime(filesystem, runtimeRoot, datadir, currentOwner);
-      if (!current.status.isOk()) {
-        return current.status == StatusCode.CORRUPTION
-            ? current.status : StatusCode.NOT_OWNER;
-      }
-      if (current.record == null || runtime == null || runtimeIdentity == null
-          || current.identity == null || !runtimeIdentity.equals(current.identity)
-          || !Objects.equals(runtimeChecksum, current.record.checksum)) {
-        return StatusCode.NOT_OWNER;
-      }
+      status = revalidateRuntime(currentOwner);
+      if (!status.isOk()) return status;
     }
     return lockHeld();
+  }
+
+  private StatusCode revalidateRuntime(RiverDaemonIdentityRecords.LockRecord currentOwner) {
+    RiverDaemonTargetBinding.BoundRuntime current =
+        RiverDaemonTargetBinding.readBoundRuntime(
+            filesystem, runtimeRoot, datadir, currentOwner);
+    if (!current.status.isOk()) {
+      return current.status == StatusCode.CORRUPTION
+          ? current.status : StatusCode.NOT_OWNER;
+    }
+    if (current.record == null || runtime == null || runtimeIdentity == null
+        || current.identity == null || !runtimeIdentity.equals(current.identity)
+        || !Objects.equals(runtimeChecksum, current.record.checksum)) {
+      return StatusCode.NOT_OWNER;
+    }
+    return StatusCode.OK;
   }
 
   StatusCode lockHeld() {
@@ -132,58 +142,6 @@ final class RiverDaemonTarget {
     return status;
   }
 
-  private static StatusCode verifyInstance(
-      RiverDirectory directory, RiverDaemonIdentityRecords.LockRecord owner) {
-    RiverFileResult result = new RiverFileResult();
-    StatusCode status = directory.openFile(
-        RiverDaemonIdentity.INSTANCE_FILE, RiverOpenMode.EXISTING, result);
-    if (!status.isOk()) return status;
-    RiverFile file = result.file();
-    RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
-    StatusCode closeStatus = file.close();
-    if (!read.status.isOk()) return read.status;
-    if (!closeStatus.isOk() && closeStatus != StatusCode.CLOSED) return closeStatus;
-    RiverDaemonIdentityRecords.InstanceRecord instance =
-        RiverDaemonIdentityRecords.parseInstance(read.bytes);
-    return instance != null && instance.incarnation.high() == owner.high
-            && instance.incarnation.low() == owner.low
-        ? StatusCode.OK : StatusCode.CORRUPTION;
-  }
-
-  private static RuntimeValues readRuntime(
-      RiverDaemonFileSystem filesystem, Path runtimeRoot, Path datadir,
-      RiverDaemonIdentityRecords.LockRecord owner) {
-    RiverFileResult result = new RiverFileResult();
-    StatusCode status = RiverDaemonRuntimeStorage.openRuntime(
-        filesystem, runtimeRoot, datadir.toString(), result);
-    if (status == StatusCode.CONFLICT) return RuntimeValues.missing();
-    if (!status.isOk()) return RuntimeValues.failure(status);
-    RiverFile file = result.file();
-    FileIdentity identity = file.identity();
-    RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
-    StatusCode closeStatus = file.close();
-    if (!read.status.isOk()) return RuntimeValues.failure(read.status);
-    if (!closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
-      return RuntimeValues.failure(closeStatus);
-    }
-    RiverDaemonRuntimeModel.RuntimeRecord runtime =
-        RiverDaemonRuntimeCodec.parseRuntime(read.bytes);
-    DatabaseIncarnation incarnation = DatabaseIncarnation.of(owner.high, owner.low);
-    if (runtime == null || identity == null
-        || !runtime.matches(datadir.toString(), incarnation, owner)) {
-      return RuntimeValues.failure(StatusCode.CORRUPTION);
-    }
-    return new RuntimeValues(StatusCode.OK, runtime, identity);
-  }
-
-  private static boolean sameOwner(
-      RiverDaemonIdentityRecords.LockRecord first,
-      RiverDaemonIdentityRecords.LockRecord second) {
-    return first.datadir.equals(second.datadir) && first.high == second.high
-        && first.low == second.low && first.pid == second.pid && first.start == second.start
-        && first.nonce.equals(second.nonce);
-  }
-
   private static StatusCode close(RiverDirectory directory, StatusCode primary) {
     StatusCode closeStatus = directory.close();
     return primary.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED
@@ -200,27 +158,6 @@ final class RiverDaemonTarget {
       primary = directoryStatus;
     }
     return primary;
-  }
-
-  private static final class RuntimeValues {
-    final StatusCode status;
-    final RiverDaemonRuntimeModel.RuntimeRecord record;
-    final FileIdentity identity;
-
-    RuntimeValues(StatusCode status, RiverDaemonRuntimeModel.RuntimeRecord record,
-        FileIdentity identity) {
-      this.status = status;
-      this.record = record;
-      this.identity = identity;
-    }
-
-    static RuntimeValues missing() {
-      return new RuntimeValues(StatusCode.OK, null, null);
-    }
-
-    static RuntimeValues failure(StatusCode status) {
-      return new RuntimeValues(status, null, null);
-    }
   }
 
   static final class Result {

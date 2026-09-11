@@ -38,9 +38,7 @@ val nativeImageOptions = (if (pgoInstrument.get()) emptyList() else listOf("-O3"
   "--enable-all-security-services",
   "--future-defaults=run-time-initialize-security-providers",
   "--initialize-at-run-time="
-      + "io.riverdb.platform.riverd.apfs.DarwinFileBridge,"
-      + "io.riverdb.platform.riverd.linux.LinuxFileBridge,"
-      + "io.riverdb.platform.riverd.ntfs.WindowsFileBridge",
+      + "io.riverdb.platform.riverd",
   "-R:MaxHeapSize=1g",
   "-H:+ReportExceptionStackTraces"
 )

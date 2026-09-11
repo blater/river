@@ -200,3 +200,11 @@ SQL/endpoint-stop smoke passed. The unchanged scan has 49 remaining files at or
 above 90 out of 2,602, with no new offenders. Checkpoint:
 `perf-checkpoint-20260911-score-first33`; per-ticket validation and
 `docs/performance-checkpoints.md` retain evidence.
+
+
+Nine further independently reviewed and validated slices bring the accepted total
+to 42. Clean full first-forty checks, the following affected checks, and the
+rebuilt standalone start/ps/authenticated SQL/endpoint-stop smoke passed. The
+unchanged scan has 40 remaining files at or above 90 out of 2,612, with no new
+offenders. Checkpoint: `perf-checkpoint-20260911-score-first42`; per-ticket
+validation and `docs/performance-checkpoints.md` retain evidence.

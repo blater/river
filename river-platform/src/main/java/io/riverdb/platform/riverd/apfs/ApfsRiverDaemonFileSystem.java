@@ -34,8 +34,8 @@ public final class ApfsRiverDaemonFileSystem implements RiverDaemonFileSystem {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int fd = DarwinFileBridge.open(path.toAbsolutePath().normalize(), DIRECTORY_FLAGS, 0);
-    if (fd < 0) return status(DarwinFileBridge.errno());
-    DarwinFileBridge.NativeStat stat = DarwinFileBridge.stat(fd);
+    if (fd < 0) return status(DarwinNativeBindings.errno());
+    DarwinNamespaceBridge.NativeStat stat = DarwinNamespaceBridge.stat(fd);
     StatusCode check = privateRequired
         ? verifyPrivateDirectory(fd, stat) : verifyDirectory(fd, stat);
     if (!check.isOk()) {
@@ -56,13 +56,13 @@ public final class ApfsRiverDaemonFileSystem implements RiverDaemonFileSystem {
       if (!reservation.isOk()) return reservation;
       int lockFd = DarwinFileBridge.duplicate(apfsFile.fd());
       if (lockFd < 0) {
-        int error = DarwinFileBridge.errno();
+        int error = DarwinNativeBindings.errno();
         apfsFile.cancelLock();
         return status(error);
       }
       int lockStatus = DarwinFileBridge.lock(lockFd);
       if (lockStatus != 0) {
-        int error = DarwinFileBridge.errno();
+        int error = DarwinNativeBindings.errno();
         DarwinFileBridge.close(lockFd);
         apfsFile.cancelLock();
         return error == DarwinFileBridge.EWOULDBLOCK
@@ -73,42 +73,42 @@ public final class ApfsRiverDaemonFileSystem implements RiverDaemonFileSystem {
     }
   }
 
-  static StatusCode verifyDirectory(int fd, DarwinFileBridge.NativeStat stat) {
-    if (stat == null) return status(DarwinFileBridge.errno());
+  static StatusCode verifyDirectory(int fd, DarwinNamespaceBridge.NativeStat stat) {
+    if (stat == null) return status(DarwinNativeBindings.errno());
     if (!stat.directory()) return StatusCode.CONFLICT;
-    if (stat.uid != DarwinFileBridge.effectiveUid() || (stat.mode & 0022) != 0) {
+    if (stat.uid != DarwinNamespaceBridge.effectiveUid() || (stat.mode & 0022) != 0) {
       return StatusCode.ACCESS_DENIED;
     }
-    int acl = DarwinFileBridge.aclAllows(fd);
+    int acl = DarwinNamespaceBridge.aclAllows(fd);
     return acl == 0 ? StatusCode.OK : acl > 0 ? StatusCode.ACCESS_DENIED
         : StatusCode.FEATURE_NOT_SUPPORTED;
   }
 
-  static StatusCode verifyPrivateDirectory(int fd, DarwinFileBridge.NativeStat stat) {
+  static StatusCode verifyPrivateDirectory(int fd, DarwinNamespaceBridge.NativeStat stat) {
     StatusCode status = verifyDirectory(fd, stat);
     if (!status.isOk()) return status;
     return (stat.mode & 0777) == 0700 ? StatusCode.OK : StatusCode.ACCESS_DENIED;
   }
 
-  static StatusCode verifyFile(int fd, DarwinFileBridge.NativeStat stat) {
-    if (stat == null) return status(DarwinFileBridge.errno());
+  static StatusCode verifyFile(int fd, DarwinNamespaceBridge.NativeStat stat) {
+    if (stat == null) return status(DarwinNativeBindings.errno());
     if (!stat.regularFile()) return StatusCode.CONFLICT;
     if (stat.links != 1) return StatusCode.ACCESS_DENIED;
-    if (stat.uid != DarwinFileBridge.effectiveUid() || (stat.mode & 0077) != 0) {
+    if (stat.uid != DarwinNamespaceBridge.effectiveUid() || (stat.mode & 0077) != 0) {
       return StatusCode.ACCESS_DENIED;
     }
-    int acl = DarwinFileBridge.aclAllows(fd);
+    int acl = DarwinNamespaceBridge.aclAllows(fd);
     return acl == 0 ? StatusCode.OK : acl > 0 ? StatusCode.ACCESS_DENIED
         : StatusCode.FEATURE_NOT_SUPPORTED;
   }
 
   static StatusCode status(int error) {
     return switch (error) {
-      case DarwinFileBridge.EEXIST, DarwinFileBridge.ENOENT, DarwinFileBridge.ENOTDIR,
-          DarwinFileBridge.ENOTEMPTY ->
+      case DarwinNamespaceBridge.EEXIST, DarwinNamespaceBridge.ENOENT, DarwinNamespaceBridge.ENOTDIR,
+          DarwinNamespaceBridge.ENOTEMPTY ->
           StatusCode.CONFLICT;
-      case DarwinFileBridge.EACCES, DarwinFileBridge.ELOOP -> StatusCode.ACCESS_DENIED;
-      case DarwinFileBridge.ENOSPC -> StatusCode.RESOURCE_EXHAUSTED;
+      case DarwinNamespaceBridge.EACCES, DarwinNamespaceBridge.ELOOP -> StatusCode.ACCESS_DENIED;
+      case DarwinNamespaceBridge.ENOSPC -> StatusCode.RESOURCE_EXHAUSTED;
       default -> StatusCode.IO_FAILURE;
     };
   }

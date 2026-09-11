@@ -54,7 +54,7 @@ final class ApfsRiverFile implements RiverFile {
     int count = DarwinFileBridge.read(fd, target, position);
     if (count < 0) {
       result.setBytesTransferred(0);
-      return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+      return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
     }
     result.setBytesTransferred(count);
     if (count == 0 && target.position() == before && target.hasRemaining()) {
@@ -73,7 +73,7 @@ final class ApfsRiverFile implements RiverFile {
     int count = DarwinFileBridge.write(fd, source, position);
     if (count < 0) {
       result.setBytesTransferred(0);
-      return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+      return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
     }
     source.position(source.position() + count);
     result.setBytesTransferred(count);
@@ -86,7 +86,7 @@ final class ApfsRiverFile implements RiverFile {
     StatusCode admission = admission();
     if (!admission.isOk()) return admission;
     return DarwinFileBridge.forceFile(fd) == 0
-        ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+        ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
   }
 
   @Override
@@ -103,7 +103,7 @@ final class ApfsRiverFile implements RiverFile {
     StatusCode admission = admission();
     if (!admission.isOk()) return admission;
     return DarwinFileBridge.truncate(fd, sizeBytes) == 0
-        ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+        ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
   }
 
   @Override
@@ -111,8 +111,8 @@ final class ApfsRiverFile implements RiverFile {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode admission = admission();
     if (!admission.isOk()) return admission;
-    DarwinFileBridge.NativeStat stat = DarwinFileBridge.stat(fd);
-    if (stat == null) return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+    DarwinNamespaceBridge.NativeStat stat = DarwinNamespaceBridge.stat(fd);
+    if (stat == null) return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
     result.setSizeBytes(stat.size);
     return StatusCode.OK;
   }
@@ -122,7 +122,7 @@ final class ApfsRiverFile implements RiverFile {
     if (closed) return StatusCode.CLOSED;
     closed = true;
     return DarwinFileBridge.close(fd) == 0
-        ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+        ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
   }
 
   private StatusCode admission() {

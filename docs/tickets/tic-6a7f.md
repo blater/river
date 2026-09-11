@@ -1,6 +1,6 @@
 ---
 id: tic-6a7f
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code

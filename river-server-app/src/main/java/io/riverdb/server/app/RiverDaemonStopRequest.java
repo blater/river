@@ -15,7 +15,7 @@ final class RiverDaemonStopRequest {
 
   static String encode(long high, long low, String ownerNonce, String requestNonce,
       String runtimeChecksum, long requestedAt) {
-    return RiverDaemonIdentityRecords.record(java.util.List.of(
+    return RiverDaemonRecordEnvelope.record(java.util.List.of(
         "format=" + FORMAT,
         "database-incarnation-high=" + high,
         "database-incarnation-low=" + low,
@@ -27,8 +27,10 @@ final class RiverDaemonStopRequest {
 
   static Record parse(byte[] bytes) {
     if (bytes == null || bytes.length == 0 || bytes.length > MAX_RECORD_BYTES) return null;
-    String[] fields = RiverDaemonIdentityRecords.envelope(bytes, 7, FORMAT);
-    if (fields == null) return null;
+    RiverDaemonRecordEnvelope.Envelope envelope =
+        RiverDaemonRecordEnvelope.decodePadded(bytes, 7, FORMAT);
+    if (envelope == null) return null;
+    String[] fields = envelope.fields;
     try {
       String highText = value(fields[1], "database-incarnation-high=");
       String lowText = value(fields[2], "database-incarnation-low=");

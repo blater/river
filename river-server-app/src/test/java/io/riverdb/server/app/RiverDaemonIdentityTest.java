@@ -39,7 +39,7 @@ final class RiverDaemonIdentityTest {
 
   @Test
   void identityCodecRejectsNoncanonicalNumbersAndMalformedUtf8WithValidChecksum() throws Exception {
-    byte[] negativeZero = RiverDaemonIdentityRecords.record(java.util.List.of(
+    byte[] negativeZero = RiverDaemonRecordEnvelope.record(java.util.List.of(
         "format=riverd-instance-v1",
         "database-incarnation-high=-0",
         "database-incarnation-low=29",
@@ -168,7 +168,7 @@ final class RiverDaemonIdentityTest {
 
     Path live = root.toRealPath().resolve("live");
     createPrivateDirectory(live);
-    writePrivate(live.resolve(RiverDaemonIdentity.LOCK_FILE), RiverDaemonIdentityRecords.record(
+    writePrivate(live.resolve(RiverDaemonIdentity.LOCK_FILE), RiverDaemonRecordEnvelope.record(
         java.util.List.of(
             "format=" + RiverDaemonIdentityRecords.LOCK_FORMAT,
             "datadir=" + live.toAbsolutePath().normalize(),
@@ -216,7 +216,7 @@ final class RiverDaemonIdentityTest {
     Path datadir = root.toRealPath().resolve("instance");
     createPrivateDirectory(datadir);
     String nonce = "0123456789abcdef0123456789abcdef";
-    writePrivate(datadir.resolve(RiverDaemonIdentity.LOCK_FILE), RiverDaemonIdentityRecords.record(
+    writePrivate(datadir.resolve(RiverDaemonIdentity.LOCK_FILE), RiverDaemonRecordEnvelope.record(
         java.util.List.of(
             "format=" + RiverDaemonIdentityRecords.LOCK_FORMAT,
             "datadir=" + datadir,
@@ -226,7 +226,7 @@ final class RiverDaemonIdentityTest {
             "process-start-epoch-millis=0",
             "owner-nonce=" + nonce)));
     writePrivate(datadir.resolve(".bootstrap-" + nonce + ".stage"),
-        RiverDaemonIdentityRecords.record(java.util.List.of(
+        RiverDaemonRecordEnvelope.record(java.util.List.of(
             "format=" + RiverDaemonIdentityRecords.BOOTSTRAP_FORMAT,
             "database-incarnation-high=" + INCARNATION.high(),
             "database-incarnation-low=" + INCARNATION.low(),
@@ -258,7 +258,7 @@ final class RiverDaemonIdentityTest {
     createPrivateDirectory(datadir);
     String lockNonce = "0123456789abcdef0123456789abcdef";
     String stageNonce = "fedcba9876543210fedcba9876543210";
-    writePrivate(datadir.resolve(RiverDaemonIdentity.LOCK_FILE), RiverDaemonIdentityRecords.record(
+    writePrivate(datadir.resolve(RiverDaemonIdentity.LOCK_FILE), RiverDaemonRecordEnvelope.record(
         java.util.List.of(
             "format=" + RiverDaemonIdentityRecords.LOCK_FORMAT,
             "datadir=" + datadir,
@@ -268,7 +268,7 @@ final class RiverDaemonIdentityTest {
             "process-start-epoch-millis=0",
             "owner-nonce=" + lockNonce)));
     writePrivate(datadir.resolve(".bootstrap-" + stageNonce + ".stage"),
-        RiverDaemonIdentityRecords.record(java.util.List.of(
+        RiverDaemonRecordEnvelope.record(java.util.List.of(
             "format=" + RiverDaemonIdentityRecords.BOOTSTRAP_FORMAT,
             "database-incarnation-high=" + INCARNATION.high(),
             "database-incarnation-low=" + INCARNATION.low(),
@@ -324,7 +324,7 @@ final class RiverDaemonIdentityTest {
     String stageName = ".instance-" + first.nonce() + ".stage";
     RiverFileResult stage = new RiverFileResult();
     assertEquals(StatusCode.OK, first.directory().createFile(stageName, stage));
-    writeRecord(stage.file(), RiverDaemonIdentityRecords.record(java.util.List.of(
+    writeRecord(stage.file(), RiverDaemonRecordEnvelope.record(java.util.List.of(
         "format=" + RiverDaemonIdentityRecords.INSTANCE_FORMAT,
         "database-incarnation-high=" + INCARNATION.high(),
         "database-incarnation-low=" + INCARNATION.low(),
@@ -388,7 +388,7 @@ final class RiverDaemonIdentityTest {
     String stageName = ".instance-" + nonce + ".stage";
     RiverFileResult stageResult = new RiverFileResult();
     assertEquals(StatusCode.OK, first.directory().createFile(stageName, stageResult));
-    writeRecord(stageResult.file(), RiverDaemonIdentityRecords.record(java.util.List.of(
+    writeRecord(stageResult.file(), RiverDaemonRecordEnvelope.record(java.util.List.of(
         "format=" + RiverDaemonIdentityRecords.INSTANCE_FORMAT,
         "database-incarnation-high=" + INCARNATION.high(),
         "database-incarnation-low=" + INCARNATION.low(),
@@ -605,7 +605,7 @@ final class RiverDaemonIdentityTest {
     }
     assertEquals(StatusCode.OK, first.close());
     Path stage = datadir.resolve(".instance-" + nonce + ".stage");
-    writePrivate(stage, RiverDaemonIdentityRecords.record(java.util.List.of(
+    writePrivate(stage, RiverDaemonRecordEnvelope.record(java.util.List.of(
         "format=riverd-instance-v1",
         "database-incarnation-high=31",
         "database-incarnation-low=47",
