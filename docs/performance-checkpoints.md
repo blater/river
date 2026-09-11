@@ -2328,7 +2328,7 @@ affected file is below 90 (maximum 27.720, original parser 255.590).
 
 Same light JVM configuration as the score campaign above: version
 `tic-e67d-efb91d9b-jvm`, 292.45 TPS, p99 68.878ms, passing invariants, zero
-failed/unknown outcomes and graceful cleanup. Adjacent accepted control296.56 TPS;
+failed/unknown outcomes and graceful cleanup. Adjacent accepted control 296.56 TPS;
 accepted with no observed regression. Artifact
 `river_harness_20260911_024105_828fa65a` under the harness runs directory above.
 Checkpoint: `perf-checkpoint-20260911-score-parser`.

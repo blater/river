@@ -1,6 +1,6 @@
 ---
 id: tic-e67d
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -46,3 +46,7 @@ stop took 1.061s. This is consistent with the adjacent accepted 296.56 TPS
 control and earlier short-sample variability; no speed improvement is claimed.
 
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_024105_828fa65a`.
+
+Accepted implementation and evidence are merged and pushed at `f08ff704`,
+checkpoint `perf-checkpoint-20260911-score-parser`. The integrated full scan
+includes 2,536 Java files, with 78 remaining at or above 90.

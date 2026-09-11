@@ -148,3 +148,7 @@ checkpoint `perf-checkpoint-20260911-score-first3`. The unchanged full scan
 analyzes 2,533 Java files; 79 remain at or above 90. All new files in the accepted
 slices are below 90. Individual ticket pages and performance checkpoints retain
 validation evidence.
+
+`tic-e67d` is closed at pushed checkpoint `perf-checkpoint-20260911-score-parser`.
+Four original files are delivered; the integrated scan includes 2,536 Java files
+and 78 remain at or above 90.
