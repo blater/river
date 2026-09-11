@@ -1,6 +1,6 @@
 ---
 id: tic-c726
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -38,3 +38,5 @@ The epic's light JVM sample/all passed at 304.50 TPS, p99 63.111ms, zero failed/
 unknown outcomes, valid invariants and graceful cleanup. Production is unchanged;
 this is a smoke, not a speed claim. Artifact:
 `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_042109_452f3e54`.
+
+Delivered at `perf-checkpoint-20260911-score-first19`.

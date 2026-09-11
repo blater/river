@@ -1,6 +1,6 @@
 ---
 id: tic-bbfc
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -45,3 +45,5 @@ The epic's light JVM sample/all passed at 310.40 TPS, p99 60.686ms, zero failed/
 unknown outcomes, valid invariants and graceful shutdown; no observed regression
 against adjacent 308.37/306.79 TPS samples. Startup 1.353s; stop 0.860s. Artifact:
 `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_041857_052148d6`.
+
+Delivered at `perf-checkpoint-20260911-score-first19`.
