@@ -23,8 +23,9 @@ final class RiverdForeground {
   private RiverdForeground() { }
 
   static StatusCode run(RiverdCommandResult command, Path home) {
-    RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
-    StatusCode status = RiverDaemonPaths.resolve(command.datadir(), command.readyFile(), home, paths);
+    RiverDaemonPathSelection.Result paths = new RiverDaemonPathSelection.Result();
+    StatusCode status = RiverDaemonPathSelection.resolve(
+        command.datadir(), command.readyFile(), home, paths);
     if (!status.isOk()) return status;
     RiverDaemonFileSystemResult filesystemResult = new RiverDaemonFileSystemResult();
     status = RiverDaemonFileSystems.current(filesystemResult);
@@ -33,22 +34,22 @@ final class RiverdForeground {
     RiverDaemonResources.Result resources = new RiverDaemonResources.Result();
     status = RiverDaemonResources.compile(command.maximumConnections(), resources);
     if (!status.isOk()) return status;
-    status = RiverDaemonPaths.verify(filesystem, paths);
+    status = RiverDaemonPathInspection.verify(filesystem, paths);
     if (!status.isOk()) return status;
-    status = RiverDaemonPaths.ensureParents(filesystem, paths.datadir);
+    status = RiverDaemonPathParents.ensureParents(filesystem, paths.datadir);
     if (!status.isOk()) return status;
     if (paths.ready != null && paths.ready.getParent() != null) {
-      status = RiverDaemonPaths.ensureParents(filesystem, paths.ready.getParent());
+      status = RiverDaemonPathParents.ensureParents(filesystem, paths.ready.getParent());
       if (!status.isOk()) return status;
     }
     RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
-    status = RiverDaemonPaths.ensureDirectory(filesystem, paths.runtimeRoot, runtimeRootResult);
+    status = RiverDaemonPathParents.ensureDirectory(filesystem, paths.runtimeRoot, runtimeRootResult);
     if (!status.isOk()) return status;
     status = runtimeRootResult.directory().close();
     if (!status.isOk() && status != StatusCode.CLOSED) return status;
     // Parent creation changed the namespace; revalidate every prospective object before
     // identity/database mutation begins.
-    status = RiverDaemonPaths.verify(filesystem, paths);
+    status = RiverDaemonPathInspection.verify(filesystem, paths);
     if (!status.isOk()) return status;
 
     Probe probe = probeAuthority(filesystem, paths.datadir);
@@ -183,7 +184,8 @@ final class RiverdForeground {
     }
 
     synchronized StatusCode publish(
-        RiverDaemonFileSystem filesystem, RiverDaemonPaths.Result paths, String certificateSha256) {
+        RiverDaemonFileSystem filesystem, RiverDaemonPathSelection.Result paths,
+        String certificateSha256) {
       if (stopped()) return StatusCode.CANCELLED;
       StatusCode current = instance.checkCredentialValidity();
       if (current.isOk()) current = publishRuntime(filesystem, paths, metadata);
@@ -238,9 +240,9 @@ final class RiverdForeground {
   }
 
   private static StatusCode publishRuntime(
-      RiverDaemonFileSystem filesystem, RiverDaemonPaths.Result paths,
+      RiverDaemonFileSystem filesystem, RiverDaemonPathSelection.Result paths,
       RiverDaemonRuntimeRecords.Metadata metadata) {
-    StatusCode status = RiverDaemonPaths.verify(filesystem, paths);
+    StatusCode status = RiverDaemonPathInspection.verify(filesystem, paths);
     if (!status.isOk()) return status;
     RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
     status = filesystem.openDirectory(paths.runtimeRoot, runtimeRootResult);
