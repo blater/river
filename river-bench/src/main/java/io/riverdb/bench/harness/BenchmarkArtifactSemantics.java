@@ -5,7 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Checks relationships between fields after an artifact passes its schema tree. */
+/** Checks relationships between fields after schema-tree validation. */
 final class BenchmarkArtifactSemantics {
   private BenchmarkArtifactSemantics() {}
 

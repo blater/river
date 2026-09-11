@@ -10,9 +10,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /** Validates the deliberately small JSON Schema subset used by benchmark artifacts. */
@@ -191,12 +193,6 @@ public final class BenchmarkSchemaValidator {
       errors.add(path + ": above maximum");
     }
   }
-
-
-
-
-
-
 
   private static boolean contains(JsonNode array, JsonNode value) {
     for (JsonNode candidate : array) {
