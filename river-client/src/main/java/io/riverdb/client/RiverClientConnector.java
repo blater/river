@@ -33,12 +33,18 @@ final class RiverClientConnector {
     result.reset();
     RiverClientConfiguration.ContextResult contextResult =
         new RiverClientConfiguration.ContextResult();
-    StatusCode status = configuration.createPinnedContext(contextResult);
+    StatusCode status = RiverClientCertificateTrust.create(
+        configuration.fileSystem(), configuration.certificateFile(),
+        configuration.certificateDigest(), contextResult);
     if (!status.isOk()) return status;
     RiverClientConfiguration.BytesResult tokenResult =
         new RiverClientConfiguration.BytesResult();
     try {
-      status = configuration.readToken(tokenResult);
+      status = RiverClientFileReader.readBounded(
+          configuration.fileSystem(), configuration.tokenFile(), TokenProof.PROOF_BYTES, tokenResult);
+      if (status.isOk() && tokenResult.value.length != TokenProof.PROOF_BYTES) {
+        status = StatusCode.CORRUPTION;
+      }
       if (!status.isOk()) return status;
       return connect(configuration.host(), configuration.port(), contextResult.context,
           tokenResult.value, tokenResult.value.length, result);
