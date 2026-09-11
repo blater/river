@@ -66,7 +66,7 @@ final class RiverDaemonCredentialStorage {
       DatabaseIncarnation incarnation,
       String generationName,
       byte[] privateKey,
-      byte[] certificate) throws Exception {
+      byte[] certificate) {
     RiverDirectory generations = null;
     RiverDirectory generation = null;
     StatusCode status = StatusCode.OK;
@@ -101,7 +101,7 @@ final class RiverDaemonCredentialStorage {
       DatabaseIncarnation incarnation,
       String generationName,
       byte[] privateKey,
-      byte[] certificate) {
+      byte[] certificate) throws Exception {
     StatusCode status = RiverDaemonCredentialFiles.writeChild(
         generation, "token.bin", material.token());
     if (!status.isOk()) return status;
