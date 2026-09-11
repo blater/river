@@ -54,13 +54,13 @@ final class CatalogIndexCodecTest {
     assertEquals(
         StatusCode.CONFLICT,
         CatalogIndexCodec.decodeForTable(
-            row(encoded), buffer(), 8, result));
+            row(encoded), buffer(), 8, null, result));
 
     encoded.putInt(20, 99);
     assertEquals(
         StatusCode.CORRUPTION,
         CatalogIndexCodec.decodeForTable(
-            row(encoded), buffer(), 7, result));
+            row(encoded), buffer(), 7, null, result));
   }
 
   private static ByteBuffer buffer() {
