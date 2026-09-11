@@ -1,6 +1,6 @@
 ---
 id: tic-b251
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,11 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-server-app` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Implementation notes
+
+Ownership is split at the existing lifecycle boundaries: admission owns directory and lock
+acquisition, staged recovery owns bootstrap namespace validation and repair, and commit owns
+publication plus residue cleanup. `RiverDaemonIdentity` remains the public façade and
+`IdentityResult` remains the sole retained-capability carrier; helpers use concrete package-local
+classes and preserve force-before-remove ordering and first-failure cleanup precedence.
