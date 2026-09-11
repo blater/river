@@ -1,6 +1,6 @@
 ---
 id: tic-90d4
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -51,3 +51,5 @@ cleanup. This test-only change leaves production source unchanged; the result is
 within the current short-sample range, with no performance claim.
 Version `tic-90d4-bee220fb-jvm`; artifact
 `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_070237_ff2ce2b6`.
+
+Delivered in `perf-checkpoint-20260911-score-first51`.

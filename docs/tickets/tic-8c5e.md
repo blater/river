@@ -1,6 +1,6 @@
 ---
 id: tic-8c5e
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -51,3 +51,5 @@ zero failed/unknown outcomes, passed invariants and graceful inactive cleanup.
 The result is within current short-run variation; no performance claim.
 Version `tic-8c5e-ba04b7ac-jvm`; artifact
 `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_071144_ff4c1be9`.
+
+Delivered in `perf-checkpoint-20260911-score-first51`.

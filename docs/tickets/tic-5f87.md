@@ -1,6 +1,6 @@
 ---
 id: tic-5f87
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -57,3 +57,5 @@ Windows slice's longer control/candidate investigation did not retain the
 short-run slowdown. No speedup is claimed.
 Version `tic-5f87-dc4c1c87-jvm`; artifact
 `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_070929_ddf8f1bf`.
+
+Delivered in `perf-checkpoint-20260911-score-first51`.

@@ -1,6 +1,6 @@
 ---
 id: tic-486d
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -48,3 +48,5 @@ five seconds warmup and ten seconds measured: **286.58 TPS**, p99 **67.502 ms**,
 cleanup. No regression observed or speedup claimed from this short diagnostic.
 Version `tic-486d-bdde7493-jvm`; artifact
 `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_072041_34e9646b`.
+
+Delivered in `perf-checkpoint-20260911-score-first51`.
