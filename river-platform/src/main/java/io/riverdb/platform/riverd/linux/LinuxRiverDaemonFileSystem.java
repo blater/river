@@ -27,10 +27,10 @@ public final class LinuxRiverDaemonFileSystem implements RiverDaemonFileSystem {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (!linux() || path == null || invalidPath(path)) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (!LinuxFileBridge.supportedArchitecture()) return StatusCode.FEATURE_NOT_SUPPORTED;
+    if (!LinuxNativeBindings.supportedArchitecture()) return StatusCode.FEATURE_NOT_SUPPORTED;
     int fd = LinuxFileBridge.open(path.toAbsolutePath().normalize(), DIRECTORY_FLAGS, 0);
-    if (fd < 0) return status(LinuxFileBridge.errno());
-    LinuxFileBridge.Stat stat = LinuxFileBridge.stat(fd);
+    if (fd < 0) return status(LinuxNativeBindings.errno());
+    LinuxNamespaceBridge.Stat stat = LinuxNamespaceBridge.stat(fd);
     StatusCode check = privateRequired ? verifyPrivateDirectory(stat) : verifyDirectory(stat);
     if (!check.isOk()) {
       LinuxFileBridge.close(fd);
@@ -50,12 +50,12 @@ public final class LinuxRiverDaemonFileSystem implements RiverDaemonFileSystem {
       if (!reservation.isOk()) return reservation;
       int lockFd = LinuxFileBridge.duplicate(linuxFile.fd());
       if (lockFd < 0) {
-        int error = LinuxFileBridge.errno();
+        int error = LinuxNativeBindings.errno();
         linuxFile.cancelLock();
         return status(error);
       }
       if (LinuxFileBridge.lock(lockFd) != 0) {
-        int error = LinuxFileBridge.errno();
+        int error = LinuxNativeBindings.errno();
         LinuxFileBridge.close(lockFd);
         linuxFile.cancelLock();
         return error == LinuxFileBridge.EWOULDBLOCK ? StatusCode.CONFLICT : status(error);
@@ -67,26 +67,26 @@ public final class LinuxRiverDaemonFileSystem implements RiverDaemonFileSystem {
 
   // Linux POSIX ACL_MASK is reflected in the group mode bits. Named user/group
   // entries cannot grant permissions outside that mask, including inherited ACLs.
-  static StatusCode verifyDirectory(LinuxFileBridge.Stat stat) {
-    if (stat == null) return status(LinuxFileBridge.errno());
+  static StatusCode verifyDirectory(LinuxNamespaceBridge.Stat stat) {
+    if (stat == null) return status(LinuxNativeBindings.errno());
     if (!stat.directory()) return StatusCode.CONFLICT;
-    if (stat.uid != LinuxFileBridge.effectiveUid() || (stat.mode & 0022) != 0) {
+    if (stat.uid != LinuxNamespaceBridge.effectiveUid() || (stat.mode & 0022) != 0) {
       return StatusCode.ACCESS_DENIED;
     }
     return StatusCode.OK;
   }
 
-  static StatusCode verifyPrivateDirectory(LinuxFileBridge.Stat stat) {
+  static StatusCode verifyPrivateDirectory(LinuxNamespaceBridge.Stat stat) {
     StatusCode check = verifyDirectory(stat);
     if (!check.isOk()) return check;
     return (stat.mode & 0777) == 0700 ? StatusCode.OK : StatusCode.ACCESS_DENIED;
   }
 
-  static StatusCode verifyFile(LinuxFileBridge.Stat stat) {
-    if (stat == null) return status(LinuxFileBridge.errno());
+  static StatusCode verifyFile(LinuxNamespaceBridge.Stat stat) {
+    if (stat == null) return status(LinuxNativeBindings.errno());
     if (!stat.regularFile()) return StatusCode.CONFLICT;
     if (stat.links != 1) return StatusCode.ACCESS_DENIED;
-    if (stat.uid != LinuxFileBridge.effectiveUid() || (stat.mode & 0077) != 0) {
+    if (stat.uid != LinuxNamespaceBridge.effectiveUid() || (stat.mode & 0077) != 0) {
       return StatusCode.ACCESS_DENIED;
     }
     return StatusCode.OK;
@@ -98,7 +98,7 @@ public final class LinuxRiverDaemonFileSystem implements RiverDaemonFileSystem {
           LinuxFileBridge.ENOTEMPTY -> StatusCode.CONFLICT;
       case LinuxFileBridge.EACCES, LinuxFileBridge.ELOOP -> StatusCode.ACCESS_DENIED;
       case LinuxFileBridge.ENOSPC -> StatusCode.RESOURCE_EXHAUSTED;
-      case LinuxFileBridge.ENOTSUP, LinuxFileBridge.EINVAL, LinuxFileBridge.ENOSYS ->
+      case LinuxNamespaceBridge.ENOTSUP, LinuxFileBridge.EINVAL, LinuxFileBridge.ENOSYS ->
           StatusCode.FEATURE_NOT_SUPPORTED;
       default -> StatusCode.IO_FAILURE;
     };
