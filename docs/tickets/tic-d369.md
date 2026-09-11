@@ -1,6 +1,6 @@
 ---
 id: tic-d369
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,14 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-engine` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Implementation notes
+
+- In progress: retained one coordinator gate while extracting statement preparation,
+  prepared validation, and scan lifecycle owners.
+- Final touched-file scores: coordinator 89.198, preparation 70.335, validation
+  56.266, scan lifecycle 39.089.
+- Focused compile and session tests pass. The first allocation run measured 1,576
+  bytes for warmed JOIN block pipeline and failed; the isolated rerun and final
+  focused suite passed, so root should treat allocation variance as unresolved
+  until an adjacent control is checked. Root owns the light performance check.
