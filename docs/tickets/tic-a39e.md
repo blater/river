@@ -1,6 +1,6 @@
 ---
 id: tic-a39e
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
