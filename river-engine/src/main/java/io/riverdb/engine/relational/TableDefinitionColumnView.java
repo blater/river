@@ -7,15 +7,12 @@ import java.nio.ByteBuffer;
 final class TableDefinitionColumnView {
   private TableDefinitionColumnView() { }
 
-  static CharSequence keyName(TableDefinition table) { return name(table, 0); }
-  static CharSequence valueName(TableDefinition table) { return name(table, 1); }
   static boolean matchesKey(TableDefinition table, CharSequence name) {
     return table.columnCount > 0 && table.columnNames[0].matches(name);
   }
   static boolean matchesValue(TableDefinition table, CharSequence name) {
     return table.columnCount > 1 && table.columnNames[1].matches(name);
   }
-  static int count(TableDefinition table) { return table.columnCount; }
   static CharSequence name(TableDefinition table, int index) {
     return index >= 0 && index < table.columnCount ? table.columnNameAt(index) : null;
   }
@@ -67,7 +64,6 @@ final class TableDefinitionColumnView {
     target.put(table.defaultTextBytes, offset, length);
     return length;
   }
-  static int defaultTextBytes(TableDefinition table) { return table.defaultTextBytesUsed; }
   static byte defaultTextByte(TableDefinition table, int index) {
     return index >= 0 && index < table.defaultTextBytesUsed
         ? table.defaultTextBytes[index] : 0;
