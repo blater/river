@@ -1,6 +1,6 @@
 ---
 id: tic-013d
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -34,3 +34,13 @@ entrypoint and lifecycle metadata. The final focused scan leaves every original 
 file below 90 (maximum **49.639**). Focused server compile and runtime, identity, stop,
 stop-request and client tests passed; the required server check and TPS installation are run
 from the isolated ticket worktree and passed.
+
+
+Validation: source `b12f3518`, Luna/high implemented; Sol/high and lead approved.
+Original score 18.390 (384.232 before); seven new owners all below 90, maximum 49.639.
+Server-app checks and installTps passed with `--no-daemon`. Runtime/ready bytes,
+identity validation, force/close order and missing-runtime distinctions preserved.
+The epic's light JVM sample/all passed at 308.64 TPS, p99 58.491ms, 506 retries,
+zero failed/unknown outcomes, valid invariants and graceful cleanup. Startup 1.329s,
+stop 0.872s. No observed regression against recent integrated control 314.68 TPS.
+Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_034035_92f33862`.

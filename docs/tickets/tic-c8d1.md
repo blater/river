@@ -166,3 +166,8 @@ Protocol request encoding (`tic-1ca8`), schema admission (`tic-50be`) and catalo
 index decoding (`tic-01f7`) bring the accepted total to 11. Combined affected
 checks passed; unchanged scan: 2,558 Java files, 71 remaining at or above 90.
 Checkpoint: `perf-checkpoint-20260911-score-first11`.
+
+
+Session grammar (`tic-03aa`) and runtime records (`tic-013d`) bring the accepted
+total to 13. Combined affected checks passed; unchanged scan: 2,566 Java files,
+69 remaining at or above 90. Checkpoint: `perf-checkpoint-20260911-score-first13`.
