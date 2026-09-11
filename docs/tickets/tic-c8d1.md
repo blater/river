@@ -39,6 +39,21 @@ above, all child changes reviewed and validated, integration tests and the actua
 installed-server path pass, changes merged/tagged/pushed, and local artifacts
 refreshed. New findings created by extraction stay in their originating ticket.
 
+## Measurement baseline
+
+JVM source `75ae39d6`, GraalVM 25.0.4, `-Xmx1g`; baseline samples 240.07 and
+294.15 committed TPS, both passed with zero failed/unknown outcomes, successful
+invariants and graceful cleanup. Evidence: `baseline-samples.json` under the
+artifact directory above. These short samples are diagnostics, not a speed claim.
+
+Per-ticket command: `benchmark run river tpcc sample all
+--river-executable=JVM_LAUNCHER --river-version=TICKET-COMMIT-VARIATION
+--warmup=5s --duration=10s --workers=4 --warehouses=1 --seed=42 --max-retries=20`.
+Record startup/stop elapsed time as well for lifecycle changes. Use the prior
+accepted build as the rolling control; keep candidate/control measurements apart
+from compilation, tests and broad scoring scans. Benchmark SQL, durability,
+isolation and retry policy are unchanged.
+
 ## File tickets
 
 | Ticket | Original file | Baseline |

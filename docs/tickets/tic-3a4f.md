@@ -25,35 +25,25 @@ reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-jdbc` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
 
-## Work notes
+## Delivery evidence
 
-- Moved the streaming SQL/reopen, bigint comparison, and long catalog lifecycle
-  suites into cohesive JDBC test classes.
-- Added `RiverDriverTestFixture` to own embedded database/server lifetime and
-  authenticated client setup, including durable reopen and failure cleanup.
-- Baseline `RiverDriverTest.java`: 166.674.
-- After unchanged full scan: all five affected files are below 90
-  (`51.497`, `54.811`, `38.074`, `34.330`, and `10.352`); the scan analyzed
-  2,526 files. Focused Gradle checks remain pending the lead's serialized build
-  slot.
+The four suites retain all 19 original tests. One fixture owns embedded database,
+server, authenticated client setup and durable reopen; one assertion helper owns
+shared column-metadata checks. Partial startup failure and repeated close retain
+explicit cleanup. Sol/high reviewed the final code; the lead accepted these
+boundaries. No production code changed.
 
-## Review fixes
+Final scores: RiverDriverTest **86.617**, fixture **67.380**, streaming suite
+**54.811**, bigint suite **38.074**, catalog suite **34.330**, metadata assertions
+**0**. The unchanged scanner includes tests. All 19 focused tests passed with
+zero failures, errors or skips; JVM benchmark distribution installation passed.
 
-- Migrated the remaining embedded JDBC tests onto the shared fixture and removed
-  the duplicated client-file map, server starter, URL helper, token helper, and
-  stray `@Test` annotation.
-- Fixture startup now closes partially acquired resources on failure, cleanup
-  attempts both server and database closes before reporting status, preserves a
-  primary failure with cleanup suppressed, and clears the client-file path on
-  close. Durable reopen retains the configured owner budget.
-- Rescanned all changed files: scores remain below 90, with `RiverDriverTest`
-  at `86.617` and the other four files unchanged.
+Light workload: `sample all`, four workers, one warehouse, seed 42, max retries
+20, 5s warmup and 10s measurement, GraalVM 25 JVM with 1GiB heap. Version
+`tic-3a4f-7af24dac-jvm` produced **252.31 committed TPS**, p99 **65.339ms**,
+418 retries, zero failed/unknown outcomes, passing invariants and graceful stop
+back to inactive. This lies within the adjacent controls of 240.07 and 294.15 TPS;
+the short diagnostic supports acceptance, not a speed claim.
 
-## Compile and test review fix
-
-- Restored the shared metadata row assertion through `JdbcMetadataAssertions`,
-  restored the `Arrays` import used by batch assertions, and added the missing
-  streaming result metadata/type imports.
-- Focused compile, JDBC tests (`RiverDriverTest`, streaming, bigint, and
-  catalog), and `:river-bench:installTps` all passed with isolated Gradle home
-  and project cache. Log: `/private/tmp/river-score-20260911/tic-3a4f-tests.log`.
+Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_021326_73013c0b`.
+Source commit: `7af24dac402edc1741d9ea5479b8ce12bff2b2f0`.
