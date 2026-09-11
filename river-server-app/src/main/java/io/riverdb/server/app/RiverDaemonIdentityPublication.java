@@ -54,25 +54,35 @@ final class RiverDaemonIdentityPublication {
     StatusCode status = directory.list(entries);
     boolean existed = status.isOk() && RiverDaemonIdentityNamespace.hasEntry(entries, stageName);
     RiverFileResult stageResult = new RiverFileResult();
+    RiverFile stage = null;
     if (status.isOk()) status = directory.openFile(stageName, RiverOpenMode.CREATE_NEW, stageResult);
     if (status == StatusCode.CONFLICT) {
       status = directory.openFile(stageName, RiverOpenMode.EXISTING, stageResult);
-      if (status.isOk()) status = validateInstance(stageResult.file(), stageName, result);
+      if (status.isOk()) {
+        stage = stageResult.file();
+        status = validateInstance(stage, stageName, result);
+      }
+    }
+    if (status.isOk()) {
+      if (stage == null) stage = stageResult.file();
+      if (!existed) {
+        String body = RiverDaemonIdentityRecords.record(List.of(
+            "format=" + RiverDaemonIdentityRecords.INSTANCE_FORMAT,
+            "database-incarnation-high=" + result.incarnation().high(),
+            "database-incarnation-low=" + result.incarnation().low(),
+            "initial-wal-generation=1"));
+        status = RiverDaemonIdentityFiles.write(stage, body.getBytes(StandardCharsets.UTF_8));
+      }
+      if (status.isOk()) status = directory.publishExclusive(
+          stage, stageName, RiverDaemonIdentity.INSTANCE_FILE, new DirectoryOperationResult());
+    }
+    if (stage != null) {
+      StatusCode closeStatus = stage.close();
+      if (status.isOk() && closeStatus != StatusCode.OK && closeStatus != StatusCode.CLOSED) {
+        status = closeStatus;
+      }
     }
     if (!status.isOk()) return status;
-    RiverFile stage = stageResult.file();
-    if (!existed) {
-      String body = RiverDaemonIdentityRecords.record(List.of(
-          "format=" + RiverDaemonIdentityRecords.INSTANCE_FORMAT,
-          "database-incarnation-high=" + result.incarnation().high(),
-          "database-incarnation-low=" + result.incarnation().low(),
-          "initial-wal-generation=1"));
-      status = RiverDaemonIdentityFiles.write(stage, body.getBytes(StandardCharsets.UTF_8));
-    }
-    if (status.isOk()) status = directory.publishExclusive(
-        stage, stageName, RiverDaemonIdentity.INSTANCE_FILE, new DirectoryOperationResult());
-    StatusCode closeStatus = stage.close();
-    if (status.isOk() && !closeStatus.isOk()) status = closeStatus;
     return status.isOk() ? RiverDaemonIdentityFiles.forceDirectory(directory) : status;
   }
 

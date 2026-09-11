@@ -105,34 +105,40 @@ final class RiverDaemonIdentityRecovery {
 
     private static RecoveryState read(Path datadir, RiverDirectory directory, RiverFile lockFile) {
       byte[] bytes = new byte[MAX_RECORD_BYTES];
-      StatusCode status = RiverDaemonIdentityFiles.readRecord(
+      StatusCode lockStatus = RiverDaemonIdentityFiles.readRecord(
           lockFile, bytes, RiverDaemonIdentity.LOCK_FILE);
-      RiverDaemonIdentityRecords.LockRecord owner = status.isOk()
+      RiverDaemonIdentityRecords.LockRecord owner = lockStatus.isOk()
           ? RiverDaemonIdentityRecords.parseLock(bytes) : null;
       Arrays.fill(bytes, (byte) 0);
-      if (status != StatusCode.OK && status != StatusCode.CORRUPTION) {
-        return new RecoveryState(status, null, owner, null);
-      }
-      if (owner != null) {
-        status = RiverDaemonIdentityNamespace.proveOwnerAbsent(owner);
-        if (!status.isOk()) return new RecoveryState(status, null, owner, null);
-      }
       RiverFileResult fileResult = new RiverFileResult();
-      status = directory.openFile("bootstrap.properties", RiverOpenMode.EXISTING, fileResult);
-      if (!status.isOk()) return new RecoveryState(status, null, owner, null);
+      StatusCode bootstrapStatus = directory.openFile("bootstrap.properties",
+          RiverOpenMode.EXISTING, fileResult);
+      if (!bootstrapStatus.isOk()) return new RecoveryState(bootstrapStatus, null, owner, null);
       RiverFile file = fileResult.file();
       bytes = new byte[MAX_RECORD_BYTES];
-      status = RiverDaemonIdentityFiles.readRecord(file, bytes, "bootstrap.properties");
-      RiverDaemonIdentityRecords.BootstrapRecord bootstrap = status.isOk()
+      bootstrapStatus = RiverDaemonIdentityFiles.readRecord(file, bytes, "bootstrap.properties");
+      RiverDaemonIdentityRecords.BootstrapRecord bootstrap = bootstrapStatus.isOk()
           ? RiverDaemonIdentityRecords.parseBootstrap(bytes) : null;
       Arrays.fill(bytes, (byte) 0);
       StatusCode closeStatus = file.close();
-      if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
-        status = closeStatus;
+      if (bootstrapStatus.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
+        bootstrapStatus = closeStatus;
       }
-      if (status.isOk() && bootstrap == null) status = StatusCode.CORRUPTION;
-      if (status.isOk() && !bootstrap.incarnation.isValid()) status = StatusCode.CORRUPTION;
-      if (status.isOk()) status = RiverDaemonIdentityNamespace.proveOwnerAbsent(
+      if (bootstrapStatus.isOk() && bootstrap == null) bootstrapStatus = StatusCode.CORRUPTION;
+      if (bootstrapStatus.isOk() && !bootstrap.incarnation.isValid()) {
+        bootstrapStatus = StatusCode.CORRUPTION;
+      }
+      if (!bootstrapStatus.isOk()) {
+        return new RecoveryState(bootstrapStatus, bootstrap, owner, null);
+      }
+      if (lockStatus != StatusCode.OK && lockStatus != StatusCode.CORRUPTION) {
+        return new RecoveryState(lockStatus, bootstrap, owner, null);
+      }
+      if (owner != null) {
+        lockStatus = RiverDaemonIdentityNamespace.proveOwnerAbsent(owner);
+        if (!lockStatus.isOk()) return new RecoveryState(lockStatus, bootstrap, owner, null);
+      }
+      StatusCode status = RiverDaemonIdentityNamespace.proveOwnerAbsent(
           RiverDaemonIdentityNamespace.bootstrapOwner(datadir, bootstrap));
       return new RecoveryState(status, bootstrap, owner, new StageRepairResult());
     }
