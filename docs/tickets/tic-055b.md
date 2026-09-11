@@ -96,5 +96,7 @@ graceful cleanup. Candidate TPS 517.67/487.20 lies within adjacent controls
 are in `docs/performance-checkpoints.md`; logs and frozen candidate are under
 `/private/tmp/river-m5-055b-evidence/`.
 
-Accepted for promotion at `perf-checkpoint-20260911-sql-command-ownership-m5`.
+Merged and pushed as `1490efc4` at
+`perf-checkpoint-20260911-sql-command-ownership-m5`. Fresh-master public-server
+smoke `river_harness_20260911_151305_76415185` passed, including cleanup.
 Native compilation remains independently blocked by `tic-ae17`.

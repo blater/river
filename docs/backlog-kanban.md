@@ -10,7 +10,7 @@ a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
 Current user-directed queue (M5) is complete: the first62 integration, `tic-9e2f`,
-and [`tic-055b`](tickets/tic-055b.md) are accepted for promotion. The campaign now
+and [`tic-055b`](tickets/tic-055b.md) are merged and pushed. The campaign now
 has 64 accepted tickets and 18 remaining high-scoring files. Existing native
 compiler failures remain separate under [`tic-ae17`](tickets/tic-ae17.md).
 

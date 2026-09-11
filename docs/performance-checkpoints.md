@@ -2889,3 +2889,11 @@ Previous indexed-store post-merge smoke used freshly rebuilt master832ae0d4 and
 passed sample/all, one worker, seed42, retries20, 1s warmup/3s measured:
 `river_harness_20260911_142401_62e1fbd9`, valid invariants and graceful cleanup.
 Log: `/private/tmp/river-m5-main/postmerge-9e2f-smoke.log`.
+
+
+Final SQL ownership promotion merged and pushed as `1490efc4`, tagged
+`perf-checkpoint-20260911-sql-command-ownership-m5`. A freshly rebuilt master
+passed the public-server sample/all smoke (one worker, seed42, retries20,
+1s warmup/3s measured): `river_harness_20260911_151305_76415185`.
+Manifest checksums, warmup/measured outcomes, invariants and graceful shutdown
+passed. Logs: `/private/tmp/river-m5-main/postmerge-055b-{install,smoke}.log`.
