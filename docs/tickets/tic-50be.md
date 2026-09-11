@@ -1,6 +1,6 @@
 ---
 id: tic-50be
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,10 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-engine` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Review notes
+
+Removed the private `reserveOrResumeValueIndex` forwarding hop and call the
+existing `RelationalIndexSchemaLifecycle` owner directly from
+`reserveIndexBuild`. Transaction begin, persistent schema admission, resume,
+commit, abort, and publication ordering are unchanged.
