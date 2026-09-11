@@ -1,6 +1,6 @@
 ---
 id: tic-98f2
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -44,3 +44,6 @@ outcomes, passing invariants, graceful stop and inactive final service state.
 This is within the 240.07–294.15 TPS control range; no speed claim is made.
 
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_021823_47de4675`.
+
+Accepted implementation and evidence were merged and pushed at `444d48fb`,
+checkpoint `perf-checkpoint-20260911-score-first3`.

@@ -140,3 +140,11 @@ isolation and retry policy are unchanged.
 | [tic-a39e](tic-a39e.md) | `river-sql/src/main/java/io/riverdb/sql/SqlQuery.java` | 90.981 |
 | [tic-428c](tic-428c.md) | `river-tx/src/main/java/io/riverdb/tx/LockExactTable.java` | 90.204 |
 | [tic-50be](tic-50be.md) | `river-engine/src/main/java/io/riverdb/engine/relational/RelationalSchemaLifecycle.java` | 90.114 |
+
+## Progress
+
+First three tickets (`tic-3a4f`, `tic-d369`, `tic-98f2`) are closed at pushed
+checkpoint `perf-checkpoint-20260911-score-first3`. The unchanged full scan
+analyzes 2,533 Java files; 79 remain at or above 90. All new files in the accepted
+slices are below 90. Individual ticket pages and performance checkpoints retain
+validation evidence.

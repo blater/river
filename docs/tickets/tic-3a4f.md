@@ -1,6 +1,6 @@
 ---
 id: tic-3a4f
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -47,3 +47,6 @@ the short diagnostic supports acceptance, not a speed claim.
 
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_021326_73013c0b`.
 Source commit: `7af24dac402edc1741d9ea5479b8ce12bff2b2f0`.
+
+Accepted implementation and evidence were merged and pushed at `444d48fb`,
+checkpoint `perf-checkpoint-20260911-score-first3`.
