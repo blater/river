@@ -1,6 +1,6 @@
 ---
 id: tic-428c
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,11 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-tx` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Review notes
+
+Removed the private `createHolding` forwarding hop and call the existing
+`LockExactAdmissionController` owner directly from `tryAcquire`. Admission
+ordering, resource lookup, conflict checks, statuses, and allocation behavior
+are unchanged. The unchanged scorer result is 90.204 before and 89.918 after;
+focused transaction checks remain pending the shared build slot.
