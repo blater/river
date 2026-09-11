@@ -7,11 +7,10 @@ import io.riverdb.engine.api.RowResult;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.sql.Types;
 
 /** Ordered JDBC primary-key parts backed by River's durable index catalog. */
-final class RiverPrimaryKeyResultSet extends AbstractResultSet {
+final class RiverPrimaryKeyResultSet extends RiverMetadataResultSet {
   private static final String TABLE = "TABLE";
   private static final String[] COLUMN_NAMES = {
       "TABLE_CAT",
@@ -212,50 +211,6 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
   }
 
   @Override
-  public int findColumn(String label) throws SQLException {
-    requireOpen();
-    return METADATA.findColumn(label);
-  }
-
-  @Override
-  public ResultSetMetaData getMetaData() throws SQLException {
-    requireOpen();
-    return METADATA;
-  }
-
-  @Override
-  public Statement getStatement() throws SQLException {
-    requireOpen();
-    return null;
-  }
-
-  @Override
-  public int getType() throws SQLException {
-    requireOpen();
-    return ResultSet.TYPE_FORWARD_ONLY;
-  }
-
-  @Override
-  public int getConcurrency() throws SQLException {
-    requireOpen();
-    return ResultSet.CONCUR_READ_ONLY;
-  }
-
-  @Override
-  public int getFetchDirection() throws SQLException {
-    requireOpen();
-    return ResultSet.FETCH_FORWARD;
-  }
-
-  @Override
-  public void setFetchDirection(int direction) throws SQLException {
-    requireOpen();
-    if (direction != ResultSet.FETCH_FORWARD) {
-      throw JdbcExceptions.unsupported();
-    }
-  }
-
-  @Override
   public int getFetchSize() throws SQLException {
     requireOpen();
     return io.riverdb.base.sql.SqlShapeLimits.MAX_KEY_PARTS;
@@ -267,12 +222,6 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
     if (rows < 0 || rows > io.riverdb.base.sql.SqlShapeLimits.MAX_KEY_PARTS) {
       throw JdbcExceptions.unsupported();
     }
-  }
-
-  @Override
-  public int getHoldability() throws SQLException {
-    requireOpen();
-    return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
 
   @Override
@@ -392,9 +341,15 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
     }
   }
 
-  private void requireOpen() throws SQLException {
+  @Override
+  void requireOpen() throws SQLException {
     if (closed) {
       throw JdbcExceptions.closed("primary-key metadata result set");
     }
+  }
+
+  @Override
+  RiverResultSetMetaData metadata() {
+    return METADATA;
   }
 }

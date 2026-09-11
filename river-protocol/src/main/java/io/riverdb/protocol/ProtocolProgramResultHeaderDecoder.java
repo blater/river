@@ -27,12 +27,12 @@ final class ProtocolProgramResultHeaderDecoder {
         index < offset + ProtocolProgramResultEncoder.HEADER_BYTES; index++) {
       if (source.get(index) != 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    outer = ProtocolResponsePayloadDecoder.statusFromStableCode(source.getInt(offset + 4));
+    outer = ProtocolStableStatus.fromCode(source.getInt(offset + 4));
     flags = source.getInt(offset + 8);
     commit = source.getLong(offset + 12);
     failing = source.getInt(offset + 20);
-    primary = ProtocolResponsePayloadDecoder.statusFromStableCode(source.getInt(offset + 24));
-    rollback = ProtocolResponsePayloadDecoder.statusFromStableCode(source.getInt(offset + 28));
+    primary = ProtocolStableStatus.fromCode(source.getInt(offset + 24));
+    rollback = ProtocolStableStatus.fromCode(source.getInt(offset + 28));
     steps = source.getInt(offset + 32);
     rows = source.getInt(offset + 36);
     cells = source.getInt(offset + 40);

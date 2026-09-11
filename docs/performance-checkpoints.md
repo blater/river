@@ -2632,3 +2632,166 @@ no new offenders and no incomplete scores. Evidence below
 `integration-first51-check-final.log`, `integration-first51-native.log`,
 `integration-first51-native-smoke.log`, `integration-first51-scores.json`.
 Checkpoint: `perf-checkpoint-20260911-score-first51`.
+
+
+## 2026-09-11 — score campaign, next integration batch (not promoted)
+
+Eleven individually reviewed and validated tickets are merged on the local
+integration branch: tic-0cd4, tic-f2bf, tic-70e3, tic-cecc, tic-650c, tic-f85e,
+tic-c965, tic-0420, tic-4fd6, tic-5049 and tic-3a3d. Their ticket pages record source commits,
+scores, focused checks and light workload artifacts. Master remains at the
+pushed first51 checkpoint; the combined promotion checkpoint is still pending.
+
+Root investigated the apparent JDBC performance drop directly. Two controls
+used OpenJDK 26 while candidates used GraalVM 25; their ratios were discarded.
+One mislabeled metadata-only installation was also excluded. Matching GraalVM
+25 controls and candidates had overlapping throughput ranges and equivalent
+allocation per transaction; no repeatable regression was established. The
+tic-f85e ticket records every retained and excluded sample. Future Java TPS
+commands explicitly select the same runtime through the existing RIVER_JAVA
+option. No workload, durability or acceptance policy changed.
+
+The server request-loop ticket's lower short samples prompted a longer pair.
+Candidate/control results were 300.63/293.57 TPS with p99 59.08/59.38 ms, zero
+failed or unknown outcomes, successful invariants and graceful cleanup. All
+samples remain recorded in tic-4fd6; this is no speedup claim.
+
+The final JDBC result-conversion ticket passed all 44 JDBC tests and source
+policy. Candidate/control Java TPS was 225.800/279.400 over ten seconds and
+317.800/184.350 over twenty seconds, with both runtimes pinned to GraalVM 25.
+All four samples completed with status OK, no errors/retries and clean terminal
+cleanup. The direction reversed; no repeatable regression was established.
+The user requested a pause after this ticket, so no combined promotion build,
+new tag or push has been performed for these eleven local integrations.
+
+## 2026-09-11: Apple M5 platform rebaseline (JVM and MariaDB)
+
+Current master: `c73022900e41fa61b3e78f4b39e893b5390351ae`; clean before
+measurement. Host: Apple M5, 10 logical CPUs, 24 GiB RAM, macOS 26.6
+build 25G72, Darwin 25.6.0/arm64. This establishes a new local diagnostic
+baseline; it does not establish an improvement over the previous platform.
+
+River uses freshly assembled master JVM classes with Oracle GraalVM
+25.0.4+7.1, `--enable-native-access=ALL-UNNAMED -Xmx1g`, through the public
+authenticated server lifecycle. Version: `master-c7302290-m5-jvm-20260911`.
+MariaDB is Homebrew 12.3.3, `innodb_flush_log_at_trx_commit=1`,
+`innodb_snapshot_isolation=1`. River uses loopback TCP/TLS; MariaDB uses a
+private Unix socket. The declared workload uses READ COMMITTED with explicit
+FOR UPDATE locks; MariaDB environment inspection reports its server default
+REPEATABLE-READ, while River reports READ COMMITTED. Both artifacts report
+`committed_transaction_log_flushed`; these are the harness target contracts,
+not proof of identical end-to-end isolation or durability implementations.
+
+Harness checkout: `aba7c43`; existing standalone binary reports Go 1.27.1 and
+build `devel` without embedded VCS revision. No harness source was changed.
+Runs were sequential, with no overlapping compilation or other database
+workload. Order: MariaDB/River/River/MariaDB, repeated twice.
+
+Common command, executed separately for each target:
+
+```sh
+~/src/ingres/river-harness/benchmark run TARGET tpcc sample all \
+  --warmup=5s --duration=30s --workers=4 --warehouses=1 \
+  --seed=42 --max-retries=20
+```
+
+River additionally uses
+`--river-executable=/private/tmp/river-rebaseline-20260911/river-jvm` and
+`--river-version=master-c7302290-m5-jvm-20260911`. The frozen JVM distribution,
+launcher, exact per-run commands, full extracted reports and build logs are in
+`/private/tmp/river-rebaseline-20260911/` (`samples.json`, `run_samples.py`,
+`jvm-build.log`, and `jvm/lib/`). Standard mix is 45/43/4/4/4; sample scale is
+one warehouse, ten districts, 30 customers/district and 100 items.
+
+Immutable report IDs below `/Users/blater/src/ingres/river-harness/runs/`:
+
+| Order | Target | Committed TPS | p99 ms | Retries | Report |
+| ---: | --- | ---: | ---: | ---: | --- |
+| 1 | mariadb | 1472.14 | 13.156 | 6663 | `river_harness_20260911_133012_47455c3d` |
+| 2 | river | 544.01 | 33.161 | 2647 | `river_harness_20260911_133050_7267a895` |
+| 3 | river | 494.91 | 36.962 | 2480 | `river_harness_20260911_133129_a558dd78` |
+| 4 | mariadb | 1144.67 | 17.039 | 5165 | `river_harness_20260911_133208_07f087eb` |
+| 5 | mariadb | 1100.70 | 17.531 | 5101 | `river_harness_20260911_133246_fb050a6f` |
+| 6 | river | 391.58 | 48.824 | 2024 | `river_harness_20260911_133324_a43bc0e1` |
+| 7 | river | 400.06 | 47.350 | 2055 | `river_harness_20260911_133403_717fd2f3` |
+| 8 | mariadb | 1108.29 | 17.498 | 4977 | `river_harness_20260911_133443_6f111f7f` |
+
+| Target | Median TPS | TPS range | Median sample p99 ms |
+| --- | ---: | --- | ---: |
+| river | 447.48 | 391.58–544.01 | 42.156 |
+| mariadb | 1126.48 | 1100.70–1472.14 | 17.269 |
+
+All eight runs passed: zero failed/unknown outcomes in warmup and measurement,
+all 12 invariants passed, report manifest checksums verified, graceful stop and
+inactive service state afterward. Measured end-of-window cancellations were
+4/4/3/4/4/4/4/4 in chronological order; expected rollback and retry counts remain
+in the reports. Final process inspection found no remaining server/workload;
+the harness temporary root retained only an empty MariaDB parent directory.
+All comparison eligibility fields are `eligible`, with identical key
+`c43b7664cc83be6b10b08711e25bd592b252ad3fbf865ffc3014d97c0e1312e6`.
+
+Both targets drifted lower during the series. A late host observation found no
+second database/build workload; `pmset -g therm` reported no recorded thermal
+or performance warning. This does not establish the cause of the drift.
+Retain every sample and its range. No stable cross-database ratio, confidence
+claim, native comparison or platform speedup is accepted from this series.
+
+Rejected initial configuration: the MariaDB sample with `--max-retries=3`
+produced 14 warmup and 98 measured failures from New-Order deadlock retry
+exhaustion, despite passing invariants and graceful cleanup. Artifact:
+`river_harness_20260911_132851_7b76d7e0`. It is excluded from accepted baseline
+statistics. A requested limit of 32 was rejected before startup by the harness
+admission range [0,20]; every accepted sample uses 20 on both targets.
+
+Native baseline remains blocked. The previous PGO profile did not transfer to
+this host. A fresh O3 build failed inside GraalVM control-flow analysis with a
+NullPointerException compiling `IndexedKernelVisibility.nextEntry`. The
+documented PGO instrumentation build also failed internally, including
+`IndexedTreeGraphValidator.validateLeaf` and a foreign-memory session-check
+inlining error in `TupleBTreePreflightSeparator.internal`. Logs:
+`native-build.log` and `instrumented-build.log` in the evidence directory.
+No source or compiler workaround was applied. The failed native build removed
+the previous ignored `bin/river` output; the tested JVM launcher above remains
+available. `:river-server-app:installBaseline` assembled current master
+successfully with `--no-daemon`; the real eight-run series supplies workload
+validation. Full tests were not rerun for this evidence-only change.
+
+## 2026-09-11: first 62 score refactors, M5 integration promotion
+
+Accepted the eleven locally integrated tickets 0cd4, f2bf, 70e3, cecc, 650c,
+f85e, c965, 0420, 4fd6, 5049 and 3a3d at source `2c5dd377`, based on master
+`c7302290`. Independent integration review approved final JDBC conversion and
+metadata ownership, protocol/server lifecycle, decimal caller migration and
+join snapshots with no blocking findings. Prior ticket reviews remain recorded.
+
+Clean `check :river-bench:installTps` passed with `--no-daemon` in 3m43s:
+1,952 tests, zero failures/errors, 18 existing skips. Unchanged full scan:
+2,641 complete files, 20 at or above 90; every touched file is below 90.
+Logs, complete scan, frozen JVM distribution, runner and extracted reports:
+`/private/tmp/river-m5-promotion/` (`integration-clean-check.log`,
+`integration-scores.json`, `samples.json`, `run_samples.py`, `jvm/lib/`).
+
+Adjacent JVM control/candidate/candidate/control uses the new M5 baseline
+configuration: GraalVM25.0.4, -Xmx1g, sample/all, four workers, one warehouse,
+seed42, max-retries20, 5s warmup/30s measurement. Candidate version:
+`score-first62-2c5dd377-m5-jvm`; control:
+`master-c7302290-m5-jvm-20260911`. Exact commands are in `samples.json`.
+
+| Variant | TPS | p99 ms | Retries | Report ID |
+| --- | ---: | ---: | ---: | --- |
+| control | 562.82 | 32.260 | 2897 | `river_harness_20260911_134527_fe9e5752` |
+| candidate | 526.70 | 34.931 | 2688 | `river_harness_20260911_134606_54a09718` |
+| candidate | 501.22 | 35.717 | 2526 | `river_harness_20260911_134645_bab21329` |
+| control | 422.15 | 43.647 | 2199 | `river_harness_20260911_134724_f2be71be` |
+
+Reports remain below `/Users/blater/src/ingres/river-harness/runs/`.
+All four passed warmup/measured outcome gates, all invariants, immutable
+manifest checksums and graceful cleanup. Eligibility is `eligible` with the
+same comparison key as the platform baseline. Candidate values lie within
+adjacent control variation; no repeated regression or speedup is established.
+
+Decision: accept the source/JVM integration and promote with a merge commit.
+Checkpoint: `perf-checkpoint-20260911-score-first62-m5`. The public managed JVM
+server path was exercised by every run. Native compilation failed on unchanged
+master before this batch; `tic-ae17` owns that unresolved toolchain blocker.
+No native execution or native performance acceptance is claimed.

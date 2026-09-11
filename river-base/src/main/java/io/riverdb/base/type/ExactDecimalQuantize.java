@@ -5,10 +5,10 @@ import io.riverdb.base.type.ExactDecimal.LongValue;
 import io.riverdb.base.type.ExactDecimal.WideScratch;
 
 /** Scale reduction and half-even rounding for exact decimals. */
-final class ExactDecimalQuantize {
+public final class ExactDecimalQuantize {
   private ExactDecimalQuantize() { }
 
-  static StatusCode apply(
+  public static StatusCode apply(
       long value,
       int sourceDescriptor,
       int targetDescriptor,
@@ -51,7 +51,7 @@ final class ExactDecimalQuantize {
     return StatusCode.OK;
   }
 
-  static StatusCode halfAway(
+  public static StatusCode halfAway(
       long value,
       int sourceDescriptor,
       int targetDescriptor,

@@ -9,11 +9,10 @@ import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.sql.Types;
 
 /** Bounded JDBC index rows backed by River's durable index catalog. */
-final class RiverIndexInfoResultSet extends AbstractResultSet {
+final class RiverIndexInfoResultSet extends RiverMetadataResultSet {
   private static final int MAXIMUM_ROWS =
       SqlShapeLimits.MAX_TABLE_INDEXES * SqlShapeLimits.MAX_KEY_PARTS;
   private static final String TABLE = "TABLE";
@@ -265,50 +264,6 @@ final class RiverIndexInfoResultSet extends AbstractResultSet {
   }
 
   @Override
-  public int findColumn(String label) throws SQLException {
-    requireOpen();
-    return METADATA.findColumn(label);
-  }
-
-  @Override
-  public ResultSetMetaData getMetaData() throws SQLException {
-    requireOpen();
-    return METADATA;
-  }
-
-  @Override
-  public Statement getStatement() throws SQLException {
-    requireOpen();
-    return null;
-  }
-
-  @Override
-  public int getType() throws SQLException {
-    requireOpen();
-    return ResultSet.TYPE_FORWARD_ONLY;
-  }
-
-  @Override
-  public int getConcurrency() throws SQLException {
-    requireOpen();
-    return ResultSet.CONCUR_READ_ONLY;
-  }
-
-  @Override
-  public int getFetchDirection() throws SQLException {
-    requireOpen();
-    return ResultSet.FETCH_FORWARD;
-  }
-
-  @Override
-  public void setFetchDirection(int direction) throws SQLException {
-    requireOpen();
-    if (direction != ResultSet.FETCH_FORWARD) {
-      throw JdbcExceptions.unsupported();
-    }
-  }
-
-  @Override
   public int getFetchSize() throws SQLException {
     requireOpen();
     return 1;
@@ -320,12 +275,6 @@ final class RiverIndexInfoResultSet extends AbstractResultSet {
     if (rows < 0 || rows > 1) {
       throw JdbcExceptions.unsupported();
     }
-  }
-
-  @Override
-  public int getHoldability() throws SQLException {
-    requireOpen();
-    return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
 
   @Override
@@ -514,9 +463,15 @@ final class RiverIndexInfoResultSet extends AbstractResultSet {
     }
   }
 
-  private void requireOpen() throws SQLException {
+  @Override
+  void requireOpen() throws SQLException {
     if (closed) {
       throw JdbcExceptions.closed("index metadata result set");
     }
+  }
+
+  @Override
+  RiverResultSetMetaData metadata() {
+    return METADATA;
   }
 }

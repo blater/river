@@ -56,7 +56,8 @@ final class SqlBlockStagePlan {
       if (status.isOk() && !join) status = logical(plans.command(block), false);
       if (status.isOk() && join) {
         joinOffset = count;
-        status = joins.describe(plans, block, source, withActuals);
+        status = joins.describe(
+            plans.joinSnapshot(), plans.command(block), block, source, withActuals);
       }
       if (!status.isOk()) return status;
     }

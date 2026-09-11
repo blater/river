@@ -33,7 +33,7 @@ public final class ProtocolProgramOpenResponseDecoder {
         index++) {
       if (source.get(index) != 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode response = ProtocolResponsePayloadDecoder.statusFromStableCode(
+    StatusCode response = ProtocolStableStatus.fromCode(
         source.getInt(offset + 4));
     long handle = source.getLong(offset + 8);
     int arguments = source.getInt(offset + 16);

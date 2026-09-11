@@ -4,10 +4,10 @@ import io.riverdb.base.type.ExactDecimal.LongValue;
 import io.riverdb.base.type.ExactDecimal.WideScratch;
 
 /** Signed-wide average with half-even rounding. */
-final class ExactDecimalAverage {
+public final class ExactDecimalAverage {
   private ExactDecimalAverage() { }
 
-  static boolean compute(
+  public static boolean compute(
       long sumHigh,
       long sumLow,
       long count,
@@ -24,7 +24,7 @@ final class ExactDecimalAverage {
     }
     int targetScale = SqlTypeDescriptor.parameterTwo(targetDescriptor);
     if (targetScale < inputScale
-        || !ExactDecimal.divideSigned(sumHigh, sumLow, count, scratch)) {
+        || !ExactDecimalWideDivision.divideSigned(sumHigh, sumLow, count, scratch)) {
       return false;
     }
     long factor = ExactDecimal.powerOfTen(targetScale - inputScale);
@@ -35,7 +35,7 @@ final class ExactDecimalAverage {
     long remainderLow = scratch.remainder * factor;
     long remainderHigh = Math.multiplyHigh(scratch.remainder, factor);
     boolean negative = scratch.negative;
-    if (!ExactDecimal.divideUnsigned(remainderHigh, remainderLow, count, scratch)) {
+    if (!ExactDecimalWideDivision.divideUnsigned(remainderHigh, remainderLow, count, scratch)) {
       return false;
     }
     long fraction = scratch.quotient;

@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.ExactDecimalQuantize;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueDomain;
@@ -38,7 +39,7 @@ final class SqlAccessEdgeRangeConversion {
       int descriptor,
       boolean numeric) {
     return !numeric || source == descriptor
-        || ExactDecimal.quantize(
+        || ExactDecimalQuantize.apply(
             value, source, descriptor, false, true, target.decimal, target.wide).isOk();
   }
 

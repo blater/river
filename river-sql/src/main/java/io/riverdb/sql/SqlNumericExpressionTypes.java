@@ -1,6 +1,6 @@
 package io.riverdb.sql;
 
-import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.ExactDecimalDescriptors;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
@@ -20,10 +20,10 @@ public final class SqlNumericExpressionTypes {
     }
     return switch (operator) {
       case SqlScalarExpression.ADD, SqlScalarExpression.SUBTRACT ->
-          ExactDecimal.addResultDescriptor(left, right);
-      case SqlScalarExpression.MULTIPLY -> ExactDecimal.multiplyResultDescriptor(left, right);
-      case SqlScalarExpression.DIVIDE -> ExactDecimal.divideResultDescriptor(left, right);
-      case SqlScalarExpression.REMAINDER -> ExactDecimal.remainderResultDescriptor(left, right);
+          ExactDecimalDescriptors.addResultDescriptor(left, right);
+      case SqlScalarExpression.MULTIPLY -> ExactDecimalDescriptors.multiplyResultDescriptor(left, right);
+      case SqlScalarExpression.DIVIDE -> ExactDecimalDescriptors.divideResultDescriptor(left, right);
+      case SqlScalarExpression.REMAINDER -> ExactDecimalDescriptors.remainderResultDescriptor(left, right);
       default -> 0;
     };
   }
@@ -32,6 +32,6 @@ public final class SqlNumericExpressionTypes {
     if (!SqlNumericTypeRules.isNumeric(source)
         || scale < 0 || scale > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION) return 0;
     return SqlNumericTypeRules.isApproximate(source)
-        ? source : ExactDecimal.quantizedDescriptor(source, (int) scale);
+        ? source : ExactDecimalDescriptors.quantizedDescriptor(source, (int) scale);
   }
 }

@@ -10,18 +10,13 @@ final class RiverJdbcBatchExecutor {
   private RiverJdbcBatchExecutor() { }
 
   static int[] execute(RiverJdbcStatement statement) throws SQLException {
-    int entries = statement.batchCount;
+    int entries = statement.batch.count();
     int[] updates = new int[entries];
-    statement.batchCount = 0;
+    statement.batch.beginExecution();
     for (int index = 0; index < entries; index++) {
-      String sql = statement.batch[index];
-      statement.batch[index] = null;
+      String sql = statement.batch.takeSql(index);
       try {
-        ParameterSet parameters = statement.batchParameters == null
-            ? null : statement.batchParameters[index];
-        if (statement.batchParameters != null) {
-          statement.batchParameters[index] = null;
-        }
+        ParameterSet parameters = statement.batch.takeParameters(index);
         try {
           updates[index] = statement.executeUpdateSql(sql, parameters, false);
         } finally {
@@ -44,12 +39,11 @@ final class RiverJdbcBatchExecutor {
 
   static int[] executePrepared(RiverJdbcStatement statement, long handle)
       throws SQLException {
-    int entries = statement.batchCount;
+    int entries = statement.batch.count();
     int[] updates = new int[entries];
-    statement.batchCount = 0;
+    statement.batch.beginExecution();
     for (int index = 0; index < entries; index++) {
-      ParameterSet parameters = statement.batchParameters[index];
-      statement.batchParameters[index] = null;
+      ParameterSet parameters = statement.batch.takeParameters(index);
       try {
         updates[index] = statement.executePreparedUpdate(handle, parameters, false);
       } catch (SQLException failure) {
@@ -66,8 +60,7 @@ final class RiverJdbcBatchExecutor {
 
   private static void releaseRemaining(RiverJdbcStatement statement, int start, int entries) {
     for (int index = start; index < entries; index++) {
-      statement.batch[index] = null;
-      statement.releaseBatchParameters(index);
+      statement.batch.release(index);
     }
   }
 }

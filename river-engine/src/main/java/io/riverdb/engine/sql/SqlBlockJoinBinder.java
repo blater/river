@@ -78,7 +78,7 @@ final class SqlBlockJoinBinder {
           bound.projectedTypeDescriptors[column],
           SqlJoinResultNullability.nullable(command, context, bound, column));
     }
-    plans.setJoinAccess(block, command, context);
+    plans.joinSnapshot().capture(block, command, context);
     return StatusCode.OK;
   }
 }
