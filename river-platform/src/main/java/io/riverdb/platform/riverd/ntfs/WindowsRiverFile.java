@@ -63,7 +63,7 @@ final class WindowsRiverFile implements RiverFile {
     if (mode == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (closed) return StatusCode.CLOSED;
     return WindowsFileBridge.force(handle) == 0 ? StatusCode.OK
-        : WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+        : WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
   }
 
   @Override
@@ -79,7 +79,7 @@ final class WindowsRiverFile implements RiverFile {
     if (sizeBytes < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (closed) return StatusCode.CLOSED;
     return WindowsFileBridge.truncate(handle, sizeBytes) == 0 ? StatusCode.OK
-        : WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+        : WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
   }
 
   @Override
@@ -87,7 +87,7 @@ final class WindowsRiverFile implements RiverFile {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (closed) return StatusCode.CLOSED;
     long size = WindowsFileBridge.size(handle);
-    if (size < 0) return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+    if (size < 0) return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
     result.setSizeBytes(size);
     return StatusCode.OK;
   }
@@ -97,11 +97,11 @@ final class WindowsRiverFile implements RiverFile {
     if (closed) return StatusCode.CLOSED;
     closed = true;
     return WindowsFileBridge.close(handle) == 0 ? StatusCode.OK
-        : WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+        : WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
   }
 
   private StatusCode failure(IoResult result) {
     result.setBytesTransferred(0);
-    return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+    return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
   }
 }

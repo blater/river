@@ -14,7 +14,7 @@ final class WindowsDirectoryListing {
   static StatusCode list(MemorySegment parentHandle, DirectoryListResult result) {
     MemorySegment stream = WindowsFileBridge.openAt(parentHandle, ".", true, false);
     if (stream.equals(MemorySegment.NULL)) {
-      return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+      return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
     }
     StatusCode status = StatusCode.OK;
     try (Arena arena = Arena.ofConfined()) {
@@ -28,7 +28,7 @@ final class WindowsDirectoryListing {
           break;
         }
         if (count < 0) {
-          status = WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+          status = WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
           break;
         }
         int offset = 0;
