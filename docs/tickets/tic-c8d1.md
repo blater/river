@@ -245,3 +245,9 @@ All 62 delivered tickets are closed; 20 source files remain at or above 90
 out of 2,641, with no new offenders. Native compiler failures reproduced on
 unchanged master are tracked separately in `tic-ae17`; native certification
 is outstanding. Continue with `tic-9e2f`, then `tic-055b`, as directed.
+
+
+`tic-9e2f` closes at `perf-checkpoint-20260911-indexed-store-cleanup-m5`,
+bringing accepted tickets to63. Complete unchanged scan2641/high19; clean
+checks, independent review and matched JVM diagnostics passed. The original
+forwarding removal was discarded to preserve K16. Next complete `tic-055b`.

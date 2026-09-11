@@ -1,6 +1,6 @@
 ---
 id: tic-9e2f
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -59,3 +59,18 @@ Log: `/private/tmp/river-9e2f-final-focused.log`.
 Independent recovery/ownership review and lead review cover the final reduced
 change. Full checkpoint validation, matched workload evidence, and pushed
 integration remain the lead integrator's promotion gates.
+
+## Promotion checkpoint
+
+Final source `d261c4bf` passed clean `check :river-bench:installTps` with
+`--no-daemon` in 2m49s: 1,954 tests, zero failures/errors and 18 existing skips.
+The original parked forwarding removal failed the compiled K16 boundary gate
+and was removed completely; the gate now passes unchanged. Final independent
+review covers the restored boundary, close retries and checkpoint-floor import.
+
+Matched M5 JVM control/candidate/candidate/control samples passed at
+569.34/533.27/516.63/466.43 TPS. All invariants/outcomes/checksums and graceful
+cleanup passed. Candidate values remain within adjacent control variation; no
+speedup is claimed. Exact settings and artifacts are in the performance ledger.
+Checkpoint: `perf-checkpoint-20260911-indexed-store-cleanup-m5`. Native execution
+is not certified; unchanged-master compiler failures remain under `tic-ae17`.
