@@ -16,11 +16,58 @@ public final class RiverdCommandParser {
     }
     String command = arguments[0];
     if ("version".equals(command)) return parseVersion(arguments, result);
-    if ("start".equals(command)) return RiverdCommandRoutes.start(arguments, result);
-    if ("stop".equals(command)) return RiverdCommandRoutes.stop(arguments, result);
-    if ("ps".equals(command)) return RiverdCommandRoutes.ps(arguments, result);
-    if ("credentials".equals(command)) return RiverdCommandRoutes.credentials(arguments, result);
+    if ("start".equals(command)) {
+      return parseCommand(arguments, result, RiverdCommand.START, "start", "start");
+    }
+    if ("stop".equals(command)) {
+      return parseCommand(arguments, result, RiverdCommand.STOP, "stop", "server stop");
+    }
+    if ("ps".equals(command)) {
+      return parseCommand(arguments, result, RiverdCommand.PS, "ps", "server ps");
+    }
+    if ("credentials".equals(command)) return parseCredentials(arguments, result);
     return fail(result, "unknown server command: " + command);
+  }
+
+  private static StatusCode parseCommand(
+      String[] arguments,
+      RiverdCommandResult result,
+      RiverdCommand command,
+      String helpTopic,
+      String trailingHelpTopic) {
+    StatusCode help = trailingHelp(arguments, result, helpTopic);
+    if (!help.isOk() || result.command() == RiverdCommand.HELP) return help;
+    boolean helpAtEnd = arguments.length > 2
+        && RiverCommandCatalog.isHelp(arguments[arguments.length - 1]);
+    int argumentLimit = arguments.length - (helpAtEnd ? 1 : 0);
+    StatusCode parsed = switch (command) {
+      case START -> RiverdStartOptionParser.parse(arguments, argumentLimit, result);
+      case STOP -> RiverdOperationOptionParser.stop(arguments, argumentLimit, result);
+      case PS -> RiverdOperationOptionParser.ps(arguments, argumentLimit, result);
+      case CREDENTIALS_RENEW_UNAVAILABLE ->
+          RiverdOperationOptionParser.renew(arguments, argumentLimit, result);
+      default -> fail(result, "unsupported server command grammar");
+    };
+    if (!parsed.isOk()) return parsed;
+    if (command == RiverdCommand.CREDENTIALS_RENEW_UNAVAILABLE && !helpAtEnd) {
+      result.fail("credentials renew is not yet available in this milestone");
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    return helpAtEnd ? help(result, trailingHelpTopic) : StatusCode.OK;
+  }
+
+  private static StatusCode parseCredentials(
+      String[] arguments, RiverdCommandResult result) {
+    if (arguments.length == 2 && RiverCommandCatalog.isHelp(arguments[1])) {
+      return help(result, "server credentials");
+    }
+    if (arguments.length < 2 || !"renew".equals(arguments[1])) {
+      return fail(result, "credentials requires the renew subcommand");
+    }
+    return parseCommand(
+        tail(arguments, 1), result, RiverdCommand.CREDENTIALS_RENEW_UNAVAILABLE,
+        "credentials renew",
+        RiverCommandCatalog.serverTopic("credentials renew"));
   }
 
   private static StatusCode parseHelpTopic(String[] arguments, RiverdCommandResult result) {

@@ -4,6 +4,7 @@ import static io.riverdb.base.error.StatusCode.FEATURE_NOT_SUPPORTED;
 import static io.riverdb.base.error.StatusCode.INVALID_EXTERNAL_INPUT;
 import static io.riverdb.base.error.StatusCode.OK;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import io.riverdb.base.error.StatusCode;
 import java.nio.file.Path;
@@ -98,6 +99,45 @@ final class RiverdCommandParserTest {
     assertEquals(FEATURE_NOT_SUPPORTED, parseStatus("credentials", "renew"));
     assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("credentials", "renew", "unexpected"));
     assertEquals(INVALID_EXTERNAL_INPUT, parseStatus("help", "audit"));
+  }
+
+  @Test
+  void credentialRenewKeepsShortAndLongDatadirForms() {
+    RiverdCommandResult result = new RiverdCommandResult();
+    assertEquals(FEATURE_NOT_SUPPORTED,
+        RiverdCommandParser.parse(new String[] {"credentials", "renew", "-D", "data"}, result));
+    assertEquals(RiverdCommand.CREDENTIALS_RENEW_UNAVAILABLE, result.command());
+    assertEquals(Path.of("data"), result.datadir());
+    assertEquals("credentials renew is not yet available in this milestone", result.diagnostic());
+
+    result = new RiverdCommandResult();
+    assertEquals(FEATURE_NOT_SUPPORTED,
+        RiverdCommandParser.parse(
+            new String[] {"credentials", "renew", "--datadir=data"}, result));
+    assertEquals(Path.of("data"), result.datadir());
+
+    result = new RiverdCommandResult();
+    assertEquals(OK,
+        RiverdCommandParser.parse(
+            new String[] {"credentials", "renew", "--datadir=data", "--help"}, result));
+    assertEquals(RiverdCommand.HELP, result.command());
+    assertEquals("server credentials renew", result.helpTopic());
+    assertNull(result.diagnostic());
+  }
+
+  @Test
+  void stopLongDatadirRetainsOriginalDiagnostics() {
+    RiverdCommandResult result = new RiverdCommandResult();
+    assertEquals(INVALID_EXTERNAL_INPUT,
+        RiverdCommandParser.parse(
+            new String[] {"stop", "--datadir=data", "--datadir=other"}, result));
+    assertEquals("invalid or duplicate datadir option", result.diagnostic());
+
+    result = new RiverdCommandResult();
+    assertEquals(INVALID_EXTERNAL_INPUT,
+        RiverdCommandParser.parse(
+            new String[] {"stop", "localhost:9191", "--datadir=data"}, result));
+    assertEquals("invalid or duplicate datadir option", result.diagnostic());
   }
 
   private static RiverdCommandResult parse(String... arguments) {
