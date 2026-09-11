@@ -52,6 +52,19 @@ final class IndexedLogicalRowIdRegistry implements CheckpointLogicalRowIdSource 
     return admit(objectId, initialPublishedFloor);
   }
 
+  StatusCode loadCheckpoint(CheckpointLogicalRowIdSource source) {
+    if (source == null) return StatusCode.CORRUPTION;
+    source.rewind();
+    for (int index = 0; index < source.floorCount(); index++) {
+      long objectId = source.nextObjectId();
+      long floor = source.nextExclusive();
+      StatusCode status = load(objectId, floor);
+      if (!status.isOk()) return status == StatusCode.INVALID_EXTERNAL_INPUT
+          ? StatusCode.CORRUPTION : status;
+    }
+    return source.nextObjectId() == -1 ? StatusCode.OK : StatusCode.CORRUPTION;
+  }
+
   StatusCode reserve(
       long objectId, int count, IndexedLogicalRowIdReservation result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;

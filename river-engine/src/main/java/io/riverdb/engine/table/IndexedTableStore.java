@@ -513,40 +513,58 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   }
 
   public synchronized StatusCode close() {
-    if (closed) {
-      return StatusCode.CLOSED;
-    }
-    if (!closing) {
-      if (phase.operationActive() || phase.commitGroupActive() || hasDirtyPages()) {
-        return StatusCode.CONFLICT;
-      }
-      StatusCode detach = pages.detach();
-      if (!detach.isOk()) return detach;
-      closing = true;
-    }
-    StatusCode first = StatusCode.OK;
-    if (!checkpointVersionsClosed) {
-      StatusCode status = kernel.closeCheckpointVersions();
-      checkpointVersionsClosed = closeCompleted(status);
-      if (!checkpointVersionsClosed) first = status;
-    }
-    if (!sidecarsClosed) {
-      StatusCode status = kernel.closeSidecars();
-      sidecarsClosed = closeCompleted(status);
-      if (first.isOk() && !sidecarsClosed) first = status;
-    }
-    if (!fileClosed) {
-      StatusCode status = file.close();
-      fileClosed = closeCompleted(status);
-      if (first.isOk() && !fileClosed) first = status;
-    }
-    if (!providerReleased) {
-      StatusCode status = providerLease.releaseStore(storeLease);
-      providerReleased = status.isOk();
-      if (first.isOk() && !providerReleased) first = status;
-    }
+    StatusCode status = beginClose();
+    if (!status.isOk()) return status;
+    // Attempt every resource even when an earlier close failed; retry only unfinished owners.
+    StatusCode versionsStatus = closeCheckpointVersions();
+    StatusCode sidecarsStatus = closeSidecars();
+    StatusCode fileStatus = closeFile();
+    StatusCode providerStatus = releaseProvider();
     closed = checkpointVersionsClosed && sidecarsClosed && fileClosed && providerReleased;
-    return first.isOk() && !closed ? StatusCode.INVARIANT_BROKEN : first;
+    if (!versionsStatus.isOk()) return versionsStatus;
+    if (!sidecarsStatus.isOk()) return sidecarsStatus;
+    if (!fileStatus.isOk()) return fileStatus;
+    if (!providerStatus.isOk()) return providerStatus;
+    return closed ? StatusCode.OK : StatusCode.INVARIANT_BROKEN;
+  }
+
+  private StatusCode beginClose() {
+    if (closed) return StatusCode.CLOSED;
+    if (closing) return StatusCode.OK;
+    if (phase.operationActive() || phase.commitGroupActive() || hasDirtyPages()) {
+      return StatusCode.CONFLICT;
+    }
+    StatusCode status = pages.detach();
+    if (status.isOk()) closing = true;
+    return status;
+  }
+
+  private StatusCode closeCheckpointVersions() {
+    if (checkpointVersionsClosed) return StatusCode.OK;
+    StatusCode status = kernel.closeCheckpointVersions();
+    checkpointVersionsClosed = closeCompleted(status);
+    return checkpointVersionsClosed ? StatusCode.OK : status;
+  }
+
+  private StatusCode closeSidecars() {
+    if (sidecarsClosed) return StatusCode.OK;
+    StatusCode status = kernel.closeSidecars();
+    sidecarsClosed = closeCompleted(status);
+    return sidecarsClosed ? StatusCode.OK : status;
+  }
+
+  private StatusCode closeFile() {
+    if (fileClosed) return StatusCode.OK;
+    StatusCode status = file.close();
+    fileClosed = closeCompleted(status);
+    return fileClosed ? StatusCode.OK : status;
+  }
+
+  private StatusCode releaseProvider() {
+    if (providerReleased) return StatusCode.OK;
+    StatusCode status = providerLease.releaseStore(storeLease);
+    providerReleased = status.isOk();
+    return status;
   }
 
   StatusCode recoverFromWal() {
@@ -562,7 +580,8 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   WalGeneration walGeneration() { return checkpoints.generation(); }
 
   StatusCode loadCheckpoint(CheckpointState checkpoint) {
-    StatusCode status = loadLogicalRowIdFloors(checkpoint);
+    if (checkpoint == null) return StatusCode.CORRUPTION;
+    StatusCode status = logicalRowIds.loadCheckpoint(checkpoint.logicalRowIdSource());
     if (status.isOk()) status = checkpoints.load(checkpoint);
     if (!status.isOk()) {
       return status;
@@ -570,23 +589,6 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
     lastCommitSequence = checkpoint.commitSequence();
     baseLoaded = true;
     return StatusCode.OK;
-  }
-
-  private StatusCode loadLogicalRowIdFloors(CheckpointState checkpoint) {
-    if (checkpoint == null || checkpoint.logicalRowIdSource() == null) {
-      return StatusCode.CORRUPTION;
-    }
-    io.riverdb.engine.checkpoint.CheckpointLogicalRowIdSource source =
-        checkpoint.logicalRowIdSource();
-    source.rewind();
-    for (int index = 0; index < source.floorCount(); index++) {
-      long objectId = source.nextObjectId();
-      long floor = source.nextExclusive();
-      StatusCode status = logicalRowIds.load(objectId, floor);
-      if (!status.isOk()) return status == StatusCode.INVALID_EXTERNAL_INPUT
-          ? StatusCode.CORRUPTION : status;
-    }
-    return source.nextObjectId() == -1 ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 
   private void clearStagedFlags() {

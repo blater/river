@@ -2795,3 +2795,48 @@ Checkpoint: `perf-checkpoint-20260911-score-first62-m5`. The public managed JVM
 server path was exercised by every run. Native compilation failed on unchanged
 master before this batch; `tic-ae17` owns that unresolved toolchain blocker.
 No native execution or native performance acceptance is claimed.
+
+## 2026-09-11: indexed-store cleanup (tic-9e2f)
+
+Final source `d261c4bf`, base `705488d5`. The meaningful change separates
+close admission from eager, ordered resource cleanup in the same store and
+lets the existing logical-row-ID registry import checkpoint floors. Original
+facade/kernel boundaries, locks, durable order and statuses remain intact.
+Two close-failure tests prove first-error precedence, continued cleanup, CLOSED
+normalization and provider-release retry. Independent final review approved.
+
+The parked forwarding removal was rejected by `verifyIndexedTableClassReferences`
+and completely removed. The gate was not weakened. Failed initial checkpoint:
+`/private/tmp/river-m5-9e2f-evidence/rejected-forwarding-clean-check.log`.
+Final clean `check :river-bench:installTps` passed in 2m49s with --no-daemon:
+1,954 tests, zero failures/errors, 18 existing skips. Final focused suite:
+59 tests; lifecycle/row-ID/recovery and architectural gate passed.
+Unchanged scan: 2,641 complete files, 19 at or above90. Store157.040→89.278;
+registry67.203 and construction tests6.008; every touched Java file below90.
+Scan `/private/tmp/river-9e2f-scores.json`; focused log
+`/private/tmp/river-9e2f-final-focused.log`.
+
+Current M5/GraalVM25.0.4 JVM configuration remains fixed: -Xmx1g, sample/all,
+four workers, one warehouse, seed42, retries20, 5s warmup/30s measured.
+Control version `score-first62-705488d5-m5-jvm`; candidate
+`tic-9e2f-d261c4bf-m5-jvm`. Logs, exact commands, frozen candidate and complete
+extracted samples are under `/private/tmp/river-m5-9e2f-evidence/`.
+
+| Variant | TPS | p99 ms | Retries | Report ID |
+| --- | ---: | ---: | ---: | --- |
+| control | 569.34 | 32.719 | 2884 | `river_harness_20260911_141909_61f91b95` |
+| candidate | 533.27 | 33.751 | 2717 | `river_harness_20260911_141948_06e86d38` |
+| candidate | 516.63 | 35.258 | 2511 | `river_harness_20260911_142027_d26a4879` |
+| control | 466.43 | 39.617 | 2342 | `river_harness_20260911_142106_2cf5529a` |
+
+Artifacts remain below `/Users/blater/src/ingres/river-harness/runs/`.
+All four passed warmup/measured outcome gates, invariants, manifest checksum
+verification and graceful cleanup. Comparison eligibility/key match. No
+repeated regression outside adjacent control variation; no speedup claimed.
+Accept and promote at `perf-checkpoint-20260911-indexed-store-cleanup-m5`.
+Native compilation remains blocked on unchanged master by `tic-ae17`.
+
+Previous first62 post-merge smoke used freshly rebuilt master705488d5 and
+passed sample/all, one worker, seed42, retries20, 1s warmup/3s measured:
+`river_harness_20260911_135046_0c20fe5d`, valid invariants and graceful cleanup.
+Log: `/private/tmp/river-m5-main/postmerge-smoke.log`.
