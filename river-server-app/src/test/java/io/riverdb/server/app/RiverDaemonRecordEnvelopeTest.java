@@ -28,7 +28,10 @@ final class RiverDaemonRecordEnvelopeTest {
 
   @Test
   void runtimeRecordsRejectPaddingAndEmbeddedChecksumMarker() {
-    byte[] padded = padded(runtimeRecord("client-config=client"));
+    byte[] valid = runtimeRecord("client-config=client");
+    assertNotNull(RiverDaemonRuntimeCodec.parseRuntime(valid));
+
+    byte[] padded = padded(valid);
     assertNull(RiverDaemonRuntimeCodec.parseRuntime(padded));
 
     byte[] embedded = runtimeRecord("client-config=record-sha256=embedded");
@@ -52,7 +55,10 @@ final class RiverDaemonRecordEnvelopeTest {
   }
 
   private static byte[] padded(String record) {
-    byte[] bytes = record.getBytes(StandardCharsets.UTF_8);
+    return padded(record.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static byte[] padded(byte[] bytes) {
     return Arrays.copyOf(bytes, bytes.length + 8);
   }
 }
