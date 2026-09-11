@@ -213,7 +213,7 @@ final class RelationalSchemaLifecycle {
       status = session.beginPersistentSchemaChange();
     }
     if (status.isOk()) {
-      status = reserveOrResumeValueIndex(
+      status = indexSchemaLifecycle.reserveOrResume(
           session, indexName, tableName, columnName, unique);
     }
     if (status.isOk()) {
@@ -256,16 +256,6 @@ final class RelationalSchemaLifecycle {
       }
     }
     return complete;
-  }
-
-  private StatusCode reserveOrResumeValueIndex(
-      RelationalSession session,
-      CharSequence indexName,
-      CharSequence tableName,
-      CharSequence columnName,
-      boolean unique) {
-    return indexSchemaLifecycle.reserveOrResume(
-        session, indexName, tableName, columnName, unique);
   }
 
   private StatusCode buildUniqueValueIndexBatch(

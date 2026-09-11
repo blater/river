@@ -1,6 +1,6 @@
 ---
 id: tic-01f7
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,20 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-engine` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Review notes
+
+Removed the redundant four-argument `decodeForTable` forwarding overload.
+Its production cleanup caller and focused codec tests now call the canonical
+five-argument method with `null` for the optional column name. The canonical
+method still owns scratch reset, validation, conflict, corruption, and result
+status behavior. The codec score is 91.625 before and 89.521 after.
+
+
+Validation: source `bf2b1962`, Luna/high implementation, Sol/high and lead
+approved. Score **89.521** (91.625 before). Focused `CatalogIndexCodecTest` and
+`RelationalDatabaseTest`, engine policy checks and installTps passed with
+`--no-daemon`. The epic's light JVM sample/all passed at **306.28 TPS**,
+p99 63.799ms, 495 retries, zero failed/unknown outcomes, valid invariants and
+graceful cleanup. Recent integrated control 314.68 TPS; no observed regression.
+Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_032929_24a2cce7`.

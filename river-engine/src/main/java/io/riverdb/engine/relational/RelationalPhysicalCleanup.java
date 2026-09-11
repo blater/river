@@ -116,7 +116,7 @@ final class RelationalPhysicalCleanup {
         break;
       }
       StatusCode decoded = CatalogIndexCodec.decodeForTable(
-          catalogRow.row(), catalogScratch, table.tableId(), indexRecord);
+          catalogRow.row(), catalogScratch, table.tableId(), null, indexRecord);
       if (decoded == StatusCode.CONFLICT) {
         continue;
       }

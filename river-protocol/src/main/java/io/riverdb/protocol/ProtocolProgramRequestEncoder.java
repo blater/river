@@ -32,7 +32,7 @@ final class ProtocolProgramRequestEncoder {
         ProtocolFrameWire.empty(target);
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      int bytes = ProtocolSqlRequestEncoder.valueBytes(arguments, index);
+      int bytes = ProtocolParameterEncoder.valueBytes(arguments, index);
       if (bytes < 0) {
         ProtocolFrameWire.empty(target);
         return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -64,7 +64,7 @@ final class ProtocolProgramRequestEncoder {
         target, output + Long.BYTES + Integer.BYTES * 2,
         diagnosticTag, diagnosticStepTag, metricsEpoch);
     for (int index = 0; index < argumentCount; index++) {
-      output = ProtocolSqlRequestEncoder.writeParameter(target, output, arguments, index);
+      output = ProtocolParameterEncoder.writeParameter(target, output, arguments, index);
     }
     return ProtocolRequestSegmenter.finish(
         target, ProtocolMessageType.EXECUTE_PROGRAM, requestId, payloadBytes);

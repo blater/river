@@ -112,14 +112,6 @@ final class CatalogIndexCodec {
       HeapRowResult source,
       ByteBuffer scratch,
       int expectedTableId,
-      Result result) {
-    return decodeForTable(source, scratch, expectedTableId, null, result);
-  }
-
-  static StatusCode decodeForTable(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      int expectedTableId,
       TableSchema.ColumnName name,
       Result result) {
     scratch.clear();

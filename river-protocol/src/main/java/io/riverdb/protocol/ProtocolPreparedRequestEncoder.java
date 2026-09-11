@@ -26,7 +26,7 @@ final class ProtocolPreparedRequestEncoder {
     int count = close ? 0 : parameters.count();
     long payload = close ? Long.BYTES : HEADER_BYTES;
     for (int index = 0; index < count; index++) {
-      int bytes = ProtocolSqlRequestEncoder.valueBytes(parameters, index);
+      int bytes = ProtocolParameterEncoder.valueBytes(parameters, index);
       if (bytes < 0) {
         ProtocolFrameWire.empty(target);
         return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -48,7 +48,7 @@ final class ProtocolPreparedRequestEncoder {
           target, output + Short.BYTES * 2,
           diagnosticTag, diagnosticStepTag, metricsEpoch);
       for (int index = 0; index < count; index++) {
-        output = ProtocolSqlRequestEncoder.writeParameter(target, output, parameters, index);
+        output = ProtocolParameterEncoder.writeParameter(target, output, parameters, index);
       }
     }
     return ProtocolRequestSegmenter.finish(target, type, requestId, payloadBytes);
