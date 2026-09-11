@@ -54,3 +54,9 @@ sample; the authorized local-server run above completed successfully.
 
 Delivered in pushed master integration `4a3b4ef0`, checkpoint
 `perf-checkpoint-20260911-score-first46`.
+
+
+The first-51 clean integration run exposed a source-policy violation in the new
+NUL filename test literal. Commit `44e3e5f6` replaces its raw Unicode escape with
+the equivalent Java octal NUL escape. The resulting bytecode is unchanged; full
+integration checks pass after the correction.

@@ -217,3 +217,12 @@ scores. Checkpoint: `perf-checkpoint-20260911-score-first46`. The per-ticket
 records include the Windows longer performance pair and platform execution
 limits. `tic-6a7f` is isolated pending specific authorization after automatic
 approval review rejected its reviewed WAL source refactor; other tickets continue.
+
+
+Five further independently reviewed and validated slices bring the accepted total
+to 51. All original high-scoring test files are below 90. Full integration checks
+passed after correcting one equivalent test literal; the rebuilt standalone
+start/ps/authenticated SQL/endpoint-stop smoke passed. The unchanged scan has
+31 remaining files at or above 90 out of 2,631, with no new offenders or incomplete
+scores. Checkpoint: `perf-checkpoint-20260911-score-first51`. WAL authorization
+remains pending while the other production files proceed.
