@@ -40,7 +40,11 @@ public final class RiverDaemonInstance {
     this.datadir = datadir;
   }
 
-  /** Opens a first-created authenticated instance. */
+  /**
+   * Opens a first-created authenticated instance. Restart uses
+   * {@link #prepareRestart} followed by {@link #openPreparedRestart}, allowing the outer runtime
+   * owner to recover stale metadata while the validated instance lock remains held.
+   */
   public static StatusCode open(
       Path datadir, RiverDaemonFileSystem filesystem, SecureRandom random,
       DatabaseIncarnation requestedIncarnation, String host, InetAddress bindAddress,
@@ -68,13 +72,6 @@ public final class RiverDaemonInstance {
     return RiverDaemonInstanceAdmission.openPreparedRestart(
         preparation, random, host, bindAddress, port, limits, result);
   }
-
-  /**
-   * Opens a first-created authenticated instance.  Restart uses
-   * {@link #prepareRestart} followed by {@link #openPreparedRestart}, allowing the outer runtime
-   * owner to recover stale metadata while the validated instance lock remains held.
-   */
-
 
   public RiverDatabase database() { return database; }
   public LoopbackRiverServer server() { return server; }
