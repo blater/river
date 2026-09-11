@@ -24,3 +24,17 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-engine` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Review
+
+Source `3a627815` retains the two end-to-end pipeline and spill scenarios, with
+shared setup/row assertions and explicit expected plan rows. Sol/high and lead
+review verified SQL, assertion order, Unicode/spill boundaries, nullability,
+atomic failures and scan/session/database cleanup. All four files score 0
+(original 207.510). Both focused scenarios passed (0.490s pipeline, 0.903s spill), with engine
+checks and benchmark installation passing in 13s. Log:
+`/private/tmp/river-score-jdbc-tic-c726-gradle.log`.
+The epic's light JVM sample/all passed at 304.50 TPS, p99 63.111ms, zero failed/
+unknown outcomes, valid invariants and graceful cleanup. Production is unchanged;
+this is a smoke, not a speed claim. Artifact:
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_042109_452f3e54`.

@@ -1,6 +1,6 @@
 ---
 id: tic-b169
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code

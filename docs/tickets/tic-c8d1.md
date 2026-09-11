@@ -178,3 +178,10 @@ accepted total to 15. Clean full checks passed in 4m21s; unchanged scan: 2,575
 files, 67 remaining at or above 90 and no new offenders. Per-ticket light
 workloads and the catalog's longer adjacent control passed.
 Checkpoint: `perf-checkpoint-20260911-score-first15`.
+
+
+Aggregate binding, stop lifecycle, join tests and client configuration bring the
+accepted total to 19. Affected checks and the rebuilt standalone CLI's real
+start/authenticate/SQL/stop path passed. Unchanged scan: 2,588 files, 63 remaining
+at or above 90, no new offenders. Checkpoint:
+`perf-checkpoint-20260911-score-first19`.

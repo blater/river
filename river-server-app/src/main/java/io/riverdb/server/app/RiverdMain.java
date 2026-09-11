@@ -63,7 +63,7 @@ public final class RiverdMain {
           output.println("No River server is running for " + selected + ".");
           return 0;
         }
-        status = RiverDaemonStop.request(target, command.timeoutMillis());
+        status = RiverDaemonStopClient.request(target, command.timeoutMillis());
         StatusCode close = target.close();
         if (status.isOk() && !close.isOk() && close != StatusCode.CLOSED) status = close;
         if (status.isOk()) {
