@@ -1,6 +1,6 @@
 ---
 id: tic-e5af
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -52,3 +52,5 @@ Artifacts below `/Users/blater/src/ingres/river-harness/runs/`:
 `river_harness_20260911_040200_2c9a404b`,
 `river_harness_20260911_040239_a42c9e92`,
 `river_harness_20260911_040330_2ab1effd`.
+
+Delivered at `perf-checkpoint-20260911-score-first15`.
