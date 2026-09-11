@@ -41,15 +41,15 @@ final class ApfsRiverDirectory implements RiverDirectory {
   public synchronized StatusCode createDirectory(String childName, RiverDirectoryResult result) {
     if (!begin(childName) || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    int status = DarwinFileBridge.mkdirAt(fd, childName, 0700);
-    if (status != 0) return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+    int status = DarwinNamespaceBridge.mkdirAt(fd, childName, 0700);
+    if (status != 0) return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
     int child = DarwinFileBridge.openAt(fd, childName, directoryFlags(), 0);
     if (child < 0) {
-      return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+      return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
     }
-    DarwinFileBridge.NativeStat stat = DarwinFileBridge.stat(child);
+    DarwinNamespaceBridge.NativeStat stat = DarwinNamespaceBridge.stat(child);
     if (stat == null) {
-      StatusCode error = ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+      StatusCode error = ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
       DarwinFileBridge.close(child);
       return error;
     }
@@ -67,8 +67,8 @@ final class ApfsRiverDirectory implements RiverDirectory {
     if (!begin(childName) || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     int child = DarwinFileBridge.openAt(fd, childName, directoryFlags(), 0);
-    if (child < 0) return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
-    DarwinFileBridge.NativeStat stat = DarwinFileBridge.stat(child);
+    if (child < 0) return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
+    DarwinNamespaceBridge.NativeStat stat = DarwinNamespaceBridge.stat(child);
     StatusCode verify = ApfsRiverDaemonFileSystem.verifyPrivateDirectory(child, stat);
     if (!verify.isOk()) {
       DarwinFileBridge.close(child);
@@ -88,10 +88,10 @@ final class ApfsRiverDirectory implements RiverDirectory {
     int flags = DarwinFileBridge.O_RDWR | DarwinFileBridge.O_CLOEXEC | DarwinFileBridge.O_NOFOLLOW;
     if (mode == RiverOpenMode.CREATE_NEW) flags |= DarwinFileBridge.O_CREAT | DarwinFileBridge.O_EXCL;
     int child = DarwinFileBridge.openAt(fd, childName, flags, 0600);
-    if (child < 0) return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
-    DarwinFileBridge.NativeStat stat = DarwinFileBridge.stat(child);
+    if (child < 0) return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
+    DarwinNamespaceBridge.NativeStat stat = DarwinNamespaceBridge.stat(child);
     if (stat == null) {
-      StatusCode error = ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+      StatusCode error = ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
       DarwinFileBridge.close(child);
       return error;
     }
@@ -114,10 +114,10 @@ final class ApfsRiverDirectory implements RiverDirectory {
     StatusCode admission = admission();
     if (!admission.isOk()) return admission;
     int streamFd = DarwinFileBridge.openAt(fd, ".", directoryFlags(), 0);
-    if (streamFd < 0) return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
-    MemorySegment directory = DarwinFileBridge.openDirectoryStream(streamFd);
+    if (streamFd < 0) return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
+    MemorySegment directory = DarwinNamespaceBridge.openDirectoryStream(streamFd);
     if (directory.equals(MemorySegment.NULL)) {
-      int error = DarwinFileBridge.errno();
+      int error = DarwinNativeBindings.errno();
       DarwinFileBridge.close(streamFd);
       return ApfsRiverDaemonFileSystem.status(error);
     }
@@ -125,9 +125,9 @@ final class ApfsRiverDirectory implements RiverDirectory {
     try {
       scanStatus = scan(directory, result);
     } finally {
-      int closeStatus = DarwinFileBridge.closeDirectoryStream(directory);
+      int closeStatus = DarwinNamespaceBridge.closeDirectoryStream(directory);
       if (scanStatus.isOk() && closeStatus != 0) {
-        scanStatus = ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+        scanStatus = ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
       }
     }
     return scanStatus;
@@ -139,7 +139,7 @@ final class ApfsRiverDirectory implements RiverDirectory {
       MemorySegment entryBuffer = entries.allocate(1048, 8);
       MemorySegment resultPointer = entries.allocate(ValueLayout.ADDRESS);
       while (true) {
-        int readStatus = DarwinFileBridge.readDirectory(directory, entryBuffer, resultPointer);
+        int readStatus = DarwinNamespaceBridge.readDirectory(directory, entryBuffer, resultPointer);
         if (readStatus != 0) return ApfsRiverDaemonFileSystem.status(readStatus);
         MemorySegment entry = resultPointer.get(ValueLayout.ADDRESS, 0);
         if (entry.equals(MemorySegment.NULL)) {
@@ -157,8 +157,8 @@ final class ApfsRiverDirectory implements RiverDirectory {
             bytes.asSlice(21, nameLength).toArray(ValueLayout.JAVA_BYTE),
             java.nio.charset.StandardCharsets.UTF_8);
         if (name.equals(".") || name.equals("..")) continue;
-        DarwinFileBridge.NativeStat stat = DarwinFileBridge.statAt(fd, name);
-        if (stat == null) return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+        DarwinNamespaceBridge.NativeStat stat = DarwinNamespaceBridge.statAt(fd, name);
+        if (stat == null) return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
         DirectoryEntryType type;
         if (stat.regularFile()) type = DirectoryEntryType.FILE;
         else if (stat.directory()) type = DirectoryEntryType.DIRECTORY;
@@ -203,23 +203,23 @@ final class ApfsRiverDirectory implements RiverDirectory {
           if (!admission.isOk()) return admission;
           StatusCode sourceAdmission = source.admission();
           if (!sourceAdmission.isOk()) return sourceAdmission;
-          DarwinFileBridge.NativeStat stageStat = DarwinFileBridge.statAt(source.fd, stageName);
+          DarwinNamespaceBridge.NativeStat stageStat = DarwinNamespaceBridge.statAt(source.fd, stageName);
           if (stageStat == null || !stageStat.directory()
               || !stageStat.identity.equals(stageDirectory.identity)) return StatusCode.CONFLICT;
-          int status = DarwinFileBridge.renameExclusive(
+          int status = DarwinNamespaceBridge.renameExclusive(
               source.fd, stageName, fd, targetName);
           if (status == 0) {
-            int sourceForce = DarwinFileBridge.forceDirectory(source.fd);
-            int targetForce = sourceForce == 0 ? DarwinFileBridge.forceDirectory(fd) : -1;
+            int sourceForce = DarwinNamespaceBridge.forceDirectory(source.fd);
+            int targetForce = sourceForce == 0 ? DarwinNamespaceBridge.forceDirectory(fd) : -1;
             if (sourceForce == 0 && targetForce == 0) {
               result.set(null, DirectoryDurability.DURABLE);
               return StatusCode.OK;
             }
             result.set(null, DirectoryDurability.UNKNOWN);
-            return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+            return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
           }
-          int error = DarwinFileBridge.errno();
-          result.set(null, error == DarwinFileBridge.EEXIST
+          int error = DarwinNativeBindings.errno();
+          result.set(null, error == DarwinNamespaceBridge.EEXIST
               ? DirectoryDurability.NOT_APPLIED : DirectoryDurability.UNKNOWN);
           return ApfsRiverDaemonFileSystem.status(error);
         }
@@ -242,7 +242,7 @@ final class ApfsRiverDirectory implements RiverDirectory {
     }
     StatusCode admission = admission();
     if (!admission.isOk()) return admission;
-    DarwinFileBridge.NativeStat stageStat = DarwinFileBridge.statAt(fd, stageName);
+    DarwinNamespaceBridge.NativeStat stageStat = DarwinNamespaceBridge.statAt(fd, stageName);
     if (stageStat == null || !stageStat.regularFile()
         || stageStat.links != 1 || !stageStat.identity.equals(stageFile.identity())) {
       return StatusCode.CONFLICT;
@@ -252,14 +252,14 @@ final class ApfsRiverDirectory implements RiverDirectory {
       if (!targetStatus.isOk()) return targetStatus;
     }
     int status = exclusive
-        ? DarwinFileBridge.renameExclusive(fd, stageName, targetName)
-        : DarwinFileBridge.renameReplace(fd, stageName, targetName);
+        ? DarwinNamespaceBridge.renameExclusive(fd, stageName, targetName)
+        : DarwinNamespaceBridge.renameReplace(fd, stageName, targetName);
     if (status == 0) {
       result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE);
       return StatusCode.OK;
     }
-    int error = DarwinFileBridge.errno();
-    result.set(null, error == DarwinFileBridge.EEXIST
+    int error = DarwinNativeBindings.errno();
+    result.set(null, error == DarwinNamespaceBridge.EEXIST
         ? DirectoryDurability.NOT_APPLIED : DirectoryDurability.UNKNOWN);
     return ApfsRiverDaemonFileSystem.status(error);
   }
@@ -271,18 +271,18 @@ final class ApfsRiverDirectory implements RiverDirectory {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    DarwinFileBridge.NativeStat stat = DarwinFileBridge.statAt(fd, childName);
-    if (stat == null) return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+    DarwinNamespaceBridge.NativeStat stat = DarwinNamespaceBridge.statAt(fd, childName);
+    if (stat == null) return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
     if (!stat.regularFile() && !stat.directory()) return StatusCode.CONFLICT;
     if (!stat.identity.equals(expectedIdentity)) return StatusCode.CONFLICT;
     int status = stat.directory()
-        ? DarwinFileBridge.removeDirectory(fd, childName)
-        : DarwinFileBridge.remove(fd, childName);
+        ? DarwinNamespaceBridge.removeDirectory(fd, childName)
+        : DarwinNamespaceBridge.remove(fd, childName);
     if (status == 0) {
       result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE);
       return StatusCode.OK;
     }
-    int error = DarwinFileBridge.errno();
+    int error = DarwinNativeBindings.errno();
     result.set(null, DirectoryDurability.UNKNOWN);
     return ApfsRiverDaemonFileSystem.status(error);
   }
@@ -293,13 +293,13 @@ final class ApfsRiverDirectory implements RiverDirectory {
     result.reset();
     StatusCode admission = admission();
     if (!admission.isOk()) return admission;
-    int status = DarwinFileBridge.forceDirectory(fd);
+    int status = DarwinNamespaceBridge.forceDirectory(fd);
     if (status == 0) {
       result.set(null, DirectoryDurability.DURABLE);
       return StatusCode.OK;
     }
     result.set(null, DirectoryDurability.UNKNOWN);
-    return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+    return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
   }
 
   @Override
@@ -307,7 +307,7 @@ final class ApfsRiverDirectory implements RiverDirectory {
     if (closed) return StatusCode.CLOSED;
     closed = true;
     return DarwinFileBridge.close(fd) == 0
-        ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+        ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
   }
 
   private StatusCode admission() {
@@ -326,13 +326,13 @@ final class ApfsRiverDirectory implements RiverDirectory {
   private StatusCode validateReplacementTarget(String targetName) {
     int target = DarwinFileBridge.openAt(fd, targetName, fileFlags(), 0);
     if (target < 0) {
-      int error = DarwinFileBridge.errno();
-      return error == DarwinFileBridge.ENOENT
+      int error = DarwinNativeBindings.errno();
+      return error == DarwinNamespaceBridge.ENOENT
           ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(error);
     }
-    DarwinFileBridge.NativeStat stat = DarwinFileBridge.stat(target);
+    DarwinNamespaceBridge.NativeStat stat = DarwinNamespaceBridge.stat(target);
     if (stat == null) {
-      int error = DarwinFileBridge.errno();
+      int error = DarwinNativeBindings.errno();
       DarwinFileBridge.close(target);
       return ApfsRiverDaemonFileSystem.status(error);
     }
@@ -342,7 +342,7 @@ final class ApfsRiverDirectory implements RiverDirectory {
       return check;
     }
     int close = DarwinFileBridge.close(target);
-    if (close != 0) return ApfsRiverDaemonFileSystem.status(DarwinFileBridge.errno());
+    if (close != 0) return ApfsRiverDaemonFileSystem.status(DarwinNativeBindings.errno());
     return StatusCode.OK;
   }
 
