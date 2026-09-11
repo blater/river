@@ -428,7 +428,8 @@ public final class TransactionManager {
     StatusCode status = participant.commit(transaction.transactionId());
     if (!status.isOk()) {
       completion.finish(transaction, result,
-          indeterminate(status) ? TransactionState.INDETERMINATE : TransactionState.ABORTED,
+          TransactionCompletion.indeterminate(status)
+              ? TransactionState.INDETERMINATE : TransactionState.ABORTED,
           0, status);
       return status;
     }
@@ -488,7 +489,7 @@ public final class TransactionManager {
       TransactionGroupCompletionTimings timings) {
     if (participant == null
         || timings == null
-        || !validCommitGroup(transactions, results, commitSequences, count)) {
+        || !completion.validCommitGroup(transactions, results, commitSequences, count)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     long previousCommitSequence = 0;
@@ -531,37 +532,7 @@ public final class TransactionManager {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (failure == null
-        || failure.isOk()
-        || transactions == null
-        || results == null
-        || count <= 0
-        || count > transactions.length
-        || count > results.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    TransactionState state = indeterminate(failure)
-        ? TransactionState.INDETERMINATE : TransactionState.ABORTED;
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      if (transaction == null
-          || !transaction.isOwnedBy(this)
-          || transaction.state() != TransactionState.COMMITTING
-          || results[index] == null) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transaction
-            || results[previous] == results[index]) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-    }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      completion.finish(transaction, results[index], state, 0, failure);
-    }
-    return StatusCode.OK;
+    return completion.failCommitGroup(transactions, results, count, failure);
   }
 
   /** Aborts a prepared group before any member enters COMMITTING or appends a decision. */
@@ -570,28 +541,7 @@ public final class TransactionManager {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (failure == null || failure.isOk()
-        || transactions == null || results == null || count <= 0
-        || count > transactions.length || count > results.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int index = 0; index < count; index++) {
-      if (!validPrepared(transactions[index]) || results[index] == null) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transactions[index]
-            || results[previous] == results[index]) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-    }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      completion.finish(
-          transaction, results[index], TransactionState.ABORTED, 0, failure);
-    }
-    return StatusCode.OK;
+    return completion.abortPreparedCommitGroup(transactions, results, count, failure);
   }
 
   public synchronized StatusCode failForcedCommitGroup(
@@ -599,29 +549,7 @@ public final class TransactionManager {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (failure == null || failure.isOk()
-        || transactions == null || results == null || count <= 0
-        || count > transactions.length || count > results.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      if (transaction == null || !transaction.isOwnedBy(this)
-          || transaction.state() != TransactionState.COMMITTING
-          || results[index] == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transaction
-            || results[previous] == results[index]) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-    }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      completion.finish(
-          transaction, results[index], TransactionState.INDETERMINATE, 0, failure);
-    }
-    return StatusCode.OK;
+    return completion.failForcedCommitGroup(transactions, results, count, failure);
   }
 
   /** Terminalizes accepted work after an unexpected commit-writer failure. */
@@ -630,31 +558,8 @@ public final class TransactionManager {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (failure == null || failure.isOk()
-        || transactions == null || results == null || count <= 0
-        || count > transactions.length || count > results.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      TransactionState state = transaction == null ? null : transaction.state();
-      if (transaction == null || !transaction.isOwnedBy(this)
-          || state != TransactionState.PREPARED && state != TransactionState.COMMITTING
-          || results[index] == null) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transaction
-            || results[previous] == results[index]) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-    }
-    for (int index = 0; index < count; index++) {
-      completion.finish(
-          transactions[index], results[index], TransactionState.INDETERMINATE, 0, failure);
-    }
-    return StatusCode.OK;
+    return completion.terminalizeAcceptedCommitGroup(
+        transactions, results, count, failure);
   }
 
   public synchronized StatusCode commitReadOnly(
@@ -693,7 +598,7 @@ public final class TransactionManager {
     }
     StatusCode status = participant.commit(transactionId);
     if (!status.isOk()) {
-      TransactionState state = indeterminate(status)
+      TransactionState state = TransactionCompletion.indeterminate(status)
           ? TransactionState.INDETERMINATE : TransactionState.ABORTED;
       result.set(databaseHigh, databaseLow, transactionId, state, 0);
       return status;
@@ -729,47 +634,8 @@ public final class TransactionManager {
         && transaction.state() == TransactionState.PREPARED;
   }
 
-  private boolean validCommitGroup(
-      Transaction[] transactions,
-      TransactionOutcome[] results,
-      long[] commitSequences,
-      int count) {
-    if (transactions == null
-        || results == null
-        || commitSequences == null
-        || count <= 0
-        || count > transactions.length
-        || count > results.length
-        || count > commitSequences.length) {
-      return false;
-    }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      if (transaction == null
-          || !transaction.isOwnedBy(this)
-          || transaction.state() != TransactionState.COMMITTING
-          || results[index] == null) {
-        return false;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transaction
-            || results[previous] == results[index]) {
-          return false;
-        }
-      }
-    }
-    for (int index = 0; index < count; index++) results[index].reset();
-    return true;
-  }
-
   void removeActive(long transactionId) {
     snapshots.remove(transactionId);
   }
 
-  private static boolean indeterminate(StatusCode status) {
-    return status == StatusCode.IO_FAILURE
-        || status == StatusCode.FENCED
-        || status == StatusCode.CORRUPTION
-        || status == StatusCode.INVARIANT_BROKEN;
-  }
 }
