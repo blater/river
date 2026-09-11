@@ -152,3 +152,10 @@ validation evidence.
 `tic-e67d` is closed at pushed checkpoint `perf-checkpoint-20260911-score-parser`.
 Four original files are delivered; the integrated scan includes 2,536 Java files
 and 78 remain at or above 90.
+
+
+Eight original files are now integrated locally: credentials, identity, Java
+client lifetime and exact-lock admission join the first four. The unchanged full
+scan covers 2,556 Java files; **74 remain at or above 90**. All files added by
+these tickets are below 90. The clean integration check passed in 4m23s;
+standalone smoke and publication are pending for this subsystem checkpoint.

@@ -31,7 +31,7 @@ Removed the private `createHolding` forwarding hop and call the existing
 `LockExactAdmissionController` owner directly from `tryAcquire`. Admission
 ordering, resource lookup, conflict checks, statuses, and allocation behavior
 are unchanged. The unchanged scorer result is 90.204 before and 89.918 after;
-focused transaction checks remain pending the shared build slot.
+focused transaction checks passed (details below).
 
 
 ## Validation
