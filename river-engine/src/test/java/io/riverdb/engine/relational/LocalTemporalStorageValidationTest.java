@@ -119,6 +119,37 @@ final class LocalTemporalStorageValidationTest {
   }
 
   @Test
+  void rejectsTruncatedActualCountTableRecordAndResetsResult() {
+    TableSchema schema = new TableSchema();
+    assertEquals(StatusCode.OK, schema.addBigint("id", false));
+    assertEquals(StatusCode.OK, schema.addBigint("value", true));
+    assertEquals(StatusCode.OK, schema.setLastCheck(TableSchema.CHECK_GREATER_OR_EQUAL, 1));
+    ByteBuffer encoded = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
+    CatalogRecord.encodeTable(
+        encoded, 17, 0, TableDefinition.INDEX_NONE, -1, "truncated_table", schema);
+    int bytes = encoded.remaining();
+    HeapRowResult source = new HeapRowResult();
+    ByteBuffer scratch = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
+    TableDefinition result = new TableDefinition();
+
+    source.set(encoded, 1, 0, bytes);
+    assertEquals(
+        StatusCode.OK,
+        CatalogRecord.decodeTable(
+            new CatalogTableDecoder(), source, scratch, "truncated_table",
+            new RelationalSchemaGate(), result));
+    assertTrue(result.isAvailable());
+
+    source.set(encoded, 1, 0, bytes - 1);
+    assertEquals(
+        StatusCode.CORRUPTION,
+        CatalogRecord.decodeTable(
+            new CatalogTableDecoder(), source, scratch, "truncated_table",
+            new RelationalSchemaGate(), result));
+    assertFalse(result.isAvailable());
+  }
+
+  @Test
   void persistsCanonicalExpressionChecksAfterTextDefaults() {
     TableSchema schema = new TableSchema();
     assertEquals(StatusCode.OK, schema.addBigint("id", false));
