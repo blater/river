@@ -1,7 +1,6 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.Utf8Text;
 
 /** Allocation-free parser for River's first executable SQL point-statement subset. */
 public final class SqlParser {
@@ -462,32 +461,6 @@ public final class SqlParser {
     return true;
   }
 
-  private static void setIdentifier(SqlIdentifier target, String value) {
-    for (int index = 0; index < value.length(); index++) {
-      target.append(value.charAt(index));
-    }
-  }
-
-  private StatusCode number(CharSequence sql, LongResult result) {
-    return input.number(sql, result);
-  }
-
-  private StatusCode literal(CharSequence sql, LongResult result) {
-    return input.literal(sql, result);
-  }
-
-  private StatusCode packedText(CharSequence sql, LongResult result) {
-    return input.packedText(sql, result);
-  }
-
-  private boolean startsText(CharSequence sql) {
-    return input.startsText(sql);
-  }
-
-  private boolean startsNumber(CharSequence sql) {
-    return input.startsNumber(sql);
-  }
-
   private StatusCode requireKeyword(CharSequence sql, String keyword) {
     return input.requireKeyword(sql, keyword);
   }
@@ -496,24 +469,12 @@ public final class SqlParser {
     return input.consumeKeyword(sql, keyword);
   }
 
-  private StatusCode requireCharacter(CharSequence sql, char expected) {
-    return input.requireCharacter(sql, expected);
-  }
-
-  private boolean consumeCharacter(CharSequence sql, char expected) {
-    return input.consumeCharacter(sql, expected);
-  }
-
   private boolean finish(CharSequence sql) {
     return input.finish(sql);
   }
 
   private void skipSpaces(CharSequence sql) {
     input.skipSpaces(sql);
-  }
-
-  private static char upper(char character) {
-    return SqlParserInput.upper(character);
   }
 
   private static boolean identifierStart(char character) {
