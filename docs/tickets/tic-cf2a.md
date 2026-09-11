@@ -1,6 +1,6 @@
 ---
 id: tic-cf2a
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -39,3 +39,7 @@ Light sample/all JVM workload: 4 workers, 1 warehouse, seed 42, max-retries 20,
 p99 58.950ms. Zero failed/unknown outcomes, valid invariants and graceful
 inactive cleanup. Artifact: `river_harness_20260911_063201_50c0bad0` under
 harness runs. No observed regression; test-only change makes no speedup claim.
+
+
+Delivered in pushed master integration `4a3b4ef0`, checkpoint
+`perf-checkpoint-20260911-score-first46`.

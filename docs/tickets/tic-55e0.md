@@ -1,6 +1,6 @@
 ---
 id: tic-55e0
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -50,3 +50,7 @@ inactive owned service. This is within the adjacent samples' observed variation.
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_064507_80d16b4f`.
 An initial sandboxed launch failed before readiness and produced no workload
 sample; the authorized local-server run above completed successfully.
+
+
+Delivered in pushed master integration `4a3b4ef0`, checkpoint
+`perf-checkpoint-20260911-score-first46`.

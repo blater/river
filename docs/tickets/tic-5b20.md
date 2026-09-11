@@ -1,6 +1,6 @@
 ---
 id: tic-5b20
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -50,3 +50,7 @@ master control run 34570183010 reproduced the identical assertion at line 130.
 Tracked separately in tic-f737; full Linux verification is not claimed.
 The integration already contains tic-e12b's required native initialization rule.
 Linux native-image execution remains release-matrix coverage.
+
+
+Delivered in pushed master integration `4a3b4ef0`, checkpoint
+`perf-checkpoint-20260911-score-first46`.

@@ -1,6 +1,6 @@
 ---
 id: tic-e334
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -64,3 +64,7 @@ Artifacts under `/Users/blater/src/ingres/river-harness/runs/`:
 - `river_harness_20260911_065457_76a0eb7e`: adjacent candidate, version `tic-e334-a4a7a7db-adjacent`.
 - `river_harness_20260911_065611_797cf0da`: longer candidate, version `tic-e334-a4a7a7db-longer`.
 - `river_harness_20260911_065709_2df88196`: longer control, version `score-first42-e334-longer`.
+
+
+Delivered in pushed master integration `4a3b4ef0`, checkpoint
+`perf-checkpoint-20260911-score-first46`.
