@@ -23,8 +23,7 @@ final class IndexedRelationalWalRegistryFixtures {
   static TupleIndexRootRecord registryRecord(
       IndexedTableStore store, long keyId) {
     HeapRowResult row = new HeapRowResult();
-    requireOk(store.kernel.fetchByKeyAt(
-        store.lastCommitSequence, CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row));
+    requireOk(store.fetchByKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row));
     ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
     requireOk(row.copyTo(bytes));
     bytes.flip();
@@ -74,8 +73,7 @@ final class IndexedRelationalWalRegistryFixtures {
       IndexedTableStore store, long keyId, int rootPageId,
       long ownerObjectId, long generation, long schemaId) {
     HeapRowResult row = new HeapRowResult();
-    requireOk(store.kernel.fetchByKeyAt(
-        store.lastCommitSequence, CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row));
+    requireOk(store.fetchByKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row));
     ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
     requireOk(row.copyTo(bytes));
     bytes.flip();
@@ -101,8 +99,7 @@ final class IndexedRelationalWalRegistryFixtures {
       IndexedTableStore store, int state, int rootPageId,
       long generation, long privateOwner, int cleanupCursor) {
     HeapRowResult row = new HeapRowResult();
-    requireOk(store.kernel.fetchByKeyAt(
-        store.lastCommitSequence, CatalogKeyspace.INDEX_ROOT_SPACE, 1_000, row));
+    requireOk(store.fetchByKey(CatalogKeyspace.INDEX_ROOT_SPACE, 1_000, row));
     ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
     requireOk(row.copyTo(bytes));
     bytes.flip();

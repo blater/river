@@ -139,8 +139,7 @@ final class IndexedMaximumRelationalReplayTest {
 
   private static void assertBaseValue(IndexedTableStore store, long key, long expected) {
     HeapRowResult row = new HeapRowResult();
-    assertEquals(StatusCode.OK,
-        store.kernel.fetchByKeyAt(store.lastCommitSequence, baseSpace(), key, row));
+    assertEquals(StatusCode.OK, store.fetchByKey(baseSpace(), key, row));
     assertEquals(expected, row.getLong(0));
   }
 

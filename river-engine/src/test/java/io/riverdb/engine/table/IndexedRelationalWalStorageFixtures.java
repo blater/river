@@ -79,7 +79,7 @@ final class IndexedRelationalWalStorageFixtures {
   static void assertBaseRow(
       IndexedTableStore store, long space, long key, long expectedValue) {
     HeapRowResult row = new HeapRowResult();
-    requireOk(store.kernel.fetchByKeyAt(store.lastCommitSequence, space, key, row));
+    requireOk(store.fetchByKey(space, key, row));
     check(row.getLong(0) == expectedValue, "hybrid base row value mismatch for " + key);
   }
 

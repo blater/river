@@ -78,8 +78,7 @@ final class IndexedTupleIntentRegistry {
   long generation() { return record.generation(); }
 
   private StatusCode loadRecord(long keyId) {
-    StatusCode status = kernel.fetchByKeyAt(
-        store.lastCommitSequence, CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row);
+    StatusCode status = store.fetchByKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row);
     if (!status.isOk()) return pressure(status) ? status : StatusCode.CORRUPTION;
     bytes.clear();
     status = row.copyTo(bytes);

@@ -32,8 +32,7 @@ final class IndexedTupleLifecycleRegistry {
 
   StatusCode loadAbsent(IndexedTupleIndexLifecycleBatch batch, int index) {
     long keyId = batch.keyIdAt(index);
-    StatusCode status = kernel.fetchByKeyAt(
-        store.lastCommitSequence, CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row);
+    StatusCode status = store.fetchByKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row);
     if (status.isOk()) return StatusCode.CORRUPTION;
     if (status != StatusCode.CONFLICT) return pressure(status) ? status : StatusCode.CORRUPTION;
     status = kernel.prepareInsert(
@@ -95,8 +94,7 @@ final class IndexedTupleLifecycleRegistry {
   private StatusCode loadExisting(
       IndexedTupleIndexLifecycleBatch batch, int index, int expected) {
     long keyId = batch.keyIdAt(index);
-    StatusCode status = kernel.fetchByKeyAt(
-        store.lastCommitSequence, CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row);
+    StatusCode status = store.fetchByKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row);
     if (!status.isOk()) return pressure(status) ? status : StatusCode.CORRUPTION;
     bytes.clear();
     status = row.copyTo(bytes);

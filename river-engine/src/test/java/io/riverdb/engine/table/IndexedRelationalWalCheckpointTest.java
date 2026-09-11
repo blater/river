@@ -59,7 +59,7 @@ final class IndexedRelationalWalCheckpointTest {
     ByteBuffer tupleRoot = pages.currentPayloadUnchecked(4);
     int pointer = tupleRoot.getInt(24);
     tupleRoot.putInt(24, 4);
-    check(store.kernel.validate() == StatusCode.CORRUPTION, "tuple leaf cycle accepted");
+    check(store.validate() == StatusCode.CORRUPTION, "tuple leaf cycle accepted");
     tupleRoot.putInt(24, pointer);
 
     ByteBuffer metadata = pages.currentPayloadUnchecked(IndexedTableKernel.ROOT_META_PAGE_ID);
@@ -78,7 +78,7 @@ final class IndexedRelationalWalCheckpointTest {
         new long[] {store.lastCommitSequence + 1}, 1, 1, 2));
     requireOk(pages.releasePreparedBatch());
     pages.resetChanges();
-    check(store.kernel.validate() == StatusCode.CORRUPTION, "orphan tuple page accepted");
+    check(store.validate() == StatusCode.CORRUPTION, "orphan tuple page accepted");
     check(store.flush() == StatusCode.CORRUPTION,
         "checkpoint writer admitted orphan tuple page");
     store.closeOpenFile();

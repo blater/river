@@ -28,31 +28,34 @@ before/after score and result, then integrate this ticket independently.
 ## Implementation and focused validation (2026-09-11)
 
 Completed on `ticket/tic-9e2f-m5-completion`, based on pushed master `705488d5`.
-Removed package-private store forwarders and migrated every owned caller directly
-to the existing kernel or relational-services owner; `IndexedTable` keeps its
-monitor and notification boundaries. No public API, durable format, WAL ordering,
-allocation, or copy contract changes.
-
 `close()` keeps its synchronized boundary and delegates first-attempt admission
 and detach to a concrete local operation. Four local resource operations own the
 existing retry flags. Cleanup still attempts every owner in order, returns the
 first failure, accepts `CLOSED` for files and sidecars, requires `OK` for provider
-release, and retries only incomplete owners. No new class or ownership layer.
+release, and retries only incomplete owners. Two failure tests prove these
+boundaries using the existing file fixture.
+
+Checkpoint floor import now belongs to the existing logical-row-ID registry,
+which already owns floor admission and implements the source contract. The store
+retains the checkpoint-null guard and import-before-checkpoint-load ordering;
+source rewind, declared count, invalid-input translation, and exhaustion checks
+are unchanged. No new class, public API, durable format, allocation, or copy
+contract changes.
+
+The initial parked forwarding removal was rejected by
+`verifyIndexedTableClassReferences`, which enforces the named K16
+`IndexedTable -> Store -> Kernel` boundary. It was dropped completely; the final
+change preserves the original facade, callers, and private kernel/page fields.
 
 The unchanged full-repository scorer covered 2,641 Java files: store
-**157.040 → 88.461**, with every touched Java file below 90 and 19 remaining files
-at or above 90. Score artifact: `/private/tmp/river-9e2f-scores.json`.
+**157.040 → 89.278**, registry **16.315 → 67.203**, construction test **6.008**.
+All three touched Java files are below 90; 19 other files remain at or above 90.
+Score artifact: `/private/tmp/river-9e2f-scores.json`.
 
-Targeted `:river-engine:compileTestJava` passed. Focused indexed-store lifecycle,
-construction, differential/interrupted recovery, relational WAL, maximum replay,
-free-page recovery, allocation, and group-commit fault tests passed (76 tests in
-13 suites). The two new
-fault tests cover eager cleanup and first-error precedence, retry completion,
-`CLOSED` normalization, and failed provider release without reclosing completed
-files. Logs: `/private/tmp/river-9e2f-compile.log` and
-`/private/tmp/river-9e2f-focused.log`.
-
-Independent recovery/ownership review and lead review approved the final source
-and both failure tests without blockers. Full checkpoint validation, matched
-workload evidence, and pushed integration remain the lead integrator's promotion
-gates.
+Final `verifyIndexedTableClassReferences` and focused store lifecycle,
+construction, differential/interrupted recovery, relational WAL, logical-row-ID,
+and checkpoint-generation checks passed: **59 tests in 12 suites**.
+Log: `/private/tmp/river-9e2f-final-focused.log`.
+Independent recovery/ownership review and lead review cover the final reduced
+change. Full checkpoint validation, matched workload evidence, and pushed
+integration remain the lead integrator's promotion gates.
