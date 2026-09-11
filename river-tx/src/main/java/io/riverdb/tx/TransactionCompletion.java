@@ -39,6 +39,157 @@ final class TransactionCompletion {
     }
   }
 
+  private boolean validFailureGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure,
+      TransactionState requiredState) {
+    return validFailureGroup(
+        transactions, results, count, failure, requiredState, requiredState);
+  }
+
+  private boolean validAcceptedFailureGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure) {
+    return validFailureGroup(
+        transactions, results, count, failure,
+        TransactionState.PREPARED, TransactionState.COMMITTING);
+  }
+
+  private boolean validFailureGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure,
+      TransactionState firstState,
+      TransactionState secondState) {
+    if (failure == null
+        || failure.isOk()
+        || transactions == null
+        || results == null
+        || count <= 0
+        || count > transactions.length
+        || count > results.length) {
+      return false;
+    }
+    return validGroupMembers(transactions, results, count, firstState, secondState);
+  }
+
+  private boolean validGroupMembers(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      TransactionState requiredState) {
+    return validGroupMembers(transactions, results, count, requiredState, requiredState);
+  }
+
+  private boolean validGroupMembers(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      TransactionState firstState,
+      TransactionState secondState) {
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      if (transaction == null
+          || !transaction.isOwnedBy(manager)
+          || transaction.state() != firstState && transaction.state() != secondState
+          || results[index] == null) {
+        return false;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (transactions[previous] == transaction
+            || results[previous] == results[index]) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  boolean validCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      long[] commitSequences,
+      int count) {
+    if (transactions == null
+        || results == null
+        || commitSequences == null
+        || count <= 0
+        || count > transactions.length
+        || count > results.length
+        || count > commitSequences.length) {
+      return false;
+    }
+    if (!validGroupMembers(
+        transactions, results, count, TransactionState.COMMITTING)) return false;
+    for (int index = 0; index < count; index++) results[index].reset();
+    return true;
+  }
+
+  StatusCode failCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure) {
+    if (!validFailureGroup(
+        transactions, results, count, failure, TransactionState.COMMITTING)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    TransactionState state = indeterminate(failure)
+        ? TransactionState.INDETERMINATE : TransactionState.ABORTED;
+    finishGroup(transactions, results, count, state, failure);
+    return StatusCode.OK;
+  }
+
+  StatusCode abortPreparedCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure) {
+    if (!validFailureGroup(
+        transactions, results, count, failure, TransactionState.PREPARED)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    finishGroup(transactions, results, count, TransactionState.ABORTED, failure);
+    return StatusCode.OK;
+  }
+
+  StatusCode failForcedCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure) {
+    if (!validFailureGroup(
+        transactions, results, count, failure, TransactionState.COMMITTING)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    finishGroup(transactions, results, count, TransactionState.INDETERMINATE, failure);
+    return StatusCode.OK;
+  }
+
+  StatusCode terminalizeAcceptedCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure) {
+    if (!validAcceptedFailureGroup(transactions, results, count, failure)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    finishGroup(transactions, results, count, TransactionState.INDETERMINATE, failure);
+    return StatusCode.OK;
+  }
+
+  static boolean indeterminate(StatusCode status) {
+    return status == StatusCode.IO_FAILURE
+        || status == StatusCode.FENCED
+        || status == StatusCode.CORRUPTION
+        || status == StatusCode.INVARIANT_BROKEN;
+  }
+
   /** Completes a validated group in phases while the manager retains its snapshot barrier. */
   void publishCommittedGroup(
       Transaction[] transactions,
