@@ -18,9 +18,9 @@ final class ApfsRiverLock implements RiverLock {
     if (closed) return StatusCode.CLOSED;
     closed = true;
     int unlockStatus = DarwinFileBridge.unlock(lockFd);
-    int unlockError = unlockStatus == 0 ? 0 : DarwinFileBridge.errno();
+    int unlockError = unlockStatus == 0 ? 0 : DarwinNativeBindings.errno();
     int closeStatus = DarwinFileBridge.close(lockFd);
-    int closeError = closeStatus == 0 ? 0 : DarwinFileBridge.errno();
+    int closeError = closeStatus == 0 ? 0 : DarwinNativeBindings.errno();
     file.releaseLockReservation();
     if (unlockStatus != 0) return ApfsRiverDaemonFileSystem.status(unlockError);
     return closeStatus == 0 ? StatusCode.OK : ApfsRiverDaemonFileSystem.status(closeError);
