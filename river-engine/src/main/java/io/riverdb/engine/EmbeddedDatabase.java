@@ -416,16 +416,7 @@ public final class EmbeddedDatabase {
       return StatusCode.CONFLICT;
     }
     closing = true;
-    StatusCode status = closeStatus(performanceCapture.cancelIfActive());
-    if (status.isOk()) status = sessions.closeAll();
-    if (status.isOk()) status = closeStatus(groupCommit.close());
-    if (status.isOk()) status = closeStatus(table.flush());
-    if (status.isOk()) {
-      status = closeStatus(table.close());
-    }
-    if (status.isOk()) {
-      status = closeStatus(wal.close());
-    }
+    StatusCode status = closePrimaryServices();
     for (LocalWal followerWal : followerWals) {
       StatusCode followerStatus = closeStatus(followerWal.close());
       if (status.isOk()) {
@@ -441,19 +432,38 @@ public final class EmbeddedDatabase {
     if (status.isOk()) {
       status = closeStatus(directory.close());
     }
-    if (status.isOk() && resourceGovernor != null && runtimeCapacityLease.active()) {
-      status = resourceGovernor.releaseRetainedDatabaseAccountedBytes(
-          runtimeCapacityLease);
-    }
-    if (status.isOk() && resourceGovernor != null && providerLease.active()) {
-      status = resourceGovernor.releaseDatabaseProviders(providerLease);
-    }
-    if (status.isOk() && resourceGovernor != null) {
-      status = closeStatus(resourceGovernor.close());
-    }
+    if (status.isOk()) status = releaseResources();
     if (status.isOk()) {
       closed = true;
     }
+    return status;
+  }
+
+  private StatusCode closePrimaryServices() {
+    StatusCode status = closeStatus(performanceCapture.cancelIfActive());
+    if (!status.isOk()) return status;
+    status = sessions.closeAll();
+    if (!status.isOk()) return status;
+    status = closeStatus(groupCommit.close());
+    if (!status.isOk()) return status;
+    status = closeStatus(table.flush());
+    if (!status.isOk()) return status;
+    status = closeStatus(table.close());
+    if (!status.isOk()) return status;
+    return closeStatus(wal.close());
+  }
+
+  private StatusCode releaseResources() {
+    if (resourceGovernor == null) return StatusCode.OK;
+    StatusCode status = StatusCode.OK;
+    if (runtimeCapacityLease.active()) {
+      status = resourceGovernor.releaseRetainedDatabaseAccountedBytes(
+          runtimeCapacityLease);
+    }
+    if (status.isOk() && providerLease.active()) {
+      status = resourceGovernor.releaseDatabaseProviders(providerLease);
+    }
+    if (status.isOk()) status = closeStatus(resourceGovernor.close());
     return status;
   }
 
