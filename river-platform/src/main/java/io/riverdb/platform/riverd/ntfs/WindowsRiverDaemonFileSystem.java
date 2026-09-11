@@ -25,12 +25,12 @@ public final class WindowsRiverDaemonFileSystem implements RiverDaemonFileSystem
     if (!windows() || path == null || invalidPath(path)) return StatusCode.INVALID_EXTERNAL_INPUT;
     var handle = WindowsFileBridge.open(path, true, false);
     if (handle.equals(java.lang.foreign.MemorySegment.NULL)) return status(WindowsFileBridge.status());
-    WindowsRiverDirectory.Stat stat = WindowsRiverDirectory.inspect(handle);
+    WindowsDirectoryInspection.Stat stat = WindowsDirectoryInspection.inspect(handle);
     StatusCode check = stat == null ? status(WindowsFileBridge.status())
         : !stat.directory ? StatusCode.CONFLICT
         : (stat.reparse ? StatusCode.ACCESS_DENIED
-        : privateRequired ? WindowsRiverDirectory.verifyPrivate(handle, stat)
-        : WindowsRiverDirectory.verifyAncestor(handle, stat));
+        : privateRequired ? WindowsDirectoryInspection.verifyPrivate(handle, stat)
+        : WindowsDirectoryInspection.verifyAncestor(handle, stat));
     if (!check.isOk()) {
       WindowsFileBridge.close(handle);
       return check;
