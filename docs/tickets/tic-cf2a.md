@@ -1,6 +1,6 @@
 ---
 id: tic-cf2a
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,10 @@ File: `river-storage/src/test/java/io/riverdb/storage/btree/TupleBTreeTestPagePr
 
 ## Approach
 
-Organize the fixture and scenarios by the behavior they prove; start with `TupleBTreeTestPageProvider.release`, `TupleBTreeTestPageProvider.pin`, `TupleBTreeTestPageProvider.consumeCanonicalMutationValidation`. Share setup only where ownership and assertions stay explicit; remove redundant cases only with a named retained proof.
+Separate validation/proof generation bookkeeping from actual page, generation,
+root and pinned-reference ownership in the test provider. Preserve release-fault
+timing, validation counters and writable-borrow transitions. Allocate the support
+state once per provider; retain zero per-operation allocation.
 
 ## Acceptance
 

@@ -2538,3 +2538,35 @@ and no incomplete scores. Evidence: `/private/tmp/river-score-20260911/` files
 `integration-first33-native-smoke.log`, `integration-first33-scores.json`.
 Frozen JVM control: `river-control-first33`. Checkpoint:
 `perf-checkpoint-20260911-score-first33`.
+
+
+## 2026-09-11: completion validation, native operations and shared fixtures
+
+Accepted nine independently merged slices: tic-0b25 (`c56c8e97`), tic-04aa
+(`36c100bb`), tic-6c32 (`275054ed`), tic-3fc3 (`658c5bf9`), tic-2de1
+(`5aa26d0c`), tic-6dc4 (`2572599c`), tic-3142 (`71ca8e8e`), tic-e12b
+(`453b51b5`, behavior `bdfd2390`), and tic-e62d (`7e4cdbd1`).
+Luna/high implemented; Sol/high and the lead reviewed. Ticket pages retain
+individual scores, focused checks, versions and workload artifacts.
+
+Light sample/all runs passed at 298.18, 308.46, 319.59, 301.80, 295.64,
+297.69, 313.35, 306.30 and 307.70 TPS. Zero failed/unknown outcomes, valid
+invariants and graceful cleanup throughout. The transaction slice's first sample
+is excluded because an additional test build overlapped it; the valid adjacent
+control/candidate pair was 301.40/319.59 TPS. The Darwin slice's first lower
+sample did not repeat: adjacent control/candidate were 306.76/306.30 TPS.
+No observed regression or speedup claim from these short diagnostics.
+
+Clean full first-forty integration checks passed in 4m23s. The following Darwin
+and resource-fixture slices passed their affected checks independently; the
+integrated O3/PGO native build passed in 1m46s. The actual executable passed
+start, ps, generated credential loading, authenticated create/insert/select and
+endpoint stop. JVM installed distribution and frozen control are refreshed.
+The unchanged full scan reports 2,612 Java files, 40 remaining at or above 90,
+no new offenders and no incomplete scores.
+
+Evidence under `/private/tmp/river-score-20260911`: `integration-first40-check.log`,
+`integration-first42-scores.json`, `integration-first42-native.log`,
+`integration-first42-native-smoke.log`, `integration-first42-install.log`.
+Frozen control: `river-control-first42`. Checkpoint:
+`perf-checkpoint-20260911-score-first42`.

@@ -28,3 +28,17 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-server-app` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Validation
+
+Implementation `36c100bb`, based on accepted tic-6d7c; Luna/high, Sol/high and
+lead accepted. Target 84.3224 (from 122.981); new binding owner 0; existing
+admission owner remains 0. Final lock-held probe is retained after successful
+runtime revalidation. All 37 focused lifecycle/identity/stop tests and server-app
+checks passed; installed workload built. Log:
+`/private/tmp/river-tic-04aa-focused-check.log`.
+Light sample/all JVM workload, 4 workers, 1 warehouse, seed 42, max-retries 20,
+5s warmup/10s measured, version `tic-04aa-36c100bb-jvm`: 308.46 TPS,
+p99 63.963ms; passed, zero failed/unknown outcomes, valid invariants, clean stop.
+Artifact: `river_harness_20260911_054731_280f6bf9` under harness runs.
+No observed regression; no speedup claim.
