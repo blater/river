@@ -89,13 +89,13 @@ final class IndexedRelationalWalCommitTest {
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     long hash = descriptorHash(descriptor);
 
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             0, 4, 0, 1, 0, 1,
             IndexedRelationalMutation.REGISTRY_ABSENT,
             IndexedRelationalMutation.REGISTRY_BUILDING, 0, TRANSACTION_ID, 4, 5), commit));
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 1, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             4, 4, 1, 2, 1, 2,
@@ -151,28 +151,28 @@ final class IndexedRelationalWalCommitTest {
     assertRecoveredRegistry(
         created.store(), 1_000, 4, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
 
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 3, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             4, 4, 3, 4, 4, 5,
             IndexedRelationalMutation.REGISTRY_READY,
             IndexedRelationalMutation.REGISTRY_DROPPING,
             0, TRANSACTION_ID + 3, 5, 5), commit));
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 4, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             4, 0, 4, 5, 5, 6,
             IndexedRelationalMutation.REGISTRY_DROPPING,
             IndexedRelationalMutation.REGISTRY_DROPPING,
             TRANSACTION_ID + 3, TRANSACTION_ID + 3, 5, 5), commit));
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 5, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             0, 0, 5, 6, 6, 7,
             IndexedRelationalMutation.REGISTRY_DROPPING,
             IndexedRelationalMutation.REGISTRY_DROPPING,
             TRANSACTION_ID + 3, TRANSACTION_ID + 3, 5, 5), commit));
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 6, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             0, 0, 6, 7, 7, 8,
@@ -186,13 +186,13 @@ final class IndexedRelationalWalCommitTest {
 
     int[] second = {SqlTypeDescriptor.varchar(16)};
     long secondHash = descriptorHash(second);
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 7, liveRootMutation(
             second, secondHash, SECOND_OWNER_OBJECT_ID, 1_001,
             0, 4, 0, 1, 8, 9,
             IndexedRelationalMutation.REGISTRY_ABSENT,
             IndexedRelationalMutation.REGISTRY_BUILDING, 0, TRANSACTION_ID + 7, 5, 5), commit));
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 8, liveRootMutation(
             second, secondHash, SECOND_OWNER_OBJECT_ID, 1_001,
             4, 4, 1, 2, 9, 10,
@@ -233,13 +233,13 @@ final class IndexedRelationalWalCommitTest {
     IndexedCommitResult commit = new IndexedCommitResult();
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     long hash = descriptorHash(descriptor);
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             0, 4, 0, 1, 0, 1,
             IndexedRelationalMutation.REGISTRY_ABSENT,
             IndexedRelationalMutation.REGISTRY_BUILDING, 0, TRANSACTION_ID, 4, 5), commit));
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 1, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             4, 4, 1, 2, 1, 2,
@@ -348,13 +348,13 @@ final class IndexedRelationalWalCommitTest {
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     long hash = descriptorHash(descriptor);
     IndexedCommitResult commit = new IndexedCommitResult();
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             0, 4, 0, 1, 0, 1,
             IndexedRelationalMutation.REGISTRY_ABSENT,
             IndexedRelationalMutation.REGISTRY_BUILDING, 0, TRANSACTION_ID, 4, 5), commit));
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 1, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             4, 4, 1, 2, 1, 2,
@@ -798,13 +798,13 @@ final class IndexedRelationalWalCommitTest {
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     long hash = descriptorHash(descriptor);
     IndexedCommitResult commit = new IndexedCommitResult();
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             0, 4, 0, 1, 0, 1,
             IndexedRelationalMutation.REGISTRY_ABSENT,
             IndexedRelationalMutation.REGISTRY_BUILDING, 0, TRANSACTION_ID, 4, 5), commit));
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 1, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             4, 4, 1, 2, 1, 2,

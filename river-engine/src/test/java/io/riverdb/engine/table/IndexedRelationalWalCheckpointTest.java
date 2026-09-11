@@ -137,7 +137,7 @@ final class IndexedRelationalWalCheckpointTest {
           0, index + 1L, tuple, 0, tuple.remaining()));
     }
     requireOk(mutation.seal());
-    requireOk(commitRelationalQuiescent(reopened.store(), 
+    requireOk(commitRelationalQuiescent(reopened.store(),
         TRANSACTION_ID + 100, mutation, new IndexedCommitResult()));
     check(pageSet(reopened.store()).payloadKind(tupleRoot)
         == PageCodec.PAYLOAD_KIND_TUPLE_BTREE, "BUILDING tuple tree did not split");
@@ -152,7 +152,7 @@ final class IndexedRelationalWalCheckpointTest {
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_BUILDING, tupleRoot, 2, 2);
-    requireOk(commitRelationalQuiescent(reopened.store(), 
+    requireOk(commitRelationalQuiescent(reopened.store(),
         TRANSACTION_ID + 101, liveRootMutation(
             descriptor, hash, tupleRoot, 0, 2, 3, 2, 3,
             IndexedRelationalMutation.REGISTRY_BUILDING,
@@ -176,7 +176,7 @@ final class IndexedRelationalWalCheckpointTest {
     while (cleanupCursor < nextPage) {
       int resultingCursor = Math.min(
           nextPage, cleanupCursor + IndexedTupleGraphReclaimer.MAX_INSPECTED_PAGES);
-      requireOk(commitRelationalQuiescent(reopened.store(), 
+      requireOk(commitRelationalQuiescent(reopened.store(),
           transaction++, liveRootMutation(
               descriptor, hash, OWNER_OBJECT_ID, 1_000, 1_000,
               0, 0, generation, generation + 1, heapVersion, heapVersion + 1,
@@ -191,7 +191,7 @@ final class IndexedRelationalWalCheckpointTest {
     check(BTreeRootPage.freePageCount(
         pageSet(reopened.store()).currentPayloadUnchecked(2)) == nextPage - 4,
         "failed BUILDING graph was not reclaimed");
-    requireOk(commitRelationalQuiescent(reopened.store(), 
+    requireOk(commitRelationalQuiescent(reopened.store(),
         transaction, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, 1_000,
             0, 0, generation, generation + 1, heapVersion, heapVersion + 1,
@@ -247,7 +247,7 @@ final class IndexedRelationalWalCheckpointTest {
     wal = openWal(directory, true);
     reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    requireOk(commitRelationalQuiescent(reopened.store(), 
+    requireOk(commitRelationalQuiescent(reopened.store(),
         TRANSACTION_ID + 102, liveRootMutation(
             descriptor, descriptorHash(descriptor), 0, 0, 1, 2, 1, 2,
             IndexedRelationalMutation.REGISTRY_BUILDING,
@@ -324,7 +324,7 @@ final class IndexedRelationalWalCheckpointTest {
     long transaction = TRANSACTION_ID + 110;
     long generation = 1;
     long heap = 1;
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         transaction++, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000,
             0, 0, 0, generation, 0, heap,
@@ -342,7 +342,7 @@ final class IndexedRelationalWalCheckpointTest {
           created.store(), descriptor, tupleRoot, logicalRowId, tupleCount, value);
       int resultingRoot = (int) (prediction >>> 32);
       int resultingNext = (int) prediction;
-      requireOk(commitRelationalQuiescent(created.store(), 
+      requireOk(commitRelationalQuiescent(created.store(),
           transaction++, liveTupleInsertMutation(
               descriptor, hash, tupleRoot, resultingRoot, nextPage, resultingNext,
               generation, heap, logicalRowId, tupleCount, value),
@@ -354,7 +354,7 @@ final class IndexedRelationalWalCheckpointTest {
       logicalRowId += tupleCount;
     }
     int ownedPages = nextPage - BTreeRootPage.FIRST_REUSABLE_PAGE_ID;
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         transaction++, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000,
             tupleRoot, 0, generation, generation + 1, heap, heap + 1,
@@ -380,7 +380,7 @@ final class IndexedRelationalWalCheckpointTest {
       int before = freePages;
       int resultingCursor = Math.min(
           nextPage, cleanupCursor + IndexedTupleGraphReclaimer.MAX_INSPECTED_PAGES);
-      requireOk(commitRelationalQuiescent(reopened.store(), 
+      requireOk(commitRelationalQuiescent(reopened.store(),
           transaction++, liveRootMutation(
               descriptor, hash, OWNER_OBJECT_ID, 1_000, 1_000,
               0, 0, generation, generation + 1, heap, heap + 1,
@@ -406,7 +406,7 @@ final class IndexedRelationalWalCheckpointTest {
     wal = openWal(directory, true);
     reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    requireOk(commitRelationalQuiescent(reopened.store(), 
+    requireOk(commitRelationalQuiescent(reopened.store(),
         transaction++, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, 1_000,
             0, 0, generation, generation + 1, heap, heap + 1,
@@ -419,7 +419,7 @@ final class IndexedRelationalWalCheckpointTest {
     long secondHash = descriptorHash(second);
     int reusedRoot = BTreeRootPage.freePageHead(
         pageSet(reopened.store()).currentPayloadUnchecked(2));
-    requireOk(commitRelationalQuiescent(reopened.store(), 
+    requireOk(commitRelationalQuiescent(reopened.store(),
         transaction, liveRootMutation(
             second, secondHash, SECOND_OWNER_OBJECT_ID, 1_001,
             0, reusedRoot, 0, 1, heap, heap + 1,

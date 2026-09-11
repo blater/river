@@ -443,7 +443,7 @@ final class IndexedRelationalWalRecoveryTest {
         SqlTypeDescriptor.varchar(250)
     };
     long hash = descriptorHash(descriptor);
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 180, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000,
             0, 0, 0, 1, 0, 1,
@@ -457,7 +457,7 @@ final class IndexedRelationalWalRecoveryTest {
     check(nextPage > BTreeRootPage.FIRST_REUSABLE_PAGE_ID
             + IndexedTupleGraphReclaimer.MAX_INSPECTED_PAGES,
         "mid-DROP fixture did not leave an unreclaimed suffix");
-    requireOk(commitRelationalQuiescent(created.store(), 
+    requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 181, liveTupleInsertMutation(
             descriptor, hash, 0, tupleRoot, 4, nextPage, 1, 1, 1, tuples, 'w'),
         new IndexedCommitResult()));
@@ -505,7 +505,7 @@ final class IndexedRelationalWalRecoveryTest {
     while (cleanupCursor < nextPage) {
       int resultingCursor = Math.min(
           nextPage, cleanupCursor + IndexedTupleGraphReclaimer.MAX_INSPECTED_PAGES);
-      requireOk(commitRelationalQuiescent(reopened.store(), 
+      requireOk(commitRelationalQuiescent(reopened.store(),
           transaction++, liveRootMutation(
               descriptor, hash, OWNER_OBJECT_ID, 1_000, 1_000,
               0, 0, generation, generation + 1, heapVersion, heapVersion + 1,
@@ -517,7 +517,7 @@ final class IndexedRelationalWalRecoveryTest {
       heapVersion++;
       cleanupCursor = resultingCursor;
     }
-    requireOk(commitRelationalQuiescent(reopened.store(), 
+    requireOk(commitRelationalQuiescent(reopened.store(),
         transaction, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, 1_000,
             0, 0, generation, generation + 1, heapVersion, heapVersion + 1,
