@@ -35,4 +35,6 @@ cleanup failures retain the primary failure and every acquired resource is
 attempted. Credential-equivalent byte arrays are wiped after use, and client
 publication forces the security directory only after stage close. Draft
 slopwatch scores for all changed Java files are below 90; focused build and
-test results remain pending the shared build slot.
+test results remain pending the shared build slot. The shared file owner is
+named `RiverDaemonCredentialFiles`; a focused regression verifies that a stage
+close failure is returned and prevents the parent security force.

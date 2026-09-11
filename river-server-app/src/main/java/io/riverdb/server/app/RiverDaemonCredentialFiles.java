@@ -12,8 +12,8 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 /** Reads bounded credential files and always closes the acquired file handle. */
-final class RiverDaemonCredentialFileReader {
-  private RiverDaemonCredentialFileReader() {
+final class RiverDaemonCredentialFiles {
+  private RiverDaemonCredentialFiles() {
   }
 
   static StatusCode read(
@@ -76,3 +76,4 @@ final class RiverDaemonCredentialFileReader {
     return file.force(ForceMode.CONTENT_AND_METADATA);
   }
 }
+

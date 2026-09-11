@@ -62,7 +62,7 @@ final class RiverDaemonCredentialClientConfiguration {
       status = security.openFile(stageName, RiverOpenMode.CREATE_NEW, stageResult);
       if (status.isOk()) {
         stage = stageResult.file();
-        status = RiverDaemonCredentialFileReader.write(stage, recordBytes);
+        status = RiverDaemonCredentialFiles.write(stage, recordBytes);
         boolean targetExists = false;
         if (status.isOk()) {
           RiverFileResult target = new RiverFileResult();

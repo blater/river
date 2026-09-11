@@ -39,7 +39,7 @@ final class RiverDaemonCredentialLoadState {
     try {
       RiverDaemonCredentials.BytesResult manifestResult =
           new RiverDaemonCredentials.BytesResult();
-      StatusCode status = RiverDaemonCredentialFileReader.read(
+      StatusCode status = RiverDaemonCredentialFiles.read(
           security, RiverDaemonCredentialStorage.SECURITY_FILE,
           RiverDaemonCredentialManifest.MAX_BYTES,
           manifestResult);
@@ -83,12 +83,12 @@ final class RiverDaemonCredentialLoadState {
         new RiverDaemonCredentials.BytesResult();
     RiverDaemonCredentials.BytesResult certificateResult =
         new RiverDaemonCredentials.BytesResult();
-    status = RiverDaemonCredentialFileReader.read(generationDirectory, "token.bin",
+    status = RiverDaemonCredentialFiles.read(generationDirectory, "token.bin",
         RiverDaemonCredentials.TOKEN_BYTES, tokenResult);
-    if (status.isOk()) status = RiverDaemonCredentialFileReader.read(
+    if (status.isOk()) status = RiverDaemonCredentialFiles.read(
         generationDirectory, "server-private-key.pkcs8",
         RiverDaemonCredentialCertificate.PRIVATE_KEY_MAX_BYTES, privateResult);
-    if (status.isOk()) status = RiverDaemonCredentialFileReader.read(
+    if (status.isOk()) status = RiverDaemonCredentialFiles.read(
         generationDirectory, "server-certificate.der",
         RiverDaemonCredentialCertificate.CERTIFICATE_MAX_BYTES, certificateResult);
     token = tokenResult.value();

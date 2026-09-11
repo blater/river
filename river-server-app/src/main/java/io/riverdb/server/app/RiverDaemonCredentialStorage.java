@@ -102,13 +102,13 @@ final class RiverDaemonCredentialStorage {
       String generationName,
       byte[] privateKey,
       byte[] certificate) {
-    StatusCode status = RiverDaemonCredentialFileReader.writeChild(
+    StatusCode status = RiverDaemonCredentialFiles.writeChild(
         generation, "token.bin", material.token());
     if (!status.isOk()) return status;
-    status = RiverDaemonCredentialFileReader.writeChild(
+    status = RiverDaemonCredentialFiles.writeChild(
         generation, "server-private-key.pkcs8", privateKey);
     if (!status.isOk()) return status;
-    status = RiverDaemonCredentialFileReader.writeChild(
+    status = RiverDaemonCredentialFiles.writeChild(
         generation, "server-certificate.der", certificate);
     if (!status.isOk()) return status;
     DirectoryOperationResult forced = new DirectoryOperationResult();
@@ -120,7 +120,7 @@ final class RiverDaemonCredentialStorage {
     byte[] manifestBytes = RiverDaemonCredentialManifest.encode(
         material, incarnation, generationName, privateKey, certificate);
     try {
-      return RiverDaemonCredentialFileReader.writeChild(
+      return RiverDaemonCredentialFiles.writeChild(
           security, SECURITY_FILE, manifestBytes);
     } finally {
       Arrays.fill(manifestBytes, (byte) 0);
