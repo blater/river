@@ -28,7 +28,7 @@ final class RiverDaemonStopRequest {
   static Record parse(byte[] bytes) {
     if (bytes == null || bytes.length == 0 || bytes.length > MAX_RECORD_BYTES) return null;
     RiverDaemonRecordEnvelope.Envelope envelope =
-        RiverDaemonRecordEnvelope.decode(bytes, 7, FORMAT);
+        RiverDaemonRecordEnvelope.decodePadded(bytes, 7, FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {

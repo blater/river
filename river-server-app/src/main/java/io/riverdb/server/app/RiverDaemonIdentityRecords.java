@@ -14,7 +14,7 @@ final class RiverDaemonIdentityRecords {
 
   static InstanceRecord parseInstance(byte[] bytes) {
     RiverDaemonRecordEnvelope.Envelope envelope =
-        RiverDaemonRecordEnvelope.decode(bytes, 4, INSTANCE_FORMAT);
+        RiverDaemonRecordEnvelope.decodePadded(bytes, 4, INSTANCE_FORMAT);
     if (envelope == null || !"initial-wal-generation=1".equals(envelope.fields[3])) return null;
     try {
       long high = canonicalLong(value(envelope.fields[1], "database-incarnation-high="));
@@ -27,7 +27,7 @@ final class RiverDaemonIdentityRecords {
 
   static LockRecord parseLock(byte[] bytes) {
     RiverDaemonRecordEnvelope.Envelope envelope =
-        RiverDaemonRecordEnvelope.decode(bytes, 7, LOCK_FORMAT);
+        RiverDaemonRecordEnvelope.decodePadded(bytes, 7, LOCK_FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
@@ -48,7 +48,7 @@ final class RiverDaemonIdentityRecords {
 
   static BootstrapRecord parseBootstrap(byte[] bytes) {
     RiverDaemonRecordEnvelope.Envelope envelope =
-        RiverDaemonRecordEnvelope.decode(bytes, 10, BOOTSTRAP_FORMAT);
+        RiverDaemonRecordEnvelope.decodePadded(bytes, 10, BOOTSTRAP_FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {

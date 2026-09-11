@@ -23,18 +23,35 @@ final class RiverDaemonRecordEnvelope {
     return body.toString();
   }
 
-  static Envelope decode(byte[] bytes, int fieldCount, String format) {
+  static Envelope decodePadded(byte[] bytes, int fieldCount, String format) {
     if (bytes == null) return null;
+    int length = paddedLength(bytes);
+    return decode(bytes, length, fieldCount, format, "\nrecord-sha256=", 1);
+  }
+
+  static Envelope decodeExact(byte[] bytes, int fieldCount, String format) {
+    if (bytes == null) return null;
+    return decode(bytes, bytes.length, fieldCount, format, "record-sha256=", 0);
+  }
+
+  private static int paddedLength(byte[] bytes) {
     int length = bytes.length;
     for (int index = 0; index < bytes.length; index++) {
       if (bytes[index] == 0) {
         for (int tail = index; tail < bytes.length; tail++) {
-          if (bytes[tail] != 0) return null;
+          if (bytes[tail] != 0) return -1;
         }
         length = index;
         break;
       }
     }
+    return length;
+  }
+
+  private static Envelope decode(
+      byte[] bytes, int length, int fieldCount, String format,
+      String marker, int markerPrefixLength) {
+    if (length < 0) return null;
     String text;
     try {
       text = StandardCharsets.UTF_8.newDecoder()
@@ -44,9 +61,10 @@ final class RiverDaemonRecordEnvelope {
     } catch (CharacterCodingException failure) {
       return null;
     }
-    int checksumStart = text.indexOf("\nrecord-sha256=");
+    int checksumStart = text.indexOf(marker);
     if (checksumStart < 0) return null;
-    int end = checksumStart + 1;
+    int end = checksumStart + markerPrefixLength;
+    if (end <= 0) return null;
     String prefix = text.substring(0, end);
     if (!prefix.endsWith("\n")) return null;
     String[] fields = prefix.substring(0, prefix.length() - 1).split("\\n", -1);

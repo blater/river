@@ -54,7 +54,7 @@ final class RiverDaemonRuntimeCodec {
 
   static RiverDaemonRuntimeModel.RuntimeRecord parseRuntime(byte[] bytes) {
     RiverDaemonRecordEnvelope.Envelope envelope =
-        RiverDaemonRecordEnvelope.decode(bytes, 12, RUNTIME_FORMAT);
+        RiverDaemonRecordEnvelope.decodeExact(bytes, 12, RUNTIME_FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
@@ -77,7 +77,7 @@ final class RiverDaemonRuntimeCodec {
 
   static RiverDaemonRuntimeModel.ReadyRecord parseReady(byte[] bytes) {
     RiverDaemonRecordEnvelope.Envelope envelope =
-        RiverDaemonRecordEnvelope.decode(bytes, 16, READY_FORMAT);
+        RiverDaemonRecordEnvelope.decodeExact(bytes, 16, READY_FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
