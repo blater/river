@@ -2,6 +2,7 @@ package io.riverdb.engine.table;
 
 
 import static io.riverdb.engine.table.IndexedRelationalWalStorageFixtures.*;
+import static io.riverdb.engine.table.IndexedRelationalWalRegistryFixtures.*;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;

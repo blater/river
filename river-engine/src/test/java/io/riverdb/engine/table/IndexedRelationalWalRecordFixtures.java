@@ -250,9 +250,9 @@ final class IndexedRelationalWalRecordFixtures {
   }
 
   static final class RecordingReplay implements IndexedRelationalWalReplay {
-    private int applications;
-    private int mutations;
-    private long commitSequence;
+    int applications;
+    int mutations;
+    long commitSequence;
 
     @Override
     public StatusCode apply(
