@@ -1,6 +1,6 @@
 ---
 id: tic-3a4f
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,15 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-jdbc` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Work notes
+
+- Moved the streaming SQL/reopen, bigint comparison, and long catalog lifecycle
+  suites into cohesive JDBC test classes.
+- Added `RiverDriverTestFixture` to own embedded database/server lifetime and
+  authenticated client setup, including durable reopen and failure cleanup.
+- Baseline `RiverDriverTest.java`: 166.674.
+- After unchanged full scan: all five affected files are below 90
+  (`51.497`, `54.811`, `38.074`, `34.330`, and `10.352`); the scan analyzed
+  2,526 files. Focused Gradle checks remain pending the lead's serialized build
+  slot.
