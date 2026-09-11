@@ -9,6 +9,11 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+Current user-directed queue (M5): promote the reviewed first62 integration,
+then complete [`tic-9e2f`](tickets/tic-9e2f.md), followed by
+[`tic-055b`](tickets/tic-055b.md). Existing native compiler failures on unchanged
+master are tracked separately in [`tic-ae17`](tickets/tic-ae17.md).
+
 Current campaign: [tic-c8d1](tickets/tic-c8d1.md) brings every scored source file,
 including tests, below 90. Its 82 file tickets carry brief approach plans, Luna/high
 implementation, Sol/high review and light per-ticket performance checks. The lead

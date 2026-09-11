@@ -236,3 +236,12 @@ tic-4fd6, tic-5049 and tic-3a3d. Their combined integration checkpoint, master
 merge, tag and push remain pending. Unfinished 055b and 9e2f source work is parked
 on separate branches; the 6a7f authorization hold is unchanged. No new full-scan
 result is claimed beyond the published first51 scan.
+
+
+Resumed at the user's request on the Apple M5 platform. The eleven-ticket
+integration is accepted at `perf-checkpoint-20260911-score-first62-m5`: clean
+checks, unchanged complete scan and independent integration review passed.
+All 62 delivered tickets are closed; 20 source files remain at or above 90
+out of 2,641, with no new offenders. Native compiler failures reproduced on
+unchanged master are tracked separately in `tic-ae17`; native certification
+is outstanding. Continue with `tic-9e2f`, then `tic-055b`, as directed.

@@ -1,6 +1,6 @@
 ---
 id: tic-0cd4
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -52,3 +52,17 @@ capture and zero remaining transactions/locks/waits. Two in-flight transactions
 at cutoff were reconciled by the normal drain. This is consistent with the
 preceding same-configuration 468.500 sample; no speedup claim. Evidence:
 `/private/tmp/river-score-20260911/tic-0cd4-candidate` and adjacent `.log`.
+
+
+## M5 integration promotion
+
+Accepted in the eleven-ticket integration at source `2c5dd377`, checkpoint
+`perf-checkpoint-20260911-score-first62-m5`. Current-platform clean checks
+passed (1,952 tests, zero failures/errors, 18 existing skips), all touched files
+score below 90, and independent integration review found no blocking issue.
+The adjacent master/candidate/candidate/master JVM series passed at
+562.82/526.70/501.22/422.15 TPS with valid invariants, zero failed/unknown
+outcomes and graceful cleanup. No repeated candidate regression was observed.
+Full evidence is in `docs/performance-checkpoints.md`. Native compilation
+remains blocked on unchanged master by the separately tracked `tic-ae17`;
+this acceptance certifies the JVM path, not native execution.

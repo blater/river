@@ -1,6 +1,6 @@
 ---
 id: tic-f85e
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -66,3 +66,17 @@ time in the adjacent pair, nearly identical lock-release time and faster candida
 WAL force. Overlapping stable/candidate ranges show no repeatable code regression;
 this is diagnostic acceptance, not a speedup claim. Future Java samples explicitly
 select the JDK. No production change was made to compensate for measurement noise.
+
+
+## M5 integration promotion
+
+Accepted in the eleven-ticket integration at source `2c5dd377`, checkpoint
+`perf-checkpoint-20260911-score-first62-m5`. Current-platform clean checks
+passed (1,952 tests, zero failures/errors, 18 existing skips), all touched files
+score below 90, and independent integration review found no blocking issue.
+The adjacent master/candidate/candidate/master JVM series passed at
+562.82/526.70/501.22/422.15 TPS with valid invariants, zero failed/unknown
+outcomes and graceful cleanup. No repeated candidate regression was observed.
+Full evidence is in `docs/performance-checkpoints.md`. Native compilation
+remains blocked on unchanged master by the separately tracked `tic-ae17`;
+this acceptance certifies the JVM path, not native execution.

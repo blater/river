@@ -1,6 +1,6 @@
 ---
 id: tic-4fd6
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -59,3 +59,17 @@ outcomes, graceful shutdown and inactive service afterward. The longer pair
 reverses the short-run throughput difference with nearly identical p99 and
 retries per commit. No repeatable regression was established; accepted as a
 behavior-preserving refactor, with no speedup claim.
+
+
+## M5 integration promotion
+
+Accepted in the eleven-ticket integration at source `2c5dd377`, checkpoint
+`perf-checkpoint-20260911-score-first62-m5`. Current-platform clean checks
+passed (1,952 tests, zero failures/errors, 18 existing skips), all touched files
+score below 90, and independent integration review found no blocking issue.
+The adjacent master/candidate/candidate/master JVM series passed at
+562.82/526.70/501.22/422.15 TPS with valid invariants, zero failed/unknown
+outcomes and graceful cleanup. No repeated candidate regression was observed.
+Full evidence is in `docs/performance-checkpoints.md`. Native compilation
+remains blocked on unchanged master by the separately tracked `tic-ae17`;
+this acceptance certifies the JVM path, not native execution.
