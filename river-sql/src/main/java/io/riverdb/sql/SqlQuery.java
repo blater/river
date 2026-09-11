@@ -129,10 +129,11 @@ public final class SqlQuery {
     if (graph.count() > 0) {
       StatusCode graphStatus = validateNestedGraph();
       if (!graphStatus.isOk()) return graphStatus;
-      graphStatus = validNestedChildren();
+      graphStatus = validNestedChildren(sourceBlockCount);
       if (!graphStatus.isOk()) return graphStatus;
     }
-    if (hasCardinalityBlock()) {
+    if (SqlQueryPipelineRouting.requiresCardinalityPipeline(
+        graph, blocks, sourceBlockCount)) {
       StatusCode status = derivedCompiler.compilePipeline(destination);
       blockPipeline = status.isOk();
       return status;
@@ -197,33 +198,6 @@ public final class SqlQuery {
         ? blocks[0].expandSelectAllFrom(blocks[sourceBlock]) : StatusCode.OK;
   }
 
-  private boolean hasCardinalityBlock() {
-    if (graph.count() > 0 && sourceBlockCount > 1) return true;
-    for (int index = 0; index < sourceBlockCount; index++) {
-      if (index > 0
-          && (blocks[index].isOrdered()
-              || blocks[index].rowLimit() != Long.MAX_VALUE)) return true;
-      SqlCommandType type = blocks[index].type();
-      if (type == SqlCommandType.JOIN_SCAN
-          || type == SqlCommandType.DISTINCT_SCAN
-          || type == SqlCommandType.COUNT
-          || type == SqlCommandType.COUNT_VALUE
-          || type == SqlCommandType.COUNT_DISTINCT
-          || type == SqlCommandType.SUM
-          || type == SqlCommandType.AVG
-          || type == SqlCommandType.MIN
-          || type == SqlCommandType.MAX
-          || type == SqlCommandType.GROUP_COUNT
-          || type == SqlCommandType.GROUP_COUNT_VALUE
-          || type == SqlCommandType.GROUP_COUNT_DISTINCT
-          || type == SqlCommandType.GROUP_SUM
-          || type == SqlCommandType.GROUP_AVG
-          || type == SqlCommandType.GROUP_MIN
-          || type == SqlCommandType.GROUP_MAX) return true;
-    }
-    return false;
-  }
-
   public StatusCode compileView(
       SqlCommand outer,
       SqlCommand view,
@@ -268,15 +242,11 @@ public final class SqlQuery {
     }
     StatusCode graphStatus = validateNestedGraph();
     if (!graphStatus.isOk()) return graphStatus;
-    StatusCode children = validNestedChildren();
+    StatusCode children = validNestedChildren(sourceBlockCount);
     if (!children.isOk()) return children;
     destination.reset();
-    blockPipeline = SqlNestedPipelineRouting.required(graph, blocks, blockCount);
+    blockPipeline = SqlQueryPipelineRouting.requiresNestedPipeline(graph, blocks, blockCount);
     return destination.copyBlockFrom(blocks[0]);
-  }
-
-  private StatusCode validNestedChildren() {
-    return validNestedChildren(sourceBlockCount);
   }
 
   private StatusCode validNestedChildren(int firstBlock) {
