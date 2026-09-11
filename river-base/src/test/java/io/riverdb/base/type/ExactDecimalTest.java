@@ -87,20 +87,20 @@ final class ExactDecimalTest {
     int right = SqlTypeDescriptor.decimal(4, 3);
     assertEquals(
         SqlTypeDescriptor.decimal(5, 3),
-        ExactDecimal.addResultDescriptor(left, right));
+        ExactDecimalDescriptors.addResultDescriptor(left, right));
     assertEquals(
         SqlTypeDescriptor.decimal(7, 5),
-        ExactDecimal.multiplyResultDescriptor(left, right));
+        ExactDecimalDescriptors.multiplyResultDescriptor(left, right));
     assertEquals(
         SqlTypeDescriptor.decimal(11, 7),
-        ExactDecimal.divideResultDescriptor(left, right));
+        ExactDecimalDescriptors.divideResultDescriptor(left, right));
     assertEquals(
         SqlTypeDescriptor.decimal(4, 3),
-        ExactDecimal.remainderResultDescriptor(left, right));
+        ExactDecimalDescriptors.remainderResultDescriptor(left, right));
 
     ExactDecimal.LongValue result = new ExactDecimal.LongValue();
     ExactDecimal.WideScratch scratch = new ExactDecimal.WideScratch();
-    int add = ExactDecimal.addResultDescriptor(
+    int add = ExactDecimalDescriptors.addResultDescriptor(
         SqlTypeDescriptor.decimal(3, 2),
         SqlTypeDescriptor.decimal(4, 3));
     assertEquals(StatusCode.OK, ExactDecimal.add(
@@ -114,7 +114,7 @@ final class ExactDecimalTest {
         scratch));
     assertEquals(3_545, result.value);
 
-    int product = ExactDecimal.multiplyResultDescriptor(
+    int product = ExactDecimalDescriptors.multiplyResultDescriptor(
         SqlTypeDescriptor.decimal(3, 1),
         SqlTypeDescriptor.decimal(3, 2));
     assertEquals(StatusCode.OK, ExactDecimal.multiply(
@@ -127,7 +127,7 @@ final class ExactDecimalTest {
         scratch));
     assertEquals(25_000, result.value);
 
-    int quotient = ExactDecimal.divideResultDescriptor(
+    int quotient = ExactDecimalDescriptors.divideResultDescriptor(
         SqlTypeDescriptor.decimal(3, 2),
         SqlTypeDescriptor.decimal(2, 1));
     assertEquals(StatusCode.OK, ExactDecimal.divide(
@@ -140,7 +140,7 @@ final class ExactDecimalTest {
         scratch));
     assertEquals(125_000, result.value);
 
-    int remainder = ExactDecimal.remainderResultDescriptor(
+    int remainder = ExactDecimalDescriptors.remainderResultDescriptor(
         SqlTypeDescriptor.decimal(3, 2),
         SqlTypeDescriptor.decimal(2, 1));
     assertEquals(StatusCode.OK, ExactDecimal.remainder(
@@ -219,11 +219,11 @@ final class ExactDecimalTest {
               right,
               rightDescriptor,
               false,
-              ExactDecimal.addResultDescriptor(leftDescriptor, rightDescriptor),
+              ExactDecimalDescriptors.addResultDescriptor(leftDescriptor, rightDescriptor),
               result,
               scratch),
           leftDecimal.add(rightDecimal),
-          ExactDecimal.addResultDescriptor(leftDescriptor, rightDescriptor),
+          ExactDecimalDescriptors.addResultDescriptor(leftDescriptor, rightDescriptor),
           result,
           iteration,
           "add");
@@ -234,11 +234,11 @@ final class ExactDecimalTest {
               right,
               rightDescriptor,
               true,
-              ExactDecimal.addResultDescriptor(leftDescriptor, rightDescriptor),
+              ExactDecimalDescriptors.addResultDescriptor(leftDescriptor, rightDescriptor),
               result,
               scratch),
           leftDecimal.subtract(rightDecimal),
-          ExactDecimal.addResultDescriptor(leftDescriptor, rightDescriptor),
+          ExactDecimalDescriptors.addResultDescriptor(leftDescriptor, rightDescriptor),
           result,
           iteration,
           "subtract");
@@ -248,17 +248,17 @@ final class ExactDecimalTest {
               leftDescriptor,
               right,
               rightDescriptor,
-              ExactDecimal.multiplyResultDescriptor(leftDescriptor, rightDescriptor),
+              ExactDecimalDescriptors.multiplyResultDescriptor(leftDescriptor, rightDescriptor),
               result,
               scratch),
           leftDecimal.multiply(rightDecimal),
-          ExactDecimal.multiplyResultDescriptor(leftDescriptor, rightDescriptor),
+          ExactDecimalDescriptors.multiplyResultDescriptor(leftDescriptor, rightDescriptor),
           result,
           iteration,
           "multiply");
       if (right != 0) {
         int quotientDescriptor =
-            ExactDecimal.divideResultDescriptor(leftDescriptor, rightDescriptor);
+            ExactDecimalDescriptors.divideResultDescriptor(leftDescriptor, rightDescriptor);
         assertArithmetic(
             ExactDecimal.divide(
                 left,
@@ -277,7 +277,7 @@ final class ExactDecimalTest {
             iteration,
             "divide");
         int remainderDescriptor =
-            ExactDecimal.remainderResultDescriptor(leftDescriptor, rightDescriptor);
+            ExactDecimalDescriptors.remainderResultDescriptor(leftDescriptor, rightDescriptor);
         assertArithmetic(
             ExactDecimal.remainder(
                 left,
@@ -301,7 +301,7 @@ final class ExactDecimalTest {
 
       int targetScale = random.nextInt(
           SqlTypeDescriptor.parameterOne(leftDescriptor) + 1);
-      int targetDescriptor = ExactDecimal.quantizedDescriptor(leftDescriptor, targetScale);
+      int targetDescriptor = ExactDecimalDescriptors.quantizedDescriptor(leftDescriptor, targetScale);
       if (targetDescriptor != 0) {
         assertArithmetic(
             ExactDecimal.quantize(

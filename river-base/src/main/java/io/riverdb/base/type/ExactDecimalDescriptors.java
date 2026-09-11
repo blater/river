@@ -1,11 +1,31 @@
 package io.riverdb.base.type;
 
 /** SQL result-shape rules for exact numeric operations. */
-final class ExactDecimalDescriptors {
+public final class ExactDecimalDescriptors {
   private ExactDecimalDescriptors() {
   }
 
-  static int binaryResult(int left, int right, int operation) {
+  public static int addResultDescriptor(int left, int right) {
+    return binaryResult(left, right, 0);
+  }
+
+  public static int multiplyResultDescriptor(int left, int right) {
+    return binaryResult(left, right, 1);
+  }
+
+  public static int divideResultDescriptor(int left, int right) {
+    return binaryResult(left, right, 2);
+  }
+
+  public static int remainderResultDescriptor(int left, int right) {
+    return binaryResult(left, right, 3);
+  }
+
+  public static int quantizedDescriptor(int source, int targetScale) {
+    return quantized(source, targetScale);
+  }
+
+  private static int binaryResult(int left, int right, int operation) {
     if (!exactNumeric(left) || !exactNumeric(right)) {
       return 0;
     }

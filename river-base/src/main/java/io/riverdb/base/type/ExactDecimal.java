@@ -46,26 +46,6 @@ public final class ExactDecimal {
         && unscaled < POWERS_OF_TEN[precision];
   }
 
-  public static int addResultDescriptor(int left, int right) {
-    return ExactDecimalDescriptors.binaryResult(left, right, 0);
-  }
-
-  public static int multiplyResultDescriptor(int left, int right) {
-    return ExactDecimalDescriptors.binaryResult(left, right, 1);
-  }
-
-  public static int divideResultDescriptor(int left, int right) {
-    return ExactDecimalDescriptors.binaryResult(left, right, 2);
-  }
-
-  public static int remainderResultDescriptor(int left, int right) {
-    return ExactDecimalDescriptors.binaryResult(left, right, 3);
-  }
-
-  public static int quantizedDescriptor(int source, int targetScale) {
-    return ExactDecimalDescriptors.quantized(source, targetScale);
-  }
-
   public static StatusCode negate(
       long value, int descriptor, LongValue result) {
     if (result == null || !exactNumeric(descriptor)) {
