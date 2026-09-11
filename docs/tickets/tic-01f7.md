@@ -1,6 +1,6 @@
 ---
 id: tic-01f7
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,11 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-engine` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Review notes
+
+Removed the redundant four-argument `decodeForTable` forwarding overload.
+Its production cleanup caller and focused codec tests now call the canonical
+five-argument method with `null` for the optional column name. The canonical
+method still owns scratch reset, validation, conflict, corruption, and result
+status behavior. The codec score is 91.625 before and 89.521 after.
