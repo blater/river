@@ -21,8 +21,8 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   private final CommandResult completion = new CommandResult();
   private char[] textCharacters = RiverJdbcTextScratch.EMPTY;
   private final RiverResultSetMetaData metadata;
-  private final RiverJdbcValueConversion valueConversion =
-      new RiverJdbcValueConversion(this);
+  private final RiverJdbcScalarConversion scalarConversion =
+      new RiverJdbcScalarConversion(this);
   private int rowNumber;
   private boolean rowAvailable;
   private boolean completed;
@@ -92,72 +92,72 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public String getString(int column) throws SQLException {
-    return valueConversion.getString(column);
+    return scalarConversion.getString(column);
   }
 
   @Override
   public boolean getBoolean(int column) throws SQLException {
-    return valueConversion.getBoolean(column);
+    return scalarConversion.getBoolean(column);
   }
 
   @Override
   public byte getByte(int column) throws SQLException {
-    return valueConversion.getByte(column);
+    return scalarConversion.getByte(column);
   }
 
   @Override
   public short getShort(int column) throws SQLException {
-    return valueConversion.getShort(column);
+    return scalarConversion.getShort(column);
   }
 
   @Override
   public int getInt(int column) throws SQLException {
-    return valueConversion.getInt(column);
+    return scalarConversion.getInt(column);
   }
 
   @Override
   public long getLong(int column) throws SQLException {
-    return valueConversion.getLong(column);
+    return scalarConversion.getLong(column);
   }
 
   @Override
   public float getFloat(int column) throws SQLException {
-    return valueConversion.getFloat(column);
+    return scalarConversion.getFloat(column);
   }
 
   @Override
   public double getDouble(int column) throws SQLException {
-    return valueConversion.getDouble(column);
+    return scalarConversion.getDouble(column);
   }
 
   @Override
   public BigDecimal getBigDecimal(int column) throws SQLException {
-    return valueConversion.getBigDecimal(column);
+    return scalarConversion.getBigDecimal(column);
   }
 
   @Override
   public Object getObject(int column) throws SQLException {
-    return valueConversion.getObject(column);
+    return RiverJdbcObjectConversion.getObject(scalarConversion, column);
   }
 
   @Override
   public <T> T getObject(int column, Class<T> type) throws SQLException {
-    return valueConversion.getObject(column, type);
+    return RiverJdbcObjectConversion.getObject(scalarConversion, column, type);
   }
 
   @Override
   public Date getDate(int column) throws SQLException {
-    return valueConversion.getDate(column);
+    return RiverJdbcObjectConversion.getDate(scalarConversion, column);
   }
 
   @Override
   public Time getTime(int column) throws SQLException {
-    return valueConversion.getTime(column);
+    return RiverJdbcObjectConversion.getTime(scalarConversion, column);
   }
 
   @Override
   public Timestamp getTimestamp(int column) throws SQLException {
-    return valueConversion.getTimestamp(column);
+    return RiverJdbcObjectConversion.getTimestamp(scalarConversion, column);
   }
 
   @Override
