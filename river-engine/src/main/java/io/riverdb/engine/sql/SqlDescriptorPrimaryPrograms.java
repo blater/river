@@ -59,12 +59,12 @@ final class SqlDescriptorPrimaryPrograms {
       return StatusCode.CONFLICT;
     }
     int symbol = (int) where.programOperand(leaf, columnProgram, 0);
-    CharSequence qualifier = command.predicateSymbolTable(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
     if (qualifier.length() != 0
         && !SqlDescriptorPrimaryPredicate.same(qualifier, command.tableName())) {
       return StatusCode.CONFLICT;
     }
-    int column = table.findColumn(command.predicateSymbolName(symbol));
+    int column = table.findColumn(command.projections().symbolName(symbol));
     int part = partForColumn(column);
     if (part < 0 || assigned[part]) return StatusCode.CONFLICT;
     StatusCode status = values.assign(column,

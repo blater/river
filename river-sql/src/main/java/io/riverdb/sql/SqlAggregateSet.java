@@ -5,7 +5,9 @@ import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Command-owned selected-output mapping for a deduplicated aggregate set. */
-final class SqlAggregateSet {
+public final class SqlAggregateSet {
+  SqlAggregateSet() { }
+
   static final int MAXIMUM_INVOCATIONS = SqlShapeLimits.MAX_AGGREGATES;
 
   int[] kinds = new int[8];
@@ -76,11 +78,11 @@ final class SqlAggregateSet {
     return -1;
   }
 
-  int invocationCount() { return invocationCount; }
-  int outputCount() { return outputCount; }
-  int kind(int invocation) { return kinds[invocation]; }
-  int operandProjection(int invocation) { return operandProjections[invocation]; }
-  int outputInvocation(int output) {
-    return outputInvocations[output];
+  public int invocationCount() { return invocationCount; }
+  public int outputCount() { return outputCount; }
+  public int kind(int invocation) { return invocation >= 0 && invocation < invocationCount ? kinds[invocation] : 0; }
+  public int operandProjection(int invocation) { return invocation >= 0 && invocation < invocationCount ? operandProjections[invocation] : -1; }
+  public int outputInvocation(int output) {
+    return output >= 0 && output < outputCount ? outputInvocations[output] : -1;
   }
 }

@@ -224,11 +224,11 @@ final class BoundSqlQuery {
         tableName.copyFrom(source.tableName());
         tableAlias.copyFrom(source.tableAlias());
       }
-      orderColumnName.copyFrom(source.orderColumnName());
+      orderColumnName.copyFrom(source.orderBy().name(0));
       columnCount = source.columnCount();
       rowLimit = source.rowLimit();
       selectAll = source.isSelectAll();
-      ordered = source.isOrdered();
+      ordered = (source.orderBy().count() > 0);
       descending = source.isDescendingOrder();
       return StatusCode.OK;
     }

@@ -12,7 +12,7 @@ final class SqlBlockAggregateInvocationBinder {
 
   static StatusCode bind(
       SqlCommand command, BoundSqlStatement bound, int invocation, int lane, int input) {
-    int kind = command.aggregateKind(invocation);
+    int kind = command.aggregates().kind(invocation);
     StatusCode status = validate(command, invocation, kind, input);
     int result = status.isOk()
         ? SqlProjectionBinder.aggregateResultDescriptor(kind, input) : 0;
@@ -23,7 +23,7 @@ final class SqlBlockAggregateInvocationBinder {
 
   private static StatusCode validate(
       SqlCommand command, int invocation, int kind, int descriptor) {
-    int lane = command.aggregateOperandProjection(invocation);
+    int lane = command.aggregates().operandProjection(invocation);
     if (kind == SqlAggregateKind.COUNT || kind == SqlAggregateKind.COUNT_DISTINCT) {
       return kind == SqlAggregateKind.COUNT_DISTINCT
           && (lane < 0 || !command.aggregateOperandExpression(lane).hasColumnReference())

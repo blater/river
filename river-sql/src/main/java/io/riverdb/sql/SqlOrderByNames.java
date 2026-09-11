@@ -21,13 +21,13 @@ final class SqlOrderByNames {
 
   private static boolean grouped(
       SqlCommand command, CharSequence qualifier, CharSequence name) {
-    for (int group = 0; group < command.groupExpressionCount(); group++) {
-      SqlScalarExpression expression = command.groupExpression(group);
+    for (int group = 0; group < command.grouping().count(); group++) {
+      SqlScalarExpression expression = command.grouping().expression(group);
       if (expression == null || !expression.isDirectColumnReference()) continue;
       int symbol = (int) expression.operand(0);
-      if (same(command.projectionSymbolName(symbol), name)
+      if (same(command.projections().symbolName(symbol), name)
           && (qualifier.length() == 0
-              || same(command.projectionSymbolTable(symbol), qualifier))) return true;
+              || same(command.projections().symbolTable(symbol), qualifier))) return true;
     }
     return false;
   }

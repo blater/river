@@ -6,6 +6,15 @@ import io.riverdb.base.error.StatusCode;
 final class SqlCommandQueryState {
   private SqlCommandQueryState() { }
 
+  static StatusCode copyBlock(SqlCommand command, SqlCommand source) {
+    if (source == null || !source.isAvailable()) {
+      command.reset();
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = copy(command, source);
+    return status.isOk() ? command.finish() : status;
+  }
+
   static StatusCode expandSelectAll(SqlCommand command, SqlCommand source) {
     return SqlSelectAllExpansion.expand(command, source);
   }

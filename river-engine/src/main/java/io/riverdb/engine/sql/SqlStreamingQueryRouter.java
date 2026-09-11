@@ -54,7 +54,7 @@ final class SqlStreamingQueryRouter {
       StatusCode status = queries.resolveUniversalJoin(bound.joinContext(0));
       if (!status.isOk()) return status;
       if (queries.universalJoinMatched()) {
-        if (bound.query.edgeCount() == 0 && !bound.command.isOrdered()) {
+        if (bound.query.edgeCount() == 0 && !(bound.command.orderBy().count() > 0)) {
           return bindings.universalJoin();
         }
         status = queries.releaseUniversalJoin();

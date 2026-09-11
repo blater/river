@@ -27,7 +27,7 @@ final class SqlTableKeyPartParser {
   StatusCode append(SqlCommand command, int count) {
     StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < count; index++) {
-      status = command.addTableConstraintPart(parts[index], null);
+      status = command.tableConstraints.addPart(parts[index], null);
     }
     return status;
   }
@@ -39,7 +39,7 @@ final class SqlTableKeyPartParser {
     while (status.isOk() && count < locals) {
       target.reset();
       status = input.identifier(sql, target);
-      if (status.isOk()) status = command.addTableConstraintPart(parts[count], target);
+      if (status.isOk()) status = command.tableConstraints.addPart(parts[count], target);
       count++;
       if (count < locals && !input.consumeCharacter(sql, ',')) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;

@@ -37,10 +37,10 @@ final class SqlDescriptorSetShape {
 
   StatusCode prepare(
       SqlCommand command, TableDescriptor table, SqlPhysicalPlan plan) {
-    grouped = command.groupExpressionCount() > 0;
+    grouped = command.grouping().count() > 0;
     if (!valid(command)) return StatusCode.FEATURE_NOT_SUPPORTED;
-    keyCount = grouped ? command.groupExpressionCount() : command.columnCount();
-    aggregateOutputs = grouped ? command.aggregateOutputCount() : 0;
+    keyCount = grouped ? command.grouping().count() : command.columnCount();
+    aggregateOutputs = grouped ? command.aggregates().outputCount() : 0;
     groupOutputs = grouped ? command.columnCount() - aggregateOutputs : keyCount;
     int resultCount = groupOutputs + aggregateOutputs;
     StatusCode status = reserve(Math.max(keyCount, resultCount));
@@ -58,8 +58,8 @@ final class SqlDescriptorSetShape {
     }
     if (grouped) status = aggregateShape.prepare(command, table, materialization);
     for (int output = 0; status.isOk() && grouped
-        && output < command.aggregateOutputCount(); output++) {
-      int invocation = command.aggregateOutputInvocation(output);
+        && output < command.aggregates().outputCount(); output++) {
+      int invocation = command.aggregates().outputInvocation(output);
       storage.aggregates[output] = invocation;
       storage.descriptors[groupOutputs + output] =
           aggregateShape.bound().resultDescriptor(invocation);
@@ -95,8 +95,8 @@ final class SqlDescriptorSetShape {
     if (command.type() == SqlCommandType.DISTINCT_SCAN) {
       return command.columnCount() > 0 && !command.isSelectAll();
     }
-    return command.groupExpressionCount() > 0
-        && command.columnCount() >= command.aggregateOutputCount();
+    return command.grouping().count() > 0
+        && command.columnCount() >= command.aggregates().outputCount();
   }
 
 }

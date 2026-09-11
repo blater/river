@@ -32,7 +32,7 @@ final class SqlStoredViewPolicy {
     return admittedType(command.type())
         && !command.isSelectAll()
         && command.columnCount() > 0
-        && !command.isOrdered()
+        && !(command.orderBy().count() > 0)
         && command.rowLimit() == Long.MAX_VALUE;
   }
 

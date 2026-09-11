@@ -63,10 +63,6 @@ final class SqlCommandColumnConstraints {
     }
   }
 
-  void markVarchar(int columnCount, int maximumScalars) {
-    markType(columnCount, SqlTypeDescriptor.varchar(maximumScalars));
-  }
-
   void markType(int columnCount, int descriptor) {
     if (columnCount > 0 && SqlTypeDescriptor.isValid(descriptor)) {
       columnTypeDescriptors[columnCount - 1] = descriptor;

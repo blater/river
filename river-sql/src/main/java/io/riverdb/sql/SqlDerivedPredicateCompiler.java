@@ -54,15 +54,15 @@ final class SqlDerivedPredicateCompiler {
   }
 
   StatusCode copyOrder(SqlCommand root, SqlCommand destination) {
-    if (!root.isOrdered()) return StatusCode.OK;
+    if (!(root.orderBy().count() > 0)) return StatusCode.OK;
     int projection = SqlDerivedColumnResolver.outputIndex(
-        root, root.orderColumnName());
+        root, root.orderBy().name(0));
     if (projection >= 0
         && !destination.projectionExpression(projection).isDirectColumnReference()) {
-      destination.writableOrderColumnName().copyFrom(root.orderColumnName());
+      destination.writableOrderColumnName().copyFrom(root.orderBy().name(0));
     } else {
       CharSequence ordered = projection >= 0
-          ? root.columnName(projection) : root.orderColumnName();
+          ? root.columnName(projection) : root.orderBy().name(0);
       int resolved = columns.copy(
           0, ordered, destination.writableOrderColumnName());
       if (resolved != 0) return resolutionStatus(resolved);

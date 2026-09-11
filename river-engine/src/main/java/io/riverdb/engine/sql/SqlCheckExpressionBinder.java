@@ -78,8 +78,8 @@ final class SqlCheckExpressionBinder {
       SqlScalarExpression expression,
       int node) {
     int symbol = (int) expression.operand(node);
-    CharSequence table = command.projectionSymbolTable(symbol);
-    CharSequence name = command.projectionSymbolName(symbol);
+    CharSequence table = command.projections().symbolTable(symbol);
+    CharSequence name = command.projections().symbolName(symbol);
     if (table == null || table.length() != 0 || name == null
         || schema.find(name) != owner) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

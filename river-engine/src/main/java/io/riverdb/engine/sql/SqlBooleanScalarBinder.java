@@ -118,8 +118,8 @@ final class SqlBooleanScalarBinder {
       int operator,
       long operand) {
     int symbol = (int) operand;
-    CharSequence name = command.projectionSymbolName(symbol);
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    CharSequence name = command.projections().symbolName(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
     if (name == null || qualifier == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = nestedColumns.resolve(
         query, block, visibleRoles, qualifier, name);
@@ -172,7 +172,7 @@ final class SqlBooleanScalarBinder {
       boolean having) {
     int ordinal = (int) operand;
     if (!having || ordinal < 0
-        || ordinal >= statement.command.groupExpressionCount()) {
+        || ordinal >= statement.command.grouping().count()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int descriptor = statement.projectionPrograms.resultDescriptor(ordinal);
@@ -311,8 +311,8 @@ final class SqlBooleanScalarBinder {
       BoundSqlStatement statement,
       SqlBlockSchema schema,
       int symbol) {
-    CharSequence name = command.projectionSymbolName(symbol);
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    CharSequence name = command.projections().symbolName(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
     if (name == null || qualifier == null
         || qualifier.length() > 0 && !SqlBindingNames.matchesTable(command, qualifier)) {
       return -1;

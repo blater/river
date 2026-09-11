@@ -22,11 +22,11 @@ final class SqlDescriptorForeignKeyTarget {
       RelationalSession session, SqlCommand command, int constraint,
       CharSequence sourceName, TableDescriptor source, int[] localParts, int count,
       StatusDetail detail) {
-    CharSequence table = command.tableConstraintReferenceTableName(constraint);
+    CharSequence table = command.tableConstraints().table(constraint);
     if (sameName(table, sourceName)) {
       for (int part = 0; part < count; part++) {
         targetParts[part] = source.findColumn(
-            command.tableConstraintReferencePartName(constraint, part));
+            command.tableConstraints().target(constraint, part));
         if (targetParts[part] < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       return match(source, source, localParts, count, true);
@@ -34,7 +34,7 @@ final class SqlDescriptorForeignKeyTarget {
     StatusCode status = open(session, table, detail);
     for (int part = 0; status.isOk() && part < count; part++) {
       targetParts[part] = referenced.descriptor().findColumn(
-          command.tableConstraintReferencePartName(constraint, part));
+          command.tableConstraints().target(constraint, part));
       if (targetParts[part] < 0) status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return status.isOk()

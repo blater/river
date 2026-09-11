@@ -50,8 +50,8 @@ final class SqlColumnCheckParser {
       int operator = expression.operator(node);
       if (operator == SqlScalarExpression.COLUMN) {
         int symbol = (int) expression.operand(node);
-        SqlIdentifier table = command.projectionSymbolTable(symbol);
-        SqlIdentifier name = command.projectionSymbolName(symbol);
+        SqlIdentifier table = command.projections().symbolTable(symbol);
+        SqlIdentifier name = command.projections().symbolName(symbol);
         if (table == null || table.length() != 0 || name == null
             || !sameIdentifier(name, command.columnName(owner))) {
           return StatusCode.INVALID_EXTERNAL_INPUT;

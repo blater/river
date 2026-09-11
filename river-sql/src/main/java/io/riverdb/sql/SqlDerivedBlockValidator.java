@@ -31,7 +31,7 @@ final class SqlDerivedBlockValidator {
   }
 
   private static StatusCode shapeStatus(SqlCommand block, int index) {
-    if ((index > 0 && block.isOrdered())
+    if ((index > 0 && (block.orderBy().count() > 0))
         || unsupported(block)) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }

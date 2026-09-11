@@ -8,8 +8,8 @@ final class SqlTableConstraintNames {
     if (!command.hasPrimaryKeyIdentity()) return true;
     int primary = primaryConstraint(command);
     return primary >= 0
-        && command.tableConstraintPartCount(primary) == 1
-        && find(command, command.tableConstraintPartName(primary, 0))
+        && command.tableConstraints().partCount(primary) == 1
+        && find(command, command.tableConstraints().part(primary, 0))
             == command.primaryKeyIdentityColumn();
   }
 
@@ -30,26 +30,26 @@ final class SqlTableConstraintNames {
   }
 
   static boolean duplicateName(SqlCommand command, int constraint) {
-    CharSequence name = command.tableConstraintName(constraint);
+    CharSequence name = command.tableConstraints().name(constraint);
     if (name.length() == 0) return false;
     for (int index = 0; index < constraint; index++) {
-      if (same(name, command.tableConstraintName(index))) return true;
+      if (same(name, command.tableConstraints().name(index))) return true;
     }
     return false;
   }
 
   static boolean duplicateParts(SqlCommand command, int constraint) {
-    int kind = command.tableConstraintKind(constraint);
+    int kind = command.tableConstraints().kind(constraint);
     for (int index = 0; index < constraint; index++) {
-      if (command.tableConstraintKind(index) == kind
+      if (command.tableConstraints().kind(index) == kind
           && sameParts(command, index, constraint)) return true;
     }
     return false;
   }
 
   private static int primaryConstraint(SqlCommand command) {
-    for (int constraint = 0; constraint < command.tableConstraintCount(); constraint++) {
-      if (command.tableConstraintKind(constraint) == SqlTableConstraintSet.PRIMARY) {
+    for (int constraint = 0; constraint < command.tableConstraints().count(); constraint++) {
+      if (command.tableConstraints().kind(constraint) == SqlTableConstraintSet.PRIMARY) {
         return constraint;
       }
     }
@@ -57,11 +57,11 @@ final class SqlTableConstraintNames {
   }
 
   private static boolean sameParts(SqlCommand command, int left, int right) {
-    int count = command.tableConstraintPartCount(left);
-    if (count != command.tableConstraintPartCount(right)) return false;
+    int count = command.tableConstraints().partCount(left);
+    if (count != command.tableConstraints().partCount(right)) return false;
     for (int part = 0; part < count; part++) {
-      if (!same(command.tableConstraintPartName(left, part),
-          command.tableConstraintPartName(right, part))) return false;
+      if (!same(command.tableConstraints().part(left, part),
+          command.tableConstraints().part(right, part))) return false;
     }
     return true;
   }

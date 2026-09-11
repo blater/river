@@ -1,7 +1,9 @@
 package io.riverdb.sql;
 
 /** Shared bounded postfix arena for INSERT cells and UPDATE assignments. */
-final class SqlMutationExpressions {
+public final class SqlMutationExpressions {
+  SqlMutationExpressions() { }
+
   static final int MAXIMUM_PROGRAMS = SqlScalarExpression.MAXIMUM_NODES;
 
   byte[] operators = new byte[16];
@@ -49,21 +51,21 @@ final class SqlMutationExpressions {
     return program;
   }
 
-  int programCount() { return programCount; }
-  int nodeCount(int program) { return valid(program) ? counts[program] : 0; }
-  int operator(int program, int node) {
+  public int programCount() { return programCount; }
+  public int nodeCount(int program) { return valid(program) ? counts[program] : 0; }
+  public int operator(int program, int node) {
     int slot = slot(program, node);
     return slot < 0 ? 0 : Byte.toUnsignedInt(operators[slot]);
   }
-  long operand(int program, int node) {
+  public long operand(int program, int node) {
     int slot = slot(program, node);
     return slot < 0 ? 0 : operands[slot];
   }
-  long operandHigh(int program, int node) {
+  public long operandHigh(int program, int node) {
     int slot = slot(program, node);
     return slot < 0 ? 0 : operandHighs[slot];
   }
-  int descriptor(int program, int node) {
+  public int descriptor(int program, int node) {
     int slot = slot(program, node);
     return slot < 0 ? 0 : descriptors[slot];
   }

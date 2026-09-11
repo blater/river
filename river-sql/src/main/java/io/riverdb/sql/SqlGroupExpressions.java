@@ -6,7 +6,7 @@ public final class SqlGroupExpressions {
 
   public static int groupKey(SqlCommand command, int projection) {
     if (command == null || projection < 0) return -1;
-    for (int group = 0; group < command.groupExpressionCount(); group++) {
+    for (int group = 0; group < command.grouping().count(); group++) {
       if (matchesProjection(command, group, projection)) return group;
     }
     return -1;
@@ -26,11 +26,11 @@ public final class SqlGroupExpressions {
 
   public static int namedGroupKey(SqlCommand command, CharSequence name) {
     if (command == null || name == null) return -1;
-    for (int group = 0; group < command.groupExpressionCount(); group++) {
-      SqlScalarExpression expression = command.groupExpression(group);
+    for (int group = 0; group < command.grouping().count(); group++) {
+      SqlScalarExpression expression = command.grouping().expression(group);
       if (expression == null || !expression.isDirectColumnReference()) continue;
       int symbol = (int) expression.operand(0);
-      if (same(command.projectionSymbolName(symbol), name)) return group;
+      if (same(command.projections().symbolName(symbol), name)) return group;
     }
     return -1;
   }
@@ -38,7 +38,7 @@ public final class SqlGroupExpressions {
   public static boolean matchesProjection(
       SqlCommand command, int group, int projection) {
     if (command == null) return false;
-    SqlScalarExpression grouped = command.groupExpression(group);
+    SqlScalarExpression grouped = command.grouping().expression(group);
     SqlScalarExpression selected = command.projectionExpression(projection);
     return grouped != null && selected != null
         && SqlAggregateExpressionParser.same(command, selected, grouped);

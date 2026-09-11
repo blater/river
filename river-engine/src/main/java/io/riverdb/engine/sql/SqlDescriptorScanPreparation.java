@@ -45,7 +45,7 @@ final class SqlDescriptorScanPreparation {
     }
     context.forUpdate = command.isSelectForUpdate();
     context.scalarAggregate = SqlDescriptorQueryTypes.scalar(command.type())
-        || command.groupExpressionCount() == 0 && command.aggregateInvocationCount() > 0;
+        || command.grouping().count() == 0 && command.aggregates().invocationCount() > 0;
     return shape.prepare(command, query, table, plan);
   }
 

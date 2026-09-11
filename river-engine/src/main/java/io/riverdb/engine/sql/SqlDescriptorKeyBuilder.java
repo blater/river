@@ -19,7 +19,7 @@ final class SqlDescriptorKeyBuilder {
   StatusCode freeze(
       SqlCommand command, ColumnDescriptorSet columns, StatusDetail detail) {
     reset();
-    for (int constraint = 0; constraint < command.tableConstraintCount(); constraint++) {
+    for (int constraint = 0; constraint < command.tableConstraints().count(); constraint++) {
       StatusCode status = freezeConstraint(command, columns, constraint, detail);
       if (!status.isOk()) return status;
     }
@@ -44,12 +44,12 @@ final class SqlDescriptorKeyBuilder {
 
   private StatusCode freezeConstraint(
       SqlCommand command, ColumnDescriptorSet columns, int constraint, StatusDetail detail) {
-    int kind = command.tableConstraintKind(constraint);
+    int kind = command.tableConstraints().kind(constraint);
     if (kind == SqlCommand.CONSTRAINT_CHECK) return StatusCode.OK;
     if (kind == SqlCommand.CONSTRAINT_FOREIGN_KEY) return StatusCode.OK;
     StatusCode status = resolveParts(command, columns, constraint);
     if (!status.isOk()) return status;
-    int[] parts = exactParts(command.tableConstraintPartCount(constraint));
+    int[] parts = exactParts(command.tableConstraints().partCount(constraint));
     if (parts == null) return StatusCode.RESOURCE_EXHAUSTED;
     KeyDescriptor.Result result = kind == SqlCommand.CONSTRAINT_PRIMARY_KEY ? primary : key;
     status = create(command, columns, constraint, kind, parts, result, detail);
@@ -60,9 +60,9 @@ final class SqlDescriptorKeyBuilder {
 
   private StatusCode resolveParts(
       SqlCommand command, ColumnDescriptorSet columns, int constraint) {
-    int count = command.tableConstraintPartCount(constraint);
+    int count = command.tableConstraints().partCount(constraint);
     for (int part = 0; part < count; part++) {
-      int ordinal = columns.find(command.tableConstraintPartName(constraint, part));
+      int ordinal = columns.find(command.tableConstraints().part(constraint, part));
       if (ordinal < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
       ordinals[part] = ordinal;
     }
@@ -72,7 +72,7 @@ final class SqlDescriptorKeyBuilder {
   private static StatusCode create(
       SqlCommand command, ColumnDescriptorSet columns, int constraint,
       int kind, int[] parts, KeyDescriptor.Result result, StatusDetail detail) {
-    CharSequence name = command.tableConstraintName(constraint);
+    CharSequence name = command.tableConstraints().name(constraint);
     int descriptorKind = kind == SqlCommand.CONSTRAINT_PRIMARY_KEY
         ? KeyDescriptor.KIND_PRIMARY : KeyDescriptor.KIND_UNIQUE;
     return name.length() == 0

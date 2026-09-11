@@ -10,9 +10,9 @@ final class SqlInsertMutationBinder {
       new SqlMutationExpressionBinder();
 
   StatusCode bind(SqlCommand command, BoundSqlStatement bound) {
-    StatusCode reserved = bound.reserveMutationColumns(command.mutationExpressionCount());
+    StatusCode reserved = bound.reserveMutationColumns(command.mutationExpressions().programCount());
     if (!reserved.isOk()) return reserved;
-    bound.projectionPrograms.beginMutations(command.mutationExpressionCount());
+    bound.projectionPrograms.beginMutations(command.mutationExpressions().programCount());
     StatusCode status = SqlInsertColumnMapping.map(command, bound);
     for (int row = 0;
         status.isOk() && row < command.insertRowCount(); row++) {

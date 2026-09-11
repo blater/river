@@ -67,7 +67,7 @@ final class SqlBlockJoinBinder {
         ? binder.bindJoinProjection(command, bound, context)
         : binder.bindJoin(command, bound, context);
     if (!status.isOk()) return status;
-    if (command.isOrdered()) status = binder.bindJoinOrder(command, bound);
+    if ((command.orderBy().count() > 0)) status = binder.bindJoinOrder(command, bound);
     if (!status.isOk()) return status;
     output.set(bound.projectedColumnCount);
     bound.joinProjectedColumnCount = bound.projectedColumnCount;

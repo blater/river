@@ -11,7 +11,7 @@ final class SqlTableConstraintValidation {
     if (command.columnCount() < 1 || SqlTableConstraintNames.duplicateColumns(command)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int constraint = 0; constraint < command.tableConstraintCount(); constraint++) {
+    for (int constraint = 0; constraint < command.tableConstraints().count(); constraint++) {
       StatusCode status = validateConstraint(command, constraint);
       if (!status.isOk()) return status;
     }
@@ -23,8 +23,8 @@ final class SqlTableConstraintValidation {
     if (SqlTableConstraintNames.duplicateName(command, constraint)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int kind = command.tableConstraintKind(constraint);
-    StatusCode status = validatePartCount(kind, command.tableConstraintPartCount(constraint));
+    int kind = command.tableConstraints().kind(constraint);
+    StatusCode status = validatePartCount(kind, command.tableConstraints().partCount(constraint));
     if (!status.isOk()) return status;
     status = resolveParts(command, constraint, kind);
     if (!status.isOk()) return status;
@@ -45,10 +45,10 @@ final class SqlTableConstraintValidation {
   }
 
   private static StatusCode resolveParts(SqlCommand command, int constraint, int kind) {
-    int parts = command.tableConstraintPartCount(constraint);
+    int parts = command.tableConstraints().partCount(constraint);
     for (int part = 0; part < parts; part++) {
       int column = SqlTableConstraintNames.find(
-          command, command.tableConstraintPartName(constraint, part));
+          command, command.tableConstraints().part(constraint, part));
       if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
       if (kind == SqlTableConstraintSet.PRIMARY) command.markColumnNotNull(column);
     }
@@ -60,10 +60,10 @@ final class SqlTableConstraintValidation {
   }
 
   private static boolean validForeign(SqlCommand command, int constraint) {
-    if (command.tableConstraintReferenceTableName(constraint).length() == 0) return false;
-    int parts = command.tableConstraintPartCount(constraint);
+    if (command.tableConstraints().table(constraint).length() == 0) return false;
+    int parts = command.tableConstraints().partCount(constraint);
     for (int part = 0; part < parts; part++) {
-      CharSequence target = command.tableConstraintReferencePartName(constraint, part);
+      CharSequence target = command.tableConstraints().target(constraint, part);
       if (target == null || target.length() == 0) return false;
     }
     return true;

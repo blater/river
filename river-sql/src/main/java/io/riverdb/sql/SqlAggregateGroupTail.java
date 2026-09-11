@@ -19,8 +19,8 @@ final class SqlAggregateGroupTail {
 
   StatusCode parse(CharSequence sql, SqlCommand command) {
     if (input.consumeKeyword(sql, "GROUP")) return grouped(sql, command);
-    if (command.aggregateInvocationCount() == 0) return StatusCode.OK;
-    if (command.columnCount() != command.aggregateOutputCount()) {
+    if (command.aggregates().invocationCount() == 0) return StatusCode.OK;
+    if (command.columnCount() != command.aggregates().outputCount()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return input.consumeKeyword(sql, "HAVING")
@@ -31,7 +31,7 @@ final class SqlAggregateGroupTail {
     StatusCode status = input.requireKeyword(sql, "BY");
     if (status.isOk()) status = grouping.parse(sql, command);
     if (status.isOk()) command.set(
-        command.aggregateInvocationCount() == 0
+        command.aggregates().invocationCount() == 0
             ? SqlCommandType.DISTINCT_SCAN
             : SqlAggregateCommandType.grouped(command.type()),
         0,

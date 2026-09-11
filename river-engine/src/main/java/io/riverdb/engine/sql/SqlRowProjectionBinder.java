@@ -70,14 +70,14 @@ final class SqlRowProjectionBinder {
     if (!reserved.isOk()) return reserved;
     bound.projectionPrograms.begin(lanes);
     if (grouped) {
-      for (int expression = 0; expression < command.groupExpressionCount(); expression++) {
+      for (int expression = 0; expression < command.grouping().count(); expression++) {
         StatusCode status = programs.bindGroupKey(command, bound, expression);
         if (!status.isOk()) return status;
       }
     }
     for (int invocation = 0;
-        invocation < command.aggregateInvocationCount(); invocation++) {
-      int lane = command.aggregateOperandProjection(invocation);
+        invocation < command.aggregates().invocationCount(); invocation++) {
+      int lane = command.aggregates().operandProjection(invocation);
       if (lane < 0) continue;
       StatusCode status = programs.bindAggregateOperand(command, bound, lane);
       if (!status.isOk()) return status;

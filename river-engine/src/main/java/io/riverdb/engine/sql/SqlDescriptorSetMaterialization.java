@@ -35,10 +35,10 @@ final class SqlDescriptorSetMaterialization {
     keyCount = keys;
     int operands = aggregateOperandCount(command);
     if (keys < 0 || keys > SqlShapeLimits.MAX_TUPLE_PARTS - operands
-        || keys == 0 && command.aggregateInvocationCount() == 0) {
+        || keys == 0 && command.aggregates().invocationCount() == 0) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = reserveAggregateLanes(command.aggregateInvocationCount());
+    StatusCode status = reserveAggregateLanes(command.aggregates().invocationCount());
     if (status.isOk()) status = prepareInput(table);
     if (status.isOk()) status = bound.command.copyBlockFrom(command);
     if (status.isOk()) status = binding.bind(
@@ -99,8 +99,8 @@ final class SqlDescriptorSetMaterialization {
 
   private static int aggregateOperandCount(SqlCommand command) {
     int count = 0;
-    for (int invocation = 0; invocation < command.aggregateInvocationCount(); invocation++) {
-      if (command.aggregateOperandProjection(invocation) >= 0) count++;
+    for (int invocation = 0; invocation < command.aggregates().invocationCount(); invocation++) {
+      if (command.aggregates().operandProjection(invocation) >= 0) count++;
     }
     return count;
   }

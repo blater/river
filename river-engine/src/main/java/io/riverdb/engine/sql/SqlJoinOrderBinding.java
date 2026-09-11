@@ -9,9 +9,9 @@ final class SqlJoinOrderBinding {
   static int firstProjection(SqlCommand command) {
     int first = -1;
     for (int expression = 0;
-        expression < command.orderExpressionCount(); expression++) {
+        expression < command.orderBy().count(); expression++) {
       int projection = SqlProjectionBinder.resolveOrderAlias(command, expression);
-      if (command.orderColumnTableName(expression).length() > 0) {
+      if (command.orderBy().qualifier(expression).length() > 0) {
         projection = SqlProjectionBinder.resolveOrderProjection(command, expression);
       }
       if (projection < 0) return -1;

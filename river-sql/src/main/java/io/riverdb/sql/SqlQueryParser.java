@@ -45,25 +45,12 @@ final class SqlQueryParser {
     source.set(sql, start, sql.length(), sql.length(), sql.length(), parameterMarkers);
     StatusCode status = statements.parseQueryBlock(source, result);
     if (status.isOk() && result.joinChain() != null
-        && result.aggregateInvocationCount() > 0) {
-      status = lowerJoinAggregate(query, result);
+        && result.aggregates().invocationCount() > 0) {
+      status = SqlJoinAggregateLowering.lower(query, result);
     }
     return status.isOk() && query.isExplain() && result.isSelectForUpdate()
         ? StatusCode.FEATURE_NOT_SUPPORTED : status;
   }
-
-  private StatusCode lowerJoinAggregate(SqlQuery query, SqlCommand parsed) {
-    SqlCommand root = query.nextBlock();
-    SqlCommand sourceBlock = query.nextBlock();
-    if (root == null || sourceBlock == null) return StatusCode.QUERY_TOO_COMPLEX;
-    StatusCode status = root.copyBlockFrom(parsed);
-    if (status.isOk()) root.lowerJoinAggregateRoot();
-    if (status.isOk()) status = sourceBlock.copyBlockFrom(parsed);
-    if (status.isOk()) status = sourceBlock.lowerJoinAggregateSource(root);
-    if (status.isOk()) query.markBlockPipeline();
-    return status.isOk() ? query.compileBlockPipeline(parsed) : status;
-  }
-
 
   StatusCode parseAppend(CharSequence sql, SqlQuery query, SqlCommand result) {
     if (sql == null || query == null || result == null

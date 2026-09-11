@@ -91,11 +91,11 @@ final class SqlSortExecution {
     int storedProjections = SqlBinder.isGroupAggregate(command.type())
         ? bound.projectionPrograms.count() : bound.projectedColumnCount;
     int groupKeys = SqlBinder.isGroupAggregate(command.type())
-        ? bound.command.groupExpressionCount()
+        ? bound.command.grouping().count()
         : command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN
             ? bound.projectedColumnCount
-            : bound.command.orderExpressionCount() > 1
-                ? bound.command.orderExpressionCount() : 0;
+            : bound.command.orderBy().count() > 1
+                ? bound.command.orderBy().count() : 0;
     StatusCode status = reserveValues(storedProjections);
     if (status.isOk()) status = workspace.begin(
         bound.table,

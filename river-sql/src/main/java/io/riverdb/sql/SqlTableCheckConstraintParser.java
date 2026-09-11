@@ -34,10 +34,10 @@ final class SqlTableCheckConstraintParser {
     for (int node = 0; status.isOk() && node < expression.nodeCount(); node++) {
       if (expression.operator(node) != SqlScalarExpression.COLUMN) continue;
       int symbol = (int) expression.operand(node);
-      SqlIdentifier table = command.projectionSymbolTable(symbol);
-      SqlIdentifier name = command.projectionSymbolName(symbol);
+      SqlIdentifier table = command.projections().symbolTable(symbol);
+      SqlIdentifier name = command.projections().symbolName(symbol);
       status = table == null || table.length() != 0 || name == null
-          ? StatusCode.INVALID_EXTERNAL_INPUT : command.addTableConstraintPart(name, null);
+          ? StatusCode.INVALID_EXTERNAL_INPUT : command.tableConstraints.addPart(name, null);
     }
     return status;
   }

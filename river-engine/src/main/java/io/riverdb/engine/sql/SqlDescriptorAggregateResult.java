@@ -18,14 +18,14 @@ final class SqlDescriptorAggregateResult {
 
   StatusCode prepare(
       SqlCommand command, SqlBoundAggregateSet aggregates, SqlPhysicalPlan plan) {
-    count = command.aggregateOutputCount();
+    count = command.aggregates().outputCount();
     if (count <= 0 || count != command.columnCount()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = reserve(count);
     if (status.isOk() && plan != null) status = plan.beginResult(count);
     for (int output = 0; status.isOk() && output < count; output++) {
-      int invocation = command.aggregateOutputInvocation(output);
+      int invocation = command.aggregates().outputInvocation(output);
       if (invocation < 0 || invocation >= aggregates.count()) {
         return StatusCode.CORRUPTION;
       }

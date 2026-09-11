@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 
 /** Fixed-capacity projection programs and their unresolved column symbols. */
-final class SqlProjectionList {
+public final class SqlProjectionList {
   static final int MAXIMUM_SYMBOLS = SqlShapeLimits.MAX_EXPRESSION_NODES;
 
   SqlScalarExpression[] expressions = new SqlScalarExpression[8];
@@ -79,15 +79,15 @@ final class SqlProjectionList {
     return symbolCount++;
   }
 
-  int symbolCount() {
+  public int symbolCount() {
     return symbolCount;
   }
 
-  SqlIdentifier symbolTable(int index) {
+  public SqlIdentifier symbolTable(int index) {
     return index >= 0 && index < symbolCount ? symbolTables[index] : null;
   }
 
-  SqlIdentifier symbolName(int index) {
+  public SqlIdentifier symbolName(int index) {
     return index >= 0 && index < symbolCount ? symbolNames[index] : null;
   }
 

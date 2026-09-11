@@ -26,8 +26,8 @@ final class SqlDescriptorForeignKeyBuilder {
     StatusCode status = assembly.begin(source, count);
     if (!status.isOk()) return status;
     for (int constraint = 0;
-        status.isOk() && constraint < command.tableConstraintCount(); constraint++) {
-      if (command.tableConstraintKind(constraint) == SqlCommand.CONSTRAINT_FOREIGN_KEY) {
+        status.isOk() && constraint < command.tableConstraints().count(); constraint++) {
+      if (command.tableConstraints().kind(constraint) == SqlCommand.CONSTRAINT_FOREIGN_KEY) {
         status = buildConstraint(session, command, constraint, source, detail);
       }
     }
@@ -41,25 +41,25 @@ final class SqlDescriptorForeignKeyBuilder {
   private StatusCode buildConstraint(
       RelationalSession session, SqlCommand command, int constraint,
       TableDescriptor source, StatusDetail detail) {
-    int count = command.tableConstraintPartCount(constraint);
+    int count = command.tableConstraints().partCount(constraint);
     if (count <= 0 || count > localParts.length) return StatusCode.INVALID_EXTERNAL_INPUT;
     for (int part = 0; part < count; part++) {
       localParts[part] = source.findColumn(
-          command.tableConstraintPartName(constraint, part));
+          command.tableConstraints().part(constraint, part));
       if (localParts[part] < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = target.resolveConstraint(
         session, command, constraint, command.tableName(), source, localParts, count, detail);
     return status.isOk()
-        ? assembly.add(source, command.tableConstraintName(constraint), count, localParts,
+        ? assembly.add(source, command.tableConstraints().name(constraint), count, localParts,
             target.referencedKeyId(), constraint, detail)
         : status;
   }
 
   private static int foreignCount(SqlCommand command) {
     int count = 0;
-    for (int index = 0; index < command.tableConstraintCount(); index++) {
-      if (command.tableConstraintKind(index) == SqlCommand.CONSTRAINT_FOREIGN_KEY) count++;
+    for (int index = 0; index < command.tableConstraints().count(); index++) {
+      if (command.tableConstraints().kind(index) == SqlCommand.CONSTRAINT_FOREIGN_KEY) count++;
     }
     return count;
   }

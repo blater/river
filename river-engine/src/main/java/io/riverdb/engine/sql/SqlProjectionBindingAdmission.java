@@ -51,10 +51,10 @@ final class SqlProjectionBindingAdmission {
   }
 
   static int aggregateLanes(SqlCommand command, boolean grouped) {
-    int lanes = grouped ? command.groupExpressionCount() : 0;
+    int lanes = grouped ? command.grouping().count() : 0;
     for (int invocation = 0;
-        invocation < command.aggregateInvocationCount(); invocation++) {
-      int lane = command.aggregateOperandProjection(invocation);
+        invocation < command.aggregates().invocationCount(); invocation++) {
+      int lane = command.aggregates().operandProjection(invocation);
       if (lane >= lanes) lanes = lane + 1;
     }
     return lanes;

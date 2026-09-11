@@ -28,7 +28,7 @@ final class SqlDescriptorSetPlan {
     for (int output = 0;
         status.isOk() && output < shape.aggregateOutputCount(); output++) {
       int result = shape.groupOutputCount() + output;
-      int invocation = command.aggregateOutputInvocation(output);
+      int invocation = command.aggregates().outputInvocation(output);
       plan.setResultColumn(
           result, -1, storage.descriptors[result],
           aggregateName(command, result, shape.aggregates().kind(invocation)));

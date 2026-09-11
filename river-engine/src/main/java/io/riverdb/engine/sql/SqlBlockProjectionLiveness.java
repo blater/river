@@ -28,7 +28,7 @@ final class SqlBlockProjectionLiveness {
     if (block < 0 || block >= count || projection < 0
         || projection >= SqlCommand.MAXIMUM_PROJECTIONS) return false;
     SqlCommand command = commands[block];
-    if (command.aggregateInvocationCount() > 0
+    if (command.aggregates().invocationCount() > 0
         || command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN) return true;
     return projection < schemas[block].count() && live[block][projection];
   }
@@ -58,7 +58,7 @@ final class SqlBlockProjectionLiveness {
         for (int node = 0; node < where.programNodeCount(leaf, program); node++) {
           if (where.programOperator(leaf, program, node) != SqlScalarExpression.COLUMN) continue;
           int symbol = (int) where.programOperand(leaf, program, node);
-          if (!mark(child, command.predicateSymbolName(symbol), live)) return false;
+          if (!mark(child, command.projections().symbolName(symbol), live)) return false;
         }
       }
     }
@@ -75,7 +75,7 @@ final class SqlBlockProjectionLiveness {
     for (int node = 0; node < expression.nodeCount(); node++) {
       if (expression.operator(node) != SqlScalarExpression.COLUMN) continue;
       int symbol = (int) expression.operand(node);
-      if (!mark(child, command.projectionSymbolName(symbol), live)) return false;
+      if (!mark(child, command.projections().symbolName(symbol), live)) return false;
     }
     return true;
   }
@@ -83,10 +83,10 @@ final class SqlBlockProjectionLiveness {
   private static void markOrder(
       SqlCommand command, SqlBlockSchema schema, boolean[] live) {
     if (command == null) return;
-    for (int order = 0; order < command.orderExpressionCount(); order++) {
-      int column = command.orderColumnTableName(order).length() > 0
+    for (int order = 0; order < command.orderBy().count(); order++) {
+      int column = command.orderBy().qualifier(order).length() > 0
           ? SqlProjectionBinder.resolveOrderProjection(command, order)
-          : schema.find(command.orderColumnName(order));
+          : schema.find(command.orderBy().name(order));
       if (column >= 0) live[column] = true;
     }
   }

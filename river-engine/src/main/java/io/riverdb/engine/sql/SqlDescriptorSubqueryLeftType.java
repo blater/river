@@ -20,7 +20,7 @@ final class SqlDescriptorSubqueryLeftType {
     if (count != 1
         || program.programOperator(leaf, side, 0) != SqlScalarExpression.COLUMN) return 0;
     int symbol = (int) program.programOperand(leaf, side, 0);
-    int column = table.findColumn(command.predicateSymbolName(symbol));
+    int column = table.findColumn(command.projections().symbolName(symbol));
     return column < 0 ? 0 : table.typeDescriptorAt(column);
   }
 }

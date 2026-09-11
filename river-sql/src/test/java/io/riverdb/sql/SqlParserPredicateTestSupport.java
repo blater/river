@@ -91,25 +91,25 @@ final class SqlParserPredicateTestSupport {
   static SqlIdentifier predicateColumnName(SqlCommand command, int leaf) {
     int symbol = (int) command.wherePredicates().programOperand(
         leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0);
-    return command.predicateSymbolName(symbol);
+    return command.projections().symbolName(symbol);
   }
 
   static SqlIdentifier predicateTableName(SqlCommand command, int leaf) {
     int symbol = (int) command.wherePredicates().programOperand(
         leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0);
-    return command.predicateSymbolTable(symbol);
+    return command.projections().symbolTable(symbol);
   }
 
   static SqlIdentifier predicateValueTableName(SqlCommand command, int leaf) {
     int symbol = (int) command.wherePredicates().programOperand(
         leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
-    return command.predicateSymbolTable(symbol);
+    return command.projections().symbolTable(symbol);
   }
 
   static SqlIdentifier predicateValueColumnName(SqlCommand command, int leaf) {
     int symbol = (int) command.wherePredicates().programOperand(
         leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
-    return command.predicateSymbolName(symbol);
+    return command.projections().symbolName(symbol);
   }
 
   static boolean isColumnPredicate(SqlCommand command, int leaf) {
@@ -183,11 +183,11 @@ final class SqlParserPredicateTestSupport {
 
   static void assertMutationPostfix(
       SqlCommand command, int expression, int... operators) {
-    assertEquals(operators.length, command.mutationExpressionNodeCount(expression));
+    assertEquals(operators.length, command.mutationExpressions().nodeCount(expression));
     for (int index = 0; index < operators.length; index++) {
       assertEquals(
           operators[index],
-          command.mutationExpressionOperator(expression, index));
+          command.mutationExpressions().operator(expression, index));
     }
   }
 

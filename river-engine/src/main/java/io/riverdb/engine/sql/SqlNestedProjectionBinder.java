@@ -86,8 +86,8 @@ final class SqlNestedProjectionBinder {
       SqlScalarExpression expression,
       int node) {
     int symbol = (int) expression.operand(node);
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
-    CharSequence name = command.projectionSymbolName(symbol);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
+    CharSequence name = command.projections().symbolName(symbol);
     if (qualifier == null || name == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = columns.resolve(query, blockIndex, qualifier, name);
     if (!status.isOk()) return status;

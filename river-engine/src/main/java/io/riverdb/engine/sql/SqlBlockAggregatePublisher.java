@@ -21,17 +21,17 @@ final class SqlBlockAggregatePublisher {
       SqlBlockRow destination,
       boolean grouped) {
     int groups = grouped
-        ? bound.command.columnCount() - bound.command.aggregateOutputCount() : 0;
+        ? bound.command.columnCount() - bound.command.aggregates().outputCount() : 0;
     SqlBlockSchema schema = bound.blockPlans().schema(block);
     StatusCode status = destination.reset(schema.count());
     if (status.isOk() && grouped) status = publishGroup(block, groupKey, destination, groups);
-    for (int output = 0; status.isOk() && output < bound.command.aggregateOutputCount(); output++) {
-      int selected = bound.command.aggregateOutputInvocation(output);
+    for (int output = 0; status.isOk() && output < bound.command.aggregates().outputCount(); output++) {
+      int selected = bound.command.aggregates().outputInvocation(output);
       int descriptor = bound.aggregates.resultDescriptor(selected);
       status = values.publish(
           accumulator, selected, descriptor, destination, groups + output);
     }
-    for (int column = groups + bound.command.aggregateOutputCount();
+    for (int column = groups + bound.command.aggregates().outputCount();
         status.isOk() && column < schema.count(); column++) {
       int group = SqlBlockGroupOrderColumns.group(bound.command, schema.name(column));
       status = group < 0 ? StatusCode.CORRUPTION

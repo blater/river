@@ -21,7 +21,7 @@ final class SqlMutationExpressionBinder {
     bound.projectionPrograms.beginMutation(expression);
     size = 0;
     for (int node = 0;
-        node < command.mutationExpressionNodeCount(expression);
+        node < command.mutationExpressions().nodeCount(expression);
         node++) {
       StatusCode status = bindNode(
           command, bound, expression, node, columnsAllowed);
@@ -39,26 +39,26 @@ final class SqlMutationExpressionBinder {
       int expression,
       int node,
       boolean columnsAllowed) {
-    int operator = command.mutationExpressionOperator(expression, node);
+    int operator = command.mutationExpressions().operator(expression, node);
     if (operator == SqlScalarExpression.COLUMN) {
       return bindColumn(command, bound, expression, node, columnsAllowed);
     }
     if (operator == SqlScalarExpression.NULL) {
-      int declared = command.mutationExpressionTypeDescriptor(expression, node);
+      int declared = command.mutationExpressions().descriptor(expression, node);
       boolean untyped = !SqlTypeDescriptor.isValid(declared);
       return push(
           bound, expression, operator, 0, 0,
           untyped ? SqlTypeDescriptor.BIGINT : declared, untyped);
     }
     if (SqlRowExpressionTypes.leaf(operator)) {
-      int descriptor = command.mutationExpressionTypeDescriptor(expression, node);
+      int descriptor = command.mutationExpressions().descriptor(expression, node);
       return SqlTypeDescriptor.isValid(descriptor)
           ? push(
               bound,
               expression,
               operator,
-              command.mutationExpressionOperandHigh(expression, node),
-              command.mutationExpressionOperand(expression, node),
+              command.mutationExpressions().operandHigh(expression, node),
+              command.mutationExpressions().operand(expression, node),
               descriptor,
               false)
           : StatusCode.DATATYPE_MISMATCH;
@@ -76,9 +76,9 @@ final class SqlMutationExpressionBinder {
       int node,
       boolean allowed) {
     if (!allowed) return StatusCode.FEATURE_NOT_SUPPORTED;
-    int symbol = (int) command.mutationExpressionOperand(expression, node);
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
-    CharSequence name = command.projectionSymbolName(symbol);
+    int symbol = (int) command.mutationExpressions().operand(expression, node);
+    CharSequence qualifier = command.projections().symbolTable(symbol);
+    CharSequence name = command.projections().symbolName(symbol);
     if (qualifier == null || name == null
         || qualifier.length() > 0
             && !SqlBindingNames.matchesTable(command, qualifier)) {
@@ -101,14 +101,14 @@ final class SqlMutationExpressionBinder {
       SqlCommand command, BoundSqlStatement bound, int expression, int node) {
     if (size < 1) return StatusCode.INVALID_EXTERNAL_INPUT;
     int slot = size - 1;
-    int operator = command.mutationExpressionOperator(expression, node);
-    int target = command.mutationExpressionTypeDescriptor(expression, node);
+    int operator = command.mutationExpressions().operator(expression, node);
+    int target = command.mutationExpressions().descriptor(expression, node);
     int descriptor = operator == SqlScalarExpression.CAST && untypedNulls[slot]
         ? target : SqlPostAggregateExpressionTypes.unary(
             operator,
             descriptors[slot],
             target,
-            command.mutationExpressionOperand(expression, node));
+            command.mutationExpressions().operand(expression, node));
     if (descriptor == 0) return StatusCode.DATATYPE_MISMATCH;
     descriptors[slot] = descriptor;
     if (operator == SqlScalarExpression.CAST) untypedNulls[slot] = false;
@@ -122,11 +122,11 @@ final class SqlMutationExpressionBinder {
     int right = --size;
     int left = size - 1;
     if (!resolveNulls(
-        command.mutationExpressionOperator(expression, node), left, right)) {
+        command.mutationExpressions().operator(expression, node), left, right)) {
       return StatusCode.DATATYPE_MISMATCH;
     }
     int descriptor = SqlPostAggregateExpressionTypes.binary(
-        command.mutationExpressionOperator(expression, node),
+        command.mutationExpressions().operator(expression, node),
         descriptors[left],
         descriptors[right]);
     if (descriptor == 0) return StatusCode.DATATYPE_MISMATCH;
@@ -178,9 +178,9 @@ final class SqlMutationExpressionBinder {
       int descriptor) {
     bound.projectionPrograms.appendMutation(
         expression,
-        command.mutationExpressionOperator(expression, node),
-        command.mutationExpressionOperandHigh(expression, node),
-        command.mutationExpressionOperand(expression, node),
+        command.mutationExpressions().operator(expression, node),
+        command.mutationExpressions().operandHigh(expression, node),
+        command.mutationExpressions().operand(expression, node),
         descriptor);
   }
 

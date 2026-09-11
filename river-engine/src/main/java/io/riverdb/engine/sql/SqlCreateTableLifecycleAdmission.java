@@ -18,8 +18,8 @@ final class SqlCreateTableLifecycleAdmission {
       }
     }
     int primaryCount = 0;
-    for (int constraint = 0; constraint < command.tableConstraintCount(); constraint++) {
-      int kind = command.tableConstraintKind(constraint);
+    for (int constraint = 0; constraint < command.tableConstraints().count(); constraint++) {
+      int kind = command.tableConstraints().kind(constraint);
       if (kind == SqlCommand.CONSTRAINT_CHECK) continue;
       if (kind == SqlCommand.CONSTRAINT_PRIMARY_KEY) primaryCount++;
       if (!legacyConstraintEnforced(command, constraint, kind)) {
@@ -35,17 +35,17 @@ final class SqlCreateTableLifecycleAdmission {
     for (int column = 0; column < command.columnCount(); column++) {
       constrained |= command.columnHasDefault(column) || command.columnHasCheck(column);
     }
-    for (int constraint = 0; constraint < command.tableConstraintCount(); constraint++) {
-      constrained |= command.tableConstraintKind(constraint) == SqlCommand.CONSTRAINT_CHECK;
+    for (int constraint = 0; constraint < command.tableConstraints().count(); constraint++) {
+      constrained |= command.tableConstraints().kind(constraint) == SqlCommand.CONSTRAINT_CHECK;
     }
     return constrained && !SqlDescriptorLifecycleAdmission.constraintShapesReady(command);
   }
 
   private static boolean legacyConstraintEnforced(
       SqlCommand command, int constraint, int kind) {
-    if (command.tableConstraintPartCount(constraint) != 1) return false;
+    if (command.tableConstraints().partCount(constraint) != 1) return false;
     int column = findColumn(
-        command, command.tableConstraintPartName(constraint, 0));
+        command, command.tableConstraints().part(constraint, 0));
     if (column < 0) return false;
     if (kind == SqlCommand.CONSTRAINT_PRIMARY_KEY) {
       return column == 0 && command.columnTypeDescriptor(0) == SqlTypeDescriptor.BIGINT;

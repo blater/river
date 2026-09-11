@@ -63,31 +63,12 @@ final class SqlCommandProjectionView {
     return StatusCode.OK;
   }
 
-  static StatusCode setNull(SqlCommand command, int index) {
-    SqlScalarExpression expression = expression(command, index);
-    if (expression == null) return StatusCode.RESOURCE_EXHAUSTED;
-    expression.reset();
-    if (!expression.append(SqlScalarExpression.NULL, 0, 0)) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    expression.finishUnresolved();
-    markNull(command);
-    return StatusCode.OK;
-  }
-
   static void markNull(SqlCommand command) {
     if (command.columnCount > 0) {
       command.nullProjections[command.columnCount - 1] = true;
     }
   }
 
-  static int symbolCount(SqlCommand command) { return command.projections.symbolCount(); }
-  static SqlIdentifier symbolTable(SqlCommand command, int index) {
-    return command.projections.symbolTable(index);
-  }
-  static SqlIdentifier symbolName(SqlCommand command, int index) {
-    return command.projections.symbolName(index);
-  }
   static int directSymbol(SqlCommand command, int index) {
     SqlScalarExpression expression = expression(command, index);
     return expression != null && expression.isDirectColumnReference()

@@ -15,7 +15,7 @@ final class SqlStoredViewZonePolicyCapacityTest {
     int aggregates = SqlShapeLimits.MAX_TABLE_COLUMNS + 1;
     SqlCommand command = new SqlCommand();
     assertEquals(StatusCode.OK, new SqlParser().parse(query(aggregates), command));
-    assertEquals(aggregates, command.aggregateInvocationCount());
+    assertEquals(aggregates, command.aggregates().invocationCount());
 
     assertEquals(
         StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,

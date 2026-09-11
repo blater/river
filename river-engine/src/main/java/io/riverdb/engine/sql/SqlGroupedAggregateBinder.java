@@ -30,8 +30,8 @@ final class SqlGroupedAggregateBinder {
     status = bindGroupKeys(command, bound);
     if (status.isOk()) status = having.bind(command, bound);
     if (!status.isOk()) return status;
-    if (command.isOrdered()) {
-      for (int key = 0; key < command.groupExpressionCount(); key++) {
+    if ((command.orderBy().count() > 0)) {
+      for (int key = 0; key < command.grouping().count(); key++) {
         if (SqlTypeDescriptor.comparisonFamily(
             bound.projectionPrograms.resultDescriptor(key))
             == SqlTypeDescriptor.COMPARISON_BOOLEAN) {
@@ -54,7 +54,7 @@ final class SqlGroupedAggregateBinder {
 
   private static StatusCode bindGroupKeys(
       SqlCommand command, BoundSqlStatement bound) {
-    int count = command.groupExpressionCount();
+    int count = command.grouping().count();
     if (count <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     for (int key = 0; key < count; key++) {
       if (!SqlTypeDescriptor.isValid(
@@ -71,8 +71,8 @@ final class SqlGroupedAggregateBinder {
 
   private static boolean hasComputedAggregate(SqlCommand command) {
     for (int invocation = 0;
-        invocation < command.aggregateInvocationCount(); invocation++) {
-      int lane = command.aggregateOperandProjection(invocation);
+        invocation < command.aggregates().invocationCount(); invocation++) {
+      int lane = command.aggregates().operandProjection(invocation);
       if (lane >= 0
           && !command.aggregateOperandExpression(lane).isDirectColumnReference()) {
         return true;
@@ -82,8 +82,8 @@ final class SqlGroupedAggregateBinder {
   }
 
   private static boolean hasComputedKey(SqlCommand command) {
-    for (int key = 0; key < command.groupExpressionCount(); key++) {
-      SqlScalarExpression expression = command.groupExpression(key);
+    for (int key = 0; key < command.grouping().count(); key++) {
+      SqlScalarExpression expression = command.grouping().expression(key);
       if (expression != null && expression.isAvailable()
           && !expression.isDirectColumnReference()) return true;
     }

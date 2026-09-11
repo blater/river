@@ -141,9 +141,9 @@ final class SqlCreateTableParser {
     if (result.columnHasCheck(result.columnCount() - 1)) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = columnCheck(sql, result);
     long checkpoint = result.tableConstraints.checkpoint();
-    if (status.isOk()) status = result.beginTableConstraint(SqlTableConstraintSet.CHECK);
+    if (status.isOk()) status = result.tableConstraints.begin(SqlTableConstraintSet.CHECK);
     status = status.isOk()
-        ? result.addTableConstraintPart(result.columnName(result.columnCount() - 1), null) : status;
+        ? result.tableConstraints.addPart(result.columnName(result.columnCount() - 1), null) : status;
     if (!status.isOk()) result.tableConstraints.rollback(checkpoint);
     return status;
   }

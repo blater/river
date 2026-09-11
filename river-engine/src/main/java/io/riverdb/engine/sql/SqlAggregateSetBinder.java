@@ -16,20 +16,20 @@ final class SqlAggregateSetBinder {
   }
 
   StatusCode bind(SqlCommand command, BoundSqlStatement bound, boolean grouped) {
-    int groups = grouped ? command.groupExpressionCount() : 0;
+    int groups = grouped ? command.grouping().count() : 0;
     StatusCode status = bound.reserveProjectionColumns(
         Math.max(groups + 1, command.columnCount()));
     if (status.isOk()) {
-      status = bound.aggregates.reserve(command.aggregateInvocationCount());
+      status = bound.aggregates.reserve(command.aggregates().invocationCount());
     }
     if (status.isOk()) status = rows.bindAggregateOperands(command, bound, grouped);
     for (int invocation = 0;
-        status.isOk() && invocation < command.aggregateInvocationCount(); invocation++) {
+        status.isOk() && invocation < command.aggregates().invocationCount(); invocation++) {
       status = bindInvocation(command, bound, invocation);
     }
     if (!status.isOk()) return status;
     int groupOutputs = grouped
-        ? command.columnCount() - command.aggregateOutputCount() : 0;
+        ? command.columnCount() - command.aggregates().outputCount() : 0;
     for (int output = 0; output < groupOutputs; output++) {
       int key = SqlGroupExpressions.groupKey(command, output);
       if (key < 0 || key >= groups) return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -37,8 +37,8 @@ final class SqlAggregateSetBinder {
           bound.projectionPrograms.resultDescriptor(key);
       bound.projectedColumns[output] = bound.projectionPrograms.rawColumn(key);
     }
-    for (int output = 0; output < command.aggregateOutputCount(); output++) {
-      int invocation = command.aggregateOutputInvocation(output);
+    for (int output = 0; output < command.aggregates().outputCount(); output++) {
+      int invocation = command.aggregates().outputInvocation(output);
       if (invocation < 0 || invocation >= bound.aggregates.count()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -52,7 +52,7 @@ final class SqlAggregateSetBinder {
           : column >= 0 ? column : SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
     }
     bound.projectedColumnCount = command.columnCount();
-    int selected = command.aggregateOutputInvocation(0);
+    int selected = command.aggregates().outputInvocation(0);
     if (selected < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     int lane = bound.aggregates.operandLane(selected);
     int column = lane < 0 ? -1 : bound.projectionPrograms.rawColumn(lane);
@@ -63,8 +63,8 @@ final class SqlAggregateSetBinder {
 
   private static StatusCode bindInvocation(
       SqlCommand command, BoundSqlStatement bound, int invocation) {
-    int kind = command.aggregateKind(invocation);
-    int lane = command.aggregateOperandProjection(invocation);
+    int kind = command.aggregates().kind(invocation);
+    int lane = command.aggregates().operandProjection(invocation);
     int input = lane < 0
         ? SqlTypeDescriptor.BIGINT
         : bound.projectionPrograms.resultDescriptor(lane);
@@ -78,7 +78,7 @@ final class SqlAggregateSetBinder {
 
   private static StatusCode validate(
       SqlCommand command, int invocation, int kind, int descriptor) {
-    int lane = command.aggregateOperandProjection(invocation);
+    int lane = command.aggregates().operandProjection(invocation);
     if (kind == SqlAggregateKind.COUNT || kind == SqlAggregateKind.COUNT_DISTINCT) {
       return kind == SqlAggregateKind.COUNT_DISTINCT && lane < 0
           ? StatusCode.FEATURE_NOT_SUPPORTED : StatusCode.OK;
