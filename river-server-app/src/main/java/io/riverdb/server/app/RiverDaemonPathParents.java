@@ -14,6 +14,25 @@ import java.util.ArrayDeque;
 final class RiverDaemonPathParents {
   private RiverDaemonPathParents() { }
 
+  /** Validates and prepares the launch namespace before identity or database mutation. */
+  static StatusCode prepare(
+      RiverDaemonFileSystem filesystem, RiverDaemonPathSelection.Result paths) {
+    StatusCode status = RiverDaemonPathInspection.verify(filesystem, paths);
+    if (!status.isOk()) return status;
+    status = ensureParents(filesystem, paths.datadir);
+    if (!status.isOk()) return status;
+    if (paths.ready != null && paths.ready.getParent() != null) {
+      status = ensureParents(filesystem, paths.ready.getParent());
+      if (!status.isOk()) return status;
+    }
+    RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
+    status = ensureDirectory(filesystem, paths.runtimeRoot, runtimeRootResult);
+    if (!status.isOk()) return status;
+    status = runtimeRootResult.directory().close();
+    if (!status.isOk() && status != StatusCode.CLOSED) return status;
+    return RiverDaemonPathInspection.verify(filesystem, paths);
+  }
+
   /** Makes only missing parent components; an existing caller-owned ancestor need not be private. */
   static StatusCode ensureParents(RiverDaemonFileSystem filesystem, Path target) {
     Path parent = target.getParent();
