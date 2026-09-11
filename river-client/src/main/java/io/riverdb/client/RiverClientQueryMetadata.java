@@ -78,17 +78,14 @@ final class RiverClientQueryMetadata implements QueryMetadata {
   @Override
   public long reservationGeneration() { return generation; }
 
-  @Override
   public CharSequence columnName(int index) {
     return index >= 0 && index < columnCount ? columnNames[index] : null;
   }
 
-  @Override
   public int columnTypeDescriptor(int index) {
     return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
   }
 
-  @Override
   public boolean columnIsNullable(int index) {
     return index >= 0 && index < columnCount
         && (nullableWords[index >>> 6] & 1L << (index & 63)) != 0;
