@@ -34,8 +34,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import io.riverdb.engine.table.IndexedRelationalWalRecordFixtures.PrefixBatch;
 import io.riverdb.engine.table.IndexedRelationalWalRecordFixtures.RecordingReplay;
-import io.riverdb.engine.table.IndexedRelationalWalRecordFixtures.PrefixBatch;
-import io.riverdb.engine.table.IndexedRelationalWalRecordFixtures.RecordingReplay;
 
 
 /** Tests for relational WAL recovery scenarios. */
