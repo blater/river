@@ -9,6 +9,11 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
+Current campaign: [tic-c8d1](tickets/tic-c8d1.md) brings every scored source file,
+including tests, below 90. Its 82 file tickets carry brief approach plans, Luna/high
+implementation, Sol/high review and light per-ticket performance checks. The lead
+owns cross-file architecture and integrates each accepted slice independently.
+
 Implemented and validated: [tic-6f28](tickets/tic-6f28.md) removes prepared-close
 acknowledgement round trips and gives programs direct plan references. The longer
 JVM pair improved 392.58 -> 429.27 TPS; socket writes per commit fell 29.0%.
