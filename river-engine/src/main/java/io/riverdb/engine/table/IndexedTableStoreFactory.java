@@ -54,18 +54,8 @@ final class IndexedTableStoreFactory {
     } catch (OutOfMemoryError error) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = directory.createFile(IndexedTableStore.FILE_NAME, FileIoMode.POSITIONAL, operation);
-    if (!status.isOk()) {
-      return status;
-    }
-    status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, rows);
-    if (!status.isOk()) {
-      return IndexedOpenFiles.close(status, null, null, operation.file());
-    }
-    status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, versions);
-    if (!status.isOk()) {
-      return IndexedOpenFiles.close(status, null, rows.file(), operation.file());
-    }
+    StatusCode status = IndexedOpenFiles.create(directory, operation, rows, versions);
+    if (!status.isOk()) return status;
     return IndexedTableStoreConstruction.construct(
         directory, operation, rows, versions, wal, database, generation, result,
         providerLease, storeLease);

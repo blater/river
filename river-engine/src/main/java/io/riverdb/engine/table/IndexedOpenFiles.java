@@ -37,6 +37,23 @@ final class IndexedOpenFiles {
     return status.isOk() ? StatusCode.OK : close(status, null, rows.file(), pages);
   }
 
+  static StatusCode create(
+      DurableDirectory directory,
+      DirectoryOperationResult pages,
+      DirectoryOperationResult rows,
+      DirectoryOperationResult versions) {
+    StatusCode status = directory.createFile(
+        IndexedTableStore.FILE_NAME, FileIoMode.POSITIONAL, pages);
+    if (!status.isOk()) return status;
+    status = directory.createFile(
+        IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, rows);
+    if (!status.isOk()) return close(status, null, null, pages.file());
+    status = directory.createFile(
+        IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, versions);
+    return status.isOk()
+        ? StatusCode.OK : close(status, null, rows.file(), pages.file());
+  }
+
   private static StatusCode reopenOrCreate(
       DurableDirectory directory,
       String fileName,
