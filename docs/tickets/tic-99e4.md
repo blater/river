@@ -1,6 +1,6 @@
 ---
 id: tic-99e4
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,17 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-engine` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Validation
+
+Accepted `14e4382d`, Luna/high implemented; Sol/high/lead approved. Three private
+push overloads are removed; callers invoke the canonical operation directly with
+identical sign-extended high words, literal high words and resolved scopes. No
+state, allocation, stack/status or SQL semantic changes. Score 88.556 (93.915 before).
+
+Nine focused Boolean/grouped/nested/joined predicate tests passed, with engine
+checks and benchmark installation. Log: `/private/tmp/river-tic-99e4-build.log`.
+The epic's light JVM sample/all passed at 307.71 TPS, p99 62.194ms, zero failed/
+unknown outcomes, valid invariants and graceful cleanup, consistent with recent
+short controls. Artifact:
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_044200_f3d6b376`.

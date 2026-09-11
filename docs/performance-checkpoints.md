@@ -2484,3 +2484,26 @@ incomplete scores. Evidence under `/private/tmp/river-score-20260911`:
 `integration-first19-check.log`, `integration-first19-native.log`,
 `integration-first19-native-smoke.log`, `integration-first19-scores.json`.
 Checkpoint: `perf-checkpoint-20260911-score-first19`.
+
+
+## 2026-09-11: query routing, paths, bindings and shared test fixtures
+
+Accepted `tic-a39e` (`8393fb96`), `tic-7c5c` (`479d638c`), `tic-b169`
+(`567ec7d2`), `tic-99e4` (`14e4382d`), `tic-95d9` (`bb883740`) and
+`tic-8b99` (`14e1504b`) after Luna/high implementation and Sol/high/lead review.
+Ticket pages retain exact scores, focused tests and workload artifacts. The
+changes consolidate existing routing, file admission and test fixture ownership,
+and remove redundant forwarding without changing status, SQL or lifetime contracts.
+
+Individual light runs passed at 314.18, 301.17, 262.65, 307.71, 272.81 and
+308.49 TPS, with zero failed/unknown outcomes, valid invariants and graceful
+cleanup. Paths' lower sample was reproduced by the adjacent frozen control at
+266.35 TPS; no change-attributed regression or speedup claim.
+
+Combined `clean check :river-bench:installTps` with `--no-daemon` passed in 4m22s.
+Unchanged scan: 2,593 Java files, 57 remaining at or above 90, no new offenders
+or incomplete scores. Evidence under `/private/tmp/river-score-20260911`:
+`integration-first25-check.log`, `integration-first25-scores.json`. The installed
+JVM distribution is refreshed; standalone refresh follows the adjacent startup
+refactor, retaining the recent first-nineteen native smoke as the prior checkpoint.
+Checkpoint: `perf-checkpoint-20260911-score-first25`.
