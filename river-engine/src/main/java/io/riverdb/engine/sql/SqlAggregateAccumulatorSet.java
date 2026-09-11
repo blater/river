@@ -152,8 +152,10 @@ final class SqlAggregateAccumulatorSet {
     }
     long value = row.value(lane);
     int descriptor = aggregates.inputDescriptor(invocation);
+    boolean numericType = SqlNumericTypeRules.isNumeric(descriptor);
     return accumulateScalarValue(
-        invocation, kind, descriptor, row.highValue(lane), value);
+        invocation, kind, descriptor, numericType ? row.highValue(lane) : 0, value,
+        numericType);
   }
 
   private StatusCode addDistinct(
@@ -211,13 +213,15 @@ final class SqlAggregateAccumulatorSet {
     }
     long value = row.value(lane);
     int descriptor = aggregates.inputDescriptor(invocation);
+    boolean numericType = SqlNumericTypeRules.isNumeric(descriptor);
     return accumulateScalarValue(
-        invocation, kind, descriptor, row.highValue(lane), value);
+        invocation, kind, descriptor, numericType ? row.highValue(lane) : 0, value,
+        numericType);
   }
 
   private StatusCode accumulateScalarValue(
-      int invocation, int kind, int descriptor, long high, long value) {
-    if (SqlNumericTypeRules.isNumeric(descriptor)) {
+      int invocation, int kind, int descriptor, long high, long value, boolean numericType) {
+    if (numericType) {
       return numeric.accumulate(
           highs, values, counts, nulls,
           invocation, kind, high, value, descriptor);
