@@ -6,7 +6,7 @@ import java.nio.ByteBuffer;
 import java.nio.file.Path;
 
 /** Small macOS libc bridge. All returned descriptors are owned by the caller. */
-/* FFM use is confined here so every native pointer has one bounded call-scoped arena owner. */
+/* File operations use direct typed FFM calls with bounded call-scoped pointer lifetimes. */
 @SuppressWarnings("restricted")
 final class DarwinFileBridge {
   static final int AT_FDCWD = -2;
