@@ -320,8 +320,6 @@ public final class ExactDecimal {
     return compareDifferentScale(left, leftScale, right, rightScale);
   }
 
-
-
   private static int compareDifferentScale(
       long lowerScaleValue,
       int lowerScale,
@@ -472,7 +470,8 @@ public final class ExactDecimal {
         return false;
       }
       unsignedScaled(remainder, 1, scratch);
-      if (!ExactDecimalWideDivision.divideUnsigned(scratch.high, scratch.low, denominator, scratch)) {
+      if (!ExactDecimalWideDivision.divideUnsigned(
+          scratch.high, scratch.low, denominator, scratch)) {
         return false;
       }
       quotient = quotient * 10 + scratch.quotient;
@@ -519,14 +518,6 @@ public final class ExactDecimal {
     scratch.negative = negative;
     return true;
   }
-
-
-
-
-
-
-
-
 
   /** Caller-owned primitive result used where conversion failure must not mutate output. */
   public static final class LongValue {

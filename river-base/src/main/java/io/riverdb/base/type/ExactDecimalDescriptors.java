@@ -21,10 +21,6 @@ public final class ExactDecimalDescriptors {
     return binaryResult(left, right, 3);
   }
 
-  public static int quantizedDescriptor(int source, int targetScale) {
-    return quantized(source, targetScale);
-  }
-
   private static int binaryResult(int left, int right, int operation) {
     if (!exactNumeric(left) || !exactNumeric(right)) {
       return 0;
@@ -55,7 +51,7 @@ public final class ExactDecimalDescriptors {
     return bounded(integerDigits, resultScale);
   }
 
-  static int quantized(int source, int targetScale) {
+  public static int quantizedDescriptor(int source, int targetScale) {
     if (!exactNumeric(source) || targetScale < 0
         || targetScale > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION) {
       return 0;
