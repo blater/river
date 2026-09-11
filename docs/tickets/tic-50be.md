@@ -31,3 +31,12 @@ Removed the private `reserveOrResumeValueIndex` forwarding hop and call the
 existing `RelationalIndexSchemaLifecycle` owner directly from
 `reserveIndexBuild`. Transaction begin, persistent schema admission, resume,
 commit, abort, and publication ordering are unchanged.
+
+
+Validation: Luna/high source `bbdf5122`, Sol/high and lead approved. Score
+**89.435** (90.114 before). Focused `RelationalDatabaseTest` and
+`CatalogIndexCodecTest`, engine policy checks and installTps passed with
+`--no-daemon`. The epic's four-worker JVM sample/all passed at **308.43 TPS**,
+p99 63.963ms, 494 retries, zero failed/unknown outcomes, valid invariants and
+graceful shutdown. Recent integrated control 314.68 TPS; no observed regression.
+Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_032529_85a3984d`.
