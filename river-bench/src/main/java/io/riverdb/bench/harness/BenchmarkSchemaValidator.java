@@ -10,11 +10,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 /** Validates the deliberately small JSON Schema subset used by benchmark artifacts. */
@@ -61,15 +59,7 @@ public final class BenchmarkSchemaValidator {
     }
     List<String> errors = new ArrayList<>();
     validateNode(schema, document, "$", errors);
-    if ((SAMPLE.equals(schemaName) || STREAMING_SAMPLE.equals(schemaName))
-        && document.isObject()) {
-      validateSampleSemantics(document, errors);
-    } else if (STREAMING_MANIFEST.equals(schemaName) && document.isObject()) {
-      validateStreamingManifestSemantics(document, errors);
-    } else if ((RESULT.equals(schemaName) || STREAMING_RESULT.equals(schemaName))
-        && document.isObject()) {
-      validateResultSemantics(document, errors);
-    }
+    BenchmarkArtifactSemantics.validate(schemaName, document, errors);
     return new SchemaValidation(errors.isEmpty(), errors);
   }
 
@@ -202,118 +192,11 @@ public final class BenchmarkSchemaValidator {
     }
   }
 
-  private static void validateSampleSemantics(JsonNode sample, List<String> errors) {
-    String mode = sample.path("mode").textValue();
-    String metric = sample.path("metric").textValue();
-    long operations = sample.path("operation_count").asLong(-1);
-    long interval = sample.path("expected_interval_ns").asLong(-1);
-    long histogramCount = sample.path("histogram_count").asLong(-1);
-    if ("closed_loop".equals(mode)) {
-      if (!"service".equals(metric)) {
-        errors.add("$.metric: closed_loop only permits service");
-      }
-      if (interval != 0) {
-        errors.add("$.expected_interval_ns: closed_loop requires zero");
-      }
-    } else if ("open_loop".equals(mode) && interval < 1) {
-      errors.add("$.expected_interval_ns: open_loop requires a positive interval");
-    }
-    if ("coordinated_omission_corrected_service".equals(metric)) {
-      if (histogramCount < operations) {
-        errors.add("$.histogram_count: corrected count cannot be below operation count");
-      }
-    } else if (histogramCount != operations) {
-      errors.add("$.histogram_count: service/scheduled count must equal operation count");
-    }
-    long minimum = sample.path("minimum_ns").asLong(-1);
-    long p50 = sample.path("p50_ns").asLong(-1);
-    long p95 = sample.path("p95_ns").asLong(-1);
-    long p99 = sample.path("p99_ns").asLong(-1);
-    long p999 = sample.path("p999_ns").asLong(-1);
-    long maximum = sample.path("maximum_ns").asLong(-1);
-    if (!(minimum <= p50 && p50 <= p95 && p95 <= p99
-        && p99 <= p999 && p999 <= maximum)) {
-      errors.add("$: latency quantiles must be monotonic from minimum through maximum");
-    }
-    double mean = sample.path("mean_ns").asDouble(Double.NaN);
-    if (!Double.isFinite(mean) || mean < minimum || mean > maximum) {
-      errors.add("$.mean_ns: mean must be finite and within minimum/maximum");
-    }
-  }
 
-  private static void validateResultSemantics(JsonNode result, List<String> errors) {
-    Set<String> paths = new HashSet<>();
-    Set<String> names = new HashSet<>();
-    for (JsonNode reference : result.path("workload_artifacts")) {
-      String name = reference.path("name").textValue();
-      String path = reference.path("path").textValue();
-      if (name != null && !names.add(name)) {
-        errors.add("$.workload_artifacts: duplicate workload name " + name);
-      }
-      if (name != null && path != null && !path.startsWith(name + "-v")) {
-        errors.add("$.workload_artifacts: path does not identify its named workload");
-      }
-      if (path != null && !paths.add(path)) {
-        errors.add("$.workload_artifacts: duplicate output path " + path);
-      }
-    }
-  }
 
-  private static void validateStreamingManifestSemantics(
-      JsonNode manifest,
-      List<String> errors) {
-    Set<String> names = new HashSet<>();
-    Map<String, Long> familySeeds = new HashMap<>();
-    Map<String, String> familyConfigs = new HashMap<>();
-    for (JsonNode workload : manifest.path("workloads")) {
-      String name = workload.path("name").textValue();
-      String schemaId = workload.path("schema_id").textValue();
-      String config = workload.path("config").textValue();
-      if (name == null || !names.add(name)) {
-        errors.add("$.workloads: duplicate or absent workload name " + name);
-        continue;
-      }
-      int separator = name.indexOf('_');
-      if (separator < 1) {
-        errors.add("$.workloads: workload name has no family " + name);
-        continue;
-      }
-      String family = name.substring(0, separator);
-      String table = name.substring(separator + 1);
-      String expectedSchema = family + '.' + table + ".v2";
-      if (!expectedSchema.equals(schemaId)) {
-        errors.add("$.workloads: schema_id does not match workload name " + name);
-      }
-      String configPrefix = "schema=" + family + "_v2;";
-      if (config == null || !config.startsWith(configPrefix)) {
-        errors.add("$.workloads: config family does not match workload name " + name);
-        continue;
-      }
-      int tableOffset = config.indexOf(";table=");
-      if (tableOffset < 0) {
-        errors.add("$.workloads: config has no table identity " + name);
-        continue;
-      }
-      int tableStart = tableOffset + ";table=".length();
-      int tableEnd = config.indexOf(';', tableStart);
-      String configuredTable = tableEnd < 0
-          ? config.substring(tableStart)
-          : config.substring(tableStart, tableEnd);
-      if (!table.equals(configuredTable)) {
-        errors.add("$.workloads: config table does not match workload name " + name);
-      }
-      String commonConfig = tableOffset < 0 ? config : config.substring(0, tableOffset);
-      long seed = workload.path("seed").asLong();
-      Long priorSeed = familySeeds.putIfAbsent(family, seed);
-      if (priorSeed != null && priorSeed != seed) {
-        errors.add("$.workloads: inconsistent seed for family " + family);
-      }
-      String priorConfig = familyConfigs.putIfAbsent(family, commonConfig);
-      if (priorConfig != null && !priorConfig.equals(commonConfig)) {
-        errors.add("$.workloads: inconsistent common config for family " + family);
-      }
-    }
-  }
+
+
+
 
   private static boolean contains(JsonNode array, JsonNode value) {
     for (JsonNode candidate : array) {
