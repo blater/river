@@ -251,3 +251,12 @@ is outstanding. Continue with `tic-9e2f`, then `tic-055b`, as directed.
 bringing accepted tickets to63. Complete unchanged scan2641/high19; clean
 checks, independent review and matched JVM diagnostics passed. The original
 forwarding removal was discarded to preserve K16. Next complete `tic-055b`.
+
+
+2026-09-11 M5 completion: `tic-055b` is accepted at
+`perf-checkpoint-20260911-sql-command-ownership-m5`, bringing the campaign to
+64 accepted tickets. Unchanged full scan: 2,640 files, 18 remaining at or above90,
+no new offenders. SqlCommand128.210→89.884. Independent review, clean1,955-test
+checkpoint and four matched JVM workload samples passed. This completes the
+user-directed first62 → indexed-store → SQL-command sequence. Native toolchain
+validation remains separately blocked by `tic-ae17`.

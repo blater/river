@@ -9,8 +9,9 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
-Current user-directed queue (M5): the first62 integration and `tic-9e2f` are
-promoted. Next complete [`tic-055b`](tickets/tic-055b.md). Existing native
+Current user-directed queue (M5) is complete: the first62 integration, `tic-9e2f`,
+and [`tic-055b`](tickets/tic-055b.md) are accepted for promotion. The campaign now
+has 64 accepted tickets and 18 remaining high-scoring files. Existing native
 compiler failures remain separate under [`tic-ae17`](tickets/tic-ae17.md).
 
 Current campaign: [tic-c8d1](tickets/tic-c8d1.md) brings every scored source file,

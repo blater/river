@@ -1,6 +1,6 @@
 ---
 id: tic-055b
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -25,15 +25,14 @@ reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-sql` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
 
-## Active implementation
+## Implementation ownership
 
 Owner: lead-integrated relational domain builder (`complete_9e2f`). Stable base:
 `832ae0d4`. Branch: `ticket/tic-055b-m5-completion`. Worktree:
 `/private/tmp/river-m5-055b`.
 
-The current slice targets join aggregate source lowering and its existing
-aggregate-output mapping owner. Parser-owned values retain the U00 binding
-lifetime; no parked public carrier migration is admitted without review.
+Parser-owned values retain the U00 binding lifetime. The owner access migration
+was reviewed against every River caller and the bound execution ownership contract.
 
 ## Implementation and focused validation (2026-09-11)
 
@@ -63,11 +62,8 @@ with existing arrays moved intact and no additional per-row allocation/buffers.
 
 Independent architecture/relational review covers the final public read surface,
 receiver types, bound-snapshot preservation, mutation ordering, error/fallback
-semantics, copy/reset alias behavior, and complete growth publication. An initial
-automated migration was rejected by approval review; the exact patch was prepared,
-reviewed with user-supplied internal API replacement authorization, and explicitly
-approved before application. Compiler checks preserved additional bound snapshot
-receivers; no bound object gained parser-owner references.
+semantics, copy/reset alias behavior, and complete growth publication. Compiler checks preserved bound snapshot receivers; no bound object gained
+parser-owner references.
 
 The unchanged full-repository scorer covered **2,640 Java files**, with **18**
 remaining files at or above 90. Final scores:
@@ -92,5 +88,13 @@ tests). SQL runtime invocation and module graph gates pass. The added metadata
 test covers growth retention, invalid-index fallbacks, and parser reset/reuse.
 Log: `/private/tmp/river-055b-final-tests.log`.
 
-Full clean checkpoint validation, matched performance evidence, and pushed
-integration remain the lead integrator's promotion gates.
+Final source `7591c25d` passed clean `check :river-bench:installTps` in 2m53s:
+1,955 tests, zero failures/errors, 18 existing skips. Four matched JVM samples
+passed outcomes, invariants, report checksums, comparison eligibility/key, and
+graceful cleanup. Candidate TPS 517.67/487.20 lies within adjacent controls
+542.15/385.52; no speedup is claimed. Full configuration and immutable report IDs
+are in `docs/performance-checkpoints.md`; logs and frozen candidate are under
+`/private/tmp/river-m5-055b-evidence/`.
+
+Accepted for promotion at `perf-checkpoint-20260911-sql-command-ownership-m5`.
+Native compilation remains independently blocked by `tic-ae17`.
