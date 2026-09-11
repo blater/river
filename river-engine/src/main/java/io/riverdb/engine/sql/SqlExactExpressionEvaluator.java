@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.ExactDecimalQuantize;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlScalarExpression;
@@ -18,15 +19,15 @@ final class SqlExactExpressionEvaluator {
       case SqlScalarExpression.CEILING -> ExactDecimal.integral(value, source, true, result);
       case SqlScalarExpression.FLOOR -> ExactDecimal.integral(value, source, false, result);
       case SqlScalarExpression.ROUND ->
-          ExactDecimal.quantize(value, source, target, true, false, result, wide);
+          ExactDecimalQuantize.apply(value, source, target, true, false, result, wide);
       case SqlScalarExpression.TRUNCATE ->
-          ExactDecimal.quantize(value, source, target, false, false, result, wide);
+          ExactDecimalQuantize.apply(value, source, target, false, false, result, wide);
       default -> StatusCode.INVALID_EXTERNAL_INPUT;
     };
   }
 
   StatusCode cast(long value, int source, int target) {
-    return ExactDecimal.quantize(
+    return ExactDecimalQuantize.apply(
         value, source, target, true, SqlNumericTypeRules.isIntegral(target),
         result, wide);
   }

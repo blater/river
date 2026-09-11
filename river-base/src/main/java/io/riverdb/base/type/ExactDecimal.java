@@ -216,34 +216,6 @@ public final class ExactDecimal {
         scratch);
   }
 
-  public static StatusCode quantize(
-      long value,
-      int sourceDescriptor,
-      int targetDescriptor,
-      boolean halfEven,
-      boolean requireExact,
-      LongValue result,
-      WideScratch scratch) {
-    return ExactDecimalQuantize.apply(
-        value,
-        sourceDescriptor,
-        targetDescriptor,
-        halfEven,
-        requireExact,
-        result,
-        scratch);
-  }
-
-  public static StatusCode quantizeHalfAway(
-      long value,
-      int sourceDescriptor,
-      int targetDescriptor,
-      LongValue result,
-      WideScratch scratch) {
-    return ExactDecimalQuantize.halfAway(
-        value, sourceDescriptor, targetDescriptor, result, scratch);
-  }
-
   /** Converts an ordered lower or exclusive-upper bound to the least target-scale value. */
   public static boolean ceilingScale(
       long value,

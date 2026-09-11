@@ -16,11 +16,11 @@ public final class SqlNumericValue {
     int targetType = SqlTypeDescriptor.typeId(target);
     if (targetType == SqlTypeDescriptor.TYPE_ID_DECIMAL
         && SqlNumericTypeRules.isExact(source)) {
-      return ExactDecimal.quantizeHalfAway(value, source, target, result, scratch);
+      return ExactDecimalQuantize.halfAway(value, source, target, result, scratch);
     }
     if (SqlNumericTypeRules.isIntegral(target)
         && SqlNumericTypeRules.isExact(source)) {
-      return ExactDecimal.quantizeHalfAway(value, source, target, result, scratch);
+      return ExactDecimalQuantize.halfAway(value, source, target, result, scratch);
     }
     if (SqlNumericTypeRules.isExact(target)
         && SqlNumericTypeRules.isApproximate(source)) {

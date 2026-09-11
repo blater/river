@@ -172,16 +172,16 @@ final class ExactDecimalTest {
     ExactDecimal.WideScratch scratch = new ExactDecimal.WideScratch();
     int source = SqlTypeDescriptor.decimal(4, 3);
     int target = SqlTypeDescriptor.decimal(3, 2);
-    assertEquals(StatusCode.OK, ExactDecimal.quantize(
+    assertEquals(StatusCode.OK, ExactDecimalQuantize.apply(
         1_245, source, target, true, false, result, scratch));
     assertEquals(124, result.value);
-    assertEquals(StatusCode.OK, ExactDecimal.quantize(
+    assertEquals(StatusCode.OK, ExactDecimalQuantize.apply(
         1_255, source, target, true, false, result, scratch));
     assertEquals(126, result.value);
-    assertEquals(StatusCode.OK, ExactDecimal.quantize(
+    assertEquals(StatusCode.OK, ExactDecimalQuantize.apply(
         -1_259, source, target, false, false, result, scratch));
     assertEquals(-125, result.value);
-    assertEquals(StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, ExactDecimal.quantize(
+    assertEquals(StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, ExactDecimalQuantize.apply(
         1_251, source, target, false, true, result, scratch));
 
     assertEquals(StatusCode.OK, ExactDecimal.integral(
@@ -304,7 +304,7 @@ final class ExactDecimalTest {
       int targetDescriptor = ExactDecimalDescriptors.quantizedDescriptor(leftDescriptor, targetScale);
       if (targetDescriptor != 0) {
         assertArithmetic(
-            ExactDecimal.quantize(
+            ExactDecimalQuantize.apply(
                 left,
                 leftDescriptor,
                 targetDescriptor,
