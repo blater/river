@@ -3,7 +3,6 @@ package io.riverdb.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.text.Utf8Text;
-import io.riverdb.base.type.SqlTypeDescriptor;
 import java.nio.ByteBuffer;
 
 /** Caller-owned parsed SQL command for the first executable point-statement subset. */
@@ -45,6 +44,7 @@ public final class SqlCommand {
       new SqlMutationExpressions();
   final SqlAggregateSet aggregates = new SqlAggregateSet();
   final SqlGroupingList grouping = new SqlGroupingList();
+  final SqlCommandColumnConstraints columnConstraints = new SqlCommandColumnConstraints();
   final SqlTableConstraintSet tableConstraints = new SqlTableConstraintSet();
   final SqlBooleanPredicateProgram wherePredicates =
       new SqlBooleanPredicateProgram();
@@ -54,29 +54,15 @@ public final class SqlCommand {
   SqlIdentifier[] columnNames = new SqlIdentifier[8];
   SqlIdentifier[] columnTableNames = new SqlIdentifier[8];
   SqlIdentifier[] columnAliases = new SqlIdentifier[8];
-  SqlIdentifier[] columnReferenceTableNames = new SqlIdentifier[8];
-  SqlIdentifier[] columnReferenceColumnNames = new SqlIdentifier[8];
   final SqlOrderByList orderBy = new SqlOrderByList();
   final SqlInsertRows inserts = new SqlInsertRows();
   long[] updateHighs = new long[8];
   long[] updateValues = new long[8];
-  long[] columnDefaultHighs = new long[8];
-  long[] columnDefaultValues = new long[8];
-  byte[] columnDefaultKinds = new byte[8];
-  int[] columnTypeDescriptors = new int[8];
-  long[] columnCheckHighs = new long[8];
-  long[] columnCheckValues = new long[8];
-  int[] columnCheckTypeDescriptors = new int[8];
-  SqlComparison[] columnCheckComparisons = new SqlComparison[8];
   boolean[] nullUpdates = new boolean[8];
   boolean[] defaultUpdates = new boolean[8];
   int[] updateTypeDescriptors = new int[8];
   int[] updateOperators = new int[8];
   boolean[] nullProjections = new boolean[8];
-  boolean[] columnNotNull = new boolean[8];
-  boolean[] columnDefaults = new boolean[8];
-  boolean[] columnUnique = new boolean[8];
-  boolean[] columnReferences = new boolean[8];
   final byte[] textBytes = new byte[MAXIMUM_TEXT_BYTES];
   SqlCommandType type;
   long key;
@@ -92,8 +78,6 @@ public final class SqlCommand {
   boolean readCommittedTransaction;
   boolean serializableTransaction;
   boolean descendingOrder;
-  boolean primaryKeyIdentity;
-  int primaryKeyIdentityColumn = -1;
   int insertRowCount;
   int insertColumnCount;
   int updateColumnCount;
@@ -109,8 +93,6 @@ public final class SqlCommand {
       columnNames[index] = new SqlIdentifier();
       columnTableNames[index] = new SqlIdentifier();
       columnAliases[index] = new SqlIdentifier();
-      columnReferenceTableNames[index] = new SqlIdentifier();
-      columnReferenceColumnNames[index] = new SqlIdentifier();
     }
   }
 
@@ -124,26 +106,14 @@ public final class SqlCommand {
   }
 
   StatusCode lowerJoinAggregateSource(SqlCommand root) {
-    for (int invocation = 0; invocation < aggregates.invocationCount(); invocation++) {
-      if (aggregates.operandProjection(invocation) >= 0) continue;
-      int output = aggregateOutputProjection(invocation);
-      if (output >= 0) {
-        projections.expression(output).replaceWithLiteral(1, SqlTypeDescriptor.BIGINT);
-      }
-    }
+    aggregates.materializeOperandlessOutputs(projections, columnCount);
     for (int group = 0; group < grouping.count(); group++) {
       int projection = grouping.projection(group);
       if (projection < 0) {
         projection = columnCount;
-        SqlIdentifier column = writableNextColumnName();
-        if (column == null) return StatusCode.RESOURCE_EXHAUSTED;
-        SqlScalarExpression destination = projections.expression(projection);
-        StatusCode status = destination.copyFrom(grouping.expression(group));
+        StatusCode status = SqlCommandProjectionView.appendGroupExpression(
+            this, grouping.expression(group));
         if (!status.isOk()) return status;
-        int symbol = destination.isDirectColumnReference()
-            ? (int) destination.operand(0) : -1;
-        SqlIdentifier name = symbol < 0 ? null : projections.symbolName(symbol);
-        if (name != null) column.copyFrom(name);
       }
       root.grouping.setOperandProjection(group, projection);
     }
@@ -155,14 +125,6 @@ public final class SqlCommand {
     rowLimit = Long.MAX_VALUE;
     type = SqlCommandType.JOIN_SCAN;
     return StatusCode.OK;
-  }
-
-  private int aggregateOutputProjection(int invocation) {
-    int groups = columnCount - aggregates.outputCount();
-    for (int output = 0; output < aggregates.outputCount(); output++) {
-      if (aggregates.outputInvocation(output) == invocation) return groups + output;
-    }
-    return -1;
   }
 
   void lowerJoinAggregateRoot() {
@@ -324,7 +286,7 @@ public final class SqlCommand {
     if (columnCount >= maximum || !SqlCommandCapacity.ensureColumns(this, columnCount + 1)) {
       return null;
     }
-    columnTypeDescriptors[columnCount] = SqlTypeDescriptor.BIGINT;
+    columnConstraints.initializeColumn(columnCount);
     return columnNames[columnCount++];
   }
 
@@ -366,11 +328,11 @@ public final class SqlCommand {
   }
 
   void markLastColumnNotNull() {
-    SqlCommandColumnConstraints.markNotNull(this);
+    columnConstraints.markNotNull(columnCount);
   }
 
   void markPrimaryKeyIdentity() {
-    SqlCommandColumnConstraints.markIdentity(this);
+    columnConstraints.markIdentity(columnCount);
   }
 
   void markLastColumnDefault(long value) {
@@ -378,23 +340,23 @@ public final class SqlCommand {
   }
 
   void markLastColumnDefault(long high, long value) {
-    SqlCommandColumnConstraints.markDefault(this, high, value);
+    columnConstraints.markDefault(columnCount, high, value);
   }
 
   void markLastColumnCurrentDefault(int kind) {
-    SqlCommandColumnConstraints.markCurrentDefault(this, kind);
+    columnConstraints.markCurrentDefault(columnCount, kind);
   }
 
   void markLastColumnVarchar(int maximumScalars) {
-    SqlCommandColumnConstraints.markVarchar(this, maximumScalars);
+    columnConstraints.markVarchar(columnCount, maximumScalars);
   }
 
   void markLastColumnType(int descriptor) {
-    SqlCommandColumnConstraints.markType(this, descriptor);
+    columnConstraints.markType(columnCount, descriptor);
   }
 
   StatusCode markLastColumnUnique() {
-    return SqlCommandColumnConstraints.markUnique(this);
+    return columnConstraints.markUnique(columnCount);
   }
 
   StatusCode beginTableConstraint(int kind) { return tableConstraints.begin(kind); }
@@ -405,20 +367,20 @@ public final class SqlCommand {
   SqlIdentifier writableTableConstraintReferenceTable() { return tableConstraints.table(); }
 
   SqlIdentifier writableLastColumnReferenceTableName() {
-    return SqlCommandColumnConstraints.referenceTable(this);
+    return columnConstraints.referenceTable(columnCount);
   }
 
   SqlIdentifier writableLastColumnReferenceColumnName() {
-    return SqlCommandColumnConstraints.referenceColumn(this);
+    return columnConstraints.referenceColumn(columnCount);
   }
 
   StatusCode markLastColumnReference() {
-    return SqlCommandColumnConstraints.markReference(this);
+    return columnConstraints.markReference(columnCount);
   }
 
   void markLastColumnCheck(
       SqlComparison comparison, long high, long value, int descriptor) {
-    SqlCommandColumnConstraints.markCheck(this, comparison, high, value, descriptor);
+    columnConstraints.markCheck(columnCount, comparison, high, value, descriptor);
   }
 
   long storeText(char[] source, int offset, int length) {
@@ -585,101 +547,87 @@ public final class SqlCommand {
   }
 
   public boolean columnIsNotNull(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnNotNull[index];
+    return columnConstraints.columnIsNotNull(columnCount, index);
   }
 
   public boolean columnHasDefault(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnDefaults[index];
+    return columnConstraints.columnHasDefault(columnCount, index);
   }
 
   public long columnDefaultValue(int index) {
-    return columnHasDefault(index) ? columnDefaultValues[index] : 0;
+    return columnConstraints.columnDefaultValue(columnCount, index);
   }
 
   public long columnDefaultHigh(int index) {
-    return columnHasDefault(index) ? columnDefaultHighs[index] : 0;
+    return columnConstraints.columnDefaultHigh(columnCount, index);
   }
 
   public int columnDefaultKind(int index) {
-    return columnHasDefault(index)
-        ? Byte.toUnsignedInt(columnDefaultKinds[index]) : 0;
+    return columnConstraints.columnDefaultKind(columnCount, index);
   }
 
   public boolean columnIsVarchar(int index) {
-    return index >= 0
-        && index < columnCount
-        && SqlTypeDescriptor.typeId(columnTypeDescriptors[index])
-            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
+    return columnConstraints.columnIsVarchar(columnCount, index);
   }
 
   public int columnTypeDescriptor(int index) {
-    return index >= 0 && index < columnCount ? columnTypeDescriptors[index] : 0;
+    return columnConstraints.columnTypeDescriptor(columnCount, index);
   }
 
   public boolean columnIsUnique(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnUnique[index];
+    return columnConstraints.columnIsUnique(columnCount, index);
   }
 
   public boolean hasUniqueColumns() {
-    return SqlCommandColumnConstraints.any(columnUnique, columnCount);
+    return columnConstraints.hasUniqueColumns(columnCount);
   }
 
   public boolean columnHasReference(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnReferences[index];
+    return columnConstraints.columnHasReference(columnCount, index);
   }
 
   public SqlIdentifier columnReferenceTableName(int index) {
-    return columnHasReference(index) ? columnReferenceTableNames[index] : null;
+    return columnConstraints.columnReferenceTableName(columnCount, index);
   }
 
   public SqlIdentifier columnReferenceColumnName(int index) {
-    return columnHasReference(index) ? columnReferenceColumnNames[index] : null;
+    return columnConstraints.columnReferenceColumnName(columnCount, index);
   }
 
   public boolean hasReferences() {
-    return SqlCommandColumnConstraints.any(columnReferences, columnCount);
+    return columnConstraints.hasReferences(columnCount);
   }
 
   public boolean hasPrimaryKeyIdentity() {
-    return primaryKeyIdentity;
+    return columnConstraints.hasPrimaryKeyIdentity();
   }
 
   int primaryKeyIdentityColumn() {
-    return primaryKeyIdentityColumn;
+    return columnConstraints.primaryKeyIdentityColumn();
   }
 
   void markColumnNotNull(int index) {
-    if (index >= 0 && index < columnCount) columnNotNull[index] = true;
+    columnConstraints.markNotNull(columnCount, index);
   }
 
   public boolean columnHasCheck(int index) {
-    return index >= 0
-        && index < columnCount
-        && columnCheckComparisons[index] != null;
+    return columnConstraints.columnHasCheck(columnCount, index);
   }
 
   public SqlComparison columnCheckComparison(int index) {
-    return columnHasCheck(index) ? columnCheckComparisons[index] : null;
+    return columnConstraints.columnCheckComparison(columnCount, index);
   }
 
   public long columnCheckValue(int index) {
-    return columnHasCheck(index) ? columnCheckValues[index] : 0;
+    return columnConstraints.columnCheckValue(columnCount, index);
   }
 
   public long columnCheckHigh(int index) {
-    return columnHasCheck(index) ? columnCheckHighs[index] : 0;
+    return columnConstraints.columnCheckHigh(columnCount, index);
   }
 
   public int columnCheckTypeDescriptor(int index) {
-    return columnHasCheck(index) ? columnCheckTypeDescriptors[index] : 0;
+    return columnConstraints.columnCheckTypeDescriptor(columnCount, index);
   }
 
   public int tableConstraintCount() { return tableConstraints.count(); }

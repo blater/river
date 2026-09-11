@@ -32,6 +32,20 @@ final class SqlCommandProjectionView {
     }
   }
 
+  static StatusCode appendGroupExpression(SqlCommand command, SqlScalarExpression source) {
+    int projection = command.columnCount;
+    SqlIdentifier column = command.writableNextColumnName();
+    if (column == null) return StatusCode.RESOURCE_EXHAUSTED;
+    SqlScalarExpression destination = command.projections.expression(projection);
+    StatusCode status = destination.copyFrom(source);
+    if (!status.isOk()) return status;
+    int symbol = destination.isDirectColumnReference()
+        ? (int) destination.operand(0) : -1;
+    SqlIdentifier name = symbol < 0 ? null : command.projections.symbolName(symbol);
+    if (name != null) column.copyFrom(name);
+    return StatusCode.OK;
+  }
+
   static StatusCode setColumn(
       SqlCommand command,
       int index,

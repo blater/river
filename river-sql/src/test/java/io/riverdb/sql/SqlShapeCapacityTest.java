@@ -11,6 +11,58 @@ import org.junit.jupiter.api.Test;
 
 final class SqlShapeCapacityTest {
   @Test
+  void constraintMetadataSurvivesGrowthAndResetsWithParserReuse() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(StatusCode.OK, parser.parse(
+        "CREATE TABLE child (id BIGINT PRIMARY KEY, "
+            + "parent BIGINT REFERENCES parents(id), value BIGINT DEFAULT -7, "
+            + "checked BIGINT CHECK (checked >= -9), label VARCHAR(12) UNIQUE)", command));
+    SqlIdentifier reference = command.columnReferenceTableName(1);
+    assertTrue(SqlCommandCapacity.ensureColumns(command, 16));
+    org.junit.jupiter.api.Assertions.assertSame(reference, command.columnReferenceTableName(1));
+    assertEquals("parents", reference.toString());
+    assertEquals(-7, command.columnDefaultValue(2));
+    assertEquals(-1, command.columnDefaultHigh(2));
+    assertEquals(-9, command.columnCheckValue(3));
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.columnCheckComparison(3));
+    assertTrue(command.columnIsVarchar(4));
+    assertTrue(command.columnIsUnique(4));
+    assertTrue(command.columnIsNotNull(0));
+    assertConstraintFallbacks(command, -1);
+    assertConstraintFallbacks(command, command.columnCount());
+
+    assertColumns(parser, command, 9, StatusCode.OK);
+    assertEquals(0, reference.length());
+    assertFalse(command.columnHasReference(1));
+    assertFalse(command.columnHasDefault(2));
+    assertFalse(command.columnHasCheck(3));
+    assertFalse(command.columnIsVarchar(4));
+    assertFalse(command.columnIsUnique(4));
+    assertEquals(0, command.columnDefaultValue(2));
+    assertEquals(0, command.columnCheckValue(3));
+  }
+
+  private static void assertConstraintFallbacks(SqlCommand command, int index) {
+    assertFalse(command.columnIsNotNull(index));
+    assertFalse(command.columnHasDefault(index));
+    assertFalse(command.columnIsVarchar(index));
+    assertFalse(command.columnIsUnique(index));
+    assertFalse(command.columnHasReference(index));
+    assertFalse(command.columnHasCheck(index));
+    assertEquals(0, command.columnTypeDescriptor(index));
+    assertEquals(0, command.columnDefaultValue(index));
+    assertEquals(0, command.columnDefaultHigh(index));
+    assertEquals(0, command.columnDefaultKind(index));
+    assertEquals(0, command.columnCheckValue(index));
+    assertEquals(0, command.columnCheckHigh(index));
+    assertEquals(0, command.columnCheckTypeDescriptor(index));
+    org.junit.jupiter.api.Assertions.assertNull(command.columnCheckComparison(index));
+    org.junit.jupiter.api.Assertions.assertNull(command.columnReferenceTableName(index));
+    org.junit.jupiter.api.Assertions.assertNull(command.columnReferenceColumnName(index));
+  }
+
+  @Test
   void growsTableInsertAndProjectionShapesThroughLegacyBoundary() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();

@@ -2,6 +2,7 @@ package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Command-owned selected-output mapping for a deduplicated aggregate set. */
 final class SqlAggregateSet {
@@ -55,6 +56,24 @@ final class SqlAggregateSet {
     }
     outputInvocations[outputCount++] = invocation;
     return true;
+  }
+
+  void materializeOperandlessOutputs(SqlProjectionList projections, int projectionCount) {
+    for (int invocation = 0; invocation < invocationCount; invocation++) {
+      if (operandProjections[invocation] >= 0) continue;
+      int output = outputProjection(invocation, projectionCount);
+      if (output >= 0) {
+        projections.expression(output).replaceWithLiteral(1, SqlTypeDescriptor.BIGINT);
+      }
+    }
+  }
+
+  private int outputProjection(int invocation, int projectionCount) {
+    int groups = projectionCount - outputCount;
+    for (int output = 0; output < outputCount; output++) {
+      if (outputInvocations[output] == invocation) return groups + output;
+    }
+    return -1;
   }
 
   int invocationCount() { return invocationCount; }

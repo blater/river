@@ -27,23 +27,10 @@ final class SqlCommandReset {
     for (int index = 0; index < usedColumns; index++) {
       command.columnNames[index].reset();
       command.nullProjections[index] = false;
-      command.columnDefaultHighs[index] = 0;
-      command.columnDefaultValues[index] = 0;
-      command.columnCheckHighs[index] = 0;
-      command.columnCheckValues[index] = 0;
-      command.columnCheckTypeDescriptors[index] = 0;
-      command.columnCheckComparisons[index] = null;
-      command.columnTypeDescriptors[index] = 0;
-      command.columnDefaultKinds[index] = 0;
-      command.columnNotNull[index] = false;
-      command.columnDefaults[index] = false;
-      command.columnUnique[index] = false;
-      command.columnReferences[index] = false;
-      command.columnReferenceTableNames[index].reset();
-      command.columnReferenceColumnNames[index].reset();
       command.columnTableNames[index].reset();
       command.columnAliases[index].reset();
     }
+    command.columnConstraints.reset(usedColumns);
     command.orderBy.reset();
     command.type = null;
     command.key = 0;
@@ -59,8 +46,6 @@ final class SqlCommandReset {
     command.readCommittedTransaction = false;
     command.serializableTransaction = false;
     command.descendingOrder = false;
-    command.primaryKeyIdentity = false;
-    command.primaryKeyIdentityColumn = -1;
     command.insertRowCount = 0;
     command.insertColumnCount = 0;
     command.updateColumnCount = 0;
