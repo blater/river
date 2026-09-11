@@ -109,7 +109,7 @@ final class RiverDaemonRuntimeRecordsTest {
           fixture.filesystem, fixture.datadir, fixture.runtimeRoot, targetResult));
       target = targetResult.target();
 
-      assertEquals(StatusCode.TIMEOUT, RiverDaemonStop.request(target, 100));
+      assertEquals(StatusCode.TIMEOUT, RiverDaemonStopClient.request(target, 100));
       assertTrue(Files.exists(fixture.runtimeRoot.resolve(fixture.runtimeName)));
       assertNoStopControls(fixture.datadir);
     } finally {
@@ -131,7 +131,7 @@ final class RiverDaemonRuntimeRecordsTest {
           fixture.filesystem, fixture.datadir, fixture.runtimeRoot, targetResult));
       target = targetResult.target();
       RiverDaemonTarget openedTarget = target;
-      caller = new FutureTask<>(() -> RiverDaemonStop.request(openedTarget, 2_000));
+      caller = new FutureTask<>(() -> RiverDaemonStopClient.request(openedTarget, 2_000));
       Thread requestThread = new Thread(caller, "river-stop-owner-exit-test");
       requestThread.start();
       awaitPath(fixture.datadir.resolve(RiverDaemonStopRequest.REQUEST_NAME));
@@ -204,7 +204,7 @@ final class RiverDaemonRuntimeRecordsTest {
       assertEquals(StatusCode.OK, RiverDaemonIdentity.openExisting(
           fixture.datadir, fixture.filesystem, new SecureRandom(), currentPid(), currentStart(),
           restarted));
-      assertEquals(StatusCode.OK, RiverDaemonStop.recoverStale(fixture.filesystem, restarted));
+      assertEquals(StatusCode.OK, RiverDaemonStopRecords.recoverStale(fixture.filesystem, restarted));
       assertFalse(Files.exists(fixture.datadir.resolve(RiverDaemonStopRequest.REQUEST_NAME)));
       assertFalse(Files.exists(fixture.datadir.resolve(
           RiverDaemonStopRequest.ACCEPTED_PREFIX + "22222222222222222222222222222222")));
@@ -232,10 +232,10 @@ final class RiverDaemonRuntimeRecordsTest {
       assertEquals(StatusCode.OK, RiverDaemonTarget.open(
           fixture.filesystem, fixture.datadir, fixture.runtimeRoot, targetResult));
       target = targetResult.target();
-      RiverDaemonStop.Control control = new RiverDaemonStop.Control(
+      RiverDaemonStopControl control = new RiverDaemonStopControl(
           fixture.filesystem, fixture.identity, fixture.metadata);
       RiverDaemonTarget openedTarget = target;
-      caller = new FutureTask<>(() -> RiverDaemonStop.request(openedTarget, 2_000));
+      caller = new FutureTask<>(() -> RiverDaemonStopClient.request(openedTarget, 2_000));
       Thread requestThread = new Thread(caller, "river-stop-join-test");
       requestThread.start();
       awaitPath(fixture.datadir.resolve("stop.request"));

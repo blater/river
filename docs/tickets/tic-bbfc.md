@@ -24,3 +24,11 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-server-app` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Delivery evidence
+
+Stop request/join, completion proof, server control, shared directory mutation and shared
+record reading now have concrete owners. River-owned callers use them directly; the stop
+request codec remains the format owner. The source scan leaves every original and extracted
+file below 90 (maximum **71.3904**); focused build and lifecycle validation remain pending
+the shared build slot.

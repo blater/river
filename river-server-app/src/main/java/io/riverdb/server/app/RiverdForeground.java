@@ -67,7 +67,7 @@ final class RiverdForeground {
       status = RiverDaemonInstance.prepareRestart(paths.datadir, filesystem, random,
           resources.request(), EmbeddedLockDiagnosticsConfig.disabled(),
           resources.maximumActiveTransactions(), preparation);
-      if (status.isOk()) status = RiverDaemonStop.recoverStale(
+      if (status.isOk()) status = RiverDaemonStopRecords.recoverStale(
           filesystem, preparation.identity());
       if (status.isOk()) status = RiverDaemonRuntimeStaleRecovery.recover(
           paths.datadir, filesystem, preparation.identity(), paths.runtimeRoot);
@@ -162,7 +162,7 @@ final class RiverdForeground {
     private final RiverDaemonFileSystem filesystem;
     private final Path runtimeRoot;
     private final RiverDaemonRuntimeRecords.Metadata metadata;
-    private final RiverDaemonStop.Control control;
+    private final RiverDaemonStopControl control;
     private final CountDownLatch stopped = new CountDownLatch(1);
     private StatusCode status = StatusCode.OK;
     private StatusCode lastControlStatus = StatusCode.OK;
@@ -175,7 +175,7 @@ final class RiverdForeground {
       this.filesystem = filesystem;
       this.runtimeRoot = runtimeRoot;
       this.metadata = metadata;
-      control = new RiverDaemonStop.Control(filesystem, identity, metadata);
+      control = new RiverDaemonStopControl(filesystem, identity, metadata);
     }
 
     void await(long millis) throws InterruptedException {
