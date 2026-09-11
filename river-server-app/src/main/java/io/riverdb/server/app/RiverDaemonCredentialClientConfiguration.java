@@ -89,8 +89,12 @@ final class RiverDaemonCredentialClientConfiguration {
       status = StatusCode.INVARIANT_BROKEN;
     } finally {
       if (stage != null) {
-        StatusCode close = stage.close();
-        if (status.isOk() && !close.isOk() && close != StatusCode.CLOSED) status = close;
+        try {
+          StatusCode close = stage.close();
+          if (status.isOk() && !close.isOk() && close != StatusCode.CLOSED) status = close;
+        } catch (RuntimeException failure) {
+          if (status.isOk()) status = StatusCode.INVARIANT_BROKEN;
+        }
       }
       if (certificate != null) java.util.Arrays.fill(certificate, (byte) 0);
       if (recordBytes != null) java.util.Arrays.fill(recordBytes, (byte) 0);

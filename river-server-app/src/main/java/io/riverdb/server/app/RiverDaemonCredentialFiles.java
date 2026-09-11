@@ -76,4 +76,3 @@ final class RiverDaemonCredentialFiles {
     return file.force(ForceMode.CONTENT_AND_METADATA);
   }
 }
-
