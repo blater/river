@@ -1,6 +1,6 @@
 ---
 id: tic-396a
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,13 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-engine` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Review notes
+
+Split the original harness into codec/retention, replay/recovery, live grouped
+commit, and checkpoint lifecycle test suites. Shared concrete owners now hold
+mutation/tuple builders, WAL record/group builders, database/WAL/session
+resources, and registry/checkpoint assertions; superseded per-suite copies were
+removed. The original 212.312 harness score is now below 90 for every extracted
+test and fixture file, with 3,350 Java lines versus 3,197 before extraction.
+Focused tests and the light workload remain pending build-slot validation.
