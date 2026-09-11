@@ -92,14 +92,14 @@ final class WindowsSecurityPolicy {
                   | WindowsFileBridge.FILE_APPEND_DATA | WindowsFileBridge.FILE_WRITE_EA
                   | WindowsFileBridge.FILE_WRITE_ATTRIBUTES | WindowsFileBridge.DELETE
                   | WindowsFileBridge.WRITE_DAC | WindowsFileBridge.WRITE_OWNER
-                  | 0x40000000 | 0x10000000)) != 0)) {
+                  | 0x40000000 | 0x10000000)) != 0)) { // GENERIC_WRITE / GENERIC_ALL
                 return WindowsFileBridge.STATUS_ACCESS_DENIED;
               }
             } else if (type != ACCESS_DENIED_ACE_TYPE) {
               return WindowsFileBridge.STATUS_ACCESS_DENIED;
             }
           }
-          return WindowsNativeBindings.STATUS_SUCCESS;
+          return WindowsFileBridge.STATUS_SUCCESS;
         } finally {
           WindowsFileBridge.close(token);
         }

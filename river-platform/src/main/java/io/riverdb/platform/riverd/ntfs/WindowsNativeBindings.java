@@ -12,7 +12,6 @@ import java.lang.invoke.MethodHandle;
 /** Initializes Windows native handles and owns the shared status/call state. */
 @SuppressWarnings("restricted")
 final class WindowsNativeBindings {
-  static final int STATUS_SUCCESS = 0;
   private static final Linker LINKER = Linker.nativeLinker();
   private static final SymbolLookup NTDLL = SymbolLookup.libraryLookup("ntdll.dll", Arena.global());
   private static final SymbolLookup KERNEL32 = SymbolLookup.libraryLookup("kernel32.dll", Arena.global());

@@ -351,6 +351,17 @@ final class WindowsFileBridge {
     return buffer.get(ValueLayout.JAVA_INT, offset + 56);
   }
 
+  private static MemorySegment unicodeString(Arena arena, String value) {
+    byte[] bytes = value.getBytes(StandardCharsets.UTF_16LE);
+    MemorySegment chars = arena.allocate(bytes.length + 2L, 2);
+    chars.asSlice(0, bytes.length).copyFrom(MemorySegment.ofArray(bytes));
+    MemorySegment string = arena.allocate(16, 8);
+    string.set(ValueLayout.JAVA_SHORT, 0, (short) bytes.length);
+    string.set(ValueLayout.JAVA_SHORT, 2, (short) (bytes.length + 2));
+    string.set(ValueLayout.ADDRESS, 8, chars);
+    return string;
+  }
+
   private static AssertionError abi(String operation, Throwable failure) {
     return new AssertionError("Windows FFM ABI invocation failed: " + operation, failure);
   }
