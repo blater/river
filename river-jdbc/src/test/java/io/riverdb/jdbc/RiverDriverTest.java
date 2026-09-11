@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import static io.riverdb.jdbc.JdbcMetadataAssertions.assertColumnMetadata;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -22,6 +23,7 @@ import java.sql.Savepoint;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

@@ -48,3 +48,12 @@ before/after score and result, then integrate this ticket independently.
   close. Durable reopen retains the configured owner budget.
 - Rescanned all changed files: scores remain below 90, with `RiverDriverTest`
   at `86.617` and the other four files unchanged.
+
+## Compile and test review fix
+
+- Restored the shared metadata row assertion through `JdbcMetadataAssertions`,
+  restored the `Arrays` import used by batch assertions, and added the missing
+  streaming result metadata/type imports.
+- Focused compile, JDBC tests (`RiverDriverTest`, streaming, bigint, and
+  catalog), and `:river-bench:installTps` all passed with isolated Gradle home
+  and project cache. Log: `/private/tmp/river-score-20260911/tic-3a4f-tests.log`.

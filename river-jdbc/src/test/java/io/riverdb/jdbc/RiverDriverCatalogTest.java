@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import static io.riverdb.jdbc.JdbcMetadataAssertions.assertColumnMetadata;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -318,59 +319,62 @@ final class RiverDriverCatalogTest {
       }
 
       fixture.reopen();
-      try (Connection connection = DriverManager.getConnection(fixture.url())) {
-    assertCatalogRows(
-        connection.getMetaData(),
-        null,
-        null,
-        "%transaction_history%",
-        null,
-        new String[] {tableName, viewName},
-        new String[] {"TABLE", "VIEW"});
-    try (ResultSet columns = connection.getMetaData().getColumns(
-        null,
-        null,
-        "customer\\_account\\_transaction\\_history\\_view",
-        "%")) {
-      assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1, true);
-      assertColumnMetadata(columns, viewName, "id", Types.BIGINT, 2, false);
-      assertFalse(columns.next());
-    }
-    try (ResultSet keys = connection.getMetaData().getPrimaryKeys(
-        null,
-        null,
-        tableName)) {
-      assertTrue(keys.next());
-      assertEquals("id", keys.getString("COLUMN_NAME"));
-      assertFalse(keys.next());
-    }
-    try (ResultSet indexes = connection.getMetaData().getIndexInfo(
-        null,
-        null,
-        tableName,
-        false,
-        false)) {
-      assertIndexMetadata(indexes, tableName, null, "id", false);
-      assertIndexMetadata(
-          indexes,
+      Connection connection = DriverManager.getConnection(fixture.url());
+      try {
+      assertCatalogRows(
+          connection.getMetaData(),
+          null,
+          null,
+          "%transaction_history%",
+          null,
+          new String[] {tableName, viewName},
+          new String[] {"TABLE", "VIEW"});
+      try (ResultSet columns = connection.getMetaData().getColumns(
+          null,
+          null,
+          "customer\\_account\\_transaction\\_history\\_view",
+          "%")) {
+        assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1, true);
+        assertColumnMetadata(columns, viewName, "id", Types.BIGINT, 2, false);
+        assertFalse(columns.next());
+      }
+      try (ResultSet keys = connection.getMetaData().getPrimaryKeys(
+          null,
+          null,
+          tableName)) {
+        assertTrue(keys.next());
+        assertEquals("id", keys.getString("COLUMN_NAME"));
+        assertFalse(keys.next());
+      }
+      try (ResultSet indexes = connection.getMetaData().getIndexInfo(
+          null,
+          null,
           tableName,
-          "transaction_value_idx",
-          "value",
-          false);
-      assertIndexMetadata(
-          indexes,
-          tableName,
-          "transaction_label_idx",
-          "label",
-          true);
-      assertFalse(indexes.next());
-    }
-    ResultSet owned = connection.getMetaData().getColumns(null, null, "%", "%");
-    assertTrue(owned.next());
-    assertFalse(owned.isClosed());
-    connection.close();
-    assertTrue(owned.isClosed());
+          false,
+          false)) {
+        assertIndexMetadata(indexes, tableName, null, "id", false);
+        assertIndexMetadata(
+            indexes,
+            tableName,
+            "transaction_value_idx",
+            "value",
+            false);
+        assertIndexMetadata(
+            indexes,
+            tableName,
+            "transaction_label_idx",
+            "label",
+            true);
+        assertFalse(indexes.next());
+      }
+      ResultSet owned = connection.getMetaData().getColumns(null, null, "%", "%");
+      assertTrue(owned.next());
+      assertFalse(owned.isClosed());
+      connection.close();
+      assertTrue(owned.isClosed());
 
+      } finally {
+        connection.close();
       }
     }
   }
@@ -413,31 +417,6 @@ final class RiverDriverCatalogTest {
     for (boolean value : found) {
       assertTrue(value);
     }
-  }
-
-  private static void assertColumnMetadata(
-      ResultSet columns,
-      String table,
-      String column,
-      int type,
-      int ordinal,
-      boolean nullable) throws SQLException {
-    assertTrue(columns.next());
-    assertNull(columns.getString("TABLE_CAT"));
-    assertTrue(columns.wasNull());
-    assertNull(columns.getString("TABLE_SCHEM"));
-    assertEquals(table, columns.getString("TABLE_NAME"));
-    assertEquals(column, columns.getString("COLUMN_NAME"));
-    assertEquals(type, columns.getInt("DATA_TYPE"));
-    assertEquals(type == Types.VARCHAR ? "VARCHAR" : "BIGINT", columns.getString("TYPE_NAME"));
-    assertEquals(type == Types.VARCHAR ? 7 : 19, columns.getInt("COLUMN_SIZE"));
-    assertEquals(
-        nullable ? ResultSetMetaData.columnNullable : ResultSetMetaData.columnNoNulls,
-        columns.getInt("NULLABLE"));
-    assertEquals(ordinal, columns.getInt("ORDINAL_POSITION"));
-    assertEquals(nullable ? "YES" : "NO", columns.getString("IS_NULLABLE"));
-    assertEquals("", columns.getString("IS_AUTOINCREMENT"));
-    assertEquals("NO", columns.getString("IS_GENERATEDCOLUMN"));
   }
 
   private static void assertIndexMetadata(
