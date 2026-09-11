@@ -17,6 +17,22 @@ final class CatalogRecord {
   private CatalogRecord() {
   }
 
+  static int intAt(ByteBuffer source, int bytes, int offset, int fallback) {
+    return offset <= bytes - Integer.BYTES ? source.getInt(offset) : fallback;
+  }
+
+  static long longAt(ByteBuffer source, int bytes, int offset, long fallback) {
+    return offset <= bytes - Long.BYTES ? source.getLong(offset) : fallback;
+  }
+
+  static boolean knownMagic(long magic) {
+    return CatalogSequenceCodec.matchesMagic(magic)
+        || CatalogViewCodec.matchesMagic(magic)
+        || magic == TABLE_MAGIC
+        || magic == DROPPING_TABLE_MAGIC
+        || CatalogIndexCodec.matchesMagic(magic);
+  }
+
   static void encodeTable(
       ByteBuffer target,
       int tableId,

@@ -171,3 +171,10 @@ Checkpoint: `perf-checkpoint-20260911-score-first11`.
 Session grammar (`tic-03aa`) and runtime records (`tic-013d`) bring the accepted
 total to 13. Combined affected checks passed; unchanged scan: 2,566 Java files,
 69 remaining at or above 90. Checkpoint: `perf-checkpoint-20260911-score-first13`.
+
+
+Relational WAL tests (`tic-396a`) and catalog decoding (`tic-e5af`) bring the
+accepted total to 15. Clean full checks passed in 4m21s; unchanged scan: 2,575
+files, 67 remaining at or above 90 and no new offenders. Per-ticket light
+workloads and the catalog's longer adjacent control passed.
+Checkpoint: `perf-checkpoint-20260911-score-first15`.
