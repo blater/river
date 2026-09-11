@@ -141,7 +141,9 @@ public final class RiverDaemonIdentity {
     public DatabaseIncarnation incarnation() { return incarnation; }
     public long generation() { return generation; }
     RiverDirectory staging() { return staging; }
+    /** Verified private component capability; its owner must initialize and validate its contents. */
     RiverDirectory database() { return database; }
+    /** Verified private component capability; its owner must initialize and validate its contents. */
     RiverDirectory security() { return security; }
     boolean databasePublished() { return databasePublished; }
     boolean securityPublished() { return securityPublished; }

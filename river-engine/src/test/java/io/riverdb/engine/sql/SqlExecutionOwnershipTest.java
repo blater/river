@@ -54,13 +54,13 @@ final class SqlExecutionOwnershipTest {
   @Test
   void coordinatorOwnsTheSessionOperationComponents() {
     assertOwnedOnce(SqlSessionExecutionCoordinator.class, RelationalSession.class);
-    assertOwnedOnce(SqlSessionExecutionCoordinator.class, SqlParser.class);
     assertOwnedOnce(SqlSessionExecutionCoordinator.class, BoundSqlStatement.class);
     assertOwnedOnce(SqlSessionExecutionCoordinator.class, SqlBinder.class);
     assertOwnedOnce(SqlSessionExecutionCoordinator.class, SqlTransactionState.class);
     assertOwnedOnce(SqlSessionExecutionCoordinator.class, SqlCommandDispatcher.class);
     assertOwnedOnce(SqlSessionExecutionCoordinator.class, SqlDmlExecutor.class);
     assertOwnedOnce(SqlSessionExecutionCoordinator.class, SqlQueryExecution.class);
+    assertOwnedOnce(SqlSessionStatementPreparation.class, SqlParser.class);
   }
 
   @Test

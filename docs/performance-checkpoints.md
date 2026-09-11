@@ -2278,3 +2278,42 @@ River checkpoint: `perf-checkpoint-20260910-one-way-prepared-close`.
 The matching harness change is merged locally on `main` at `aba7c43` and has the
 same annotated tag. Its repository has no remote configured; publication remains
 pending the user's remote URL. This does not prevent local use of the v5 adapter.
+
+
+## 2026-09-11: score refactor campaign, first three files (tic-c8d1)
+
+Independent merge boundaries: JDBC test ownership (`tic-3a4f`, source
+`7af24dac`), SQL session preparation/scan ownership (`tic-d369`, `1f197a4c`),
+and protocol response encoding (`tic-98f2`, `deb1998f`). Luna/high authored;
+Sol/high and the lead reviewed. Ticket pages contain the final scores and
+correctness details. These are structural simplifications, not claimed speedups.
+
+All light samples used GraalVM 25 JVM, 1GiB heap, authenticated installed-server
+harness `tpcc sample all`, four workers, one warehouse, seed 42, max retries 20,
+5s warmup and 10s measurement. Durability and isolation were unchanged. No build
+or other database workload overlapped. Controls at source `75ae39d6` measured
+240.07 and 294.15 committed TPS. Candidates measured 252.31 (JDBC), 256.86
+(SQL), and 255.29 (protocol), within the observed short-control range. All passed
+invariants with zero failed/unknown outcomes and graceful owned-server cleanup.
+These short diagnostic runs do not establish performance improvements.
+
+Artifacts under `/Users/blater/src/ingres/river-harness/runs/`:
+
+- Controls: `river_harness_20260911_013933_d0929e41`,
+  `river_harness_20260911_013955_4309a951`.
+- JDBC: `river_harness_20260911_021326_73013c0b`.
+- SQL: `river_harness_20260911_021613_96d2fada`.
+- Protocol: `river_harness_20260911_021823_47de4675`.
+
+Focused tests passed for each ticket. The SQL allocation assertion had one early
+1,576-byte failure; unchanged reruns, final focused checks and an unchanged
+control passed. Its cause remains unestablished; assertions were not relaxed.
+
+The merged source passed `clean check :river-bench:installTps` in 4m21s.
+The unchanged full scan includes 2,533 Java files, with 79 remaining at or above
+90 (82 at baseline); every original and extracted file in these three tickets
+is below 90. The merged installed-server workload passed at **296.56 TPS**,
+p99 **61.735ms**, with zero failed/unknown outcomes, passing invariants and
+graceful cleanup: `river_harness_20260911_022447_0cba3c4d`, version
+`tic-c8d1-first3-3dc54319-jvm`. Accepted as no observed regression.
+Checkpoint tag: `perf-checkpoint-20260911-score-first3`.
