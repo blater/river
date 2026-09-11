@@ -77,11 +77,8 @@ final class RiverDaemonTargetAdmission {
   }
 
   static StatusCode verifyRuntime(
-      RiverDaemonRuntimeModel.RuntimeRecord record,
-      String name,
-      RiverDaemonTarget target) {
+      RiverDaemonRuntimeModel.RuntimeRecord record, RiverDaemonTarget target) {
     return target.runtime != null
-        && RiverDaemonRuntimeStorage.runtimeName(record.datadir).equals(name)
         && record.checksum.equals(target.runtime.checksum)
         ? StatusCode.OK : StatusCode.NOT_OWNER;
   }

@@ -66,9 +66,8 @@ final class RiverDaemonTargets {
             || entries.name(index).startsWith(".")) continue;
         RiverDaemonTargetAdmission.RuntimeValues values =
             RiverDaemonTargetAdmission.readRuntime(runtimeRoot, entries.name(index));
-        if (!values.status.isOk() || values.record == null) {
-          warn(errors, entries.name(index), values.status.isOk()
-              ? StatusCode.CORRUPTION : values.status);
+        if (!values.status.isOk()) {
+          warn(errors, entries.name(index), values.status);
           continue;
         }
         RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
@@ -82,7 +81,7 @@ final class RiverDaemonTargets {
             continue;
           }
           targetStatus = RiverDaemonTargetAdmission.verifyRuntime(
-              values.record, entries.name(index), target);
+              values.record, target);
           if (targetStatus.isOk()) targetStatus = target.revalidate(true);
           if (targetStatus.isOk()) {
             rows.add(new Row(RiverDaemonEndpoint.of(target.runtime.address, target.runtime.port),
@@ -153,9 +152,8 @@ final class RiverDaemonTargets {
             || entries.name(index).startsWith(".")) continue;
         RiverDaemonTargetAdmission.RuntimeValues values =
             RiverDaemonTargetAdmission.readRuntime(runtimeRoot, entries.name(index));
-        if (!values.status.isOk() || values.record == null) {
-          warn(errors, entries.name(index), values.status.isOk()
-              ? StatusCode.CORRUPTION : values.status);
+        if (!values.status.isOk()) {
+          warn(errors, entries.name(index), values.status);
           continue;
         }
         if (!requested.matches(values.record.address, values.record.port)) continue;
@@ -173,7 +171,7 @@ final class RiverDaemonTargets {
           continue;
         }
         status = RiverDaemonTargetAdmission.verifyRuntime(
-            values.record, entries.name(index), candidate);
+            values.record, candidate);
         if (status.isOk()) status = candidate.revalidate(true);
         if (!status.isOk()) {
           warn(errors, entries.name(index), status);
@@ -195,7 +193,6 @@ final class RiverDaemonTargets {
       if (selected == null) result.reset();
     }
   }
-
 
   private static void warn(PrintStream errors, String name, StatusCode status) {
     errors.println("warning: ignoring runtime record " + name + " (" + status + ")");
