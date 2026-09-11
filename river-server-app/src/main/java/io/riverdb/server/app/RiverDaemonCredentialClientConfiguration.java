@@ -43,7 +43,7 @@ final class RiverDaemonCredentialClientConfiguration {
           "generations").resolve(generation).resolve("server-certificate.der").toString();
       String tokenPath = securityPath.toAbsolutePath().normalize().resolve(
           "generations").resolve(generation).resolve("token.bin").toString();
-      String body = RiverDaemonIdentityRecords.record(java.util.List.of(
+      String body = RiverDaemonRecordEnvelope.record(java.util.List.of(
           "format=riverd-client-v1",
           "database-incarnation-high=" + incarnation.high(),
           "database-incarnation-low=" + incarnation.low(),

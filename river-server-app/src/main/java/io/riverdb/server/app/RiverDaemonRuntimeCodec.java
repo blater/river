@@ -1,13 +1,6 @@
 package io.riverdb.server.app;
 
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.util.Arrays;
-import java.util.HexFormat;
 import java.util.List;
 
 final class RiverDaemonRuntimeCodec {
@@ -18,7 +11,7 @@ final class RiverDaemonRuntimeCodec {
   }
 
   static String runtimeBody(RiverDaemonRuntimeRecords.Metadata metadata) {
-    return RiverDaemonIdentityRecords.record(List.of(
+    return RiverDaemonRecordEnvelope.record(List.of(
         "format=" + RUNTIME_FORMAT,
         "datadir=" + metadata.datadir,
         "database-incarnation-high=" + metadata.incarnation.high(),
@@ -35,7 +28,7 @@ final class RiverDaemonRuntimeCodec {
 
   static String readyBody(RiverDaemonRuntimeRecords.Metadata metadata, String certificate) {
     Path datadir = Path.of(metadata.datadir);
-    return RiverDaemonIdentityRecords.record(List.of(
+    return RiverDaemonRecordEnvelope.record(List.of(
         "format=" + READY_FORMAT,
         "datadir=" + metadata.datadir,
         "database-incarnation-high=" + metadata.incarnation.high(),
@@ -60,7 +53,8 @@ final class RiverDaemonRuntimeCodec {
   }
 
   static RiverDaemonRuntimeModel.RuntimeRecord parseRuntime(byte[] bytes) {
-    Envelope envelope = envelope(bytes, 12, RUNTIME_FORMAT);
+    RiverDaemonRecordEnvelope.Envelope envelope =
+        RiverDaemonRecordEnvelope.decode(bytes, 12, RUNTIME_FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
@@ -82,7 +76,8 @@ final class RiverDaemonRuntimeCodec {
   }
 
   static RiverDaemonRuntimeModel.ReadyRecord parseReady(byte[] bytes) {
-    Envelope envelope = envelope(bytes, 16, READY_FORMAT);
+    RiverDaemonRecordEnvelope.Envelope envelope =
+        RiverDaemonRecordEnvelope.decode(bytes, 16, READY_FORMAT);
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
@@ -99,33 +94,6 @@ final class RiverDaemonRuntimeCodec {
     } catch (RuntimeException failure) {
       return null;
     }
-  }
-
-  private static Envelope envelope(byte[] bytes, int fieldCount, String format) {
-    if (bytes == null) return null;
-    String text;
-    try {
-      text = StandardCharsets.UTF_8.newDecoder()
-          .onMalformedInput(CodingErrorAction.REPORT)
-          .onUnmappableCharacter(CodingErrorAction.REPORT)
-          .decode(ByteBuffer.wrap(bytes)).toString();
-    } catch (CharacterCodingException failure) {
-      return null;
-    }
-    int end = text.indexOf("record-sha256=");
-    if (end <= 0) return null;
-    String prefix = text.substring(0, end);
-    if (!prefix.endsWith("\n")) return null;
-    String[] fields = prefix.substring(0, prefix.length() - 1).split("\\n", -1);
-    String checksumLine = text.substring(end + "record-sha256=".length());
-    if (fields.length != fieldCount || !checksumLine.endsWith("\n")) return null;
-    String checksum = checksumLine.substring(0, checksumLine.length() - 1);
-    if (!checksum.matches("[0-9a-f]{64}")) return null;
-    byte[] expected = digest(prefix.getBytes(StandardCharsets.UTF_8));
-    boolean valid = checksum.equals(HexFormat.of().formatHex(expected));
-    Arrays.fill(expected, (byte) 0);
-    return valid && format.equals(value(fields[0], "format="))
-        ? new Envelope(fields, checksum) : null;
   }
 
   private static String value(String field, String key) {
@@ -145,21 +113,4 @@ final class RiverDaemonRuntimeCodec {
     return (int) parsed;
   }
 
-  private static byte[] digest(byte[] bytes) {
-    try {
-      return MessageDigest.getInstance("SHA-256").digest(bytes);
-    } catch (Exception failure) {
-      throw new IllegalStateException(failure);
-    }
-  }
-
-  private static final class Envelope {
-    final String[] fields;
-    final String checksum;
-
-    Envelope(String[] fields, String checksum) {
-      this.fields = fields;
-      this.checksum = checksum;
-    }
-  }
 }
