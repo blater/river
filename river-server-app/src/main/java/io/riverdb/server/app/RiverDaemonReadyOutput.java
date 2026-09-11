@@ -25,7 +25,7 @@ final class RiverDaemonReadyOutput {
         + "riverd_data=" + datadir.resolve("database") + "\n"
         + "riverd_identity=" + datadir.resolve("instance.properties") + "\n"
         + "riverd_runtime_file="
-        + RiverDaemonRuntimeRecords.runtimePath(runtimeRoot, metadata.datadir) + "\n"
+        + RiverDaemonRuntimeStorage.runtimePath(runtimeRoot, metadata.datadir) + "\n"
         + "riverd_listen_address=" + metadata.listenAddress + "\n"
         + "riverd_listen_port=" + metadata.listenPort + "\n"
         + "riverd_pid=" + metadata.owner.pid + "\n"
@@ -36,7 +36,7 @@ final class RiverDaemonReadyOutput {
     byte[] prefixBytes = prefix.getBytes(StandardCharsets.UTF_8);
     boolean fileMode = !"none".equals(metadata.readyFile);
     if (fileMode) {
-      StatusCode status = RiverDaemonRuntimeRecords.publishReady(
+      StatusCode status = RiverDaemonRuntimePublication.publishReady(
           filesystem, metadata, Path.of(metadata.readyFile), certificateSha256);
       // Publication may already be visible on failure. Never continue serving after a
       // durability error, and never try to retract an observed readiness commitment.

@@ -2418,3 +2418,19 @@ uses affected checks. Full unchanged scan: 2,558 files, 71 remaining at or above
 added files below 90. Evidence: `integration-first11-check.log` and
 `integration-first11-scores.json` under `/private/tmp/river-score-20260911`.
 Checkpoint: `perf-checkpoint-20260911-score-first11`.
+
+
+## 2026-09-11: session grammar and runtime records
+
+Accepted `tic-03aa` (`39f30922`) and `tic-013d` (`b12f3518`) after Luna/high
+implementation and Sol/high/lead review. Ticket pages record scores and exact
+workload artifacts. Original scores fall to 87.025 and 18.390 respectively; every
+added file is below 90. Light JVM sample/all runs passed at 293.04 and 308.64 TPS,
+with zero failed/unknown outcomes, valid invariants and graceful cleanup; no
+observed regression against recent controls, no speedup claim.
+
+Combined server-app/SQL checks, focused API/atomic SQL lifecycle tests and engine
+policy checks passed in 24s with `--no-daemon`. Full unchanged scan: 2,566 Java
+files, 69 remaining at or above 90. Evidence under `/private/tmp/river-score-20260911`:
+`integration-first13-check.log`, `integration-first13-scores.json`.
+Checkpoint: `perf-checkpoint-20260911-score-first13`.

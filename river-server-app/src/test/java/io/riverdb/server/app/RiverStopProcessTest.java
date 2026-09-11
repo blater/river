@@ -66,7 +66,7 @@ final class RiverStopProcessTest {
       assertEquals(0, stopped.exit, stopped.text);
       second.assertExited();
       assertTrue(first.process.isAlive());
-      assertFalse(Files.exists(RiverDaemonRuntimeRecords.runtimePath(runtimeRoot, otherData.toString())));
+      assertFalse(Files.exists(RiverDaemonRuntimeStorage.runtimePath(runtimeRoot, otherData.toString())));
       assertTrue(Files.exists(otherData.resolve("instance.properties")));
 
       Result defaultStop = invoke(home, "", "stop");
@@ -94,7 +94,7 @@ final class RiverStopProcessTest {
     try {
       assertEquals(StatusCode.OK, directory.directory().openFile(staleName,
           io.riverdb.platform.riverd.RiverOpenMode.CREATE_NEW, record));
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.write(record.file(), staleBytes));
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeStorage.write(record.file(), staleBytes));
     } finally {
       if (record.file() != null) record.file().close();
       directory.directory().close();
@@ -145,7 +145,7 @@ final class RiverStopProcessTest {
     try (Server server = start(home)) {
       Path datadir = home.resolve(".river/default").toRealPath();
       Properties runtime = new Properties();
-      try (var input = Files.newInputStream(RiverDaemonRuntimeRecords.runtimePath(home.resolve(".river/run"), datadir.toString()))) {
+      try (var input = Files.newInputStream(RiverDaemonRuntimeStorage.runtimePath(home.resolve(".river/run"), datadir.toString()))) {
         runtime.load(input);
       }
       String wrongOwner = "0".repeat(32);
@@ -162,10 +162,10 @@ final class RiverStopProcessTest {
       RiverFileResult file = new RiverFileResult();
       try {
         assertEquals(StatusCode.OK, directory.directory().createFile("stop.request", file));
-        assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.write(
+        assertEquals(StatusCode.OK, RiverDaemonRuntimeStorage.write(
             file.file(), request.getBytes(StandardCharsets.UTF_8)));
         assertEquals(StatusCode.OK, file.file().close());
-        assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.force(directory.directory()));
+        assertEquals(StatusCode.OK, RiverDaemonRuntimeStorage.force(directory.directory()));
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (!Files.readString(server.log).contains("stop request rejected")
             && System.nanoTime() < deadline) Thread.sleep(25);
@@ -176,7 +176,7 @@ final class RiverStopProcessTest {
         assertEquals(request, Files.readString(datadir.resolve("stop.request")));
         assertEquals(StatusCode.OK, directory.directory().removeOwned(
             "stop.request", file.file().identity(), new DirectoryOperationResult()));
-        assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.force(directory.directory()));
+        assertEquals(StatusCode.OK, RiverDaemonRuntimeStorage.force(directory.directory()));
       } finally {
         if (file.file() != null) file.file().close();
         directory.directory().close();

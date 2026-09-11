@@ -43,15 +43,15 @@ final class RiverDaemonRuntimeRecordsTest {
         Files.writeString(
             fixture.readyPath.getParent().resolve("unrelated-" + index), "preserve");
       }
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimePublication.publishRuntime(
           fixture.runtimeDirectory, fixture.metadata));
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishReady(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimePublication.publishReady(
           fixture.filesystem, fixture.metadata, fixture.readyPath,
           "a".repeat(64)));
       assertTrue(Files.exists(fixture.runtimeRoot.resolve(fixture.runtimeName)));
       assertTrue(Files.exists(fixture.readyPath));
 
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.cleanupCurrent(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeCleanup.cleanup(
           fixture.filesystem, fixture.identity, fixture.runtimeRoot, fixture.metadata));
       assertFalse(Files.exists(fixture.runtimeRoot.resolve(fixture.runtimeName)));
       assertFalse(Files.exists(fixture.readyPath));
@@ -68,14 +68,14 @@ final class RiverDaemonRuntimeRecordsTest {
   void mismatchedReadyRecordPreservesAllCurrentRecords(@TempDir Path root) throws Exception {
     Fixture fixture = fixture(root, true);
     try {
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimePublication.publishRuntime(
           fixture.runtimeDirectory, fixture.metadata));
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishReady(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimePublication.publishReady(
           fixture.filesystem, fixture.metadata, fixture.readyPath,
           "a".repeat(64)));
       Files.writeString(fixture.readyPath, mismatchedReady(fixture));
 
-      assertEquals(StatusCode.CORRUPTION, RiverDaemonRuntimeRecords.cleanupCurrent(
+      assertEquals(StatusCode.CORRUPTION, RiverDaemonRuntimeCleanup.cleanup(
           fixture.filesystem, fixture.identity, fixture.runtimeRoot, fixture.metadata));
       assertTrue(Files.exists(fixture.runtimeRoot.resolve(fixture.runtimeName)));
       assertTrue(Files.exists(fixture.readyPath));
@@ -88,9 +88,9 @@ final class RiverDaemonRuntimeRecordsTest {
   void cleanupWithNoRecordsIsIdempotent(@TempDir Path root) throws Exception {
     Fixture fixture = fixture(root, false);
     try {
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.cleanupCurrent(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeCleanup.cleanup(
           fixture.filesystem, fixture.identity, fixture.runtimeRoot, fixture.metadata));
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.cleanupCurrent(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeCleanup.cleanup(
           fixture.filesystem, fixture.identity, fixture.runtimeRoot, fixture.metadata));
     } finally {
       fixture.close();
@@ -102,7 +102,7 @@ final class RiverDaemonRuntimeRecordsTest {
     Fixture fixture = fixture(root, false);
     RiverDaemonTarget target = null;
     try {
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimePublication.publishRuntime(
           fixture.runtimeDirectory, fixture.metadata));
       RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
       assertEquals(StatusCode.OK, RiverDaemonTarget.open(
@@ -124,7 +124,7 @@ final class RiverDaemonRuntimeRecordsTest {
     RiverDaemonTarget target = null;
     FutureTask<StatusCode> caller = null;
     try {
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimePublication.publishRuntime(
           fixture.runtimeDirectory, fixture.metadata));
       RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
       assertEquals(StatusCode.OK, RiverDaemonTarget.open(
@@ -153,7 +153,7 @@ final class RiverDaemonRuntimeRecordsTest {
     Fixture fixture = fixture(root, false);
     RiverDaemonTarget target = null;
     try {
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimePublication.publishRuntime(
           fixture.runtimeDirectory, fixture.metadata));
       RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
       assertEquals(StatusCode.OK, RiverDaemonTarget.open(
@@ -175,7 +175,7 @@ final class RiverDaemonRuntimeRecordsTest {
     RiverDaemonTarget target = null;
     RiverDaemonIdentity.IdentityResult restarted = null;
     try {
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimePublication.publishRuntime(
           fixture.runtimeDirectory, fixture.metadata));
       RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
       assertEquals(StatusCode.OK, RiverDaemonTarget.open(
@@ -190,11 +190,11 @@ final class RiverDaemonRuntimeRecordsTest {
             target.owner.high, target.owner.low, target.owner.nonce,
             "22222222222222222222222222222222", target.runtimeChecksum,
             System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8);
-        assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.write(requestFile, request));
+        assertEquals(StatusCode.OK, RiverDaemonRuntimeStorage.write(requestFile, request));
       } finally {
         assertEquals(StatusCode.OK, requestFile.close());
       }
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.force(fixture.identity.directory()));
+      assertEquals(StatusCode.OK, RiverDaemonRuntimeStorage.force(fixture.identity.directory()));
       assertTrue(Files.exists(fixture.datadir.resolve(RiverDaemonStopRequest.REQUEST_NAME)));
       assertEquals(StatusCode.OK, target.close());
       target = null;
@@ -225,7 +225,7 @@ final class RiverDaemonRuntimeRecordsTest {
     Path foreignStage = fixture.datadir.resolve(
         ".stop-request-11111111111111111111111111111111.stage");
     try {
-      assertEquals(StatusCode.OK, RiverDaemonRuntimeRecords.publishRuntime(
+      assertEquals(StatusCode.OK, RiverDaemonRuntimePublication.publishRuntime(
           fixture.runtimeDirectory, fixture.metadata));
       Files.createFile(foreignStage);
       RiverDaemonTarget.Result targetResult = new RiverDaemonTarget.Result();
@@ -329,7 +329,7 @@ final class RiverDaemonRuntimeRecordsTest {
         canonicalRoot.resolve("client.properties").toString(), withReady ? readyPath : null, runtimeRoot);
     return new Fixture(filesystem, identity, runtimeDirectory, runtimeRoot, datadir,
         withReady ? readyPath : null, metadata,
-        RiverDaemonRuntimeRecords.runtimeName(datadir.toString()));
+        RiverDaemonRuntimeStorage.runtimeName(datadir.toString()));
   }
 
   private static String mismatchedReady(Fixture fixture) {
