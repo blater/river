@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.QueryOpenResult;
-import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RiverSession;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -16,8 +15,7 @@ class RiverJdbcStatement extends AbstractStatement {
   private final RiverSession session;
   private final CommandResult command = new CommandResult();
   private final QueryOpenResult openedQuery = new QueryOpenResult();
-  String[] batch = new String[0];
-  ParameterSet[] batchParameters;
+  final RiverJdbcBatchState batch = new RiverJdbcBatchState();
   private RiverJdbcResultSet resultSet;
   private RiverGeneratedKeysResultSet generatedKeysResultSet;
   private long generatedKey;
@@ -25,7 +23,6 @@ class RiverJdbcStatement extends AbstractStatement {
   private int updateCount = -1;
   private boolean closeOnCompletion;
   private boolean closed;
-  int batchCount;
 
   RiverJdbcStatement(RiverJdbcConnection owner, RiverSession remoteSession) {
     connection = owner;
@@ -46,11 +43,7 @@ class RiverJdbcStatement extends AbstractStatement {
     StatusCode status = parameters == null
         ? session.beginQuery(sql, openedQuery)
         : session.beginQuery(sql, parameters, openedQuery);
-    JdbcExceptions.require(status, "execute query");
-    RiverQuery query = openedQuery.query();
-    resultSet = new RiverJdbcResultSet(this, query);
-    updateCount = -1;
-    return resultSet;
+    return completeQuery(status, "execute query");
   }
 
   final ResultSet executePreparedQuery(long handle, ParameterSet parameters)
@@ -60,10 +53,7 @@ class RiverJdbcStatement extends AbstractStatement {
     connection.beforeExecution();
     openedQuery.reset();
     StatusCode status = session.beginPreparedQuery(handle, parameters, openedQuery);
-    JdbcExceptions.require(status, "execute prepared query");
-    resultSet = new RiverJdbcResultSet(this, openedQuery.query());
-    updateCount = -1;
-    return resultSet;
+    return completeQuery(status, "execute prepared query");
   }
 
   @Override
@@ -74,40 +64,20 @@ class RiverJdbcStatement extends AbstractStatement {
   final int executeUpdateSql(
       String sql, ParameterSet parameters, boolean returnGeneratedKeys)
       throws SQLException {
-    requireOpen();
-    closeCurrentResult();
-    connection.beforeExecution();
-    command.reset();
+    prepareCommand();
     StatusCode status = parameters == null
         ? session.execute(sql, command) : session.execute(sql, parameters, command);
-    JdbcExceptions.require(status, "execute update");
-    if (command.rowAvailable()) {
-      throw JdbcExceptions.invalid("query SQL must use executeQuery");
-    }
-    connection.commandCompleted(command);
-    updateCount = command.affectedRows();
-    generatedKeyAvailable = returnGeneratedKeys && command.key() > 0;
-    generatedKey = generatedKeyAvailable ? command.key() : 0;
-    return updateCount;
+    return completeUpdate(
+        status, returnGeneratedKeys, "execute update", "query SQL must use executeQuery");
   }
 
   final int executePreparedUpdate(
       long handle, ParameterSet parameters, boolean returnGeneratedKeys)
       throws SQLException {
-    requireOpen();
-    closeCurrentResult();
-    connection.beforeExecution();
-    command.reset();
+    prepareCommand();
     StatusCode status = session.executePrepared(handle, parameters, command);
-    JdbcExceptions.require(status, "execute prepared update");
-    if (command.rowAvailable()) {
-      throw JdbcExceptions.invalid("query handle must use executeQuery");
-    }
-    connection.commandCompleted(command);
-    updateCount = command.affectedRows();
-    generatedKeyAvailable = returnGeneratedKeys && command.key() > 0;
-    generatedKey = generatedKeyAvailable ? command.key() : 0;
-    return updateCount;
+    return completeUpdate(
+        status, returnGeneratedKeys, "execute prepared update", "query handle must use executeQuery");
   }
 
   @Override
@@ -417,50 +387,48 @@ class RiverJdbcStatement extends AbstractStatement {
     closeCurrentResult();
   }
 
+  private void prepareCommand() throws SQLException {
+    requireOpen();
+    closeCurrentResult();
+    connection.beforeExecution();
+    command.reset();
+  }
+
+  private ResultSet completeQuery(StatusCode status, String failureOperation)
+      throws SQLException {
+    JdbcExceptions.require(status, failureOperation);
+    resultSet = new RiverJdbcResultSet(this, openedQuery.query());
+    updateCount = -1;
+    return resultSet;
+  }
+
+  private int completeUpdate(
+      StatusCode status,
+      boolean returnGeneratedKeys,
+      String failureOperation,
+      String queryMessage)
+      throws SQLException {
+    JdbcExceptions.require(status, failureOperation);
+    if (command.rowAvailable()) {
+      throw JdbcExceptions.invalid(queryMessage);
+    }
+    connection.commandCompleted(command);
+    updateCount = command.affectedRows();
+    generatedKeyAvailable = returnGeneratedKeys && command.key() > 0;
+    generatedKey = generatedKeyAvailable ? command.key() : 0;
+    return updateCount;
+  }
+
   void addSqlBatch(String sql) throws SQLException {
     addSqlBatch(sql, null);
   }
 
   void addSqlBatch(String sql, ParameterSet parameters) throws SQLException {
-    ensureBatchCapacity();
-    batch[batchCount] = sql;
-    if (parameters != null) {
-      if (batchParameters == null) {
-        batchParameters = new ParameterSet[batch.length];
-      }
-      batchParameters[batchCount] = parameters;
-    }
-    batchCount++;
+    batch.addSql(sql, parameters);
   }
 
   void addPreparedBatch(ParameterSet parameters) throws SQLException {
-    ensureBatchCapacity();
-    if (batchParameters == null) {
-      batchParameters = new ParameterSet[batch.length];
-    }
-    batchParameters[batchCount++] = parameters;
-  }
-
-  final void ensureBatchCapacity() throws SQLException {
-    if (batchCount < batch.length) return;
-    if (batchCount == Integer.MAX_VALUE) {
-      throw JdbcExceptions.failure(
-          StatusCode.RESOURCE_EXHAUSTED,
-          "add batch entry");
-    }
-    int required = batchCount + 1;
-    int grown = batch.length == 0 ? 16
-        : batch.length >= Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE : batch.length << 1;
-    int capacity = Math.max(required, grown);
-    try {
-      String[] grownBatch = java.util.Arrays.copyOf(batch, capacity);
-      ParameterSet[] grownParameters = batchParameters == null ? null
-          : java.util.Arrays.copyOf(batchParameters, capacity);
-      batch = grownBatch;
-      batchParameters = grownParameters;
-    } catch (OutOfMemoryError exhausted) {
-      throw JdbcExceptions.failure(StatusCode.RESOURCE_EXHAUSTED, "add batch entry");
-    }
+    batch.addPrepared(parameters);
   }
 
   private void closeCurrentResult() throws SQLException {
@@ -478,18 +446,7 @@ class RiverJdbcStatement extends AbstractStatement {
   }
 
   private void clearBatchEntries() {
-    for (int index = 0; index < batchCount; index++) {
-      batch[index] = null;
-      releaseBatchParameters(index);
-    }
-    batchCount = 0;
-  }
-
-  void releaseBatchParameters(int index) {
-    if (batchParameters == null) return;
-    ParameterSet parameters = batchParameters[index];
-    batchParameters[index] = null;
-    if (parameters != null) parameters.reset();
+    batch.clear();
   }
 
   final void requireOpen() throws SQLException {
