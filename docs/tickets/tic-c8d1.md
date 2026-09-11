@@ -208,3 +208,12 @@ rebuilt standalone start/ps/authenticated SQL/endpoint-stop smoke passed. The
 unchanged scan has 40 remaining files at or above 90 out of 2,612, with no new
 offenders. Checkpoint: `perf-checkpoint-20260911-score-first42`; per-ticket
 validation and `docs/performance-checkpoints.md` retain evidence.
+
+
+Four further independently reviewed and validated slices bring the accepted
+total to 46. Integrated affected checks passed; the unchanged scan has 36
+remaining files at or above 90 out of 2,620, with no new offenders or incomplete
+scores. Checkpoint: `perf-checkpoint-20260911-score-first46`. The per-ticket
+records include the Windows longer performance pair and platform execution
+limits. `tic-6a7f` is isolated pending specific authorization after automatic
+approval review rejected its reviewed WAL source refactor; other tickets continue.

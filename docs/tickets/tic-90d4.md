@@ -1,6 +1,6 @@
 ---
 id: tic-90d4
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,7 @@ File: `river-engine/src/test/java/io/riverdb/engine/testsupport/fault/FaultingDu
 
 ## Approach
 
-Organize the fixture and scenarios by the behavior they prove; start with `Handle.read`, `Handle.write`, `FaultingDurableDirectory.list`. Share setup only where ownership and assertions stay explicit; remove redundant cases only with a named retained proof.
+Remove the no-op diagnostic `record` facade and the pure durability calculations whose values it discards. Preserve the fake's observable results, fault hooks, crash generations, handle synchronization and content/namespace persistence model. Reassess the score before introducing any further ownership changes.
 
 ## Acceptance
 

@@ -1,6 +1,6 @@
 ---
 id: tic-55e0
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,7 @@ File: `river-platform/src/main/java/io/riverdb/platform/riverd/linux/LinuxRiverD
 
 ## Approach
 
-Review `LinuxRiverDirectory.scan`, `LinuxRiverDirectory.publishDirectoryExclusive`, `LinuxRiverDirectory.publish` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
+Give the Linux directory listing operation one owner for its stream and decoding storage. Share the existing POSIX filename policy between Linux and APFS, with the additional Windows restrictions explicit in the same validator. Preserve native status capture, descriptor lifetime, and namespace publication ordering.
 
 ## Acceptance
 
@@ -24,3 +24,29 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-platform` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+
+## Validation
+
+Implementation: `5426002e`, branch `ticket/tic-55e0-linux-directory`, with the
+reviewed Linux bridge dependency `tic-5b20`. LinuxRiverDirectory falls from
+137.831 to 27.0842; LinuxDirectoryListing scores 34.5066 and RiverDirectoryNames
+20.5552. The listing owns its stream and buffer; filename rules have one shared
+owner with explicit platform differences. Constant-only flag methods are gone.
+Root and Sol reviewed errno capture, close precedence, admission and publication
+ordering, filename equivalence, and the absence of new runtime allocation.
+
+`:river-platform:check :river-bench:installTps` passed with `--no-daemon`:
+23 tests passed, 16 platform-specific tests skipped on macOS, no failures or
+errors. Log: `/private/tmp/river-tic-55e0-platform-check.log`.
+Linux runtime coverage retains the baseline CI limitation recorded in `tic-f737`;
+this local run does not claim Linux or Windows runtime validation.
+
+Light JVM sample: `sample all`, four workers, one warehouse, seed 42,
+20 retries, 5-second warmup and 10-second measurement, version
+`tic-55e0-5426002e-jvm`: **303.85 TPS**, p99 **63.701 ms**, 488 retries,
+zero failed or unknown outcomes, all invariants passed, graceful shutdown and
+inactive owned service. This is within the adjacent samples' observed variation.
+Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_064507_80d16b4f`.
+An initial sandboxed launch failed before readiness and produced no workload
+sample; the authorized local-server run above completed successfully.

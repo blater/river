@@ -2570,3 +2570,36 @@ Evidence under `/private/tmp/river-score-20260911`: `integration-first40-check.l
 `integration-first42-native-smoke.log`, `integration-first42-install.log`.
 Frozen control: `river-control-first42`. Checkpoint:
 `perf-checkpoint-20260911-score-first42`.
+
+
+## 2026-09-11: Linux/Windows directory ownership and B-tree test validation
+
+Four independently reviewed slices bring the accepted total to 46:
+`tic-cf2a` (`3d8e0c5b`), `tic-5b20` (`7962048e`), `tic-55e0`
+(`5426002e`), and `tic-e334` (`a4a7a7db`). Luna/high implemented;
+Sol/high and the lead reviewed. Per-ticket records retain scores, commands,
+platform limits and workload artifacts.
+
+Light full-mix samples passed at 318.93, 302.01 and 303.85 TPS for the first
+three slices. The Windows slice's two lower short samples (280.58/270.41 versus
+309.49 control) triggered a longer pair with agent work paused: candidate
+399.34 TPS, stable control 364.02 TPS. The short-run slowdown did not persist;
+no speedup is claimed. All samples had zero failed/unknown outcomes, passed
+invariants and graceful cleanup. Workload settings and every sample path are
+recorded in the tickets.
+
+Integrated platform checks, focused B-tree tests, storage checks and JVM
+installation passed with --no-daemon in 7 seconds. The unchanged full scan has
+2,620 Java files, 36 remaining at or above 90, no new offenders and no incomplete
+scores. This checkpoint uses proportionate affected checks; the full clean and
+standalone checkpoint remains the preceding first-42 integration.
+
+The Linux verification workflow failed in the same backup CHECKPOINT assertion
+on both stable master and the Linux refactor. `tic-f737` records the existing
+failure without skipping or weakening it. Windows runtime tests remain unexecuted
+on this macOS host; source-equivalence review is not a claim of native Windows
+validation.
+
+Evidence: `/private/tmp/river-score-20260911/integration-first46-check.log` and
+`integration-first46-scores.json`. Checkpoint:
+`perf-checkpoint-20260911-score-first46`.
