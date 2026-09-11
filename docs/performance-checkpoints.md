@@ -2632,3 +2632,34 @@ no new offenders and no incomplete scores. Evidence below
 `integration-first51-check-final.log`, `integration-first51-native.log`,
 `integration-first51-native-smoke.log`, `integration-first51-scores.json`.
 Checkpoint: `perf-checkpoint-20260911-score-first51`.
+
+
+## 2026-09-11 — score campaign, next integration batch (not promoted)
+
+Eleven individually reviewed and validated tickets are merged on the local
+integration branch: tic-0cd4, tic-f2bf, tic-70e3, tic-cecc, tic-650c, tic-f85e,
+tic-c965, tic-0420, tic-4fd6, tic-5049 and tic-3a3d. Their ticket pages record source commits,
+scores, focused checks and light workload artifacts. Master remains at the
+pushed first51 checkpoint; the combined promotion checkpoint is still pending.
+
+Root investigated the apparent JDBC performance drop directly. Two controls
+used OpenJDK 26 while candidates used GraalVM 25; their ratios were discarded.
+One mislabeled metadata-only installation was also excluded. Matching GraalVM
+25 controls and candidates had overlapping throughput ranges and equivalent
+allocation per transaction; no repeatable regression was established. The
+tic-f85e ticket records every retained and excluded sample. Future Java TPS
+commands explicitly select the same runtime through the existing RIVER_JAVA
+option. No workload, durability or acceptance policy changed.
+
+The server request-loop ticket's lower short samples prompted a longer pair.
+Candidate/control results were 300.63/293.57 TPS with p99 59.08/59.38 ms, zero
+failed or unknown outcomes, successful invariants and graceful cleanup. All
+samples remain recorded in tic-4fd6; this is no speedup claim.
+
+The final JDBC result-conversion ticket passed all 44 JDBC tests and source
+policy. Candidate/control Java TPS was 225.800/279.400 over ten seconds and
+317.800/184.350 over twenty seconds, with both runtimes pinned to GraalVM 25.
+All four samples completed with status OK, no errors/retries and clean terminal
+cleanup. The direction reversed; no repeatable regression was established.
+The user requested a pause after this ticket, so no combined promotion build,
+new tag or push has been performed for these eleven local integrations.

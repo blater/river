@@ -226,3 +226,13 @@ start/ps/authenticated SQL/endpoint-stop smoke passed. The unchanged scan has
 31 remaining files at or above 90 out of 2,631, with no new offenders or incomplete
 scores. Checkpoint: `perf-checkpoint-20260911-score-first51`. WAL authorization
 remains pending while the other production files proceed.
+
+
+Paused at the user's request after tic-3a3d. **51 tickets are published; eleven
+more have passed individual review, tests and light performance checks and are
+merged locally**, bringing the accepted total to 62. The pending promotion set
+is tic-0cd4, tic-f2bf, tic-70e3, tic-cecc, tic-650c, tic-f85e, tic-c965, tic-0420,
+tic-4fd6, tic-5049 and tic-3a3d. Their combined integration checkpoint, master
+merge, tag and push remain pending. Unfinished 055b and 9e2f source work is parked
+on separate branches; the 6a7f authorization hold is unchanged. No new full-scan
+result is claimed beyond the published first51 scan.
