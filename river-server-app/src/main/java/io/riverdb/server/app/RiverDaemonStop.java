@@ -148,7 +148,7 @@ final class RiverDaemonStop {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       if (acceptedNonce != null) {
-        StatusCode forced = RiverDaemonRuntimeRecords.force(identity.directory());
+        StatusCode forced = RiverDaemonRuntimeStorage.force(identity.directory());
         return forced.isOk() ? StatusCode.CANCELLED : forced;
       }
       Probe probe = probeRequest(identity.directory(), probeResult);
@@ -163,7 +163,7 @@ final class RiverDaemonStop {
       if (!status.isOk()) return status;
       acceptedNonce = probe.entry.record.requestNonce;
       acceptedIdentity = probe.entry.identity;
-      status = RiverDaemonRuntimeRecords.force(identity.directory());
+      status = RiverDaemonRuntimeStorage.force(identity.directory());
       if (!status.isOk()) return status;
       return StatusCode.CANCELLED;
     }
@@ -188,17 +188,17 @@ final class RiverDaemonStop {
       if (record.high != metadata.incarnation.high() || record.low != metadata.incarnation.low()
           || !record.ownerNonce.equals(metadata.owner.nonce)) return StatusCode.NOT_OWNER;
       RiverFileResult result = new RiverFileResult();
-      StatusCode status = RiverDaemonRuntimeRecords.openRuntime(
+      StatusCode status = RiverDaemonRuntimeStorage.openRuntime(
           filesystem, metadata.runtimeRoot, metadata.datadir, result);
       if (status != StatusCode.OK) return status == StatusCode.CONFLICT
           ? StatusCode.NOT_OWNER : status;
       RiverFile file = result.file();
-      RiverDaemonRuntimeRecords.ReadResult read = RiverDaemonRuntimeRecords.read(file);
+      RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
       StatusCode closeStatus = file.close();
       if (!read.status.isOk()) return read.status;
       if (!closeStatus.isOk() && closeStatus != StatusCode.CLOSED) return closeStatus;
-      RiverDaemonRuntimeRecords.RuntimeRecord runtime =
-          RiverDaemonRuntimeRecords.parseRuntime(read.bytes);
+      RiverDaemonRuntimeModel.RuntimeRecord runtime =
+          RiverDaemonRuntimeCodec.parseRuntime(read.bytes);
       Arrays.fill(read.bytes, (byte) 0);
       if (runtime == null || !runtime.matches(metadata.datadir, metadata.incarnation, metadata.owner)
           || !record.runtimeChecksum.equals(runtime.checksum)) return StatusCode.NOT_OWNER;
@@ -224,7 +224,7 @@ final class RiverDaemonStop {
       if (!status.isOk()) return status;
       removed = true;
     }
-    return removed ? RiverDaemonRuntimeRecords.force(identity.directory()) : StatusCode.OK;
+    return removed ? RiverDaemonRuntimeStorage.force(identity.directory()) : StatusCode.OK;
   }
 
   private static StatusCode validateRequest(RiverDaemonStopRequest.Record record,
@@ -284,7 +284,7 @@ final class RiverDaemonStop {
         name.length() - RiverDaemonStopRequest.STAGE_SUFFIX.length());
     String body = RiverDaemonStopRequest.encode(target.owner.high, target.owner.low,
         target.owner.nonce, nonce, target.runtimeChecksum, System.currentTimeMillis());
-    status = RiverDaemonRuntimeRecords.write(file, body.getBytes(StandardCharsets.UTF_8));
+    status = RiverDaemonRuntimeStorage.write(file, body.getBytes(StandardCharsets.UTF_8));
     FileIdentity identity = file.identity();
     StatusCode closeStatus = file.close();
     if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) status = closeStatus;
@@ -302,7 +302,7 @@ final class RiverDaemonStop {
         new DirectoryOperationResult());
     StatusCode closeStatus = stage.close();
     if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) status = closeStatus;
-    if (status.isOk()) status = RiverDaemonRuntimeRecords.force(directory);
+    if (status.isOk()) status = RiverDaemonRuntimeStorage.force(directory);
     return status;
   }
 
@@ -324,7 +324,7 @@ final class RiverDaemonStop {
     if (directory == null || identity == null) return StatusCode.OK;
     StatusCode status = directory.removeOwned(name, identity, new DirectoryOperationResult());
     if (status == StatusCode.CONFLICT) return StatusCode.OK;
-    if (status.isOk()) status = RiverDaemonRuntimeRecords.force(directory);
+    if (status.isOk()) status = RiverDaemonRuntimeStorage.force(directory);
     return status;
   }
 
@@ -336,7 +336,7 @@ final class RiverDaemonStop {
     if (!status.isOk()) return Probe.failure(status);
     RiverFile file = result.file();
     FileIdentity identity = file.identity();
-    RiverDaemonRuntimeRecords.ReadResult read = RiverDaemonRuntimeRecords.read(file);
+    RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
     StatusCode closeStatus = file.close();
     if (!read.status.isOk()) return Probe.failure(read.status);
     if (!closeStatus.isOk() && closeStatus != StatusCode.CLOSED) return Probe.failure(closeStatus);
@@ -388,7 +388,7 @@ final class RiverDaemonStop {
       if (!status.isOk()) return Scan.failure(status);
       RiverFile file = result.file();
       FileIdentity identity = file.identity();
-      RiverDaemonRuntimeRecords.ReadResult read = RiverDaemonRuntimeRecords.read(file);
+      RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
       StatusCode closeStatus = file.close();
       if (!read.status.isOk()) {
         if (stage && includeStages) continue;

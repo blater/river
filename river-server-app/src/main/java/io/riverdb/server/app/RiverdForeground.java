@@ -69,7 +69,7 @@ final class RiverdForeground {
           resources.maximumActiveTransactions(), preparation);
       if (status.isOk()) status = RiverDaemonStop.recoverStale(
           filesystem, preparation.identity());
-      if (status.isOk()) status = RiverDaemonRuntimeRecords.recoverStale(
+      if (status.isOk()) status = RiverDaemonRuntimeStaleRecovery.recover(
           paths.datadir, filesystem, preparation.identity(), paths.runtimeRoot);
       if (status.isOk()) status = RiverDaemonInstance.openPreparedRestart(
           preparation, random, command.ip(), address, command.port(),
@@ -210,7 +210,7 @@ final class RiverdForeground {
       if (stopped.getCount() == 0) return;
       status = firstFailure(status, instance.closeServices());
       if (instance.servicesClosed()) {
-        status = firstFailure(status, RiverDaemonRuntimeRecords.cleanupCurrent(
+        status = firstFailure(status, RiverDaemonRuntimeCleanup.cleanup(
             filesystem, identity, runtimeRoot, metadata));
         // Keep the acceptance receipt when shutdown failed; absence must not report success.
         if (status.isOk()) status = control.cleanup();
@@ -245,7 +245,7 @@ final class RiverdForeground {
     RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
     status = filesystem.openDirectory(paths.runtimeRoot, runtimeRootResult);
     if (!status.isOk()) return status;
-    status = RiverDaemonRuntimeRecords.publishRuntime(runtimeRootResult.directory(), metadata);
+    status = RiverDaemonRuntimePublication.publishRuntime(runtimeRootResult.directory(), metadata);
     StatusCode close = runtimeRootResult.directory().close();
     return status.isOk() && close != StatusCode.OK && close != StatusCode.CLOSED ? close : status;
   }
