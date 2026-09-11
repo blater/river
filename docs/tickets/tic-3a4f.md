@@ -36,3 +36,15 @@ before/after score and result, then integrate this ticket independently.
   (`51.497`, `54.811`, `38.074`, `34.330`, and `10.352`); the scan analyzed
   2,526 files. Focused Gradle checks remain pending the lead's serialized build
   slot.
+
+## Review fixes
+
+- Migrated the remaining embedded JDBC tests onto the shared fixture and removed
+  the duplicated client-file map, server starter, URL helper, token helper, and
+  stray `@Test` annotation.
+- Fixture startup now closes partially acquired resources on failure, cleanup
+  attempts both server and database closes before reporting status, preserves a
+  primary failure with cleanup suppressed, and clears the client-file path on
+  close. Durable reopen retains the configured owner budget.
+- Rescanned all changed files: scores remain below 90, with `RiverDriverTest`
+  at `86.617` and the other four files unchanged.
