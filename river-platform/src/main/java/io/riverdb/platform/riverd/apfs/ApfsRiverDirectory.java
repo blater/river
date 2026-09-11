@@ -238,7 +238,9 @@ final class ApfsRiverDirectory implements RiverDirectory {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    if (!RiverDirectoryNames.validPosix(stageName) || !RiverDirectoryNames.validPosix(targetName) || stageName.equals(targetName)) {
+    if (!RiverDirectoryNames.validPosix(stageName)
+        || !RiverDirectoryNames.validPosix(targetName)
+        || stageName.equals(targetName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode admission = admission();

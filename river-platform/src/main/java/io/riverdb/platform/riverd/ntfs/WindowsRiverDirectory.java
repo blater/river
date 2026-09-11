@@ -165,7 +165,8 @@ final class WindowsRiverDirectory implements RiverDirectory {
       DirectoryOperationResult result, boolean replace) {
     if (result == null || !(stage instanceof WindowsRiverFile file)) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    if (!begin(stageName) || !RiverDirectoryNames.validWindows(targetName) || stageName.equals(targetName)) {
+    if (!begin(stageName) || !RiverDirectoryNames.validWindows(targetName)
+        || stageName.equals(targetName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     Stat stat = inspect(file.handle());
@@ -189,7 +190,8 @@ final class WindowsRiverDirectory implements RiverDirectory {
       String stageName, String targetName, DirectoryOperationResult result) {
     if (result == null || !(sourceParent instanceof WindowsRiverDirectory source)
         || !(stage instanceof WindowsRiverDirectory staged)
-        || !RiverDirectoryNames.validWindows(stageName) || !RiverDirectoryNames.validWindows(targetName)) return StatusCode.INVALID_EXTERNAL_INPUT;
+        || !RiverDirectoryNames.validWindows(stageName)
+        || !RiverDirectoryNames.validWindows(targetName)) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     synchronized (CROSS_PARENT) {
       synchronized (this) {
