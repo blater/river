@@ -1,6 +1,6 @@
 ---
 id: tic-013d
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -44,3 +44,5 @@ The epic's light JVM sample/all passed at 308.64 TPS, p99 58.491ms, 506 retries,
 zero failed/unknown outcomes, valid invariants and graceful cleanup. Startup 1.329s,
 stop 0.872s. No observed regression against recent integrated control 314.68 TPS.
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_034035_92f33862`.
+
+Delivered at `perf-checkpoint-20260911-score-first13`.

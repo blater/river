@@ -1,6 +1,6 @@
 ---
 id: tic-03aa
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -40,3 +40,5 @@ with `--no-daemon`. The epic's light JVM sample/all passed at 293.04 TPS,
 p99 62.849ms, 509 retries, zero failed/unknown outcomes, valid invariants and
 graceful cleanup. No observed regression against the recent control range.
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_033626_c68ac72e`.
+
+Delivered at `perf-checkpoint-20260911-score-first13`.
