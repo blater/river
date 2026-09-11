@@ -2,7 +2,6 @@ package io.riverdb.platform.riverd.linux;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.file.DirectoryDurability;
-import io.riverdb.platform.file.DirectoryEntryType;
 import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.riverd.FileIdentity;
@@ -11,12 +10,6 @@ import io.riverdb.platform.riverd.RiverDirectoryResult;
 import io.riverdb.platform.riverd.RiverFile;
 import io.riverdb.platform.riverd.RiverFileResult;
 import io.riverdb.platform.riverd.RiverOpenMode;
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
-
-/* FFM directory buffers stay inside the synchronous adapter call. */
-@SuppressWarnings("restricted")
 final class LinuxRiverDirectory implements RiverDirectory {
   private static final Object CROSS_PARENT = new Object();
   private final int fd;
@@ -99,47 +92,7 @@ final class LinuxRiverDirectory implements RiverDirectory {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (!admission().isOk()) return admission();
-    int streamFd = LinuxFileBridge.openAt(fd, ".", directoryFlags(), 0);
-    if (streamFd < 0) return status();
-    StatusCode scanStatus = StatusCode.IO_FAILURE;
-    try (Arena arena = Arena.ofConfined()) {
-      scanStatus = scan(streamFd, result, arena.allocate(8192, 8));
-    } finally {
-      int closeStatus = LinuxFileBridge.close(streamFd);
-      if (scanStatus.isOk() && closeStatus != 0) scanStatus = status();
-    }
-    return scanStatus;
-  }
-
-  private StatusCode scan(int streamFd, DirectoryListResult result, MemorySegment buffer) {
-    while (true) {
-      int count = LinuxNamespaceBridge.readDirectory(streamFd, buffer, 8192);
-      if (count == 0) {
-        result.finish(1);
-        return StatusCode.OK;
-      }
-      if (count < 0) return status();
-      int offset = 0;
-      while (offset < count) {
-        if (count - offset < 19) return StatusCode.CORRUPTION;
-        int recordLength = Short.toUnsignedInt(buffer.get(ValueLayout.JAVA_SHORT, offset + 16));
-        if (recordLength < 19 || recordLength > count - offset) return StatusCode.CORRUPTION;
-        int nameLength = 0;
-        while (nameLength < recordLength - 19
-            && buffer.get(ValueLayout.JAVA_BYTE, offset + 19 + nameLength) != 0) nameLength++;
-        if (nameLength == 0 || nameLength == recordLength - 19) return StatusCode.CORRUPTION;
-        String name = LinuxNamespaceBridge.directoryEntryName(buffer, offset + 19, nameLength);
-        offset += recordLength;
-        if (name.equals(".") || name.equals("..")) continue;
-        LinuxNamespaceBridge.Stat stat = LinuxNamespaceBridge.statAt(fd, name);
-        if (stat == null) return status();
-        DirectoryEntryType type = stat.regularFile() ? DirectoryEntryType.FILE
-            : stat.directory() ? DirectoryEntryType.DIRECTORY : null;
-        if (type == null) return StatusCode.CORRUPTION;
-        StatusCode added = result.add(name, type);
-        if (!added.isOk()) return added;
-      }
-    }
+    return LinuxDirectoryListing.list(fd, directoryFlags(), result);
   }
 
   @Override
