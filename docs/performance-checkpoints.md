@@ -2395,3 +2395,26 @@ file is below 90. Logs and scan: `/private/tmp/river-score-20260911/`
 `integration-next4-check.log`, `integration-next4-native.log`,
 `integration-next4-native-smoke.log`, `integration-first8-scores.json`.
 Checkpoint: `perf-checkpoint-20260911-score-first8`.
+
+
+## 2026-09-11: request encoding and catalog/schema simplification
+
+Accepted sources: `tic-1ca8` at `7251282c`, `tic-50be` at `bbdf5122`, `tic-01f7` at `bf2b1962`.
+Luna/high implemented; Sol/high and lead approved. Per-ticket pages retain exact
+scores, focused tests and workload artifacts. Shared parameter encoding now has
+one direct owner; the schema and catalog changes remove internal forwarding.
+
+Protocol's short Java sample 346.1/control 477.6 TPS prompted a longer 30s pair:
+553.533/560.267 TPS, with zero errors/retries and clean terminal accounting.
+The large short-run gap did not repeat; no speedup claimed. Schema/catalog
+external sample/all runs passed at 308.43/306.28 TPS against recent 314.68 control,
+with zero failed/unknown outcomes, valid invariants and graceful cleanup.
+Java and external-harness figures are separate workloads and are not compared.
+
+Combined protocol/client checks and focused relational/catalog tests plus engine
+policy checks passed in 16s with `--no-daemon`. The preceding first-eight checkpoint
+supplies the recent clean full build and standalone smoke; this small follow-up
+uses affected checks. Full unchanged scan: 2,558 files, 71 remaining at or above 90; all newly
+added files below 90. Evidence: `integration-first11-check.log` and
+`integration-first11-scores.json` under `/private/tmp/river-score-20260911`.
+Checkpoint: `perf-checkpoint-20260911-score-first11`.

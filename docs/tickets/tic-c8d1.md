@@ -160,3 +160,9 @@ client lifetime and exact-lock admission join the first four. The unchanged full
 scan covers 2,556 Java files; **74 remain at or above 90**. All files added by
 these tickets are below 90. The clean integration check passed in 4m23s;
 the standalone smoke and integrated JVM sample passed. All eight tickets are closed.
+
+
+Protocol request encoding (`tic-1ca8`), schema admission (`tic-50be`) and catalog
+index decoding (`tic-01f7`) bring the accepted total to 11. Combined affected
+checks passed; unchanged scan: 2,558 Java files, 71 remaining at or above 90.
+Checkpoint: `perf-checkpoint-20260911-score-first11`.
