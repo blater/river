@@ -28,6 +28,17 @@ final class TransactionCompletion {
     result.set(manager.databaseHigh, manager.databaseLow, id, state, commitSequence);
   }
 
+  void finishGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      TransactionState state,
+      StatusCode lockOutcome) {
+    for (int index = 0; index < count; index++) {
+      finish(transactions[index], results[index], state, 0, lockOutcome);
+    }
+  }
+
   /** Completes a validated group in phases while the manager retains its snapshot barrier. */
   void publishCommittedGroup(
       Transaction[] transactions,

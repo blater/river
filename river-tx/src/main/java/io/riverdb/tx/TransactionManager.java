@@ -531,36 +531,13 @@ public final class TransactionManager {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (failure == null
-        || failure.isOk()
-        || transactions == null
-        || results == null
-        || count <= 0
-        || count > transactions.length
-        || count > results.length) {
+    if (!validFailureGroup(
+        transactions, results, count, failure, TransactionState.COMMITTING)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     TransactionState state = indeterminate(failure)
         ? TransactionState.INDETERMINATE : TransactionState.ABORTED;
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      if (transaction == null
-          || !transaction.isOwnedBy(this)
-          || transaction.state() != TransactionState.COMMITTING
-          || results[index] == null) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transaction
-            || results[previous] == results[index]) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-    }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      completion.finish(transaction, results[index], state, 0, failure);
-    }
+    completion.finishGroup(transactions, results, count, state, failure);
     return StatusCode.OK;
   }
 
@@ -570,27 +547,12 @@ public final class TransactionManager {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (failure == null || failure.isOk()
-        || transactions == null || results == null || count <= 0
-        || count > transactions.length || count > results.length) {
+    if (!validFailureGroup(
+        transactions, results, count, failure, TransactionState.PREPARED)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int index = 0; index < count; index++) {
-      if (!validPrepared(transactions[index]) || results[index] == null) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transactions[index]
-            || results[previous] == results[index]) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-    }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      completion.finish(
-          transaction, results[index], TransactionState.ABORTED, 0, failure);
-    }
+    completion.finishGroup(
+        transactions, results, count, TransactionState.ABORTED, failure);
     return StatusCode.OK;
   }
 
@@ -599,28 +561,12 @@ public final class TransactionManager {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (failure == null || failure.isOk()
-        || transactions == null || results == null || count <= 0
-        || count > transactions.length || count > results.length) {
+    if (!validFailureGroup(
+        transactions, results, count, failure, TransactionState.COMMITTING)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      if (transaction == null || !transaction.isOwnedBy(this)
-          || transaction.state() != TransactionState.COMMITTING
-          || results[index] == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transaction
-            || results[previous] == results[index]) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-    }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      completion.finish(
-          transaction, results[index], TransactionState.INDETERMINATE, 0, failure);
-    }
+    completion.finishGroup(
+        transactions, results, count, TransactionState.INDETERMINATE, failure);
     return StatusCode.OK;
   }
 
@@ -630,30 +576,11 @@ public final class TransactionManager {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (failure == null || failure.isOk()
-        || transactions == null || results == null || count <= 0
-        || count > transactions.length || count > results.length) {
+    if (!validFailureGroup(transactions, results, count, failure, null)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      TransactionState state = transaction == null ? null : transaction.state();
-      if (transaction == null || !transaction.isOwnedBy(this)
-          || state != TransactionState.PREPARED && state != TransactionState.COMMITTING
-          || results[index] == null) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transaction
-            || results[previous] == results[index]) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-    }
-    for (int index = 0; index < count; index++) {
-      completion.finish(
-          transactions[index], results[index], TransactionState.INDETERMINATE, 0, failure);
-    }
+    completion.finishGroup(
+        transactions, results, count, TransactionState.INDETERMINATE, failure);
     return StatusCode.OK;
   }
 
@@ -729,6 +656,50 @@ public final class TransactionManager {
         && transaction.state() == TransactionState.PREPARED;
   }
 
+  private boolean validFailureGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure,
+      TransactionState requiredState) {
+    if (failure == null
+        || failure.isOk()
+        || transactions == null
+        || results == null
+        || count <= 0
+        || count > transactions.length
+        || count > results.length) {
+      return false;
+    }
+    return validGroupMembers(transactions, results, count, requiredState);
+  }
+
+  private boolean validGroupMembers(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      TransactionState requiredState) {
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      if (transaction == null
+          || !transaction.isOwnedBy(this)
+          || requiredState != null && transaction.state() != requiredState
+          || requiredState == null
+              && transaction.state() != TransactionState.PREPARED
+              && transaction.state() != TransactionState.COMMITTING
+          || results[index] == null) {
+        return false;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (transactions[previous] == transaction
+            || results[previous] == results[index]) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   private boolean validCommitGroup(
       Transaction[] transactions,
       TransactionOutcome[] results,
@@ -743,21 +714,8 @@ public final class TransactionManager {
         || count > commitSequences.length) {
       return false;
     }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      if (transaction == null
-          || !transaction.isOwnedBy(this)
-          || transaction.state() != TransactionState.COMMITTING
-          || results[index] == null) {
-        return false;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (transactions[previous] == transaction
-            || results[previous] == results[index]) {
-          return false;
-        }
-      }
-    }
+    if (!validGroupMembers(
+        transactions, results, count, TransactionState.COMMITTING)) return false;
     for (int index = 0; index < count; index++) results[index].reset();
     return true;
   }
