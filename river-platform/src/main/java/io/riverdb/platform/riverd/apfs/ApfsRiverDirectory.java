@@ -6,6 +6,7 @@ import io.riverdb.platform.file.DirectoryEntryType;
 import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.riverd.FileIdentity;
+import io.riverdb.platform.riverd.RiverDirectoryNames;
 import io.riverdb.platform.riverd.RiverDirectory;
 import io.riverdb.platform.riverd.RiverDirectoryResult;
 import io.riverdb.platform.riverd.RiverFileResult;
@@ -192,7 +193,7 @@ final class ApfsRiverDirectory implements RiverDirectory {
         || !(stage instanceof ApfsRiverDirectory stageDirectory)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (!validChild(stageName) || !validChild(targetName)) {
+    if (!RiverDirectoryNames.validPosix(stageName) || !RiverDirectoryNames.validPosix(targetName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -237,7 +238,7 @@ final class ApfsRiverDirectory implements RiverDirectory {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    if (!validChild(stageName) || !validChild(targetName) || stageName.equals(targetName)) {
+    if (!RiverDirectoryNames.validPosix(stageName) || !RiverDirectoryNames.validPosix(targetName) || stageName.equals(targetName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode admission = admission();
@@ -347,7 +348,7 @@ final class ApfsRiverDirectory implements RiverDirectory {
   }
 
   private boolean begin(String name) {
-    return admission().isOk() && validChild(name);
+    return admission().isOk() && RiverDirectoryNames.validPosix(name);
   }
 
   private static int directoryFlags() {
@@ -359,14 +360,5 @@ final class ApfsRiverDirectory implements RiverDirectory {
     return DarwinFileBridge.O_RDWR | DarwinFileBridge.O_CLOEXEC | DarwinFileBridge.O_NOFOLLOW;
   }
 
-  private static boolean validChild(String name) {
-    if (name == null || name.isBlank() || name.length() > 255 || name.equals(".")
-        || name.equals("..")) return false;
-    for (int index = 0; index < name.length(); index++) {
-      char value = name.charAt(index);
-      if (value == '/' || value == '\\' || value == 0 || value == '\r' || value == '\n'
-          || Character.getType(value) == Character.CONTROL) return false;
-    }
-    return true;
-  }
+
 }
