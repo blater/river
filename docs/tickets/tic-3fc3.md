@@ -1,6 +1,6 @@
 ---
 id: tic-3fc3
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code

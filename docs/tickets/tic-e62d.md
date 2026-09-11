@@ -1,6 +1,6 @@
 ---
 id: tic-e62d
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
