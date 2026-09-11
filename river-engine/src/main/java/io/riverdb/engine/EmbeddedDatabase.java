@@ -418,16 +418,10 @@ public final class EmbeddedDatabase {
     closing = true;
     StatusCode status = closePrimaryServices();
     for (LocalWal followerWal : followerWals) {
-      StatusCode followerStatus = closeStatus(followerWal.close());
-      if (status.isOk()) {
-        status = followerStatus;
-      }
+      status = firstFailure(status, closeStatus(followerWal.close()));
     }
     for (NioDurableDirectory followerDirectory : followerDirectories) {
-      StatusCode followerStatus = closeStatus(followerDirectory.close());
-      if (status.isOk()) {
-        status = followerStatus;
-      }
+      status = firstFailure(status, closeStatus(followerDirectory.close()));
     }
     if (status.isOk()) {
       status = closeStatus(directory.close());
