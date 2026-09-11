@@ -17,8 +17,8 @@ final class RiverDefaultClient {
       PrintStream output,
       PrintStream errors,
       Path home) {
-    RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
-    StatusCode status = RiverDaemonPaths.resolve(null, null, home, paths);
+    RiverDaemonPathSelection.Result paths = new RiverDaemonPathSelection.Result();
+    StatusCode status = RiverDaemonPathSelection.resolve(null, null, home, paths);
     if (!status.isOk()) {
       errors.println("Default client configuration could not be resolved: " + status);
       errors.println("Start the default instance with `river server start`.");

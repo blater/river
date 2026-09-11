@@ -185,3 +185,10 @@ accepted total to 19. Affected checks and the rebuilt standalone CLI's real
 start/authenticate/SQL/stop path passed. Unchanged scan: 2,588 files, 63 remaining
 at or above 90, no new offenders. Checkpoint:
 `perf-checkpoint-20260911-score-first19`.
+
+
+Six further reviewed and validated tickets bring the accepted total to 25.
+Clean full integration checks passed; the unchanged scan now has 57 remaining
+files at or above 90 out of 2,593, with no new offenders. Checkpoint:
+`perf-checkpoint-20260911-score-first25`; per-ticket validation and
+`docs/performance-checkpoints.md` retain evidence.

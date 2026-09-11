@@ -13,7 +13,7 @@ File: `river-server-app/src/main/java/io/riverdb/server/app/RiverDaemonTargets.j
 
 ## Approach
 
-Review `RiverDaemonTargets.list`, `RiverDaemonTargets.resolveEndpoint`, `RiverDaemonTargets.resolve` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
+Share runtime-record admission used by listing and endpoint resolution; keep endpoint filtering before target acquisition. Separate user-facing row formatting only if still needed. Preserve stale-record warnings, duplicate endpoint conflict, lock revalidation and exact close/status ordering. Reuse current runtime codec/storage owners; do not add a second registry or lifetime owner.
 
 ## Acceptance
 

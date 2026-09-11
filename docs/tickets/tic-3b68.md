@@ -1,6 +1,6 @@
 ---
 id: tic-3b68
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,7 @@ File: `river-engine/src/main/java/io/riverdb/engine/table/IndexedTableStoreFacto
 
 ## Approach
 
-Review `IndexedTableStoreFactory.openClaimed`, `IndexedTableStoreFactory.openCheckpointClaimed`, `IndexedTableStoreFactory.createClaimed` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
+Replace identical row/version reopen-or-create helpers with one local operation taking the file name. Preserve acquisition order, missing-page corruption mapping, lease ownership and cleanup precedence. Do not generalize the factory or add an interface.
 
 ## Acceptance
 

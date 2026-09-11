@@ -205,11 +205,11 @@ public final class TableDefinition {
   }
 
   public CharSequence keyColumnName() {
-    return TableDefinitionColumnView.keyName(this);
+    return columnName(0);
   }
 
   public CharSequence valueColumnName() {
-    return TableDefinitionColumnView.valueName(this);
+    return columnName(1);
   }
 
   public boolean matchesKeyColumn(CharSequence name) {
@@ -221,7 +221,7 @@ public final class TableDefinition {
   }
 
   public int columnCount() {
-    return TableDefinitionColumnView.count(this);
+    return columnCount;
   }
 
   public CharSequence columnName(int index) {
@@ -277,7 +277,7 @@ public final class TableDefinition {
   }
 
   int defaultTextBytes() {
-    return TableDefinitionColumnView.defaultTextBytes(this);
+    return defaultTextBytesUsed;
   }
 
   byte defaultTextByte(int index) {

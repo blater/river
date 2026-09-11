@@ -24,3 +24,23 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-server-app` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Validation
+
+Accepted `567ec7d2`, Luna/high implemented; Sol/high/lead approved. Canonical
+selection, capability probing, collision admission and parent mutation now have
+concrete stateless owners. The old facade is removed and callers migrate directly.
+Validation precedes carrier publication; identity, symlink, overlap, ancestor,
+private-directory, force/close and status contracts are unchanged. Scores:
+selection 5.688, inspection 10.931, probe 28.057, parents 18.946 (original 192.224).
+
+All 12 focused path/default-client/lifecycle tests and server checks passed;
+benchmark installation passed. Logs: `/private/tmp/river-tic-b169-focused.log`
+and `/private/tmp/river-tic-b169-check.log`.
+The epic's light JVM sample/all candidate was 262.65 TPS; adjacent frozen control
+was similarly lower at 266.35 TPS (p99 62.226/64.913ms). Both passed with zero
+failed/unknown outcomes, valid invariants and graceful cleanup. The adjacent
+control reproduces the lower rate; no change-attributed regression or speedup claim.
+Artifacts under `/Users/blater/src/ingres/river-harness/runs/`:
+`river_harness_20260911_043732_cba08bf2`,
+`river_harness_20260911_043840_3f3f47b6`.
