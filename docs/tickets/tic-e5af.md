@@ -15,12 +15,14 @@ File: `river-engine/src/main/java/io/riverdb/engine/relational/CatalogTableDecod
 
 Review `CatalogTableDecoder.decodeCopied`, `CatalogTableDecoder.decodeForScan`, `CatalogTableDecoder.decode` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
 
-Implementation plan: keep record header/name/index validation, `TableDefinition`
-reset/publication, and source restoration in `CatalogTableDecoder`. Move the
-column metadata, defaults, check nodes, reusable `TableSchema`, and scratch
-arrays into one `CatalogColumnDecoder` created once. The column decoder returns
-the next section offset and reuses the existing status precedence; the unused
-`columnFlags` scratch array is removed.
+Implementation plan: keep shared record header/name/index validation and
+`TableDefinition` reset/publication in `CatalogTableDecoder`; the existing
+scan owner handles only scan-specific copy and name admission before calling
+that shared path. Move column metadata, defaults, check nodes, reusable
+`TableSchema`, and scratch arrays into one `CatalogColumnDecoder` created once.
+The embedded index tail has its own static `CatalogTableIndexDecoder`, and the
+unused `columnFlags` scratch array is removed. All decoders preserve the
+existing status precedence and source-buffer restoration.
 
 ## Acceptance
 
