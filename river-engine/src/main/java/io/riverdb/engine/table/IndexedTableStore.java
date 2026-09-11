@@ -1,7 +1,6 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointState;
@@ -13,7 +12,6 @@ import io.riverdb.platform.file.DurableFile;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalMetrics;
 import io.riverdb.tx.TransactionManager;
-import java.nio.ByteBuffer;
 
 /** Single-owner bounded page store whose WAL operations atomically cover heap and index state. */
 public final class IndexedTableStore extends IndexedRelationalStoreAccess {
@@ -31,12 +29,12 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   private final DurableFile file;
   private final LocalWal wal;
   private final DatabaseIncarnation database;
-  private final IndexedTableKernel kernel;
+  final IndexedTableKernel kernel;
   private final IndexedCheckpointCoordinator checkpoints;
   private final IndexedGroupCommitMetrics commitMetrics = new IndexedGroupCommitMetrics();
   private final IndexedWalRecovery recovery;
   private final IndexedPageOperationCommitter pageCommitter;
-  private final IndexedPageSet pages;
+  final IndexedPageSet pages;
   private final DatabaseProviderLease providerLease;
   private final DatabaseStoreLease storeLease;
   private final IndexedDurableVersionAdmission durableVersions =
@@ -102,10 +100,6 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
     return status;
   }
 
-  StatusCode validate() {
-    return kernel.validate();
-  }
-
   StatusCode transactionAdmissionStatus() {
     StatusCode status = admission();
     return status.isOk() ? durableVersions.transactionAdmissionStatus() : status;
@@ -128,46 +122,6 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   StatusCode reserveLogicalRowIds(
       long objectId, int count, IndexedLogicalRowIdReservation result) {
     return logicalRowIds.reserve(objectId, count, result);
-  }
-
-  StatusCode preflightHybridGroup(
-      IndexedPreparedLogicalCommit[] prepared, int count,
-      long oldestVisibleCommitSequence) {
-    return relationalServices().preflightHybridGroup(
-        prepared, count, oldestVisibleCommitSequence);
-  }
-
-  StatusCode reserveHybridGroupCapacity(int required) {
-    return relationalServices().reserveHybridGroupCapacity(required);
-  }
-
-  StatusCode appendHybridGroup(
-      IndexedPreparedLogicalCommit[] prepared,
-      long[] commitSequences,
-      long[] committedRows,
-      int count) {
-    return relationalServices().appendHybridGroup(
-        prepared, commitSequences, committedRows, count);
-  }
-
-  StatusCode forceHybridGroup() {
-    return relationalServices().forceHybridGroup();
-  }
-
-  StatusCode completeHybridGroupDurability() {
-    return relationalServices().completeHybridGroupDurability();
-  }
-
-  StatusCode cancelCommitGroup() {
-    return relationalServices().cancelHybridGroup();
-  }
-
-  boolean commitGroupDecisionAppended() {
-    return relationalServices().hybridDecisionAppended();
-  }
-
-  boolean commitGroupDurabilityUncertain() {
-    return relationalServices().hybridDurabilityUncertain();
   }
 
   StatusCode fenceCommitWriter() {
@@ -237,72 +191,6 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
 
 
 
-  StatusCode fetchByKey(
-      long space, long key, io.riverdb.storage.heap.HeapRowResult result) {
-    return kernel.fetchByKeyAt(lastCommitSequence, space, key, result);
-  }
-
-  StatusCode fetchByKeyAt(
-      long visibleCommitSequence,
-      long space,
-      long key,
-      io.riverdb.storage.heap.HeapRowResult result) {
-    return kernel.fetchByKeyAt(visibleCommitSequence, space, key, result);
-  }
-
-  StatusCode fetchVersionedByKeyAt(
-      long visibleCommitSequence, long space, long key,
-      HeapRowResult row, IndexedVersionedRowResult result) {
-    return kernel.fetchVersionedByKeyAt(visibleCommitSequence, space, key, row, result);
-  }
-
-  StatusCode fetchCurrentSuccessor(
-      long space, long key, long candidateRowId, HeapRowResult row, IndexedVersionedRowResult result) {
-    return kernel.fetchCurrentSuccessor(space, key, candidateRowId, row, result);
-  }
-
-  int firstLeafPageIdAt(long visibleCommitSequence, long space, long lowerKey) {
-    return kernel.findLeafPageIdAt(visibleCommitSequence, space, lowerKey);
-  }
-
-  StatusCode snapshotLookupStatus() { return kernel.snapshotLookupStatus(); }
-
-  StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {
-    return kernel.nextScan(cursor, result);
-  }
-
-  StatusCode prepareMutation(
-      long visibleCommitSequence,
-      long space,
-      long key,
-      IndexedMutationTarget result) {
-    return kernel.prepareMutation(visibleCommitSequence, space, key, result);
-  }
-
-  StatusCode prepareInsert(
-      long visibleCommitSequence,
-      long space,
-      long key,
-      IndexedMutationTarget result) {
-    return kernel.prepareInsert(visibleCommitSequence, space, key, result);
-  }
-
-  int rootPageId() {
-    return kernel.rootPageId();
-  }
-
-  int nextPageId() {
-    return kernel.nextPageId();
-  }
-
-  int pageCount() {
-    return pages.highestPageId();
-  }
-
-  int treeHeight() {
-    return kernel.treeHeight();
-  }
-
   public static StatusCode create(
       DurableDirectory directory,
       LocalWal wal,
@@ -355,31 +243,6 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   private StatusCode beginBootstrap() {
     StatusCode status = admission();
     return status.isOk() ? pageCommitter.beginBootstrap() : status;
-  }
-
-  StatusCode fetchRow(long rowId, io.riverdb.storage.heap.HeapRowResult result) {
-    return kernel.fetchRow(rowId, result);
-  }
-
-  int rowLength(long rowId) {
-    return kernel.rowLength(rowId);
-  }
-
-  StatusCode copyRowTo(long rowId, ByteBuffer destination, int destinationOffset) {
-    return kernel.copyRowTo(rowId, destination, destinationOffset);
-  }
-
-  long rowCount() {
-    return kernel.rowCount();
-  }
-
-  /** Returns the number of superseded heap versions in constant time. */
-  int obsoleteVersionCount() {
-    return kernel.obsoleteVersionCount();
-  }
-
-  long remainingVersionCapacity() {
-    return kernel.remainingVersionCapacity();
   }
 
   private StatusCode commitBootstrap() {
@@ -506,10 +369,6 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
 
   long nextTransactionId() {
     return wal.nextTransactionId();
-  }
-
-  StatusCode readVersion(long rowId, IndexedVersionRecord result) {
-    return kernel.readVersion(rowId, result);
   }
 
   public synchronized StatusCode close() {

@@ -104,7 +104,7 @@ final class IndexedTableStoreInterruptedVacuumTest {
     assertEquals(300, table.rowCount());
     assertEquals(0, table.obsoleteVersionCount());
     IndexedVersionRecord version = new IndexedVersionRecord();
-    assertEquals(StatusCode.OK, store.readVersion(1, version));
+    assertEquals(StatusCode.OK, store.kernel.readVersion(1, version));
     assertEquals(14, version.commitSequence());
     assertEquals(0, version.previousRowId());
     HeapRowResult fetched = new HeapRowResult();

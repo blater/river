@@ -69,8 +69,9 @@ final class IndexedRelationalWalCommitTest {
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    requireOk(reopened.store().fetchByKey(space, 1, row));
-    check(row.getLong(0) == 811 && reopened.store().rowCount() == 1,
+    requireOk(reopened.store().kernel.fetchByKeyAt(
+        reopened.store().lastCommitSequence, space, 1, row));
+    check(row.getLong(0) == 811 && reopened.store().kernel.rowCount() == 1,
         "live grouped recovery diverged from publication");
     requireOk(reopened.store().close());
     requireOk(wal.close());
@@ -212,7 +213,7 @@ final class IndexedRelationalWalCommitTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistry(reopened.store(), 1_001, 4, SECOND_OWNER_OBJECT_ID, 2);
-    check(reopened.store().rowCount() == 10, "atomic grouped recovery frontier mismatch");
+    check(reopened.store().kernel.rowCount() == 10, "atomic grouped recovery frontier mismatch");
     IndexedPageSet reopenedPages = pageSet(reopened.store());
     check(reopenedPages.payloadKind(4) == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
         && reopenedPages.ownerKeyId(4) == 1_001,
@@ -324,9 +325,11 @@ final class IndexedRelationalWalCommitTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(
         directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    requireOk(reopened.store().fetchByKey(baseSpace, 1, fetched));
+    requireOk(reopened.store().kernel.fetchByKeyAt(
+        reopened.store().lastCommitSequence, baseSpace, 1, fetched));
     check(fetched.getLong(0) == 991, "reopen lost hybrid base row");
-    check(reopened.store().fetchByKey(baseSpace, 2, fetched) == StatusCode.CONFLICT,
+    check(reopened.store().kernel.fetchByKeyAt(
+        reopened.store().lastCommitSequence, baseSpace, 2, fetched) == StatusCode.CONFLICT,
         "reopen recovered rolled-back hybrid row");
     assertRecoveredRegistry(
         reopened.store(), 1_000, 4, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
@@ -451,8 +454,10 @@ final class IndexedRelationalWalCommitTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(
         directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    requireOk(reopened.store().fetchByKey(baseSpace, 1, fetched));
-    requireOk(reopened.store().fetchByKey(baseSpace, 2, fetched));
+    requireOk(reopened.store().kernel.fetchByKeyAt(
+        reopened.store().lastCommitSequence, baseSpace, 1, fetched));
+    requireOk(reopened.store().kernel.fetchByKeyAt(
+        reopened.store().lastCommitSequence, baseSpace, 2, fetched));
     assertTuple(reopened.store(), descriptor, 991, 1);
     assertTuple(reopened.store(), descriptor, 992, 2);
     assertRecoveredRegistry(reopened.store(), 1_000, 4, OWNER_OBJECT_ID, 4, KEY_SCHEMA_ID);
@@ -465,8 +470,10 @@ final class IndexedRelationalWalCommitTest {
     reopened.reset();
     requireOk(IndexedTableStore.openExisting(
         directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    requireOk(reopened.store().fetchByKey(baseSpace, 1, fetched));
-    requireOk(reopened.store().fetchByKey(baseSpace, 2, fetched));
+    requireOk(reopened.store().kernel.fetchByKeyAt(
+        reopened.store().lastCommitSequence, baseSpace, 1, fetched));
+    requireOk(reopened.store().kernel.fetchByKeyAt(
+        reopened.store().lastCommitSequence, baseSpace, 2, fetched));
     assertTuple(reopened.store(), descriptor, 991, 1);
     assertTuple(reopened.store(), descriptor, 992, 2);
     requireOk(reopened.store().close());
@@ -946,8 +953,10 @@ final class IndexedRelationalWalCommitTest {
         reopened.store(), 1_000, OWNER_OBJECT_ID, firstBuilding.rootPageId(), 3);
     assertReadyRegistry(
         reopened.store(), 1_001, SECOND_OWNER_OBJECT_ID, secondBuilding.rootPageId(), 2);
-    requireOk(reopened.store().fetchByKey(77, 1, scalar));
-    requireOk(reopened.store().fetchByKey(77, 2, scalar));
+    requireOk(reopened.store().kernel.fetchByKeyAt(
+        reopened.store().lastCommitSequence, 77, 1, scalar));
+    requireOk(reopened.store().kernel.fetchByKeyAt(
+        reopened.store().lastCommitSequence, 77, 2, scalar));
 
     IndexedTableOpenResult reopenedTable = new IndexedTableOpenResult();
     requireOk(IndexedTable.open(reopened.store(), reopenedTable));

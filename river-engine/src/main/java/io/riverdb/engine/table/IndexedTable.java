@@ -43,7 +43,7 @@ public final class IndexedTable extends IndexedRelationalTableAccess
     }
     result.reset();
     IndexedTable table = new IndexedTable(store);
-    StatusCode status = table.store.validate();
+    StatusCode status = table.store.kernel.validate();
     if (status.isOk()) {
       result.set(table);
     }
@@ -66,12 +66,12 @@ public final class IndexedTable extends IndexedRelationalTableAccess
   synchronized StatusCode preflightHybridCommitGroup(
       IndexedPreparedLogicalCommit[] prepared, int count,
       long oldestVisibleCommitSequence) {
-    return store.preflightHybridGroup(
+    return store.relationalServices().preflightHybridGroup(
         prepared, count, oldestVisibleCommitSequence);
   }
 
   synchronized StatusCode reserveHybridCommitGroupCapacity(int required) {
-    return store.reserveHybridGroupCapacity(required);
+    return store.relationalServices().reserveHybridGroupCapacity(required);
   }
 
   /** Copies indexed commit-path telemetry into caller-owned storage. */
@@ -111,13 +111,16 @@ public final class IndexedTable extends IndexedRelationalTableAccess
       long[] commitSequences,
       long[] committedRows,
       int count) {
-    return store.appendHybridGroup(prepared, commitSequences, committedRows, count);
+    return store.relationalServices().appendHybridGroup(
+        prepared, commitSequences, committedRows, count);
   }
 
-  StatusCode forceHybridCommitGroup() { return store.forceHybridGroup(); }
+  StatusCode forceHybridCommitGroup() {
+    return store.relationalServices().forceHybridGroup();
+  }
 
   synchronized StatusCode completeGroupDurability() {
-    StatusCode status = store.completeHybridGroupDurability();
+    StatusCode status = store.relationalServices().completeHybridGroupDurability();
     notifyAll();
     return status;
   }
@@ -137,17 +140,17 @@ public final class IndexedTable extends IndexedRelationalTableAccess
   }
 
   synchronized StatusCode cancelCommitGroup() {
-    StatusCode status = store.cancelCommitGroup();
+    StatusCode status = store.relationalServices().cancelHybridGroup();
     notifyAll();
     return status;
   }
 
   synchronized boolean commitGroupDecisionAppended() {
-    return store.commitGroupDecisionAppended();
+    return store.relationalServices().hybridDecisionAppended();
   }
 
   synchronized boolean commitGroupDurabilityUncertain() {
-    return store.commitGroupDurabilityUncertain();
+    return store.relationalServices().hybridDurabilityUncertain();
   }
 
   synchronized StatusCode fenceCommitWriter() {
@@ -187,42 +190,44 @@ public final class IndexedTable extends IndexedRelationalTableAccess
 
   public synchronized StatusCode fetchByKey(
       long space, long key, HeapRowResult result) {
-    return store.fetchByKey(space, key, result);
+    return store.kernel.fetchByKeyAt(store.lastCommitSequence, space, key, result);
   }
 
   synchronized StatusCode tupleIndexCleanupComplete(
       int cleanupCursor, int cleanupEndPageId) {
     if (cleanupCursor < io.riverdb.storage.btree.BTreeRootPage.FIRST_REUSABLE_PAGE_ID
-        || cleanupEndPageId < cleanupCursor || cleanupEndPageId > store.nextPageId()) {
+        || cleanupEndPageId < cleanupCursor
+        || cleanupEndPageId > store.kernel.nextPageId()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return cleanupCursor == cleanupEndPageId ? StatusCode.OK : StatusCode.CONFLICT;
   }
 
-  synchronized int nextPageId() { return store.nextPageId(); }
+  synchronized int nextPageId() { return store.kernel.nextPageId(); }
 
   public synchronized StatusCode fetchByKeyAt(
       long visibleCommitSequence,
       long space,
       long key,
       HeapRowResult result) {
-    return store.fetchByKeyAt(visibleCommitSequence, space, key, result);
+    return store.kernel.fetchByKeyAt(visibleCommitSequence, space, key, result);
   }
 
   synchronized StatusCode fetchVersionedByKeyAt(
       long visibleCommitSequence, long space, long key,
       HeapRowResult row, IndexedVersionedRowResult result) {
-    return store.fetchVersionedByKeyAt(visibleCommitSequence, space, key, row, result);
+    return store.kernel.fetchVersionedByKeyAt(visibleCommitSequence, space, key, row, result);
   }
 
   synchronized StatusCode fetchCurrentByKey(
       long space, long key, HeapRowResult row, IndexedVersionedRowResult result) {
-    return store.fetchVersionedByKeyAt(store.currentCommitSequence(), space, key, row, result);
+    return store.kernel.fetchVersionedByKeyAt(
+        store.currentCommitSequence(), space, key, row, result);
   }
 
   synchronized StatusCode fetchCurrentSuccessor(
       long space, long key, long candidateRowId, HeapRowResult row, IndexedVersionedRowResult result) {
-    return store.fetchCurrentSuccessor(space, key, candidateRowId, row, result);
+    return store.kernel.fetchCurrentSuccessor(space, key, candidateRowId, row, result);
   }
 
   synchronized StatusCode probeTuplePrefixAt(
@@ -317,10 +322,10 @@ public final class IndexedTable extends IndexedRelationalTableAccess
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int leafPageId = store.firstLeafPageIdAt(
+    int leafPageId = store.kernel.findLeafPageIdAt(
         visibleCommitSequence, lowerSpace, lowerKey);
     if (leafPageId <= 0) {
-      return store.snapshotLookupStatus();
+      return store.kernel.snapshotLookupStatus();
     }
     return cursor.claim(
         this, visibleCommitSequence,
@@ -333,7 +338,7 @@ public final class IndexedTable extends IndexedRelationalTableAccess
     if (cursor == null || !cursor.isOwnedBy(this) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return store.nextScan(cursor, result);
+    return store.kernel.nextScan(cursor, result);
   }
 
   public synchronized StatusCode closeScan(IndexedScanCursor cursor) {
@@ -349,7 +354,7 @@ public final class IndexedTable extends IndexedRelationalTableAccess
       long space,
       long key,
       IndexedMutationTarget result) {
-    return store.prepareMutation(visibleCommitSequence, space, key, result);
+    return store.kernel.prepareMutation(visibleCommitSequence, space, key, result);
   }
 
   public synchronized StatusCode prepareInsert(
@@ -357,31 +362,31 @@ public final class IndexedTable extends IndexedRelationalTableAccess
       long space,
       long key,
       IndexedMutationTarget result) {
-    return store.prepareInsert(visibleCommitSequence, space, key, result);
+    return store.kernel.prepareInsert(visibleCommitSequence, space, key, result);
   }
 
   public synchronized long rowCount() {
-    return store.rowCount();
+    return store.kernel.rowCount();
   }
 
   public synchronized int obsoleteVersionCount() {
-    return store.obsoleteVersionCount();
+    return store.kernel.obsoleteVersionCount();
   }
 
   public synchronized long remainingVersionCapacity() {
-    return store.remainingVersionCapacity();
+    return store.kernel.remainingVersionCapacity();
   }
 
   public int rootPageId() {
-    return store.rootPageId();
+    return store.kernel.rootPageId();
   }
 
   public int pageCount() {
-    return store.pageCount();
+    return store.pages.highestPageId();
   }
 
   public synchronized int treeHeight() {
-    return store.treeHeight();
+    return store.kernel.treeHeight();
   }
 
   public synchronized long visibleCommitSequence() {

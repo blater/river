@@ -396,18 +396,18 @@ final class IndexedRelationalWalRecoveryTest {
     assertRecoveredRegistry(reopened.store());
     assertRecoveredRegistry(reopened.store(), 1_001, 5, SECOND_OWNER_OBJECT_ID);
     HeapRowResult base = new HeapRowResult();
-    requireOk(reopened.store().fetchByKey(
+    requireOk(reopened.store().kernel.fetchByKeyAt(reopened.store().lastCommitSequence,
         CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID),
         1, base));
     check(base.length() == Long.BYTES && base.getLong(0) == 771, "base replay mismatch");
-    check(reopened.store().rowCount() == 7, "grouped replay heap frontier mismatch");
+    check(reopened.store().kernel.rowCount() == 7, "grouped replay heap frontier mismatch");
     IndexedVacuumResult vacuum = new IndexedVacuumResult();
     requireOk(reopened.store().vacuum(90, vacuum));
     check(vacuum.rowsBefore() == 7 && vacuum.rowsAfter() == 3,
         "tuple leaf entries inflated scalar vacuum retention");
     assertRecoveredRegistry(reopened.store());
     assertRecoveredRegistry(reopened.store(), 1_001, 5, SECOND_OWNER_OBJECT_ID);
-    requireOk(reopened.store().fetchByKey(
+    requireOk(reopened.store().kernel.fetchByKeyAt(reopened.store().lastCommitSequence,
         CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID),
         1, base));
     check(base.getLong(0) == 771, "vacuum changed grouped base row");

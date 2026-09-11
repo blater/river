@@ -96,8 +96,8 @@ final class IndexedFreePageDurableRecoveryTest {
         IndexedTableStore.openExisting(
             directory, wal, DATABASE, GENERATION, databaseProviderLease(1), reopened));
     assertNotNull(reopened.store());
-    assertEquals(3, reopened.store().pageCount());
-    assertEquals(StatusCode.OK, reopened.store().validate());
+    assertEquals(3, reopened.store().pages.highestPageId());
+    assertEquals(StatusCode.OK, reopened.store().kernel.validate());
     assertEquals(StatusCode.OK, reopened.store().close());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
