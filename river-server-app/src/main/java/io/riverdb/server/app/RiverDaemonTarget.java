@@ -95,7 +95,10 @@ final class RiverDaemonTarget {
     }
     StatusCode status = RiverDaemonTargetBinding.verifyInstance(directory, currentOwner);
     if (!status.isOk()) return status == StatusCode.CORRUPTION ? status : StatusCode.NOT_OWNER;
-    if (requireRuntime) return revalidateRuntime(currentOwner);
+    if (requireRuntime) {
+      status = revalidateRuntime(currentOwner);
+      if (!status.isOk()) return status;
+    }
     return lockHeld();
   }
 
