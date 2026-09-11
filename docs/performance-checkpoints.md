@@ -2354,7 +2354,7 @@ Artifacts under the harness runs directory:
 - Adjacent control: `river_harness_20260911_025615_7d0d10af`.
 - Identity: `river_harness_20260911_025827_90081ad0`.
 
-Integration publication awaits the subsystem checkpoint.
+Accepted at the first-eight subsystem checkpoint below.
 
 
 ## 2026-09-11: Java client lifetime and exact-lock forwarding
@@ -2377,4 +2377,21 @@ configuration passed at 304.95 TPS, zero failed/unknown, valid invariants and
 graceful cleanup: `river_harness_20260911_030956_61ea73ba` under the harness
 runs directory. No observed regression or claimed speedup.
 
-Integration checkpoint pending.
+Accepted at the first-eight subsystem checkpoint below.
+
+
+The first-eight integration passed `clean check :river-bench:installTps` with
+`--no-daemon` in 4m23s. O3/PGO native compilation passed in 1m44s using the approved
+`/private/tmp/river-native-final.iprof`; the actual executable passed authenticated
+sample/all startup, workload validation and graceful shutdown (one worker, seed 42,
+1s warmup/3s measured, max retries 3). Native TPS is not compared with JVM samples.
+
+The integrated JVM rolling control `score-first8-bfd67b92-jvm` passed the usual
+four-worker sample/all at 314.68 TPS, p99 60.850ms, 519 retries, zero failed/unknown
+outcomes, valid invariants and graceful shutdown. Artifact:
+`river_harness_20260911_031811_b9ba00e4` under the harness runs directory.
+The unchanged scan covers 2,556 files with 74 remaining at or above 90. Every added
+file is below 90. Logs and scan: `/private/tmp/river-score-20260911/`
+`integration-next4-check.log`, `integration-next4-native.log`,
+`integration-next4-native-smoke.log`, `integration-first8-scores.json`.
+Checkpoint: `perf-checkpoint-20260911-score-first8`.

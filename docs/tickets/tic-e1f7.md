@@ -50,4 +50,4 @@ No repeated regression; the spread does not support a speedup claim.
 Artifacts: `/private/tmp/river-score-20260911/client-tps-control`,
 `client-tps-control-2`, `client-tps-candidate-1`, `client-tps-candidate-2` in the
 same directory, with adjacent `.log` files. Exact version labels are retained
-in each log. Integration publication awaits the subsystem checkpoint.
+in each log. Accepted at `perf-checkpoint-20260911-score-first8`.

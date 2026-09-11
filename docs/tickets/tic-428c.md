@@ -46,4 +46,4 @@ The epic's light JVM sample/all run (`tic-428c-7d8f66df-jvm`) passed at
 invariants and graceful shutdown. Recent unchanged control 258.89 TPS; the short
 samples do not establish a speedup or repeated regression.
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_030956_61ea73ba`.
-Integration publication awaits the subsystem checkpoint.
+Accepted at `perf-checkpoint-20260911-score-first8`.

@@ -51,4 +51,4 @@ The epic's light JVM sample at version `tic-b251-4de3d42a-jvm` passed at
 invariants and graceful shutdown. Startup 1.279s; stop 0.879s. Adjacent unchanged
 control: 258.89 TPS. No observed regression in this short diagnostic.
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_025827_90081ad0`.
-Integration publication remains pending the subsystem checkpoint.
+Accepted at `perf-checkpoint-20260911-score-first8`.
