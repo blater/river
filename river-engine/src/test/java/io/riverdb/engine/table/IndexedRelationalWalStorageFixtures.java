@@ -1,85 +1,34 @@
 package io.riverdb.engine.table;
 
-import static io.riverdb.engine.TestDatabaseResources.databasePlan;
-import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
-import static io.riverdb.engine.TestDatabaseResources.runtimeRoot;
-import static io.riverdb.tx.TransactionManager.DEFAULT_LOCK_WAIT_TIMEOUT_NANOS;
 
-import com.sun.management.ThreadMXBean;
+import static io.riverdb.engine.table.IndexedRelationalWalMutationFixtures.*;
 import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
-import io.riverdb.base.tuple.TupleShape;
-import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.EmbeddedDatabase;
-import io.riverdb.engine.EmbeddedDatabaseOpenResult;
-import io.riverdb.engine.EmbeddedSessionOpenResult;
-import io.riverdb.format.btree.TupleIndexRootRecord;
-import io.riverdb.format.btree.TupleIndexRootRecordCodec;
-import io.riverdb.format.btree.TupleBTreePageCodec;
-import io.riverdb.format.btree.TupleKeyBuilder;
-import io.riverdb.format.btree.TupleKeyCodec;
-import io.riverdb.format.catalog.CatalogKeyspace;
-import io.riverdb.format.page.PageCodec;
-import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.heap.HeapRowResult;
-import io.riverdb.storage.btree.BTreeFreePage;
-import io.riverdb.storage.btree.BTreeRootPage;
-import io.riverdb.storage.btree.TupleBTree;
-import io.riverdb.storage.btree.TupleBTreeInsertPreflightResult;
-import io.riverdb.storage.btree.TupleBTreePageReference;
-import io.riverdb.storage.btree.BTreeStructuralLimits;
-import io.riverdb.storage.btree.TupleBTreeTreeWorkspace;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
-import io.riverdb.tx.api.TransactionState;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalAppendResult;
-import io.riverdb.wal.local.LocalWalForceTarget;
-import io.riverdb.wal.local.LocalWalGroupAppendResult;
-import io.riverdb.wal.local.LocalWalLogicalStream;
 import io.riverdb.wal.local.LocalWalOpenResult;
-import io.riverdb.wal.local.LocalWalReadResult;
-import io.riverdb.wal.local.LocalWalRecordBatch;
-import io.riverdb.wal.local.LocalWalReservation;
-import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.zip.CRC32C;
-import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
-import static io.riverdb.engine.table.IndexedRelationalWalCommitFixtures.*;
 
-/** Storage and encoding operations for relational WAL scenarios. */
-final class IndexedRelationalWalCommitStorageFixtures {
-  static void assertRecoveredRegistry(
-      IndexedTableStore store, long keyId, int rootPageId,
-      long ownerObjectId, long generation, long schemaId) {
-    HeapRowResult row = new HeapRowResult();
-    requireOk(store.fetchByKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row));
-    ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
-    requireOk(row.copyTo(bytes));
-    bytes.flip();
-    TupleIndexRootRecord record = new TupleIndexRootRecord();
-    requireOk(TupleIndexRootRecordCodec.decode(bytes, 0, record, new CRC32C()));
-    check(record.state() == TupleIndexRootRecordCodec.STATE_READY
-        && record.rootPageId() == rootPageId && record.generation() == generation
-        && record.ownerObjectId() == ownerObjectId
-        && record.schemaId() == schemaId
-        && record.privateOwner() == 0, "registry replay mismatch");
+
+/** Database, WAL, and session resources for relational WAL tests. */
+final class IndexedRelationalWalStorageFixtures {
+  static StatusCode commitRelationalQuiescent(
+      IndexedTableStore store,
+      long transactionId,
+      IndexedRelationalMutation mutation,
+      IndexedCommitResult result) {
+    return store.commitRelational(
+        transactionId, mutation, Long.MAX_VALUE, result);
   }
 
   static NioDurableDirectory openDirectory(Path root) {
@@ -144,18 +93,6 @@ final class IndexedRelationalWalCommitStorageFixtures {
     Field file = LocalWal.class.getDeclaredField("file");
     file.setAccessible(true);
     requireOk(((io.riverdb.platform.file.DurableFile) file.get(wal)).close());
-  }
-
-  static long descriptorHash(int[] descriptors) {
-    TupleShape.Result result = new TupleShape.Result();
-    requireOk(TupleShape.create(descriptors, result));
-    return result.value().descriptorHash();
-  }
-
-  static TupleShape shape(int[] descriptors) {
-    TupleShape.Result result = new TupleShape.Result();
-    requireOk(TupleShape.create(descriptors, result));
-    return result.value();
   }
 
   static IndexedPageSet pageSet(IndexedTableStore store) throws Exception {

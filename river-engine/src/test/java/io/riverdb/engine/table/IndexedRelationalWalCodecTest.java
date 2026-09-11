@@ -1,70 +1,35 @@
 package io.riverdb.engine.table;
 
-import static io.riverdb.engine.TestDatabaseResources.databasePlan;
+import static io.riverdb.engine.table.IndexedRelationalWalMutationFixtures.*;
+import static io.riverdb.engine.table.IndexedRelationalWalRecordFixtures.*;
+import static io.riverdb.engine.table.IndexedRelationalWalStorageFixtures.*;
 import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
-import static io.riverdb.engine.TestDatabaseResources.runtimeRoot;
-import static io.riverdb.tx.TransactionManager.DEFAULT_LOCK_WAIT_TIMEOUT_NANOS;
 
 import com.sun.management.ThreadMXBean;
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.id.DatabaseIncarnation;
-import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.EmbeddedDatabase;
-import io.riverdb.engine.EmbeddedDatabaseOpenResult;
-import io.riverdb.engine.EmbeddedSessionOpenResult;
-import io.riverdb.format.btree.TupleIndexRootRecord;
 import io.riverdb.format.btree.TupleIndexRootRecordCodec;
-import io.riverdb.format.btree.TupleBTreePageCodec;
-import io.riverdb.format.btree.TupleKeyBuilder;
 import io.riverdb.format.btree.TupleKeyCodec;
 import io.riverdb.format.catalog.CatalogKeyspace;
-import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.wal.WalRecordCodec;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
-import io.riverdb.storage.heap.HeapRowResult;
-import io.riverdb.storage.btree.BTreeFreePage;
-import io.riverdb.storage.btree.BTreeRootPage;
-import io.riverdb.storage.btree.TupleBTree;
-import io.riverdb.storage.btree.TupleBTreeInsertPreflightResult;
-import io.riverdb.storage.btree.TupleBTreePageReference;
-import io.riverdb.storage.btree.BTreeStructuralLimits;
-import io.riverdb.storage.btree.TupleBTreeTreeWorkspace;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
-import io.riverdb.tx.api.TransactionState;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalAppendResult;
-import io.riverdb.wal.local.LocalWalForceTarget;
-import io.riverdb.wal.local.LocalWalGroupAppendResult;
-import io.riverdb.wal.local.LocalWalLogicalStream;
-import io.riverdb.wal.local.LocalWalOpenResult;
-import io.riverdb.wal.local.LocalWalReadResult;
-import io.riverdb.wal.local.LocalWalRecordBatch;
-import io.riverdb.wal.local.LocalWalReservation;
 import java.lang.management.ManagementFactory;
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import static io.riverdb.engine.table.IndexedRelationalWalCodecFixtures.*;
 
-/** Tests for the relational WAL Codec scenarios. */
+/** Tests for relational WAL codec scenarios. */
 final class IndexedRelationalWalCodecTest {
+  private static volatile long allocationGuard;
+
   @Test
   void primaryPlusSixtyFourUpdateRoundTripsBelow430KiB() {
     int[] descriptors = {
@@ -426,5 +391,30 @@ final class IndexedRelationalWalCodecTest {
         IndexedRelationalSuboperations.REGISTRY_BUILDING,
         IndexedRelationalSuboperations.REGISTRY_READY, TRANSACTION_ID, 0)
         == StatusCode.INVALID_EXTERNAL_INPUT, "unchained tuple root accepted");
+  }
+
+  static StatusCode decodeOne(ByteBuffer source) {
+    IndexedRelationalMutationBuffer output =
+        new IndexedRelationalMutationBuffer(1, 0, 0);
+    return new IndexedRelationalWalDecoder(output).decode(source, TRANSACTION_ID, 1);
+  }
+
+  static IndexedRelationalWalPlan descriptorOnlyPlan(
+      int[] descriptor, long operationId) {
+    IndexedRelationalMutationBuffer mutations =
+        new IndexedRelationalMutationBuffer(0, 1, descriptor.length);
+    requireOk(mutations.reserve(0, 1, descriptor.length, 0));
+    requireOk(mutations.appendDescriptor(
+        OWNER_OBJECT_ID, 1_000, 1_000, descriptorHash(descriptor),
+        descriptor, 0, descriptor.length));
+    requireOk(mutations.appendSuboperation(
+        OWNER_OBJECT_ID, 0, 0, 0, 4, 4, SCALAR_ROOT, SCALAR_ROOT,
+        NEXT_PAGE, NEXT_PAGE, 1, 2, 1, 2,
+        IndexedRelationalSuboperations.REGISTRY_READY,
+        IndexedRelationalSuboperations.REGISTRY_READY, 0, 0));
+    requireOk(mutations.seal());
+    IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
+    requireOk(plan.plan(TRANSACTION_ID, operationId, mutations));
+    return plan;
   }
 }

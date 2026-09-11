@@ -1,71 +1,27 @@
 package io.riverdb.engine.table;
 
-import static io.riverdb.engine.TestDatabaseResources.databasePlan;
-import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
-import static io.riverdb.engine.TestDatabaseResources.runtimeRoot;
-import static io.riverdb.tx.TransactionManager.DEFAULT_LOCK_WAIT_TIMEOUT_NANOS;
 
-import com.sun.management.ThreadMXBean;
-import io.riverdb.base.concurrent.FatalStateFence;
+import static io.riverdb.engine.table.IndexedRelationalWalStorageFixtures.*;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.EmbeddedDatabase;
-import io.riverdb.engine.EmbeddedDatabaseOpenResult;
-import io.riverdb.engine.EmbeddedSessionOpenResult;
 import io.riverdb.format.btree.TupleIndexRootRecord;
 import io.riverdb.format.btree.TupleIndexRootRecordCodec;
-import io.riverdb.format.btree.TupleBTreePageCodec;
 import io.riverdb.format.btree.TupleKeyBuilder;
 import io.riverdb.format.btree.TupleKeyCodec;
-import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.format.page.PageCodec;
-import io.riverdb.format.wal.WalRecordCodec;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
-import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
-import io.riverdb.storage.heap.HeapRowResult;
-import io.riverdb.storage.btree.BTreeFreePage;
 import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.btree.TupleBTree;
 import io.riverdb.storage.btree.TupleBTreeInsertPreflightResult;
-import io.riverdb.storage.btree.TupleBTreePageReference;
 import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.storage.btree.TupleBTreeTreeWorkspace;
-import io.riverdb.tx.TransactionManager;
-import io.riverdb.tx.api.IsolationLevel;
-import io.riverdb.tx.api.TransactionOutcome;
-import io.riverdb.tx.api.TransactionState;
-import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalAppendResult;
-import io.riverdb.wal.local.LocalWalForceTarget;
-import io.riverdb.wal.local.LocalWalGroupAppendResult;
-import io.riverdb.wal.local.LocalWalLogicalStream;
-import io.riverdb.wal.local.LocalWalOpenResult;
-import io.riverdb.wal.local.LocalWalReadResult;
-import io.riverdb.wal.local.LocalWalRecordBatch;
-import io.riverdb.wal.local.LocalWalReservation;
-import java.lang.management.ManagementFactory;
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.zip.CRC32C;
-import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
-import static io.riverdb.engine.table.IndexedRelationalWalCommitStorageFixtures.*;
 
-/** Concrete fixtures for the relational WAL scenarios. */
-final class IndexedRelationalWalCommitFixtures {
-  static volatile long allocationGuard;
+/** Concrete mutation fixtures for relational WAL tests. */
+final class IndexedRelationalWalMutationFixtures {
   static final long TRANSACTION_ID = 41;
   static final long OPERATION_ID = 73;
   static final long OWNER_OBJECT_ID = 19;
@@ -92,6 +48,58 @@ final class IndexedRelationalWalCommitFixtures {
         1, 0, row, 0, Long.BYTES));
     requireOk(mutation.seal());
     return mutation;
+  }
+
+  static IndexedRelationalMutation liveTupleInsertMutation(
+      int[] descriptor, long hash, int expectedRoot, int resultingRoot,
+      int expectedNext, int resultingNext, long expectedGeneration, long expectedHeap,
+      long firstLogicalRowId, int tupleCount, char value) {
+    IndexedRelationalMutation mutation =
+        new IndexedRelationalMutation(tupleCount, 1, descriptor.length);
+    requireOk(mutation.reserve(
+        tupleCount, 1, descriptor.length, tupleCount * 3_080));
+    requireOk(mutation.appendDescriptor(
+        OWNER_OBJECT_ID, 1_000, 1_000, hash, descriptor, 0, descriptor.length));
+    requireOk(mutation.appendSuboperation(
+        OWNER_OBJECT_ID, 0, 0, tupleCount, expectedRoot, resultingRoot,
+        SCALAR_ROOT, SCALAR_ROOT, expectedNext, resultingNext,
+        expectedGeneration, expectedGeneration + 1, expectedHeap, expectedHeap + 1,
+        IndexedRelationalMutation.REGISTRY_BUILDING,
+        IndexedRelationalMutation.REGISTRY_BUILDING, 2, 2));
+    for (int index = 0; index < tupleCount; index++) {
+      long logicalRowId = firstLogicalRowId + index;
+      ByteBuffer tuple = physicalTuple(descriptor, logicalRowId, value);
+      requireOk(mutation.appendTuple(
+          0, OWNER_OBJECT_ID, IndexedRelationalMutation.TUPLE_INSERT,
+          0, logicalRowId, tuple, 0, tuple.remaining()));
+    }
+    requireOk(mutation.seal());
+    return mutation;
+  }
+
+  static long predictTupleInsert(
+      IndexedTableStore store, int[] descriptor, int expectedRoot,
+      long firstLogicalRowId, int tupleCount, char value) throws Exception {
+    IndexedPageSet pages = pageSet(store);
+    pages.resetChanges();
+    IndexedRelationalTupleSession session = new IndexedRelationalTupleSession(pages);
+    StatusCode status = session.configure(1_000, 1_000, expectedRoot, shape(descriptor));
+    try {
+      if (status.isOk() && expectedRoot == 0) status = session.initialize();
+      for (int index = 0; status.isOk() && index < tupleCount; index++) {
+        status = session.insert(physicalTuple(
+            descriptor, firstLogicalRowId + index, value));
+      }
+      if (status.isOk()) status = session.validate();
+      requireOk(status);
+      ByteBuffer metadata = pages.operationPayload(IndexedTableKernel.ROOT_META_PAGE_ID);
+      requireOk(BTreeRootPage.validate(metadata));
+      return (long) session.rootPageId() << 32
+          | Integer.toUnsignedLong(BTreeRootPage.nextPageId(metadata));
+    } finally {
+      pages.clearStagedFlags();
+      pages.resetChanges();
+    }
   }
 
   static int tupleInsertNewPageCount(
@@ -210,15 +218,6 @@ final class IndexedRelationalWalCommitFixtures {
     return mutation;
   }
 
-  static StatusCode commitRelationalQuiescent(
-      IndexedTableStore store,
-      long transactionId,
-      IndexedRelationalMutation mutation,
-      IndexedCommitResult result) {
-    return store.commitRelational(
-        transactionId, mutation, Long.MAX_VALUE, result);
-  }
-
   static ByteBuffer physicalFixedTuple(long logicalRowId, long value) {
     ByteBuffer result = ByteBuffer.allocate(32);
     TupleKeyBuilder builder = new TupleKeyBuilder();
@@ -241,58 +240,51 @@ final class IndexedRelationalWalCommitFixtures {
     return result;
   }
 
+  static ByteBuffer physicalTextTuple(long logicalRowId, String value) {
+    ByteBuffer result = ByteBuffer.allocate(64);
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    requireOk(builder.beginIndex(result, 0, 1));
+    requireOk(builder.addText(SqlTypeDescriptor.varchar(16), value));
+    requireOk(builder.finishPhysical(logicalRowId));
+    result.position(0);
+    result.limit(builder.keyBytes());
+    return result;
+  }
+
   static ByteBuffer scalarRow(long value) {
     ByteBuffer row = ByteBuffer.allocate(Long.BYTES);
     row.putLong(0, value);
     return row;
   }
 
-  static TupleIndexRootRecord registryRecord(
-      IndexedTableStore store, long keyId) {
-    HeapRowResult row = new HeapRowResult();
-    requireOk(store.fetchByKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row));
-    ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
-    requireOk(row.copyTo(bytes));
-    bytes.flip();
-    TupleIndexRootRecord record = new TupleIndexRootRecord();
-    requireOk(TupleIndexRootRecordCodec.decode(bytes, 0, record, new CRC32C()));
-    return record;
+  static long descriptorHash(int[] descriptors) {
+    TupleShape.Result result = new TupleShape.Result();
+    requireOk(TupleShape.create(descriptors, result));
+    return result.value().descriptorHash();
   }
 
-  static void assertReadyRegistry(
-      IndexedTableStore store, long keyId, long owner, int rootPageId,
-      long generation) {
-    TupleIndexRootRecord record = registryRecord(store, keyId);
-    check(record.state() == TupleIndexRootRecordCodec.STATE_READY
-        && record.rootPageId() == rootPageId && record.ownerObjectId() == owner
-        && record.schemaId() == KEY_SCHEMA_ID && record.generation() == generation
-        && record.privateOwner() == 0 && record.cleanupCursor() == 0,
-        "batched READY registry mismatch");
+  static TupleShape shape(int[] descriptors) {
+    TupleShape.Result result = new TupleShape.Result();
+    requireOk(TupleShape.create(descriptors, result));
+    return result.value();
   }
 
-  static void assertAbsentRegistry(
-      IndexedTableStore store, long keyId, long owner, long generation) {
-    TupleIndexRootRecord record = registryRecord(store, keyId);
-    check(record.state() == TupleIndexRootRecordCodec.STATE_ABSENT
-        && record.rootPageId() == 0 && record.ownerObjectId() == owner
-        && record.schemaId() == KEY_SCHEMA_ID && record.generation() == generation
-        && record.privateOwner() == 0 && record.cleanupCursor() == 0,
-        "batched ABSENT registry mismatch");
+  static ByteBuffer physicalTuple(int[] descriptors, long logicalRowId, char value) {
+    ByteBuffer result = ByteBuffer.allocate(3_080);
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    requireOk(builder.beginIndex(result, 0, descriptors.length));
+    requireOk(builder.addText(descriptors[0], repeated(value, 255)));
+    requireOk(builder.addText(descriptors[1], repeated(value, 255)));
+    requireOk(builder.addText(descriptors[2], repeated(value, 250)));
+    requireOk(builder.finishPhysical(logicalRowId));
+    result.limit(builder.keyBytes());
+    result.position(0);
+    return result;
   }
 
-  static void assertRecoveredRegistry(IndexedTableStore store) {
-    assertRecoveredRegistry(store, 1_000, 4, OWNER_OBJECT_ID);
-  }
-
-  static void assertRecoveredRegistry(
-      IndexedTableStore store, long keyId, int rootPageId, long ownerObjectId) {
-    assertRecoveredRegistry(store, keyId, rootPageId, ownerObjectId, 3);
-  }
-
-  static void assertRecoveredRegistry(
-      IndexedTableStore store, long keyId, int rootPageId,
-      long ownerObjectId, long generation) {
-    assertRecoveredRegistry(
-        store, keyId, rootPageId, ownerObjectId, generation, keyId);
+  static String repeated(char value, int count) {
+    char[] characters = new char[count];
+    for (int index = 0; index < count; index++) characters[index] = value;
+    return new String(characters);
   }
 }

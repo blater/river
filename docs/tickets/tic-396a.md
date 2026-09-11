@@ -28,9 +28,9 @@ before/after score and result, then integrate this ticket independently.
 ## Review notes
 
 Split the original harness into codec/retention, replay/recovery, live grouped
-commit, and checkpoint lifecycle test suites. Each suite keeps concrete fixture
-operations in its own package-local fixture files, with storage and encoding
-helpers separated where needed to keep ownership and control flow explicit.
-The original 212.312 harness score is now below 90 for every extracted test and
-fixture file; focused tests and the light workload remain pending build-slot
-validation.
+commit, and checkpoint lifecycle test suites. Shared concrete owners now hold
+mutation/tuple builders, WAL record/group builders, database/WAL/session
+resources, and registry/checkpoint assertions; superseded per-suite copies were
+removed. The original 212.312 harness score is now below 90 for every extracted
+test and fixture file, with 3,350 Java lines versus 3,197 before extraction.
+Focused tests and the light workload remain pending build-slot validation.
