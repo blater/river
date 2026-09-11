@@ -38,13 +38,13 @@ public final class LoopbackRiverServer {
   private final ProtocolMemoryBudget bufferBudget;
   private final int authenticationTimeoutMillis;
   private final int idleTimeoutMillis;
-  private final ProtocolFrameCodec codec = new ProtocolFrameCodec();
+  final ProtocolFrameCodec codec = new ProtocolFrameCodec();
   final ConnectionSlot[] slots;
   private final AtomicInteger activeConnections = new AtomicInteger();
   private final AtomicLong acceptedConnections = new AtomicLong();
-  private final AtomicLong completedRequests = new AtomicLong();
+  final AtomicLong completedRequests = new AtomicLong();
   private final AtomicLong rejectedConnections = new AtomicLong();
-  private final AtomicLong rejectedFrames = new AtomicLong();
+  final AtomicLong rejectedFrames = new AtomicLong();
   private final AtomicLong authenticationFailures = new AtomicLong();
   private final AtomicLong authorizationFailures = new AtomicLong();
   volatile StatusCode lastStatus = StatusCode.OK;
@@ -250,13 +250,15 @@ public final class LoopbackRiverServer {
       }
       endpoint = opened.endpoint();
       authenticationDeadline = opened.authenticationDeadline();
-      serveRequests(
+      LoopbackConnectionRequestLoop.serve(
+          this,
           slot,
           connection,
           endpoint,
           input,
           output,
-          authenticationDeadline);
+          authenticationDeadline,
+          idleTimeoutMillis);
     } catch (SocketTimeoutException timeout) {
       if (running) {
         lastStatus = StatusCode.TIMEOUT;
@@ -275,74 +277,6 @@ public final class LoopbackRiverServer {
         }
       }
       release(slot);
-    }
-  }
-
-  private void serveRequests(
-      ConnectionSlot slot,
-      Socket connection,
-      SessionEndpoint endpoint,
-      InputStream input,
-      OutputStream output,
-      long initialAuthenticationDeadline) throws IOException {
-    long authenticationDeadline = initialAuthenticationDeadline;
-    while (running) {
-      int headerBytes = readExact(
-          input,
-          slot.requestBytes,
-          0,
-          ProtocolFrameCodec.HEADER_BYTES,
-          connection,
-          authenticationDeadline);
-      if (headerBytes == 0) {
-        if (slot.requests.isActive()) {
-          rejectedFrames.incrementAndGet();
-          lastStatus = StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-        return;
-      }
-      if (headerBytes != ProtocolFrameCodec.HEADER_BYTES) {
-        rejectedFrames.incrementAndGet();
-        lastStatus = StatusCode.INVALID_EXTERNAL_INPUT;
-        return;
-      }
-      slot.request.position(0);
-      slot.request.limit(ProtocolFrameCodec.HEADER_BYTES);
-      StatusCode headerStatus = codec.inspectRequestHeader(
-          slot.request, slot.requestHeader);
-      if (!headerStatus.isOk()) {
-        rejectedFrames.incrementAndGet();
-        lastStatus = headerStatus;
-        return;
-      }
-      int payloadBytes = slot.requestHeader.payloadBytes();
-      if (readExact(
-          input,
-          slot.requestBytes,
-          ProtocolFrameCodec.HEADER_BYTES,
-          payloadBytes,
-          connection,
-          authenticationDeadline) != payloadBytes) {
-        rejectedFrames.incrementAndGet();
-        lastStatus = StatusCode.INVALID_EXTERNAL_INPUT;
-        return;
-      }
-      slot.request.position(0);
-      slot.request.limit(ProtocolFrameCodec.HEADER_BYTES + payloadBytes);
-      StatusCode processed = ServerRequestDispatch.process(
-          codec, slot.requests, slot.responses, slot.request, slot.requestHeader,
-          endpoint, output);
-      if (processed == StatusCode.RETRY) continue;
-      if (!processed.isOk()) {
-        rejectedFrames.incrementAndGet();
-        lastStatus = processed;
-        return;
-      }
-      completedRequests.incrementAndGet();
-      if (authenticationDeadline != 0 && endpoint.authenticationComplete()) {
-        authenticationDeadline = 0;
-        connection.setSoTimeout(idleTimeoutMillis);
-      }
     }
   }
 
@@ -376,13 +310,13 @@ public final class LoopbackRiverServer {
           validityFence);
     } catch (OutOfMemoryError failure) {
       socket.close();
-      closeFence(validityFence);
+      validityFence.close();
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode completed = result.complete(server);
     if (!completed.isOk()) {
       socket.close();
-      closeFence(validityFence);
+      validityFence.close();
       return completed;
     }
     server.acceptor = Thread.ofPlatform()
@@ -392,47 +326,17 @@ public final class LoopbackRiverServer {
     return StatusCode.OK;
   }
 
-  private static void closeFence(CredentialValidityFence fence) {
-    if (fence != null) fence.close();
-  }
-
-  private static int readExact(
-      InputStream input,
-      byte[] target,
-      int offset,
-      int length,
-      Socket connection,
-      long deadline) throws IOException {
-    int read = 0;
-    while (read < length) {
-      if (deadline != 0) {
-        long remaining = deadline - System.nanoTime();
-        if (remaining <= 0) {
-          throw new SocketTimeoutException("authentication deadline expired");
-        }
-        long millis = (remaining + 999_999L) / 1_000_000L;
-        connection.setSoTimeout((int) Math.min(Integer.MAX_VALUE, millis));
-      }
-      int count = input.read(target, offset + read, length - read);
-      if (count < 0) {
-        return read;
-      }
-      read += count;
-    }
-    return read;
-  }
-
   final class ConnectionSlot implements Runnable {
     final int index;
     final MutableCancellationToken cancellation = new MutableCancellationToken();
-    private final ServerConnectionMemory memory = new ServerConnectionMemory(bufferBudget);
-    private final ProtocolFrameHeader requestHeader = new ProtocolFrameHeader();
-    private final ServerRequestAssembly requests =
+    final ServerConnectionMemory memory = new ServerConnectionMemory(bufferBudget);
+    final ProtocolFrameHeader requestHeader = new ProtocolFrameHeader();
+    final ServerRequestAssembly requests =
         new ServerRequestAssembly(memory.lease());
-    private final ServerResponseBuffer responses =
+    final ServerResponseBuffer responses =
         new ServerResponseBuffer(memory.lease());
-    private final byte[] requestBytes = new byte[ProtocolFrameCodec.MAXIMUM_FRAME_BYTES];
-    private final ByteBuffer request = ByteBuffer.wrap(requestBytes);
+    final byte[] requestBytes = new byte[ProtocolFrameCodec.MAXIMUM_FRAME_BYTES];
+    final ByteBuffer request = ByteBuffer.wrap(requestBytes);
     Socket socket;
     Thread worker;
 
