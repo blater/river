@@ -91,7 +91,7 @@ public final class EmbeddedDatabase {
       WalGeneration generation,
       int maximumActiveTransactions,
       EmbeddedDatabaseOpenResult result) {
-    return open(
+    return EmbeddedDatabaseOpener.open(
         resourceRoot,
         resourcePlan,
         directoryPath,
@@ -100,6 +100,9 @@ public final class EmbeddedDatabase {
         maximumActiveTransactions,
         TransactionManager.DEFAULT_LOCK_WAIT_TIMEOUT_NANOS,
         true,
+        null,
+        1,
+        EmbeddedLockDiagnosticsConfig.disabled(),
         result);
   }
 
@@ -128,9 +131,10 @@ public final class EmbeddedDatabase {
       long lockWaitTimeoutNanos,
       EmbeddedLockDiagnosticsConfig lockDiagnostics,
       EmbeddedDatabaseOpenResult result) {
-    return open(
+    return EmbeddedDatabaseOpener.open(
         resourceRoot, resourcePlan, directoryPath, database, generation,
-        maximumActiveTransactions, lockWaitTimeoutNanos, true, lockDiagnostics, result);
+        maximumActiveTransactions, lockWaitTimeoutNanos, true, null, 1,
+        lockDiagnostics, result);
   }
 
   public static StatusCode createWithDurableWalQuorum(
@@ -144,7 +148,7 @@ public final class EmbeddedDatabase {
       int maximumActiveTransactions,
       long lockWaitTimeoutNanos,
       EmbeddedDatabaseOpenResult result) {
-    return open(
+    return EmbeddedDatabaseOpener.open(
         resourceRoot, resourcePlan, directoryPath, database, generation,
         maximumActiveTransactions, lockWaitTimeoutNanos, true,
         followerDirectoryPaths, requiredDurableNodes,
@@ -161,7 +165,7 @@ public final class EmbeddedDatabase {
       EmbeddedLockDiagnosticsConfig lockDiagnostics,
       EmbeddedDatabaseOpenResult result) {
     if (lockDiagnostics == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    return open(
+    return EmbeddedDatabaseOpener.open(
         resourceRoot,
         resourcePlan,
         directoryPath,
@@ -170,6 +174,8 @@ public final class EmbeddedDatabase {
         maximumActiveTransactions,
         TransactionManager.DEFAULT_LOCK_WAIT_TIMEOUT_NANOS,
         false,
+        null,
+        1,
         lockDiagnostics,
         result);
   }
@@ -185,9 +191,10 @@ public final class EmbeddedDatabase {
       EmbeddedLockDiagnosticsConfig lockDiagnostics,
       EmbeddedDatabaseOpenResult result) {
     if (lockDiagnostics == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    return open(
+    return EmbeddedDatabaseOpener.open(
         resourceRoot, resourcePlan, directoryPath, database, generation,
-        maximumActiveTransactions, lockWaitTimeoutNanos, false, lockDiagnostics, result);
+        maximumActiveTransactions, lockWaitTimeoutNanos, false, null, 1,
+        lockDiagnostics, result);
   }
 
   public static StatusCode openWithDurableWalQuorum(
@@ -201,7 +208,7 @@ public final class EmbeddedDatabase {
       int maximumActiveTransactions,
       long lockWaitTimeoutNanos,
       EmbeddedDatabaseOpenResult result) {
-    return open(
+    return EmbeddedDatabaseOpener.open(
         resourceRoot, resourcePlan, directoryPath, database, generation,
         maximumActiveTransactions, lockWaitTimeoutNanos, false,
         followerDirectoryPaths, requiredDurableNodes,
@@ -308,10 +315,7 @@ public final class EmbeddedDatabase {
     }
     StatusCode status = transactions.snapshotDeadlockDiagnostics(snapshot);
     if (!status.isOk()) return status;
-    appendDiagnosticSummary(target, snapshot);
-    appendDiagnosticSignatures(target, snapshot);
-    appendDiagnosticEvents(target, snapshot);
-    appendDiagnosticExemplars(target, snapshot);
+    EmbeddedDeadlockDiagnostics.append(target, snapshot);
     return StatusCode.OK;
   }
 
@@ -338,144 +342,6 @@ public final class EmbeddedDatabase {
 
   public StatusCode cancelPerformanceCapture() {
     return performanceCapture.cancelIfActive();
-  }
-
-  private static void appendDiagnosticSummary(
-      StringBuilder target, LockDeadlockDiagnosticsSnapshot snapshot) {
-    target.append("server_deadlock_diagnostics_enabled=").append(snapshot.enabled()).append('\n')
-        .append("server_deadlock_diagnostics_budget_bytes=")
-        .append(snapshot.maximumRetainedBytes()).append('\n')
-        .append("server_deadlock_diagnostics_retained_payload_bytes=")
-        .append(snapshot.retainedPayloadBytes()).append('\n')
-        .append("server_deadlock_diagnostics_maximum_epochs=")
-        .append(snapshot.maximumEpochs()).append('\n')
-        .append("server_deadlock_diagnostics_signatures_per_epoch=")
-        .append(snapshot.signaturesPerEpoch()).append('\n')
-        .append("server_deadlock_diagnostics_events_per_epoch=")
-        .append(snapshot.victimEventsPerEpoch()).append('\n')
-        .append("server_deadlock_diagnostics_exemplars_per_signature=")
-        .append(snapshot.exemplarsPerSignature()).append('\n')
-        .append("server_deadlock_diagnostics_maximum_cycle_edges=")
-        .append(snapshot.maximumCycleEdges()).append('\n')
-        .append("server_deadlock_fingerprint_version=")
-        .append(snapshot.fingerprintVersion()).append('\n')
-        .append("server_deadlock_diagnostics_valid=")
-        .append(snapshot.validForDiagnosticGate()).append('\n')
-        .append("server_deadlock_victim_selections=")
-        .append(snapshot.totalVictimSelections()).append('\n')
-        .append("server_deadlock_victim_outcomes=")
-        .append(snapshot.victimTransactionOutcomes()).append('\n')
-        .append("server_deadlock_queued_requests_cancelled=")
-        .append(snapshot.queuedRequestsCancelled()).append('\n')
-        .append("server_deadlock_holdings_released=")
-        .append(snapshot.holdingsReleased()).append('\n')
-        .append("server_deadlock_self_validation_failures=")
-        .append(snapshot.selfValidationFailures()).append('\n')
-        .append("server_deadlock_fingerprint_overflows=")
-        .append(snapshot.fingerprintOverflows()).append('\n')
-        .append("server_deadlock_fingerprint_collisions=")
-        .append(snapshot.fingerprintCollisions()).append('\n')
-        .append("server_deadlock_epoch_overflows=")
-        .append(snapshot.epochOverflows()).append('\n')
-        .append("server_deadlock_event_overflows=")
-        .append(snapshot.victimEventOverflows()).append('\n')
-        .append("server_deadlock_exemplar_overflows=")
-        .append(snapshot.exemplarOverflows()).append('\n')
-        .append("server_deadlock_cycle_edge_overflows=")
-        .append(snapshot.cycleEdgeOverflows()).append('\n')
-        .append("server_deadlock_sequence_overflows=")
-        .append(snapshot.eventSequenceOverflows()).append('\n');
-  }
-
-  private static void appendDiagnosticSignatures(
-      StringBuilder target, LockDeadlockDiagnosticsSnapshot snapshot) {
-    for (int index = 0; index < snapshot.signatureCount(); index++) {
-      target.append("deadlock_signature index=").append(index)
-          .append(" epoch=").append(snapshot.signatureEpochAt(index))
-          .append(" fingerprint=")
-          .append(Long.toUnsignedString(snapshot.fingerprintAt(index), 16))
-          .append(" collision_guard=")
-          .append(Long.toUnsignedString(snapshot.collisionGuardAt(index), 16))
-          .append(" victims=").append(snapshot.signatureVictimSelectionsAt(index))
-          .append(" outcomes=").append(snapshot.signatureVictimOutcomesAt(index))
-          .append(" queued_cancelled=")
-          .append(snapshot.signatureQueuedRequestsCancelledAt(index))
-          .append(" holdings_released=")
-          .append(snapshot.signatureHoldingsReleasedAt(index))
-          .append(" first_sequence=")
-          .append(snapshot.signatureFirstEventSequenceAt(index))
-          .append(" last_sequence=")
-          .append(snapshot.signatureLastEventSequenceAt(index))
-          .append(" exemplars=").append(snapshot.signatureExemplarCountAt(index))
-          .append('\n');
-    }
-  }
-
-  private static void appendDiagnosticEvents(
-      StringBuilder target, LockDeadlockDiagnosticsSnapshot snapshot) {
-    for (int index = 0; index < snapshot.victimEventCount(); index++) {
-      target.append("deadlock_event index=").append(index)
-          .append(" epoch=").append(snapshot.eventEpochAt(index))
-          .append(" sequence=").append(snapshot.eventSequenceAt(index))
-          .append(" outcome_sequence=").append(snapshot.eventOutcomeSequenceAt(index))
-          .append(" victim_sequence=")
-          .append(snapshot.eventVictimSelectionSequenceAt(index))
-          .append(" fingerprint=")
-          .append(Long.toUnsignedString(snapshot.eventFingerprintAt(index), 16))
-          .append(" transaction_id=").append(snapshot.eventTransactionIdAt(index))
-          .append(" generation=").append(snapshot.eventTransactionGenerationAt(index))
-          .append(" start_order=").append(snapshot.eventTransactionStartOrderAt(index))
-          .append(" attempt_tag=").append(snapshot.eventDiagnosticTagAt(index))
-          .append(" step_tag=").append(snapshot.eventDiagnosticStepTagAt(index))
-          .append(" outcome=").append(snapshot.eventOutcomeStatusAt(index))
-          .append(" queued_cancelled=")
-          .append(snapshot.eventQueuedRequestsCancelledAt(index))
-          .append(" holdings_released=").append(snapshot.eventHoldingsReleasedAt(index))
-          .append(" cleanup_valid=").append(snapshot.eventCleanupValidAt(index))
-          .append('\n');
-    }
-  }
-
-  private static void appendDiagnosticExemplars(
-      StringBuilder target, LockDeadlockDiagnosticsSnapshot snapshot) {
-    for (int exemplar = 0; exemplar < snapshot.exemplarCount(); exemplar++) {
-      int edges = snapshot.exemplarEdgeCountAt(exemplar);
-      target.append("deadlock_exemplar index=").append(exemplar)
-          .append(" signature_index=").append(snapshot.exemplarSignatureIndexAt(exemplar))
-          .append(" event_index=").append(snapshot.exemplarEventIndexAt(exemplar))
-          .append(" edges=").append(edges).append('\n');
-      for (int offset = 0; offset < edges; offset++) {
-        int edge = snapshot.exemplarEdgeIndex(exemplar, offset);
-        target.append("deadlock_edge exemplar=").append(exemplar)
-            .append(" offset=").append(offset)
-            .append(" kind=").append(snapshot.edgeKindAt(edge))
-            .append(" precondition=").append(snapshot.edgePreconditionAt(edge))
-            .append(" grant_predicate=").append(snapshot.edgeGrantPredicateResultAt(edge))
-            .append(" waiter_attempt_tag=")
-            .append(snapshot.edgeWaiterDiagnosticTagAt(edge))
-            .append(" waiter_step_tag=")
-            .append(snapshot.edgeWaiterDiagnosticStepTagAt(edge))
-            .append(" blocker_attempt_tag=")
-            .append(snapshot.edgeBlockerDiagnosticTagAt(edge))
-            .append(" blocker_step_tag=")
-            .append(snapshot.edgeBlockerDiagnosticStepTagAt(edge))
-            .append(" scope=").append(snapshot.edgeResourceScopeAt(edge))
-            .append(" requested_mode=").append(snapshot.edgeRequestedModeAt(edge))
-            .append(" held_mode=").append(snapshot.edgeHeldModeAt(edge))
-            .append(" blocker_requested_mode=")
-            .append(snapshot.edgeBlockerRequestedModeAt(edge))
-            .append(" waiter_queue=").append(snapshot.edgeWaiterQueueKindAt(edge))
-            .append(" waiter_order=").append(snapshot.edgeWaiterQueueOrderAt(edge))
-            .append(" blocker_queue=").append(snapshot.edgeBlockerQueueKindAt(edge))
-            .append(" blocker_order=").append(snapshot.edgeBlockerQueueOrderAt(edge))
-            .append(" resource_namespace=").append(snapshot.edgeResourceNamespaceAt(edge))
-            .append(" resource_lower=").append(snapshot.edgeResourceLowerKeyAt(edge))
-            .append(" resource_upper_namespace=")
-            .append(snapshot.edgeResourceUpperNamespaceAt(edge))
-            .append(" resource_upper=").append(snapshot.edgeResourceUpperKeyAt(edge))
-            .append('\n');
-      }
-    }
   }
 
   public int activeTransactionCount() {
@@ -550,44 +416,48 @@ public final class EmbeddedDatabase {
       return StatusCode.CONFLICT;
     }
     closing = true;
-    StatusCode status = closeStatus(performanceCapture.cancelIfActive());
-    if (status.isOk()) status = sessions.closeAll();
-    if (status.isOk()) status = closeStatus(groupCommit.close());
-    if (status.isOk()) status = closeStatus(table.flush());
-    if (status.isOk()) {
-      status = closeStatus(table.close());
-    }
-    if (status.isOk()) {
-      status = closeStatus(wal.close());
-    }
+    StatusCode status = closePrimaryServices();
     for (LocalWal followerWal : followerWals) {
-      StatusCode followerStatus = closeStatus(followerWal.close());
-      if (status.isOk()) {
-        status = followerStatus;
-      }
+      status = firstFailure(status, closeStatus(followerWal.close()));
     }
     for (NioDurableDirectory followerDirectory : followerDirectories) {
-      StatusCode followerStatus = closeStatus(followerDirectory.close());
-      if (status.isOk()) {
-        status = followerStatus;
-      }
+      status = firstFailure(status, closeStatus(followerDirectory.close()));
     }
     if (status.isOk()) {
       status = closeStatus(directory.close());
     }
-    if (status.isOk() && resourceGovernor != null && runtimeCapacityLease.active()) {
-      status = resourceGovernor.releaseRetainedDatabaseAccountedBytes(
-          runtimeCapacityLease);
-    }
-    if (status.isOk() && resourceGovernor != null && providerLease.active()) {
-      status = resourceGovernor.releaseDatabaseProviders(providerLease);
-    }
-    if (status.isOk() && resourceGovernor != null) {
-      status = closeStatus(resourceGovernor.close());
-    }
+    if (status.isOk()) status = releaseResources();
     if (status.isOk()) {
       closed = true;
     }
+    return status;
+  }
+
+  private StatusCode closePrimaryServices() {
+    StatusCode status = closeStatus(performanceCapture.cancelIfActive());
+    if (!status.isOk()) return status;
+    status = sessions.closeAll();
+    if (!status.isOk()) return status;
+    status = closeStatus(groupCommit.close());
+    if (!status.isOk()) return status;
+    status = closeStatus(table.flush());
+    if (!status.isOk()) return status;
+    status = closeStatus(table.close());
+    if (!status.isOk()) return status;
+    return closeStatus(wal.close());
+  }
+
+  private StatusCode releaseResources() {
+    if (resourceGovernor == null) return StatusCode.OK;
+    StatusCode status = StatusCode.OK;
+    if (runtimeCapacityLease.active()) {
+      status = resourceGovernor.releaseRetainedDatabaseAccountedBytes(
+          runtimeCapacityLease);
+    }
+    if (status.isOk() && providerLease.active()) {
+      status = resourceGovernor.releaseDatabaseProviders(providerLease);
+    }
+    if (status.isOk()) status = closeStatus(resourceGovernor.close());
     return status;
   }
 
@@ -643,64 +513,4 @@ public final class EmbeddedDatabase {
     return status == StatusCode.CLOSED ? StatusCode.OK : status;
   }
 
-  private static StatusCode open(
-      RuntimeResourceRoot resourceRoot,
-      DatabaseResourcePlan resourcePlan,
-      Path directoryPath,
-      DatabaseIncarnation database,
-      WalGeneration generation,
-      int maximumActiveTransactions,
-      long lockWaitTimeoutNanos,
-      boolean create,
-      EmbeddedDatabaseOpenResult result) {
-    return open(
-        resourceRoot, resourcePlan, directoryPath, database, generation,
-        maximumActiveTransactions, lockWaitTimeoutNanos, create,
-        EmbeddedLockDiagnosticsConfig.disabled(), result);
-  }
-
-  private static StatusCode open(
-      RuntimeResourceRoot resourceRoot,
-      DatabaseResourcePlan resourcePlan,
-      Path directoryPath,
-      DatabaseIncarnation database,
-      WalGeneration generation,
-      int maximumActiveTransactions,
-      long lockWaitTimeoutNanos,
-      boolean create,
-      EmbeddedLockDiagnosticsConfig lockDiagnostics,
-      EmbeddedDatabaseOpenResult result) {
-    return open(
-        resourceRoot, resourcePlan, directoryPath, database, generation,
-        maximumActiveTransactions, lockWaitTimeoutNanos, create, null, 1,
-        lockDiagnostics, result);
-  }
-
-  private static StatusCode open(
-      RuntimeResourceRoot resourceRoot,
-      DatabaseResourcePlan resourcePlan,
-      Path directoryPath,
-      DatabaseIncarnation database,
-      WalGeneration generation,
-      int maximumActiveTransactions,
-      long lockWaitTimeoutNanos,
-      boolean create,
-      Path[] followerDirectoryPaths,
-      int requiredDurableNodes,
-      EmbeddedLockDiagnosticsConfig lockDiagnostics,
-      EmbeddedDatabaseOpenResult result) {
-    return EmbeddedDatabaseOpener.open(
-        resourceRoot,
-        resourcePlan,
-        directoryPath,
-        database,
-        generation,
-        maximumActiveTransactions,
-        lockWaitTimeoutNanos,
-        create,
-        followerDirectoryPaths,
-        requiredDurableNodes,
-        lockDiagnostics,
-        result);
-  }
 }

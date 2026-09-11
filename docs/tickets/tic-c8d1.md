@@ -192,3 +192,11 @@ Clean full integration checks passed; the unchanged scan now has 57 remaining
 files at or above 90 out of 2,593, with no new offenders. Checkpoint:
 `perf-checkpoint-20260911-score-first25`; per-ticket validation and
 `docs/performance-checkpoints.md` retain evidence.
+
+
+Eight further independently reviewed and validated slices bring the accepted
+total to 33. Clean full checks and the rebuilt standalone start/ps/authenticated
+SQL/endpoint-stop smoke passed. The unchanged scan has 49 remaining files at or
+above 90 out of 2,602, with no new offenders. Checkpoint:
+`perf-checkpoint-20260911-score-first33`; per-ticket validation and
+`docs/performance-checkpoints.md` retain evidence.

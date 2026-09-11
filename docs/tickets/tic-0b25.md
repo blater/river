@@ -1,6 +1,6 @@
 ---
 id: tic-0b25
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,10 @@ File: `river-engine/src/test/java/io/riverdb/engine/schema/catalog/CatalogLifecy
 
 ## Approach
 
-Organize the fixture and scenarios by the behavior they prove; start with `CatalogLifecycleRemediationTest.unknownCommittedIntentIsReconciledForInitialAndSuccessorBuilds`, `CatalogLifecycleRemediationTest.unknownAbortedIntentCancelsInitialAndSuccessorAdmissions`, `CatalogLifecycleRemediationTest.startupReclaimsEveryRecordedUnfinishedBuildBoundary`. Share setup only where ownership and assertions stay explicit; remove redundant cases only with a named retained proof.
+Move catalog lifecycle fixture construction, durable record builders and shared
+assertions into one package-private test support owner. Keep all 23 scenarios and
+explicit resource cleanup in the test class; use record accessors for its moved
+Opened carrier. Preserve allocation checks and encoded byte boundaries.
 
 ## Acceptance
 

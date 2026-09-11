@@ -1,6 +1,6 @@
 ---
 id: tic-6d7c
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -24,3 +24,18 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-server-app` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Validation
+
+Accepted `da7f4f4b`: runtime records are read, closed, parsed and admitted once;
+target listing/resolution share the same admission owner. Immutable admitted
+record checks no longer repeat in callers; live checksum/lock revalidation remains.
+Targets 55.639 (181.796 before); Admission 0. Sol/high and lead approved status,
+warning, endpoint filtering and collision/resource cleanup ordering.
+
+All 44 focused tests and server checks/installTps passed in one invocation, log
+`/private/tmp/river-tic-6d7c-focused-check.log`. Epic light workload
+`tic-6d7c-da7f4f4b-jvm`: 317.40 TPS, p99 61.374 ms, 517 retries, zero failed/
+unknown outcomes, valid invariants and graceful cleanup; start 1.328s, stop 0.845s.
+Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_051352_00224157`.
+No observed regression against recent controls; no speedup claim.

@@ -22,8 +22,8 @@ final class IndexedTableStoreFactory {
       WalGeneration generation,
       DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
-    if (providerLease == null || !providerLease.active()
-        || !validInput(directory, wal, database, generation, result)) {
+    if (!validInput(
+        directory, wal, database, generation, providerLease, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     DatabaseStoreLease storeLease = new DatabaseStoreLease();
@@ -54,18 +54,8 @@ final class IndexedTableStoreFactory {
     } catch (OutOfMemoryError error) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = directory.createFile(IndexedTableStore.FILE_NAME, FileIoMode.POSITIONAL, operation);
-    if (!status.isOk()) {
-      return status;
-    }
-    status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, rows);
-    if (!status.isOk()) {
-      return cleanup(status, null, operation.file());
-    }
-    status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, versions);
-    if (!status.isOk()) {
-      return cleanup(status, rows.file(), operation.file());
-    }
+    StatusCode status = IndexedOpenFiles.create(directory, operation, rows, versions);
+    if (!status.isOk()) return status;
     return IndexedTableStoreConstruction.construct(
         directory, operation, rows, versions, wal, database, generation, result,
         providerLease, storeLease);
@@ -79,8 +69,8 @@ final class IndexedTableStoreFactory {
       DatabaseProviderLease providerLease,
       boolean createWhenMissing,
       IndexedTableStoreOpenResult result) {
-    if (providerLease == null || !providerLease.active()
-        || !validInput(directory, wal, database, generation, result)) {
+    if (!validInput(
+        directory, wal, database, generation, providerLease, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     DatabaseStoreLease storeLease = new DatabaseStoreLease();
@@ -120,14 +110,8 @@ final class IndexedTableStoreFactory {
     if (!status.isOk()) {
       return status;
     }
-    status = openRowDirectory(directory, rows);
-    if (!status.isOk()) {
-      return cleanup(status, null, operation.file());
-    }
-    status = openVersionDirectory(directory, versions);
-    if (!status.isOk()) {
-      return cleanup(status, rows.file(), operation.file());
-    }
+    status = IndexedOpenFiles.openAuxiliary(directory, operation.file(), rows, versions);
+    if (!status.isOk()) return status;
     return IndexedTableStoreConstruction.open(
         directory, operation, rows, versions, wal, database, generation,
         providerLease, storeLease, result);
@@ -141,7 +125,8 @@ final class IndexedTableStoreFactory {
       DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
     if (providerLease == null || !providerLease.active()
-        || !validCheckpoint(checkpoint, database)) {
+        || checkpoint == null || !checkpoint.isAvailable()
+        || !checkpoint.database().equals(database)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     WalGeneration generation = checkpoint.walGeneration();
@@ -181,14 +166,8 @@ final class IndexedTableStoreFactory {
     if (!status.isOk()) {
       return status == StatusCode.CONFLICT ? StatusCode.CORRUPTION : status;
     }
-    status = openRowDirectory(directory, rows);
-    if (!status.isOk()) {
-      return cleanup(status, null, operation.file());
-    }
-    status = openVersionDirectory(directory, versions);
-    if (!status.isOk()) {
-      return cleanup(status, rows.file(), operation.file());
-    }
+    status = IndexedOpenFiles.openAuxiliary(directory, operation.file(), rows, versions);
+    if (!status.isOk()) return status;
     return IndexedTableStoreConstruction.openCheckpoint(
         directory, operation, rows, versions, wal, database, generation,
         checkpoint, providerLease, storeLease, result);
@@ -203,41 +182,16 @@ final class IndexedTableStoreFactory {
     return release.isOk() ? status : release;
   }
 
-  private static boolean validCheckpoint(
-      CheckpointState checkpoint, DatabaseIncarnation database) {
-    return checkpoint != null
-        && checkpoint.isAvailable()
-        && checkpoint.database().equals(database);
-  }
-
-  private static StatusCode openRowDirectory(
+  private static boolean validInput(
       DurableDirectory directory,
-      DirectoryOperationResult result) {
-    StatusCode status = directory.reopen(
-        IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
-    if (status == StatusCode.CONFLICT) {
-      status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
-    }
-    return status;
-  }
-
-  private static StatusCode openVersionDirectory(
-      DurableDirectory directory,
-      DirectoryOperationResult result) {
-    StatusCode status = directory.reopen(
-        IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
-    if (status == StatusCode.CONFLICT) {
-      status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
-    }
-    return status;
-  }
-
-  private static StatusCode cleanup(
-      StatusCode operation,
-      io.riverdb.platform.file.DurableFile rows,
-      io.riverdb.platform.file.DurableFile pages) {
-    StatusCode cleanup = IndexedOpenFiles.close(null, rows, pages);
-    return cleanup.isOk() ? operation : cleanup;
+      LocalWal wal,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      DatabaseProviderLease providerLease,
+      IndexedTableStoreOpenResult result) {
+    return providerLease != null
+        && providerLease.active()
+        && validInput(directory, wal, database, generation, result);
   }
 
   private static boolean validInput(

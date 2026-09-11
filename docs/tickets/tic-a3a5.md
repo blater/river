@@ -1,6 +1,6 @@
 ---
 id: tic-a3a5
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,11 @@ File: `river-engine/src/main/java/io/riverdb/engine/EmbeddedDatabase.java`. Base
 
 ## Approach
 
-Review `EmbeddedDatabase.close`, `EmbeddedDatabase.closeAfterOpenFailure`, `EmbeddedDatabase.createSession` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
+Separate cold deadlock formatting into a stateless diagnostics owner, remove
+private opener forwarding, and express close as local primary-service and resource
+release phases. Preserve the sole synchronized lifetime owner, eager follower
+cleanup after failure, all status normalization, flags and unpublished cleanup.
+Use existing first-failure policy instead of repeating it in follower loops.
 
 ## Acceptance
 
@@ -24,3 +28,15 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-engine` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Validation
+
+Implementation `b7d250a2`; Luna/high, Sol/high and lead review accepted.
+EmbeddedDatabase scores 87.9032 (from 164.297); EmbeddedDeadlockDiagnostics 0.
+All 33 focused tests passed without failures, errors or skips; engine checks and
+installed workload build passed (`/private/tmp/river-tic-a3a5-build.log`).
+Light JVM sample/all, four workers, one warehouse, seed 42, 20 retries,
+5s warmup/10s measured: 303.24 TPS, p99 61.506ms, 504 retries; passed with
+zero failed/unknown outcomes, valid invariants and graceful inactive cleanup.
+Artifact: `river_harness_20260911_053252_5ef71c73` under the harness runs directory.
+Version: `tic-a3a5-b7d250a2-jvm`. No observed regression; no speedup claim.

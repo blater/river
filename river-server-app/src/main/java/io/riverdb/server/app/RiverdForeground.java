@@ -34,22 +34,7 @@ final class RiverdForeground {
     RiverDaemonResources.Result resources = new RiverDaemonResources.Result();
     status = RiverDaemonResources.compile(command.maximumConnections(), resources);
     if (!status.isOk()) return status;
-    status = RiverDaemonPathInspection.verify(filesystem, paths);
-    if (!status.isOk()) return status;
-    status = RiverDaemonPathParents.ensureParents(filesystem, paths.datadir);
-    if (!status.isOk()) return status;
-    if (paths.ready != null && paths.ready.getParent() != null) {
-      status = RiverDaemonPathParents.ensureParents(filesystem, paths.ready.getParent());
-      if (!status.isOk()) return status;
-    }
-    RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
-    status = RiverDaemonPathParents.ensureDirectory(filesystem, paths.runtimeRoot, runtimeRootResult);
-    if (!status.isOk()) return status;
-    status = runtimeRootResult.directory().close();
-    if (!status.isOk() && status != StatusCode.CLOSED) return status;
-    // Parent creation changed the namespace; revalidate every prospective object before
-    // identity/database mutation begins.
-    status = RiverDaemonPathInspection.verify(filesystem, paths);
+    status = RiverDaemonPathParents.prepare(filesystem, paths);
     if (!status.isOk()) return status;
 
     Probe probe = probeAuthority(filesystem, paths.datadir);

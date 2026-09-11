@@ -1,6 +1,6 @@
 ---
 id: tic-04aa
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,11 @@ File: `river-server-app/src/main/java/io/riverdb/server/app/RiverDaemonTarget.ja
 
 ## Approach
 
-Review `RiverDaemonTarget.revalidate`, `RiverDaemonTarget.open`, `RiverDaemonTarget.lockHeld` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
+Separate stateless instance/runtime identity binding from the live target capability
+owner. Keep listing admission distinct, use the existing record parsers, and retain
+one bound-runtime carrier with its file identity. Give runtime revalidation its
+local phase while preserving lock/instance-before-runtime checks, close/status
+precedence, missing-runtime behavior and every retained field's ownership.
 
 ## Acceptance
 

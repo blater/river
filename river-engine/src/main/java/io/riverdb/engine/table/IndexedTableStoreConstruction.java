@@ -47,16 +47,14 @@ final class IndexedTableStoreConstruction {
           directory, pages.file(), rows.file(), versions.file(), wal, database, generation,
           providerLease, storeLease);
       if (store == null) {
-        StatusCode cleanup = IndexedOpenFiles.close(
-            versions.file(), rows.file(), pages.file());
-        return cleanup.isOk() ? StatusCode.INVARIANT_BROKEN : cleanup;
+        return IndexedOpenFiles.close(
+            StatusCode.INVARIANT_BROKEN, versions.file(), rows.file(), pages.file());
       }
       result.set(store);
       return StatusCode.OK;
     } catch (OutOfMemoryError error) {
-      StatusCode cleanup = IndexedOpenFiles.close(
-          versions.file(), rows.file(), pages.file());
-      return cleanup.isOk() ? StatusCode.RESOURCE_EXHAUSTED : cleanup;
+      return IndexedOpenFiles.close(
+          StatusCode.RESOURCE_EXHAUSTED, versions.file(), rows.file(), pages.file());
     }
   }
 
