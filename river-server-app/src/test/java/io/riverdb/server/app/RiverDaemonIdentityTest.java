@@ -10,6 +10,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.ForceMode;
+import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.riverd.FileIdentity;
 import io.riverdb.platform.riverd.RiverDaemonFileSystem;
@@ -312,6 +313,61 @@ final class RiverDaemonIdentityTest {
   }
 
   @Test
+  void closedExistingInstanceStageContinuesPublicationThroughApfs(@TempDir Path root)
+      throws Exception {
+    Assumptions.assumeTrue("Mac OS X".equals(System.getProperty("os.name")));
+    Path datadir = root.toRealPath().resolve("instance");
+    FailingForceFileSystem filesystem = new FailingForceFileSystem();
+    RiverDaemonIdentity.IdentityResult first = new RiverDaemonIdentity.IdentityResult();
+    assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
+        datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0, first));
+    String stageName = ".instance-" + first.nonce() + ".stage";
+    RiverFileResult stage = new RiverFileResult();
+    assertEquals(StatusCode.OK, first.directory().createFile(stageName, stage));
+    writeRecord(stage.file(), RiverDaemonIdentityRecords.record(java.util.List.of(
+        "format=" + RiverDaemonIdentityRecords.INSTANCE_FORMAT,
+        "database-incarnation-high=" + INCARNATION.high(),
+        "database-incarnation-low=" + INCARNATION.low(),
+        "initial-wal-generation=1")));
+    assertEquals(StatusCode.OK, stage.file().close());
+    assertEquals(StatusCode.OK, first.directory().force(new DirectoryOperationResult()));
+
+    filesystem.armCloseExistingStage();
+    try {
+      assertEquals(StatusCode.OK, RiverDaemonIdentity.completeCreate(first));
+      assertEquals(1, filesystem.existingStageCloseCalls);
+      assertTrue(Files.exists(datadir.resolve(RiverDaemonIdentity.INSTANCE_FILE)));
+      assertFalse(Files.exists(datadir.resolve("bootstrap.properties")));
+    } finally {
+      first.close();
+    }
+  }
+
+  @Test
+  void invalidExistingInstanceStageIsClosedBeforePublicationReturnsThroughApfs(@TempDir Path root)
+      throws Exception {
+    Assumptions.assumeTrue("Mac OS X".equals(System.getProperty("os.name")));
+    Path datadir = root.toRealPath().resolve("instance");
+    FailingForceFileSystem filesystem = new FailingForceFileSystem();
+    RiverDaemonIdentity.IdentityResult result = new RiverDaemonIdentity.IdentityResult();
+    try {
+      assertEquals(StatusCode.OK, RiverDaemonIdentity.beginCreate(
+          datadir, filesystem, INCARNATION, new SecureRandom(), 999_999_999L, 0, result));
+      String stageName = ".instance-" + result.nonce() + ".stage";
+      RiverFileResult stage = new RiverFileResult();
+      assertEquals(StatusCode.OK, result.directory().createFile(stageName, stage));
+      writeRecord(stage.file(), "read-failed");
+      assertEquals(StatusCode.OK, stage.file().close());
+      assertEquals(StatusCode.OK, result.directory().force(new DirectoryOperationResult()));
+      filesystem.armCloseExistingStage();
+      assertEquals(StatusCode.CORRUPTION, RiverDaemonIdentity.completeCreate(result));
+      assertEquals(1, filesystem.existingStageCloseCalls);
+    } finally {
+      result.close();
+    }
+  }
+
+  @Test
   void committedInstanceCleansValidatedBootstrapResidueAfterConsumerChecksThroughApfs(
       @TempDir Path root) throws Exception {
     Assumptions.assumeTrue("Mac OS X".equals(System.getProperty("os.name")));
@@ -588,7 +644,13 @@ final class RiverDaemonIdentityTest {
   private static final class FailingForceFileSystem implements RiverDaemonFileSystem {
     private final ApfsRiverDaemonFileSystem delegate = new ApfsRiverDaemonFileSystem();
     private boolean armed;
+    private boolean closeExistingStage;
+    private int existingStageCloseCalls;
     private int forceCalls;
+
+    void armCloseExistingStage() {
+      closeExistingStage = true;
+    }
 
     void armCommitForceFailure() {
       armed = true;
@@ -644,7 +706,12 @@ final class RiverDaemonIdentityTest {
 
     @Override
     public StatusCode openFile(String childName, RiverOpenMode mode, RiverFileResult result) {
-      return delegate.openFile(childName, mode, result);
+      StatusCode status = delegate.openFile(childName, mode, result);
+      if (status.isOk() && filesystem.closeExistingStage && mode == RiverOpenMode.EXISTING
+          && childName.startsWith(".instance-")) {
+        result.set(new ClosedStageFile(this.filesystem, result.file()));
+      }
+      return status;
     }
 
     @Override
@@ -655,13 +722,13 @@ final class RiverDaemonIdentityTest {
     @Override
     public StatusCode publishExclusive(
         RiverFile stage, String stageName, String targetName, DirectoryOperationResult result) {
-      return delegate.publishExclusive(stage, stageName, targetName, result);
+      return delegate.publishExclusive(raw(stage), stageName, targetName, result);
     }
 
     @Override
     public StatusCode publishReplacement(
         RiverFile stage, String stageName, String targetName, DirectoryOperationResult result) {
-      return delegate.publishReplacement(stage, stageName, targetName, result);
+      return delegate.publishReplacement(raw(stage), stageName, targetName, result);
     }
 
     @Override
@@ -705,6 +772,47 @@ final class RiverDaemonIdentityTest {
 
     private static RiverDirectory raw(RiverDirectory value) {
       return value instanceof FailingForceDirectory wrapped ? wrapped.delegate : value;
+    }
+
+    private static RiverFile raw(RiverFile value) {
+      return value instanceof ClosedStageFile wrapped ? wrapped.delegate : value;
+    }
+  }
+
+  private static final class ClosedStageFile implements RiverFile {
+    private final FailingForceFileSystem filesystem;
+    private final RiverFile delegate;
+
+    private ClosedStageFile(FailingForceFileSystem filesystem, RiverFile delegate) {
+      this.filesystem = filesystem;
+      this.delegate = delegate;
+    }
+
+    @Override
+    public FileIdentity identity() { return delegate.identity(); }
+    @Override
+    public StatusCode read(long position, ByteBuffer target, IoResult result) {
+      return delegate.read(position, target, result);
+    }
+    @Override
+    public StatusCode write(long position, ByteBuffer source, IoResult result) {
+      return delegate.write(position, source, result);
+    }
+    @Override
+    public StatusCode force(ForceMode mode) { return delegate.force(mode); }
+    @Override
+    public StatusCode force(long startOffset, long endOffset, ForceMode mode) {
+      return delegate.force(startOffset, endOffset, mode);
+    }
+    @Override
+    public StatusCode truncate(long sizeBytes) { return delegate.truncate(sizeBytes); }
+    @Override
+    public StatusCode size(FileSizeResult result) { return delegate.size(result); }
+    @Override
+    public StatusCode close() {
+      StatusCode status = delegate.close();
+      filesystem.existingStageCloseCalls++;
+      return status.isOk() ? StatusCode.CLOSED : status;
     }
   }
 
