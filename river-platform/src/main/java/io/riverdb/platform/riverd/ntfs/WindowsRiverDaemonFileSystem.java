@@ -24,9 +24,9 @@ public final class WindowsRiverDaemonFileSystem implements RiverDaemonFileSystem
     result.reset();
     if (!windows() || path == null || invalidPath(path)) return StatusCode.INVALID_EXTERNAL_INPUT;
     var handle = WindowsFileBridge.open(path, true, false);
-    if (handle.equals(java.lang.foreign.MemorySegment.NULL)) return status(WindowsFileBridge.status());
+    if (handle.equals(java.lang.foreign.MemorySegment.NULL)) return status(WindowsNativeBindings.status());
     WindowsDirectoryInspection.Stat stat = WindowsDirectoryInspection.inspect(handle);
-    StatusCode check = stat == null ? status(WindowsFileBridge.status())
+    StatusCode check = stat == null ? status(WindowsNativeBindings.status())
         : !stat.directory ? StatusCode.CONFLICT
         : (stat.reparse ? StatusCode.ACCESS_DENIED
         : privateRequired ? WindowsDirectoryInspection.verifyPrivate(handle, stat)
@@ -50,11 +50,11 @@ public final class WindowsRiverDaemonFileSystem implements RiverDaemonFileSystem
       var duplicate = WindowsFileBridge.duplicate(windowsFile.handle());
       if (duplicate.equals(java.lang.foreign.MemorySegment.NULL)) {
         windowsFile.cancelLock();
-        return status(WindowsFileBridge.status());
+        return status(WindowsNativeBindings.status());
       }
       var overlapped = WindowsFileBridge.lock(duplicate);
       if (overlapped.equals(java.lang.foreign.MemorySegment.NULL)) {
-        int error = WindowsFileBridge.status();
+        int error = WindowsNativeBindings.status();
         WindowsFileBridge.close(duplicate);
         windowsFile.cancelLock();
         return error == WindowsFileBridge.ERROR_LOCK_VIOLATION ? StatusCode.CONFLICT : status(error);

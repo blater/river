@@ -21,9 +21,9 @@ final class WindowsRiverLock implements RiverLock {
     if (closed) return StatusCode.CLOSED;
     closed = true;
     int unlock = WindowsFileBridge.unlock(handle, overlapped);
-    int unlockStatus = WindowsFileBridge.status();
+    int unlockStatus = WindowsNativeBindings.status();
     int close = WindowsFileBridge.close(handle);
-    int closeStatus = WindowsFileBridge.status();
+    int closeStatus = WindowsNativeBindings.status();
     StatusCode status = unlock == 0 && close == 0 ? StatusCode.OK
         : WindowsRiverDaemonFileSystem.status(unlock != 0 ? unlockStatus : closeStatus);
     file.releaseLockReservation();
