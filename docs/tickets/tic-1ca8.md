@@ -1,6 +1,6 @@
 ---
 id: tic-1ca8
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -30,3 +30,20 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-protocol` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+
+## Result
+
+Source `7251282c`: request encoder **20.688** (110.622 before); new text and
+parameter owners **0**; touched prepared/program encoders **45.237/7.925**.
+All callers use the shared parameter owner directly. Luna/high implemented;
+Sol/high and lead approved. Protocol/client checks and installTps passed with
+`--no-daemon`; byte formats, validation order and allocation behavior preserved.
+
+Java/JDBC tiny/standard, four terminals, warehouse 1, seed 42, attempts 32, 5s warmup:
+10s candidate 346.1/control 477.6 TPS prompted a 30s pair, which measured
+candidate 553.533/control 560.267 TPS. All returned OK, zero errors/retries and
+clean transaction/lock cleanup. The large short-run gap did not repeat; accepted
+as a structural refactor, with no speedup claim. Control is frozen first-three
+source 444d48fb; candidate version `tic-1ca8-7251282c-jvm[-30s]`.
+Artifacts/logs: `/private/tmp/river-score-20260911/protocol-tps-{candidate,control,candidate-30s,control-30s}`.
