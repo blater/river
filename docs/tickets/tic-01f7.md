@@ -1,6 +1,6 @@
 ---
 id: tic-01f7
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -41,3 +41,5 @@ approved. Score **89.521** (91.625 before). Focused `CatalogIndexCodecTest` and
 p99 63.799ms, 495 retries, zero failed/unknown outcomes, valid invariants and
 graceful cleanup. Recent integrated control 314.68 TPS; no observed regression.
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_032929_24a2cce7`.
+
+Delivered at `perf-checkpoint-20260911-score-first11`.

@@ -1,6 +1,6 @@
 ---
 id: tic-50be
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -40,3 +40,5 @@ Validation: Luna/high source `bbdf5122`, Sol/high and lead approved. Score
 p99 63.963ms, 494 retries, zero failed/unknown outcomes, valid invariants and
 graceful shutdown. Recent integrated control 314.68 TPS; no observed regression.
 Artifact: `/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_032529_85a3984d`.
+
+Delivered at `perf-checkpoint-20260911-score-first11`.

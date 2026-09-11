@@ -1,6 +1,6 @@
 ---
 id: tic-1ca8
-status: in_progress
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -47,3 +47,5 @@ clean transaction/lock cleanup. The large short-run gap did not repeat; accepted
 as a structural refactor, with no speedup claim. Control is frozen first-three
 source 444d48fb; candidate version `tic-1ca8-7251282c-jvm[-30s]`.
 Artifacts/logs: `/private/tmp/river-score-20260911/protocol-tps-{candidate,control,candidate-30s,control-30s}`.
+
+Delivered at `perf-checkpoint-20260911-score-first11`.
