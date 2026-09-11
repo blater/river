@@ -655,7 +655,7 @@ changing its limit. Source/bytecode policy checks retain exactly **261 existing
 control violations**, with none added/removed; class-reference verification passes.
 Slopmark row directory **40.5049 -> 40.4243**, version directory **28.4651 unchanged**.
 
-Explicit OpenJDK 26.0.2.1, seed42, tiny/standard, serializable, ten terminals,
+Explicit OpenJDK 26.0.2.1, seed 42, tiny/standard, serializable, ten terminals,
 one warehouse, user background load left running. Untouched 10-second baselines
 **153.4/161.5 TPS**, candidates **160.1/156.8**. The original 30-second configuration
 passes twice (**181.533/175.733**); the 60-second run also passes (**153.767**).
@@ -1564,7 +1564,7 @@ Slopmark before/after: BTreePage 28.6416 → 28.3441; BTreeKeyLayout 7.92481 →
 
 Comparisons use the same temporary `/private/tmp/river-native-profile.py` driver
 as the requested baselines: tiny, standard mix, serializable, no-wait-stress,
-one warehouse, ten terminals, seed42, batch rows32, maximum attempts32, 5s warmup
+one warehouse, ten terminals, seed 42, batch rows32, maximum attempts 32, 5s warmup
 and 30s measurement. Both servers retain production defaults and a 1GiB heap.
 GraalVM25.0.4 drives both; native remains O3/Serial GC with retained symbols and
 GC logging; JVM retains default G1, GC logging and profile JFR. Both receive the
@@ -1620,7 +1620,7 @@ run serially without concurrent workloads. Native runtime keeps Serial GC and
 runner described above, 5s warmup and 60s measurement, tiny data, serializable,
 ten terminals, one warehouse. TPS excludes drain commits.
 
-CPU-target interleaving, standard mix/seed42:
+CPU-target interleaving, standard mix/seed 42:
 
 | Variant | Sample 1 TPS | Sample 2 TPS | Mean TPS |
 | --- | ---: | ---: | ---: |
@@ -1647,7 +1647,7 @@ passed with zero retries/failures and successful cleanup, producing
 
 
 PGO validation interleaves O3 native-target controls with the PGO candidate,
-keeping all other settings fixed. Standard mix uses seed42 (training used77).
+keeping all other settings fixed. Standard mix uses seed 42 (training used77).
 The held-out New Order/Stock Level 50/50 mix uses seed99.
 
 | Workload / variant | Sample 1 TPS | Sample 2 TPS | Mean TPS |
@@ -1739,7 +1739,7 @@ the profile remains a build input only.
 Final build: `/private/tmp/river-native-fixed-final-build.log`, successful in
 1m51s; Oracle GraalVM 25.0.4, O3, armv8.1-a, user-provided PGO, Serial GC.
 Final matched samples use tiny data, standard mix, serializable isolation,
-10 terminals, one warehouse, seed42, batch rows32, maximum attempts32,
+10 terminals, one warehouse, seed 42, batch rows32, maximum attempts 32,
 5s warmup and 60s measurement. Server resource defaults are unchanged; the JVM
 launcher uses the same GraalVM JDK with `-Xmx1g`. Runs are sequential and
 interleaved JVM/native/JVM/native. Driver and commands:
@@ -1769,7 +1769,7 @@ and the database was removed. Log directory:
 `/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-native-lifecycle-smoke-l9j51dyb/`.
 
 Final `tools/tps-test.sh` smoke also passed: version
-`a51d-final-predecessor-pin`, tiny standard mix, serializable, seed42,
+`a51d-final-predecessor-pin`, tiny standard mix, serializable, seed 42,
 10 terminals, one warehouse, 2s warmup and 10s measurement; 148.0 TPS, zero
 errors, `deadlock_reconciliation=OK`, `performance_capture=OK`. This short
 managed-server smoke is separate from the matched runtime comparison above.
@@ -1816,11 +1816,11 @@ Performance used the actual native foreground server because `tools/tps-test.sh`
 starts its benchmark-specific server and would not exercise the new lifecycle
 poll. Before edits, two short TPS controls were 148.500 and 146.900, version
 `0803-stop-baseline-{1,2}`, standard tiny serializable mix, 10 terminals, one
-warehouse, seed42, 2s warmup, 10s measurement; artifacts:
+warehouse, seed 42, 2s warmup, 10s measurement; artifacts:
 `/private/tmp/river-0803-baseline-{1,2}`. Both passed reconciliation and capture.
 
 The native comparison used the unchanged acceptance workload: standard tiny
-serializable mix, 10 terminals, one warehouse, seed42, batch32, maximum attempts32,
+serializable mix, 10 terminals, one warehouse, seed 42, batch32, maximum attempts 32,
 5s warmup and 60s measurement. Command:
 `python3 /private/tmp/river-native-final-forensic.py --server=EXECUTABLE
 --label=LABEL --mode=native --warmup=5 --duration=60`. Each artifact's `run.json`
@@ -1917,7 +1917,7 @@ replaces v2 directly and requires fresh database directories. Checkpoint:
 Base production `ad1db42f`; candidate `b66de835` on
 `ticket/tic-a73c-insert-admission`. User-authorized deferred step 5 resumed.
 GraalVM 25.0.4 JVM, four terminals, tiny standard mix, serializable, one warehouse,
-seed42, unchanged durability/resources. Each command uses `tools/tps-test.sh
+seed 42, unchanged durability/resources. Each command uses `tools/tps-test.sh
 --terminals=4 --seed=42 --warmup-seconds=W --measured-seconds=D
 --version=insert-a73c-LABEL --output-dir=/private/tmp/insert-step5/a73c-LABEL`.
 
@@ -1987,7 +1987,7 @@ removed. Checkpoint: `perf-checkpoint-20260910-unique-lookup`.
 Base `2a21dbcf`, checkpoint `perf-checkpoint-20260910-unique-lookup`; candidate
 `df88f18c` on `ticket/tic-8b64-lock-storage`. Reused preceding accepted controls
 `2e91-candidate-{1,2}`: 275.600 / 278.033 TPS. Same JVM and workload configuration
-as above: four terminals, seed42, warm5/duration30, unchanged isolation/durability.
+as above: four terminals, seed 42, warm5/duration30, unchanged isolation/durability.
 Command: `tools/tps-test.sh --terminals=4 --seed=42 --warmup-seconds=5
 --measured-seconds=30 --version=insert-8b64-LABEL
 --output-dir=/private/tmp/insert-step5/8b64-LABEL`.
@@ -2355,3 +2355,26 @@ Artifacts under the harness runs directory:
 - Identity: `river_harness_20260911_025827_90081ad0`.
 
 Integration publication awaits the subsystem checkpoint.
+
+
+## 2026-09-11: Java client lifetime and exact-lock forwarding
+
+Java client `tic-e1f7` at `3e5c0030` passed client/JDBC checks and Sol/high/lead
+review. Connection, session, query and metadata retain separate concrete owners;
+all scores are below 90 (maximum 87.99). Matched Java/JDBC `tools/tps-test.sh`
+controls at installed source `444d48fb`: 382.9 and 379.7 TPS; candidate: 370.2 and
+475.0 TPS. Tiny/standard, four terminals, one warehouse, seed 42, attempts 32,
+5s warmup/10s measured, GraalVM25, unchanged default resources/isolation/durability.
+All samples returned OK with zero errors/retries and clean transaction/lock
+cleanup. No repeated regression and no speedup claim given the spread. These
+figures are not comparable with the external Go harness figures.
+Artifacts: `/private/tmp/river-score-20260911/client-tps-{control,control-2,candidate-1,candidate-2}`.
+
+Exact-lock `tic-428c` at `7d8f66df` deletes one redundant private forwarding
+method, preserving the existing admission call and order. Score 89.918;
+Sol/high/lead approved and tx checks passed. The epic's external sample/all
+configuration passed at 304.95 TPS, zero failed/unknown, valid invariants and
+graceful cleanup: `river_harness_20260911_030956_61ea73ba` under the harness
+runs directory. No observed regression or claimed speedup.
+
+Integration checkpoint pending.
