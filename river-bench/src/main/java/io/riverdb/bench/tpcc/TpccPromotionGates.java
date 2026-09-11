@@ -14,13 +14,13 @@ final class TpccPromotionGates {
     if (metrics.overflowed()) {
       throw new SQLException("correctness gate: measurement counter overflow");
     }
-    if (metrics.unclassifiedRetryFailures() != 0
-        || metrics.drainUnclassifiedRetryFailures() != 0) {
+    if (metrics.retry().unclassifiedRetryFailures() != 0
+        || metrics.retry().drainUnclassifiedRetryFailures() != 0) {
       throw new SQLException("correctness gate: unclassified retry outcome");
     }
-    if (metrics.retryCorrelationOverflows() != 0
-        || metrics.retryCorrelationCount()
-            != metrics.retryableOutcomes() + metrics.drainRetryableOutcomes()) {
+    if (metrics.retry().retryCorrelationOverflows() != 0
+        || metrics.retry().retryCorrelationCount()
+            != metrics.retry().retryableOutcomes() + metrics.retry().drainRetryableOutcomes()) {
       throw new SQLException("correctness gate: incomplete retry correlation");
     }
     if (metrics.overflowed()) {
