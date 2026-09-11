@@ -2332,3 +2332,26 @@ failed/unknown outcomes and graceful cleanup. Adjacent accepted control 296.56 T
 accepted with no observed regression. Artifact
 `river_harness_20260911_024105_828fa65a` under the harness runs directory above.
 Checkpoint: `perf-checkpoint-20260911-score-parser`.
+
+
+## 2026-09-11: credential and identity lifecycle ownership
+
+Credentials (`tic-7c86`, source `14a77c4a`) and identity (`tic-b251`, source
+`4de3d42a`) separate operation ownership, serialization and publication while
+preserving file identity checks, force ordering and failure cleanup. Luna/high
+implemented; Sol/high and the lead approved. Focused tests and server-app checks
+passed. Every touched/extracted source scores below 90; maxima are 66.428 for
+credentials and 65.480 for identity. Individual tickets record failure tests.
+
+The same light JVM sample/all configuration described above produced 258.82 TPS
+for credentials, then 258.89 for unchanged first-three control `444d48fb`, then
+269.52 for identity. The lower credential figure relative to earlier samples
+reproduced on the unchanged control. All passed with zero failed/unknown outcomes,
+valid invariants and graceful cleanup. No observed regression; no speedup claimed.
+Artifacts under the harness runs directory:
+
+- Credentials: `river_harness_20260911_025024_12113f34`.
+- Adjacent control: `river_harness_20260911_025615_7d0d10af`.
+- Identity: `river_harness_20260911_025827_90081ad0`.
+
+Integration publication awaits the subsystem checkpoint.
