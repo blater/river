@@ -135,46 +135,48 @@ final class TpccArtifact {
       TpccProcessObservation after,
       int rollbackProbes,
       int retryProbes) {
-    values.setProperty("measurement.retries", Long.toString(metrics.retries()));
+    values.setProperty("measurement.retries", Long.toString(metrics.retry().retries()));
     values.setProperty("measurement.started_transactions", Long.toString(metrics.started()));
     values.setProperty("measurement.completed_transactions_at_cutoff",
         Long.toString(metrics.total()));
     values.setProperty("measurement.in_flight_at_cutoff",
         Long.toString(metrics.inFlightAtCutoff()));
     values.setProperty("measurement.transaction_attempts",
-        Long.toString(metrics.transactionAttempts()));
+        Long.toString(metrics.retry().transactionAttempts()));
     values.setProperty("measurement.drain_transaction_attempts",
-        Long.toString(metrics.drainTransactionAttempts()));
-    values.setProperty("measurement.attempt_id_first", Long.toString(metrics.firstAttemptId()));
-    values.setProperty("measurement.attempt_id_last", Long.toString(metrics.lastAttemptId()));
+        Long.toString(metrics.retry().drainTransactionAttempts()));
+    values.setProperty("measurement.attempt_id_first",
+        Long.toString(metrics.retry().firstAttemptId()));
+    values.setProperty("measurement.attempt_id_last",
+        Long.toString(metrics.retry().lastAttemptId()));
     values.setProperty("measurement.unclassified_retry_failures",
-        Long.toString(metrics.unclassifiedRetryFailures()));
+        Long.toString(metrics.retry().unclassifiedRetryFailures()));
     values.setProperty("measurement.drain_unclassified_retry_failures",
-        Long.toString(metrics.drainUnclassifiedRetryFailures()));
+        Long.toString(metrics.retry().drainUnclassifiedRetryFailures()));
     values.setProperty("measurement.retry_correlation_overflows",
-        Long.toString(metrics.retryCorrelationOverflows()));
+        Long.toString(metrics.retry().retryCorrelationOverflows()));
     values.setProperty("measurement.metrics_overflowed",
         Boolean.toString(metrics.overflowed()));
     values.setProperty("measurement.drain_completed_transactions",
         Long.toString(metrics.drainTotal()));
     values.setProperty("measurement.maximum_latency_us",
-        Long.toString(metrics.maximumLatencyMicros()));
+        Long.toString(metrics.latency().maximumLatencyMicros()));
     values.setProperty(
-        "measurement.protocol_requests", Long.toString(metrics.protocolRequests()));
+        "measurement.protocol_requests", Long.toString(metrics.protocol().requests()));
     values.setProperty(
-        "measurement.logical_exchanges", Long.toString(metrics.protocolRequests()));
+        "measurement.logical_exchanges", Long.toString(metrics.protocol().requests()));
     values.setProperty("measurement.physical_request_frames", "unavailable_via_jdbc");
     values.setProperty("measurement.physical_response_frames", "unavailable_via_jdbc");
     values.setProperty(
-        "measurement.protocol_bytes_sent", Long.toString(metrics.protocolBytesSent()));
+        "measurement.protocol_bytes_sent", Long.toString(metrics.protocol().bytesSent()));
     values.setProperty(
-        "measurement.protocol_bytes_received", Long.toString(metrics.protocolBytesReceived()));
+        "measurement.protocol_bytes_received", Long.toString(metrics.protocol().bytesReceived()));
     values.setProperty("measurement.drain_protocol_requests",
-        Long.toString(metrics.drainProtocolRequests()));
+        Long.toString(metrics.protocol().drainRequests()));
     values.setProperty("measurement.drain_protocol_bytes_sent",
-        Long.toString(metrics.drainProtocolBytesSent()));
+        Long.toString(metrics.protocol().drainBytesSent()));
     values.setProperty("measurement.drain_protocol_bytes_received",
-        Long.toString(metrics.drainProtocolBytesReceived()));
+        Long.toString(metrics.protocol().drainBytesReceived()));
     values.setProperty("measurement.rollback_probes", Integer.toString(rollbackProbes));
     values.setProperty("measurement.retry_probes", Integer.toString(retryProbes));
     for (StatusCode status : StatusCode.values()) {
@@ -182,13 +184,13 @@ final class TpccArtifact {
       String prefix = "measurement.retry_status."
           + status.name().toLowerCase(java.util.Locale.ROOT) + ".";
       values.setProperty(prefix + "server_outcomes",
-          Long.toString(metrics.retryableOutcomes(status)));
+          Long.toString(metrics.retry().retryableOutcomes(status)));
       values.setProperty(prefix + "client_retries",
-          Long.toString(metrics.clientRetries(status)));
+          Long.toString(metrics.retry().clientRetries(status)));
       values.setProperty(prefix + "drain_server_outcomes",
-          Long.toString(metrics.drainRetryableOutcomes(status)));
+          Long.toString(metrics.retry().drainRetryableOutcomes(status)));
       values.setProperty(prefix + "drain_client_retries",
-          Long.toString(metrics.drainClientRetries(status)));
+          Long.toString(metrics.retry().drainClientRetries(status)));
     }
     for (TpccTransactionType type : TpccTransactionType.values()) {
       String prefix = "measurement." + type.name().toLowerCase(java.util.Locale.ROOT) + ".";
@@ -205,43 +207,48 @@ final class TpccArtifact {
           Long.toString(metrics.drainRetryExhausted(type)));
       values.setProperty(prefix + "drain_failed", Long.toString(metrics.drainFailed(type)));
       values.setProperty(
-          prefix + "protocol_requests", Long.toString(metrics.protocolRequests(type)));
+          prefix + "protocol_requests", Long.toString(metrics.protocol().requests(type)));
       values.setProperty(prefix + "drain_protocol_requests",
-          Long.toString(metrics.drainProtocolRequests(type)));
+          Long.toString(metrics.protocol().drainRequests(type)));
       values.setProperty(prefix + "drain_protocol_bytes_sent",
-          Long.toString(metrics.drainProtocolBytesSent(type)));
+          Long.toString(metrics.protocol().drainBytesSent(type)));
       values.setProperty(prefix + "drain_protocol_bytes_received",
-          Long.toString(metrics.drainProtocolBytesReceived(type)));
+          Long.toString(metrics.protocol().drainBytesReceived(type)));
       values.setProperty(prefix + "protocol_bytes_sent",
-          Long.toString(metrics.protocolBytesSent(type)));
+          Long.toString(metrics.protocol().bytesSent(type)));
       values.setProperty(prefix + "protocol_bytes_received",
-          Long.toString(metrics.protocolBytesReceived(type)));
+          Long.toString(metrics.protocol().bytesReceived(type)));
       values.setProperty(prefix + "protocol_requests_per_attempt", String.format(
-          java.util.Locale.ROOT, "%.1f", metrics.protocolRequestsPerAttempt(type)));
+          java.util.Locale.ROOT, "%.1f", metrics.protocol().requestsPerAttempt(
+              type, metrics.retry().transactionAttempts(type))));
       values.setProperty(prefix + "transaction_attempts",
-          Long.toString(metrics.transactionAttempts(type)));
+          Long.toString(metrics.retry().transactionAttempts(type)));
       for (StatusCode status : StatusCode.values()) {
         if (!status.isRetryable()) continue;
         String statusPrefix = prefix + "retry_status."
             + status.name().toLowerCase(java.util.Locale.ROOT) + ".";
         values.setProperty(statusPrefix + "server_outcomes",
-            Long.toString(metrics.retryableOutcomes(type, status)));
+            Long.toString(metrics.retry().retryableOutcomes(type, status)));
         values.setProperty(statusPrefix + "client_retries",
-            Long.toString(metrics.clientRetries(type, status)));
+            Long.toString(metrics.retry().clientRetries(type, status)));
         values.setProperty(statusPrefix + "drain_server_outcomes",
-            Long.toString(metrics.drainRetryableOutcomes(type, status)));
+            Long.toString(metrics.retry().drainRetryableOutcomes(type, status)));
         values.setProperty(statusPrefix + "drain_client_retries",
-            Long.toString(metrics.drainClientRetries(type, status)));
+            Long.toString(metrics.retry().drainClientRetries(type, status)));
       }
-      values.setProperty(prefix + "p50_us_upper", Long.toString(metrics.percentileMicros(type, 50)));
-      values.setProperty(prefix + "p95_us_upper", Long.toString(metrics.percentileMicros(type, 95)));
-      values.setProperty(prefix + "p99_us_upper", Long.toString(metrics.percentileMicros(type, 99)));
+      values.setProperty(prefix + "p50_us_upper",
+          Long.toString(metrics.latency().percentileMicros(type, 50)));
+      values.setProperty(prefix + "p95_us_upper",
+          Long.toString(metrics.latency().percentileMicros(type, 95)));
+      values.setProperty(prefix + "p99_us_upper",
+          Long.toString(metrics.latency().percentileMicros(type, 99)));
       values.setProperty(prefix + "p99_9_us_upper",
-          Long.toString(metrics.percentileMicrosPermille(type, 999)));
-      values.setProperty(prefix + "maximum_us", Long.toString(metrics.maximumLatencyMicros(type)));
+          Long.toString(metrics.latency().percentileMicrosPermille(type, 999)));
+      values.setProperty(prefix + "maximum_us",
+          Long.toString(metrics.latency().maximumLatencyMicros(type)));
       for (int bucket = 0; bucket < 64; bucket++) {
         values.setProperty(prefix + "histogram." + bucket,
-            Long.toString(metrics.histogram(type, bucket)));
+            Long.toString(metrics.latency().histogram(type, bucket)));
       }
     }
     values.setProperty("process.heap_used_before", Long.toString(before.heapUsed()));
