@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.ExactDecimalQuantize;
 import io.riverdb.base.type.ExactDecimal128;
 import io.riverdb.base.type.ExactDecimal128Conversion;
 import io.riverdb.base.type.SqlApproximateNumeric;
@@ -74,7 +75,7 @@ final class SqlMutationFixedValues {
       set(value);
       return StatusCode.OK;
     }
-    StatusCode status = ExactDecimal.quantize(
+    StatusCode status = ExactDecimalQuantize.apply(
         value, source, target, false, true, decimal, wide);
     if (status.isOk()) set(decimal.value);
     return status;
