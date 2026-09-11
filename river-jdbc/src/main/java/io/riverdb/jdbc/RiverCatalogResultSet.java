@@ -8,10 +8,9 @@ import io.riverdb.engine.api.RowResult;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.sql.Statement;
 
 /** Forward-only JDBC catalog rows backed by River's durable catalog scan. */
-final class RiverCatalogResultSet extends AbstractResultSet {
+final class RiverCatalogResultSet extends RiverMetadataResultSet {
   private static final int TABLES = 1;
   private static final int TABLE_TYPES = 2;
   private static final int INITIAL_TABLE_CAPACITY = 16;
@@ -255,50 +254,6 @@ final class RiverCatalogResultSet extends AbstractResultSet {
   }
 
   @Override
-  public int findColumn(String label) throws SQLException {
-    requireOpen();
-    return metadata().findColumn(label);
-  }
-
-  @Override
-  public ResultSetMetaData getMetaData() throws SQLException {
-    requireOpen();
-    return metadata();
-  }
-
-  @Override
-  public Statement getStatement() throws SQLException {
-    requireOpen();
-    return null;
-  }
-
-  @Override
-  public int getType() throws SQLException {
-    requireOpen();
-    return ResultSet.TYPE_FORWARD_ONLY;
-  }
-
-  @Override
-  public int getConcurrency() throws SQLException {
-    requireOpen();
-    return ResultSet.CONCUR_READ_ONLY;
-  }
-
-  @Override
-  public int getFetchDirection() throws SQLException {
-    requireOpen();
-    return ResultSet.FETCH_FORWARD;
-  }
-
-  @Override
-  public void setFetchDirection(int direction) throws SQLException {
-    requireOpen();
-    if (direction != ResultSet.FETCH_FORWARD) {
-      throw JdbcExceptions.unsupported();
-    }
-  }
-
-  @Override
   public int getFetchSize() throws SQLException {
     requireOpen();
     return 1;
@@ -310,12 +265,6 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     if (rows < 0 || rows > 1) {
       throw JdbcExceptions.unsupported();
     }
-  }
-
-  @Override
-  public int getHoldability() throws SQLException {
-    requireOpen();
-    return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
 
   @Override
@@ -361,7 +310,8 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     return !closed && type != null && type.isInstance(this);
   }
 
-  private RiverResultSetMetaData metadata() {
+  @Override
+  RiverResultSetMetaData metadata() {
     return mode == TABLES ? TABLE_METADATA : TYPE_METADATA;
   }
 
@@ -473,7 +423,8 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     }
   }
 
-  private void requireOpen() throws SQLException {
+  @Override
+  void requireOpen() throws SQLException {
     if (closed) {
       throw JdbcExceptions.closed("catalog result set");
     }
