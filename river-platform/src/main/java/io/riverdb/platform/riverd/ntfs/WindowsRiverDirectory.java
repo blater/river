@@ -32,9 +32,9 @@ final class WindowsRiverDirectory implements RiverDirectory {
     if (result == null || !begin(name)) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     MemorySegment child = WindowsFileBridge.openAt(handle, name, true, true);
-    if (child.equals(MemorySegment.NULL)) return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+    if (child.equals(MemorySegment.NULL)) return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
     WindowsDirectoryInspection.Stat stat = WindowsDirectoryInspection.inspect(child);
-    StatusCode check = stat == null ? WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status())
+    StatusCode check = stat == null ? WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status())
         : WindowsDirectoryInspection.verifyPrivate(child, stat);
     if (!check.isOk()) {
       WindowsFileBridge.remove(child);
@@ -51,9 +51,9 @@ final class WindowsRiverDirectory implements RiverDirectory {
     if (result == null || !begin(name)) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     MemorySegment child = WindowsFileBridge.openAt(handle, name, true, false);
-    if (child.equals(MemorySegment.NULL)) return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+    if (child.equals(MemorySegment.NULL)) return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
     WindowsDirectoryInspection.Stat stat = WindowsDirectoryInspection.inspect(child);
-    StatusCode check = stat == null ? WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status())
+    StatusCode check = stat == null ? WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status())
         : WindowsDirectoryInspection.verifyPrivate(child, stat);
     if (!check.isOk()) {
       WindowsFileBridge.close(child);
@@ -69,9 +69,9 @@ final class WindowsRiverDirectory implements RiverDirectory {
     result.reset();
     MemorySegment child = WindowsFileBridge.openAt(handle, name, false,
         mode == RiverOpenMode.CREATE_NEW);
-    if (child.equals(MemorySegment.NULL)) return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+    if (child.equals(MemorySegment.NULL)) return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
     WindowsDirectoryInspection.Stat stat = WindowsDirectoryInspection.inspect(child);
-    StatusCode check = stat == null ? WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status())
+    StatusCode check = stat == null ? WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status())
         : WindowsDirectoryInspection.verifyFile(child, stat);
     if (!check.isOk()) {
       if (mode == RiverOpenMode.CREATE_NEW) {
@@ -130,7 +130,7 @@ final class WindowsRiverDirectory implements RiverDirectory {
       return StatusCode.OK;
     }
     result.set(null, DirectoryDurability.UNKNOWN);
-    return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+    return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
   }
 
   @Override
@@ -152,7 +152,7 @@ final class WindowsRiverDirectory implements RiverDirectory {
           }
           if (WindowsFileBridge.rename(staged.handle, handle, targetName, false) != 0) {
             result.set(null, DirectoryDurability.UNKNOWN);
-            return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+            return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
           }
           StatusCode targetForce = force(new DirectoryOperationResult());
           StatusCode sourceForce = source.force(new DirectoryOperationResult());
@@ -174,17 +174,17 @@ final class WindowsRiverDirectory implements RiverDirectory {
     result.reset();
     MemorySegment child = WindowsFileBridge.openAt(handle, name, false, false);
     if (child.equals(MemorySegment.NULL)) child = WindowsFileBridge.openAt(handle, name, true, false);
-    if (child.equals(MemorySegment.NULL)) return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+    if (child.equals(MemorySegment.NULL)) return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
     FileIdentity identity = WindowsFileBridge.identity(child);
     if (identity == null || !identity.equals(expected)) {
       WindowsFileBridge.close(child);
       return StatusCode.CONFLICT;
     }
     int remove = WindowsFileBridge.remove(child);
-    int removeStatus = WindowsFileBridge.status();
+    int removeStatus = WindowsNativeBindings.status();
     int close = WindowsFileBridge.close(child);
     if (remove != 0) return WindowsRiverDaemonFileSystem.status(removeStatus);
-    if (close != 0) return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+    if (close != 0) return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
     result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE);
     return StatusCode.OK;
   }
@@ -199,7 +199,7 @@ final class WindowsRiverDirectory implements RiverDirectory {
       return StatusCode.OK;
     }
     result.set(null, DirectoryDurability.UNKNOWN);
-    return WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+    return WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
   }
 
   @Override
@@ -207,17 +207,17 @@ final class WindowsRiverDirectory implements RiverDirectory {
     if (closed) return StatusCode.CLOSED;
     closed = true;
     return WindowsFileBridge.close(handle) == 0 ? StatusCode.OK
-        : WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+        : WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
   }
 
   private StatusCode validateTarget(String name) {
     MemorySegment target = WindowsFileBridge.openAt(handle, name, false, false);
     if (target.equals(MemorySegment.NULL)) {
-      return WindowsFileBridge.status() == WindowsFileBridge.STATUS_OBJECT_NAME_NOT_FOUND
-          ? StatusCode.OK : WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status());
+      return WindowsNativeBindings.status() == WindowsFileBridge.STATUS_OBJECT_NAME_NOT_FOUND
+          ? StatusCode.OK : WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status());
     }
     WindowsDirectoryInspection.Stat stat = WindowsDirectoryInspection.inspect(target);
-    StatusCode check = stat == null ? WindowsRiverDaemonFileSystem.status(WindowsFileBridge.status())
+    StatusCode check = stat == null ? WindowsRiverDaemonFileSystem.status(WindowsNativeBindings.status())
         : WindowsDirectoryInspection.verifyFile(target, stat);
     WindowsFileBridge.close(target);
     return check;

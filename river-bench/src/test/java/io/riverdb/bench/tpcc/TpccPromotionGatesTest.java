@@ -37,10 +37,10 @@ final class TpccPromotionGatesTest {
   @Test
   void rejectsCounterOverflow() throws Exception {
     TpccMetrics metrics = new TpccMetrics();
-    java.lang.reflect.Field requests = TpccMetrics.class.getDeclaredField("protocolRequests");
+    java.lang.reflect.Field requests = TpccProtocolMetrics.class.getDeclaredField("requests");
     requests.setAccessible(true);
-    requests.setLong(metrics, Long.MAX_VALUE);
-    metrics.protocol(TpccTransactionType.NEW_ORDER, 1, 0, 0);
+    requests.setLong(metrics.protocol(), Long.MAX_VALUE);
+    metrics.protocol().record(TpccTransactionType.NEW_ORDER, 1, 0, 0);
 
     SQLException failure = assertThrows(
         SQLException.class, () -> TpccPromotionGates.verifyTerminalOutcomes(metrics));

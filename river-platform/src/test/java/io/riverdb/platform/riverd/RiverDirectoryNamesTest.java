@@ -19,7 +19,7 @@ final class RiverDirectoryNamesTest {
     assertFalse(RiverDirectoryNames.validPosix("a".repeat(256)));
     assertFalse(RiverDirectoryNames.validPosix("a/b"));
     assertFalse(RiverDirectoryNames.validPosix("a\\b"));
-    assertFalse(RiverDirectoryNames.validPosix("a\u0000b"));
+    assertFalse(RiverDirectoryNames.validPosix("a\0b"));
     assertFalse(RiverDirectoryNames.validPosix("a\nb"));
   }
 
