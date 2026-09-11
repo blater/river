@@ -2434,3 +2434,25 @@ policy checks passed in 24s with `--no-daemon`. Full unchanged scan: 2,566 Java
 files, 69 remaining at or above 90. Evidence under `/private/tmp/river-score-20260911`:
 `integration-first13-check.log`, `integration-first13-scores.json`.
 Checkpoint: `perf-checkpoint-20260911-score-first13`.
+
+
+## 2026-09-11: catalog decoding and relational WAL test ownership
+
+Accepted `tic-396a` (`dcf87cfe`) and `tic-e5af` (`89d6fcbd`) after Luna/high
+implementation and Sol/high/lead review. The WAL test split retains all 31
+scenarios and 96 original method bodies in four suites with shared fixtures;
+maximum score 87.624. Catalog column and index decoding have distinct owners,
+with unchanged persisted bytes/statuses and no new steady-state allocation;
+maximum extracted score 69.548. Per-ticket pages retain focused checks and artifacts.
+
+WAL's test-only light workload passed at 274.85 TPS. Catalog's short candidate/control
+267.84/308.37 TPS prompted a matched 30s pair: 379.94/380.63 TPS. The short gap did
+not repeat. All runs passed with zero failed/unknown outcomes, valid invariants
+and graceful cleanup; no speedup claim.
+
+Combined `clean check :river-bench:installTps` with `--no-daemon` passed in 4m21s.
+Unchanged scan: 2,575 Java files, 67 at or above 90, no new offenders or incomplete
+scores. Evidence: `/private/tmp/river-score-20260911/integration-first15-check.log`
+and `integration-first15-scores.json`. Standalone refresh remains scheduled after
+the adjacent lifecycle refactor, using the recent first-eight native smoke meanwhile.
+Checkpoint: `perf-checkpoint-20260911-score-first15`.
