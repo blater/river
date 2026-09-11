@@ -2456,3 +2456,31 @@ scores. Evidence: `/private/tmp/river-score-20260911/integration-first15-check.l
 and `integration-first15-scores.json`. Standalone refresh remains scheduled after
 the adjacent lifecycle refactor, using the recent first-eight native smoke meanwhile.
 Checkpoint: `perf-checkpoint-20260911-score-first15`.
+
+
+## 2026-09-11: aggregate binding, stop lifecycle, join tests and client configuration
+
+Accepted `tic-7339` (`c51c9a8f`), `tic-bbfc` (`8ee95a4d`), `tic-c726`
+(`3a627815`) and `tic-68d6` (`87ef2a81`) after Luna/high implementation and
+Sol/high/lead review. Per-ticket pages record exact scores and focused evidence.
+Aggregate validation is shared; stop operations have explicit ownership with
+unchanged durable/status ordering and allocation-free idle probing; join tests
+share fixtures; client parsing, file I/O and certificate trust are stateless owners.
+
+The four light JVM sample/all runs passed at 306.79, 310.40, 304.50 and 314.92 TPS,
+with zero failed/unknown outcomes, valid invariants and graceful cleanup.
+No observed regression against adjacent controls; no speedup claim. Client
+configuration also passed real CLI authentication and create/insert/select/stop.
+
+Combined affected client/CLI/server checks and focused aggregate/join/nullability
+engine tests plus policy checks passed in 24s with `--no-daemon`. The recent
+first-fifteen checkpoint supplies clean full-test evidence. O3/PGO native build
+passed in 1m39s; the actual executable passed isolated start, generated credential
+loading, authenticated create/insert/select, and graceful stop. Main `bin/river`
+is refreshed from that tested executable.
+
+Unchanged scan: 2,588 files, 63 remaining at or above 90, no new offenders or
+incomplete scores. Evidence under `/private/tmp/river-score-20260911`:
+`integration-first19-check.log`, `integration-first19-native.log`,
+`integration-first19-native-smoke.log`, `integration-first19-scores.json`.
+Checkpoint: `perf-checkpoint-20260911-score-first19`.

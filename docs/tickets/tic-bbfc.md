@@ -33,3 +33,15 @@ request codec remains the format owner. The source scan leaves every original an
 file below 90 (maximum **71.3904**). `:river-server-app:compileJava` passed, the focused
 runtime, stop, identity, request and client lifecycle tests passed, and
 `:river-server-app:check :river-bench:installTps` passed with isolated Gradle state.
+
+Sol/high and lead approved final source `8ee95a4d`; review corrected stage filename
+admission, I/O status distinctions, record accessors and idle probe allocations
+before acceptance. Shared immutable empty probe and retained I/O carrier preserve
+idle polling behavior; request/accepted publication and force order are unchanged.
+All 36 focused lifecycle tests passed, including the staging and I/O status policy
+regression; server-app checks and benchmark installation passed.
+
+The epic's light JVM sample/all passed at 310.40 TPS, p99 60.686ms, zero failed/
+unknown outcomes, valid invariants and graceful shutdown; no observed regression
+against adjacent 308.37/306.79 TPS samples. Startup 1.353s; stop 0.860s. Artifact:
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_041857_052148d6`.
