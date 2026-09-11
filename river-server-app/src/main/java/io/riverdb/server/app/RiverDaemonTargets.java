@@ -78,7 +78,7 @@ final class RiverDaemonTargets {
           continue;
         }
         if (!validRuntime(values.record)
-            || !RiverDaemonRuntimeRecords.runtimeName(values.record.datadir).equals(entries.name(index))) {
+            || !RiverDaemonRuntimeStorage.runtimeName(values.record.datadir).equals(entries.name(index))) {
           warn(errors, entries.name(index), StatusCode.CORRUPTION);
           continue;
         }
@@ -167,7 +167,7 @@ final class RiverDaemonTargets {
           continue;
         }
         if (!validRuntime(values.record)
-            || !RiverDaemonRuntimeRecords.runtimeName(values.record.datadir).equals(entries.name(index))) {
+            || !RiverDaemonRuntimeStorage.runtimeName(values.record.datadir).equals(entries.name(index))) {
           warn(errors, entries.name(index), StatusCode.CORRUPTION);
           continue;
         }
@@ -226,18 +226,18 @@ final class RiverDaemonTargets {
   }
 
   private static StatusCode verifyRuntime(
-      RiverDaemonRuntimeRecords.RuntimeRecord record,
+      RiverDaemonRuntimeModel.RuntimeRecord record,
       String name,
       RiverDaemonTarget target) {
     return target.runtime != null
-        && RiverDaemonRuntimeRecords.runtimeName(record.datadir).equals(name)
+        && RiverDaemonRuntimeStorage.runtimeName(record.datadir).equals(name)
         && record.checksum.equals(target.runtime.checksum)
         ? StatusCode.OK : StatusCode.NOT_OWNER;
   }
 
-  private static boolean validRuntime(RiverDaemonRuntimeRecords.RuntimeRecord record) {
+  private static boolean validRuntime(RiverDaemonRuntimeModel.RuntimeRecord record) {
     return RiverDaemonIdentityRecords.validDatadir(record.datadir)
-        && RiverDaemonRuntimeRecords.validAddress(record.address)
+        && RiverDaemonRuntimeStorage.validAddress(record.address)
         && record.port >= 1 && record.port <= 65535
         && record.nonce != null && record.nonce.matches("[0-9a-f]{32}");
   }
@@ -247,14 +247,14 @@ final class RiverDaemonTargets {
     StatusCode status = runtimeRoot.openFile(name, RiverOpenMode.EXISTING, result);
     if (!status.isOk()) return RuntimeValues.failure(status);
     RiverFile file = result.file();
-    RiverDaemonRuntimeRecords.ReadResult read = RiverDaemonRuntimeRecords.read(file);
+    RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
     StatusCode closeStatus = file.close();
     if (!read.status.isOk()) return RuntimeValues.failure(read.status);
     if (!closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
       return RuntimeValues.failure(closeStatus);
     }
-    RiverDaemonRuntimeRecords.RuntimeRecord record =
-        RiverDaemonRuntimeRecords.parseRuntime(read.bytes);
+    RiverDaemonRuntimeModel.RuntimeRecord record =
+        RiverDaemonRuntimeCodec.parseRuntime(read.bytes);
     return record == null
         ? RuntimeValues.failure(StatusCode.CORRUPTION)
         : new RuntimeValues(StatusCode.OK, record);
@@ -303,9 +303,9 @@ final class RiverDaemonTargets {
 
   private static final class RuntimeValues {
     final StatusCode status;
-    final RiverDaemonRuntimeRecords.RuntimeRecord record;
+    final RiverDaemonRuntimeModel.RuntimeRecord record;
 
-    RuntimeValues(StatusCode status, RiverDaemonRuntimeRecords.RuntimeRecord record) {
+    RuntimeValues(StatusCode status, RiverDaemonRuntimeModel.RuntimeRecord record) {
       this.status = status;
       this.record = record;
     }

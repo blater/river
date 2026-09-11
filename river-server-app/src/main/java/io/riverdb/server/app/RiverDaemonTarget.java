@@ -19,7 +19,7 @@ final class RiverDaemonTarget {
   RiverDirectory directory;
   RiverFile lockFile;
   RiverDaemonIdentityRecords.LockRecord owner;
-  RiverDaemonRuntimeRecords.RuntimeRecord runtime;
+  RiverDaemonRuntimeModel.RuntimeRecord runtime;
   FileIdentity runtimeIdentity;
   String runtimeChecksum;
   Path datadir;
@@ -45,7 +45,7 @@ final class RiverDaemonTarget {
     if (!status.isOk()) return close(directory, status);
     RiverFile lockFile = lockResult.file();
     FileIdentity lockIdentity = lockFile.identity();
-    RiverDaemonRuntimeRecords.ReadResult lockRead = RiverDaemonRuntimeRecords.read(lockFile);
+    RiverDaemonRuntimeModel.ReadResult lockRead = RiverDaemonRuntimeStorage.read(lockFile);
     RiverDaemonIdentityRecords.LockRecord owner = lockRead.status.isOk()
         ? RiverDaemonIdentityRecords.parseLock(lockRead.bytes) : null;
     if (!lockRead.status.isOk()) status = lockRead.status;
@@ -76,7 +76,7 @@ final class RiverDaemonTarget {
   }
 
   StatusCode openRuntime(RiverFileResult result) {
-    return RiverDaemonRuntimeRecords.openRuntime(filesystem, runtimeRoot, datadir.toString(), result);
+    return RiverDaemonRuntimeStorage.openRuntime(filesystem, runtimeRoot, datadir.toString(), result);
   }
 
   StatusCode revalidate(boolean requireRuntime) {
@@ -86,7 +86,7 @@ final class RiverDaemonTarget {
     if (lockIdentity == null || !lockIdentity.equals(lockFile.identity())) {
       return StatusCode.NOT_OWNER;
     }
-    RiverDaemonRuntimeRecords.ReadResult lockRead = RiverDaemonRuntimeRecords.read(lockFile);
+    RiverDaemonRuntimeModel.ReadResult lockRead = RiverDaemonRuntimeStorage.read(lockFile);
     if (!lockRead.status.isOk()) return lockRead.status;
     RiverDaemonIdentityRecords.LockRecord currentOwner =
         RiverDaemonIdentityRecords.parseLock(lockRead.bytes);
@@ -139,7 +139,7 @@ final class RiverDaemonTarget {
         RiverDaemonIdentity.INSTANCE_FILE, RiverOpenMode.EXISTING, result);
     if (!status.isOk()) return status;
     RiverFile file = result.file();
-    RiverDaemonRuntimeRecords.ReadResult read = RiverDaemonRuntimeRecords.read(file);
+    RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
     StatusCode closeStatus = file.close();
     if (!read.status.isOk()) return read.status;
     if (!closeStatus.isOk() && closeStatus != StatusCode.CLOSED) return closeStatus;
@@ -154,20 +154,20 @@ final class RiverDaemonTarget {
       RiverDaemonFileSystem filesystem, Path runtimeRoot, Path datadir,
       RiverDaemonIdentityRecords.LockRecord owner) {
     RiverFileResult result = new RiverFileResult();
-    StatusCode status = RiverDaemonRuntimeRecords.openRuntime(
+    StatusCode status = RiverDaemonRuntimeStorage.openRuntime(
         filesystem, runtimeRoot, datadir.toString(), result);
     if (status == StatusCode.CONFLICT) return RuntimeValues.missing();
     if (!status.isOk()) return RuntimeValues.failure(status);
     RiverFile file = result.file();
     FileIdentity identity = file.identity();
-    RiverDaemonRuntimeRecords.ReadResult read = RiverDaemonRuntimeRecords.read(file);
+    RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
     StatusCode closeStatus = file.close();
     if (!read.status.isOk()) return RuntimeValues.failure(read.status);
     if (!closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
       return RuntimeValues.failure(closeStatus);
     }
-    RiverDaemonRuntimeRecords.RuntimeRecord runtime =
-        RiverDaemonRuntimeRecords.parseRuntime(read.bytes);
+    RiverDaemonRuntimeModel.RuntimeRecord runtime =
+        RiverDaemonRuntimeCodec.parseRuntime(read.bytes);
     DatabaseIncarnation incarnation = DatabaseIncarnation.of(owner.high, owner.low);
     if (runtime == null || identity == null
         || !runtime.matches(datadir.toString(), incarnation, owner)) {
@@ -204,10 +204,10 @@ final class RiverDaemonTarget {
 
   private static final class RuntimeValues {
     final StatusCode status;
-    final RiverDaemonRuntimeRecords.RuntimeRecord record;
+    final RiverDaemonRuntimeModel.RuntimeRecord record;
     final FileIdentity identity;
 
-    RuntimeValues(StatusCode status, RiverDaemonRuntimeRecords.RuntimeRecord record,
+    RuntimeValues(StatusCode status, RiverDaemonRuntimeModel.RuntimeRecord record,
         FileIdentity identity) {
       this.status = status;
       this.record = record;

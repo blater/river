@@ -24,3 +24,13 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-server-app` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+## Delivery evidence
+
+Runtime lifecycle ownership is split across codec/model, publication, stale recovery,
+current cleanup, ready-record access and raw runtime storage owners. River-owned callers
+use those owners directly while `RiverDaemonRuntimeRecords` retains the public stale-recovery
+entrypoint and lifecycle metadata. The final focused scan leaves every original and extracted
+file below 90 (maximum **49.639**). Focused server compile and runtime, identity, stop,
+stop-request and client tests passed; the required server check and TPS installation are run
+from the isolated ticket worktree and passed.
