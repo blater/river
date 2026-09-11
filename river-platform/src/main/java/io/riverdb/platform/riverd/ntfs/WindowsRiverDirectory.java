@@ -6,6 +6,7 @@ import io.riverdb.platform.file.DirectoryEntryType;
 import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.riverd.FileIdentity;
+import io.riverdb.platform.riverd.RiverDirectoryNames;
 import io.riverdb.platform.riverd.RiverDirectory;
 import io.riverdb.platform.riverd.RiverDirectoryResult;
 import io.riverdb.platform.riverd.RiverFile;
@@ -164,7 +165,8 @@ final class WindowsRiverDirectory implements RiverDirectory {
       DirectoryOperationResult result, boolean replace) {
     if (result == null || !(stage instanceof WindowsRiverFile file)) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    if (!begin(stageName) || !validChild(targetName) || stageName.equals(targetName)) {
+    if (!begin(stageName) || !RiverDirectoryNames.validWindows(targetName)
+        || stageName.equals(targetName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     Stat stat = inspect(file.handle());
@@ -188,7 +190,8 @@ final class WindowsRiverDirectory implements RiverDirectory {
       String stageName, String targetName, DirectoryOperationResult result) {
     if (result == null || !(sourceParent instanceof WindowsRiverDirectory source)
         || !(stage instanceof WindowsRiverDirectory staged)
-        || !validChild(stageName) || !validChild(targetName)) return StatusCode.INVALID_EXTERNAL_INPUT;
+        || !RiverDirectoryNames.validWindows(stageName)
+        || !RiverDirectoryNames.validWindows(targetName)) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     synchronized (CROSS_PARENT) {
       synchronized (this) {
@@ -311,21 +314,9 @@ final class WindowsRiverDirectory implements RiverDirectory {
   }
 
   private StatusCode admission() { return closed ? StatusCode.CLOSED : StatusCode.OK; }
-  private boolean begin(String name) { return admission().isOk() && validChild(name); }
+  private boolean begin(String name) { return admission().isOk() && RiverDirectoryNames.validWindows(name); }
 
-  private static boolean validChild(String name) {
-    if (name == null || name.isBlank() || name.length() > 255
-        || name.equals(".") || name.equals("..")
-        || name.endsWith(".") || name.endsWith(" ")) return false;
-    for (int index = 0; index < name.length(); index++) {
-      char value = name.charAt(index);
-      if (value == '\\' || value == '/' || value == 0 || value == '\r' || value == '\n'
-          || value == ':' || value == '"' || value == '<' || value == '>'
-          || value == '|' || value == '?' || value == '*'
-          || Character.getType(value) == Character.CONTROL) return false;
-    }
-    return true;
-  }
+
 
   static final class Stat {
     final FileIdentity identity;
