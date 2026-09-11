@@ -120,11 +120,11 @@ final class IndexedTableStoreFactory {
     if (!status.isOk()) {
       return status;
     }
-    status = openRowDirectory(directory, rows);
+    status = reopenOrCreate(directory, IndexedTableStore.ROW_DIRECTORY_FILE_NAME, rows);
     if (!status.isOk()) {
       return cleanup(status, null, operation.file());
     }
-    status = openVersionDirectory(directory, versions);
+    status = reopenOrCreate(directory, IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, versions);
     if (!status.isOk()) {
       return cleanup(status, rows.file(), operation.file());
     }
@@ -181,11 +181,11 @@ final class IndexedTableStoreFactory {
     if (!status.isOk()) {
       return status == StatusCode.CONFLICT ? StatusCode.CORRUPTION : status;
     }
-    status = openRowDirectory(directory, rows);
+    status = reopenOrCreate(directory, IndexedTableStore.ROW_DIRECTORY_FILE_NAME, rows);
     if (!status.isOk()) {
       return cleanup(status, null, operation.file());
     }
-    status = openVersionDirectory(directory, versions);
+    status = reopenOrCreate(directory, IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, versions);
     if (!status.isOk()) {
       return cleanup(status, rows.file(), operation.file());
     }
@@ -210,24 +210,13 @@ final class IndexedTableStoreFactory {
         && checkpoint.database().equals(database);
   }
 
-  private static StatusCode openRowDirectory(
+  private static StatusCode reopenOrCreate(
       DurableDirectory directory,
+      String fileName,
       DirectoryOperationResult result) {
-    StatusCode status = directory.reopen(
-        IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
+    StatusCode status = directory.reopen(fileName, FileIoMode.POSITIONAL, result);
     if (status == StatusCode.CONFLICT) {
-      status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
-    }
-    return status;
-  }
-
-  private static StatusCode openVersionDirectory(
-      DurableDirectory directory,
-      DirectoryOperationResult result) {
-    StatusCode status = directory.reopen(
-        IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
-    if (status == StatusCode.CONFLICT) {
-      status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, result);
+      status = directory.createFile(fileName, FileIoMode.POSITIONAL, result);
     }
     return status;
   }
