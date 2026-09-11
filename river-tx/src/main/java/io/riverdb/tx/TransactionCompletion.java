@@ -4,7 +4,10 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
 
-/** Orders terminal lock cleanup, active-set removal, and outcome publication. */
+/**
+ * Orders terminal lock cleanup, active-set removal, and outcome publication.
+ * TransactionManager's monitor guards every access to this owner.
+ */
 final class TransactionCompletion {
   private final TransactionManager manager;
   private int publishedPending;
@@ -28,7 +31,7 @@ final class TransactionCompletion {
     result.set(manager.databaseHigh, manager.databaseLow, id, state, commitSequence);
   }
 
-  void finishGroup(
+  private void finishGroup(
       Transaction[] transactions,
       TransactionOutcome[] results,
       int count,
@@ -37,26 +40,6 @@ final class TransactionCompletion {
     for (int index = 0; index < count; index++) {
       finish(transactions[index], results[index], state, 0, lockOutcome);
     }
-  }
-
-  private boolean validFailureGroup(
-      Transaction[] transactions,
-      TransactionOutcome[] results,
-      int count,
-      StatusCode failure,
-      TransactionState requiredState) {
-    return validFailureGroup(
-        transactions, results, count, failure, requiredState, requiredState);
-  }
-
-  private boolean validAcceptedFailureGroup(
-      Transaction[] transactions,
-      TransactionOutcome[] results,
-      int count,
-      StatusCode failure) {
-    return validFailureGroup(
-        transactions, results, count, failure,
-        TransactionState.PREPARED, TransactionState.COMMITTING);
   }
 
   private boolean validFailureGroup(
@@ -76,14 +59,6 @@ final class TransactionCompletion {
       return false;
     }
     return validGroupMembers(transactions, results, count, firstState, secondState);
-  }
-
-  private boolean validGroupMembers(
-      Transaction[] transactions,
-      TransactionOutcome[] results,
-      int count,
-      TransactionState requiredState) {
-    return validGroupMembers(transactions, results, count, requiredState, requiredState);
   }
 
   private boolean validGroupMembers(
@@ -124,8 +99,8 @@ final class TransactionCompletion {
         || count > commitSequences.length) {
       return false;
     }
-    if (!validGroupMembers(
-        transactions, results, count, TransactionState.COMMITTING)) return false;
+    if (!validGroupMembers(transactions, results, count,
+        TransactionState.COMMITTING, TransactionState.COMMITTING)) return false;
     for (int index = 0; index < count; index++) results[index].reset();
     return true;
   }
@@ -135,8 +110,8 @@ final class TransactionCompletion {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (!validFailureGroup(
-        transactions, results, count, failure, TransactionState.COMMITTING)) {
+    if (!validFailureGroup(transactions, results, count, failure,
+        TransactionState.COMMITTING, TransactionState.COMMITTING)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     TransactionState state = indeterminate(failure)
@@ -150,8 +125,8 @@ final class TransactionCompletion {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (!validFailureGroup(
-        transactions, results, count, failure, TransactionState.PREPARED)) {
+    if (!validFailureGroup(transactions, results, count, failure,
+        TransactionState.PREPARED, TransactionState.PREPARED)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     finishGroup(transactions, results, count, TransactionState.ABORTED, failure);
@@ -163,8 +138,8 @@ final class TransactionCompletion {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (!validFailureGroup(
-        transactions, results, count, failure, TransactionState.COMMITTING)) {
+    if (!validFailureGroup(transactions, results, count, failure,
+        TransactionState.COMMITTING, TransactionState.COMMITTING)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     finishGroup(transactions, results, count, TransactionState.INDETERMINATE, failure);
@@ -176,7 +151,8 @@ final class TransactionCompletion {
       TransactionOutcome[] results,
       int count,
       StatusCode failure) {
-    if (!validAcceptedFailureGroup(transactions, results, count, failure)) {
+    if (!validFailureGroup(transactions, results, count, failure,
+        TransactionState.PREPARED, TransactionState.COMMITTING)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     finishGroup(transactions, results, count, TransactionState.INDETERMINATE, failure);
