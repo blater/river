@@ -181,18 +181,7 @@ final class SqlAggregateAccumulatorSet {
         Utf8Text.MAXIMUM_SCALARS, text, candidate);
     if (length < 0) return StatusCode.CORRUPTION;
     candidateLength = length;
-    int compared = nulls[invocation] ? 0
-        : compare(candidate, length, textOffset(invocation), textLength(invocation));
-    if (nulls[invocation]
-        || kind == SqlAggregateKind.MIN && compared < 0
-        || kind == SqlAggregateKind.MAX && compared > 0) {
-      int winner = textOffset(invocation);
-      int previous = textLength(invocation);
-      System.arraycopy(text, candidate, text, winner, length);
-      for (int index = length; index < previous; index++) text[winner + index] = 0;
-      textLengths[invocation] = (short) length;
-    }
-    nulls[invocation] = false;
+    acceptTextCandidate(invocation, kind, candidate, length);
     return StatusCode.OK;
   }
 
@@ -260,26 +249,27 @@ final class SqlAggregateAccumulatorSet {
         programs, row, source, definition, lane);
     if (candidateLength < 0) return StatusCode.CORRUPTION;
     this.candidateLength = candidateLength;
+    acceptTextCandidate(invocation, kind, candidateOffset, candidateLength);
+    return StatusCode.OK;
+  }
+
+  private void acceptTextCandidate(
+      int invocation, int kind, int candidateOffset, int candidateLength) {
     int compared = nulls[invocation]
         ? 0 : compare(candidateOffset, candidateLength,
-            textOffset(invocation),
-            Short.toUnsignedInt(textLengths[invocation]));
+            textOffset(invocation), textLength(invocation));
     if (nulls[invocation]
         || kind == SqlAggregateKind.MIN && compared < 0
         || kind == SqlAggregateKind.MAX && compared > 0) {
       int winnerOffset = textOffset(invocation);
-      int previousLength = Short.toUnsignedInt(textLengths[invocation]);
-      System.arraycopy(
-          text, candidateOffset,
-          text, winnerOffset,
-          candidateLength);
+      int previousLength = textLength(invocation);
+      System.arraycopy(text, candidateOffset, text, winnerOffset, candidateLength);
       for (int index = candidateLength; index < previousLength; index++) {
         text[winnerOffset + index] = 0;
       }
       textLengths[invocation] = (short) candidateLength;
     }
     nulls[invocation] = false;
-    return StatusCode.OK;
   }
 
   private int candidateText(
