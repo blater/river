@@ -98,26 +98,27 @@ final class SqlJoinChainPlan {
   }
 
   StatusCode describe(
-      SqlBoundBlockPlans plans,
+      SqlBoundJoinSnapshot snapshot,
+      SqlCommand command,
       int block,
       SqlJoinChainSource rowSource,
       boolean withActuals) {
     begin(rowSource, withActuals);
-    StatusCode status = root(plans.joinRootAccessColumn(block));
-    if (status.isOk()) status = statistics(plans, block, 0);
-    SqlJoinChain chain = plans.command(block).joinChain();
+    StatusCode status = root(snapshot.rootAccessColumn(block));
+    if (status.isOk()) status = statistics(snapshot, block, 0);
+    SqlJoinChain chain = command.joinChain();
     for (int stage = 0;
-        status.isOk() && stage < plans.joinStageCount(block); stage++) {
+        status.isOk() && stage < snapshot.stageCount(block); stage++) {
       status = stage(
           chain,
           stage,
-          plans.joinRightColumn(block, stage),
-          plans.joinAccessKind(block, stage),
-          plans.joinStrategy(block, stage));
-      if (status.isOk()) status = statistics(plans, block, stage + 1);
-      if (status.isOk()) status = estimate(plans, block, stage);
+          snapshot.rightColumn(block, stage),
+          snapshot.accessKind(block, stage),
+          snapshot.strategy(block, stage));
+      if (status.isOk()) status = statistics(snapshot, block, stage + 1);
+      if (status.isOk()) status = estimate(snapshot, block, stage);
     }
-    return finish(status, plans.command(block));
+    return finish(status, command);
   }
 
   int count() { return count; }
@@ -224,17 +225,17 @@ final class SqlJoinChainPlan {
         : StatusCode.OK;
   }
 
-  private StatusCode statistics(SqlBoundBlockPlans plans, int block, int role) {
-    if (!plans.joinEstimatesAvailable(block)) return StatusCode.OK;
+  private StatusCode statistics(SqlBoundJoinSnapshot snapshot, int block, int role) {
+    if (!snapshot.estimatesAvailable(block)) return StatusCode.OK;
     return appendEstimate(
-        plans.joinStatisticsSampled(block, role) ? SAMPLED : EXACT,
-        plans.joinStatisticsEpoch(block, role),
-        plans.joinStatisticsRows(block, role));
+        snapshot.statisticsSampled(block, role) ? SAMPLED : EXACT,
+        snapshot.statisticsEpoch(block, role),
+        snapshot.statisticsRows(block, role));
   }
 
-  private StatusCode estimate(SqlBoundBlockPlans plans, int block, int stage) {
-    return plans.joinEstimatesAvailable(block)
-        ? appendEstimate(ESTIMATE, stage + 1, plans.joinEstimatedRows(block, stage))
+  private StatusCode estimate(SqlBoundJoinSnapshot snapshot, int block, int stage) {
+    return snapshot.estimatesAvailable(block)
+        ? appendEstimate(ESTIMATE, stage + 1, snapshot.estimatedRows(block, stage))
         : StatusCode.OK;
   }
 
