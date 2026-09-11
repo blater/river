@@ -5,9 +5,10 @@ import io.riverdb.base.error.StatusCode;
 /** Allocation-free parser for River's first executable SQL point-statement subset. */
 public final class SqlParser {
   private final SqlIdentifier identifierScratch = new SqlIdentifier();
-  private final LongResult literalScratch = new LongResult();
   private final SqlQueryParser queryParser = new SqlQueryParser(this);
   private final SqlParserInput input = new SqlParserInput();
+  private final SqlSessionCommandParser sessionCommands =
+      new SqlSessionCommandParser(input);
   private final SqlScalarExpressionParser scalarExpressions =
       new SqlScalarExpressionParser(input);
   private final SqlPredicateParser predicateParser =
@@ -201,48 +202,9 @@ public final class SqlParser {
   }
 
   private StatusCode parseStatement(CharSequence sql, SqlCommand result) {
-    StatusCode transaction = parseTransactionStatement(sql, result);
+    StatusCode transaction = sessionCommands.parse(sql, result);
     if (transaction != null) return transaction;
     return parseDataStatement(sql, result);
-  }
-
-  private StatusCode parseTransactionStatement(CharSequence sql, SqlCommand result) {
-    if (consumeKeyword(sql, "SET")) {
-      return parseSetTimeZone(sql, result);
-    }
-    if (consumeKeyword(sql, "BEGIN")) {
-      return parseBegin(sql, result);
-    }
-    if (consumeKeyword(sql, "SAVEPOINT")) {
-      return parseNamedCommand(
-          sql, result, SqlCommandType.SAVEPOINT, result.writableSavepointName());
-    }
-    if (consumeKeyword(sql, "COMMIT")) {
-      result.set(SqlCommandType.COMMIT, 0, 0);
-      return StatusCode.OK;
-    }
-    if (consumeKeyword(sql, "ROLLBACK")) return parseRollback(sql, result);
-    if (consumeKeyword(sql, "RELEASE")) return parseReleaseSavepoint(sql, result);
-    if (consumeKeyword(sql, "CHECKPOINT")) {
-      result.set(SqlCommandType.CHECKPOINT, 0, 0);
-      return StatusCode.OK;
-    }
-    return null;
-  }
-
-  private StatusCode parseSetTimeZone(CharSequence sql, SqlCommand result) {
-    StatusCode status = requireKeyword(sql, "TIME");
-    if (status.isOk()) {
-      status = requireKeyword(sql, "ZONE");
-    }
-    LongResult zone = literalScratch;
-    if (status.isOk()) {
-      status = input.packedText(sql, zone);
-    }
-    if (status.isOk()) {
-      result.set(SqlCommandType.SET_TIME_ZONE, 0, zone.value);
-    }
-    return status;
   }
 
   private StatusCode parseDataStatement(CharSequence sql, SqlCommand result) {
@@ -279,53 +241,6 @@ public final class SqlParser {
     consumeKeyword(sql, "TABLE");
     result.set(SqlCommandType.ANALYZE_TABLE, 0, 0);
     return identifier(sql, result.writableTableName());
-  }
-
-  private StatusCode parseBegin(CharSequence sql, SqlCommand result) {
-    StatusCode status = StatusCode.OK;
-    boolean readCommitted = false;
-    boolean serializable = false;
-    if (consumeKeyword(sql, "SERIALIZABLE")) {
-      serializable = true;
-    } else if (consumeKeyword(sql, "READ")) {
-      status = requireKeyword(sql, "COMMITTED");
-      readCommitted = status.isOk();
-    } else if (consumeKeyword(sql, "REPEATABLE")) {
-      status = requireKeyword(sql, "READ");
-    }
-    result.setBegin(readCommitted, serializable);
-    return status;
-  }
-
-
-  private StatusCode parseNamedCommand(
-      CharSequence sql,
-      SqlCommand result,
-      SqlCommandType type,
-      SqlIdentifier name) {
-    result.set(type, 0, 0);
-    return identifier(sql, name);
-  }
-
-  private StatusCode parseRollback(CharSequence sql, SqlCommand result) {
-    if (!consumeKeyword(sql, "TO")) {
-      result.set(SqlCommandType.ROLLBACK, 0, 0);
-      return StatusCode.OK;
-    }
-    consumeKeyword(sql, "SAVEPOINT");
-    return parseNamedCommand(
-        sql,
-        result,
-        SqlCommandType.ROLLBACK_TO_SAVEPOINT,
-        result.writableSavepointName());
-  }
-
-  private StatusCode parseReleaseSavepoint(
-      CharSequence sql, SqlCommand result) {
-    result.set(SqlCommandType.RELEASE_SAVEPOINT, 0, 0);
-    StatusCode status = requireKeyword(sql, "SAVEPOINT");
-    return status.isOk()
-        ? identifier(sql, result.writableSavepointName()) : status;
   }
 
   private StatusCode parseShow(CharSequence sql, SqlCommand result) {

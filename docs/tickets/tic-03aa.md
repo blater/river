@@ -15,10 +15,12 @@ File: `river-sql/src/main/java/io/riverdb/sql/SqlParser.java`. Baseline slopwatc
 
 Review `SqlParser.parseDataStatement`, `SqlParser.parseQuery`, `SqlParser.parseTemplate` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
 
-Final approach: retain the existing transaction, catalog, and data dispatch
-owners, and remove only the private forwarding helpers with no callers in
-`SqlParser` (`setIdentifier`, literal/number probes, and character wrappers).
-The active keyword and grammar paths remain unchanged.
+Final approach: retain catalog, data, and query ownership while moving the
+transaction/session grammar into `SqlSessionCommandParser`. It shares the
+parser cursor, keeps one reusable literal scratch for `SET TIME ZONE`, and
+returns the existing no-match result to `SqlParser`'s ordered dispatch. The
+active keyword order and grammar paths remain unchanged; unused forwarding
+helpers in `SqlParser` are removed with the old owner.
 
 ## Acceptance
 
