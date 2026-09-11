@@ -6,7 +6,7 @@ import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.FileIoMode;
 
-/** Exhaustive cleanup of unpublished indexed-store file capabilities. */
+/** Acquires and exhaustively cleans up unpublished indexed-store file capabilities. */
 final class IndexedOpenFiles {
   private IndexedOpenFiles() { }
 
