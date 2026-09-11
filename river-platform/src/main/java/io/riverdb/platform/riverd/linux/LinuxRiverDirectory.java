@@ -13,6 +13,10 @@ import io.riverdb.platform.riverd.RiverFileResult;
 import io.riverdb.platform.riverd.RiverOpenMode;
 final class LinuxRiverDirectory implements RiverDirectory {
   private static final Object CROSS_PARENT = new Object();
+  private static final int DIRECTORY_FLAGS = LinuxFileBridge.O_RDONLY | LinuxFileBridge.O_DIRECTORY
+      | LinuxFileBridge.O_CLOEXEC | LinuxFileBridge.O_NOFOLLOW;
+  private static final int FILE_FLAGS = LinuxFileBridge.O_RDWR | LinuxFileBridge.O_CLOEXEC
+      | LinuxFileBridge.O_NOFOLLOW;
   private final int fd;
   private final FileIdentity identity;
   private boolean closed;
@@ -31,7 +35,7 @@ final class LinuxRiverDirectory implements RiverDirectory {
     if (result == null || !begin(name)) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (LinuxNamespaceBridge.mkdirAt(fd, name, 0700) != 0) return status();
-    int child = LinuxFileBridge.openAt(fd, name, directoryFlags(), 0);
+    int child = LinuxFileBridge.openAt(fd, name, DIRECTORY_FLAGS, 0);
     if (child < 0) return status();
     LinuxNamespaceBridge.Stat stat = LinuxNamespaceBridge.stat(child);
     if (stat == null) {
@@ -52,7 +56,7 @@ final class LinuxRiverDirectory implements RiverDirectory {
   public synchronized StatusCode openDirectory(String name, RiverDirectoryResult result) {
     if (result == null || !begin(name)) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    int child = LinuxFileBridge.openAt(fd, name, directoryFlags(), 0);
+    int child = LinuxFileBridge.openAt(fd, name, DIRECTORY_FLAGS, 0);
     if (child < 0) return status();
     LinuxNamespaceBridge.Stat stat = LinuxNamespaceBridge.stat(child);
     StatusCode check = LinuxRiverDaemonFileSystem.verifyPrivateDirectory(stat);
@@ -93,7 +97,7 @@ final class LinuxRiverDirectory implements RiverDirectory {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (!admission().isOk()) return admission();
-    return LinuxDirectoryListing.list(fd, directoryFlags(), result);
+    return LinuxDirectoryListing.list(fd, DIRECTORY_FLAGS, result);
   }
 
   @Override
@@ -213,7 +217,7 @@ final class LinuxRiverDirectory implements RiverDirectory {
   }
 
   private StatusCode validateTarget(String name) {
-    int target = LinuxFileBridge.openAt(fd, name, fileFlags(), 0);
+    int target = LinuxFileBridge.openAt(fd, name, FILE_FLAGS, 0);
     if (target < 0) {
       int error = LinuxNativeBindings.errno();
       return error == LinuxFileBridge.ENOENT ? StatusCode.OK
@@ -242,15 +246,5 @@ final class LinuxRiverDirectory implements RiverDirectory {
   private StatusCode admission() { return closed ? StatusCode.CLOSED : StatusCode.OK; }
   private StatusCode status() { return LinuxRiverDaemonFileSystem.status(LinuxNativeBindings.errno()); }
   private boolean begin(String name) { return admission().isOk() && RiverDirectoryNames.validPosix(name); }
-
-  private static int directoryFlags() {
-    return LinuxFileBridge.O_RDONLY | LinuxFileBridge.O_DIRECTORY
-        | LinuxFileBridge.O_CLOEXEC | LinuxFileBridge.O_NOFOLLOW;
-  }
-
-  private static int fileFlags() {
-    return LinuxFileBridge.O_RDWR | LinuxFileBridge.O_CLOEXEC | LinuxFileBridge.O_NOFOLLOW;
-  }
-
 
 }
