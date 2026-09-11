@@ -2,6 +2,8 @@ package io.riverdb.server.app;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
@@ -13,6 +15,7 @@ import io.riverdb.platform.riverd.RiverFile;
 import io.riverdb.platform.riverd.RiverFileResult;
 import io.riverdb.platform.riverd.RiverOpenMode;
 import io.riverdb.platform.riverd.apfs.ApfsRiverDaemonFileSystem;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,6 +37,9 @@ final class RiverDaemonRuntimeRecordsTest {
       PosixFilePermission.OWNER_READ,
       PosixFilePermission.OWNER_WRITE,
       PosixFilePermission.OWNER_EXECUTE);
+  private static final Set<PosixFilePermission> PRIVATE_FILE = Set.of(
+      PosixFilePermission.OWNER_READ,
+      PosixFilePermission.OWNER_WRITE);
 
   @Test
   void publishesAndCleansMatchingRuntimeAndReadyRecords(@TempDir Path root) throws Exception {
@@ -257,6 +263,89 @@ final class RiverDaemonRuntimeRecordsTest {
       if (target != null) target.close();
       fixture.close();
     }
+  }
+
+  @Test
+  void stopDirectoryPreservesStageAndProbeFailurePolicies(@TempDir Path root) throws Exception {
+    Fixture fixture = fixture(root, false);
+    String nonce = "0".repeat(32);
+    Path malformed = fixture.datadir.resolve(".stop-request-" + nonce + ".broken");
+    Path stage = fixture.datadir.resolve(".stop-request-" + nonce + ".stage");
+    try {
+      Files.writeString(malformed, "malformed stage");
+      Files.setPosixFilePermissions(malformed, PRIVATE_FILE);
+      RiverDaemonStopDirectory.Scan excluded = RiverDaemonStopDirectory.scan(
+          fixture.identity.directory(), false);
+      assertEquals(StatusCode.OK, excluded.status);
+      assertEquals(0, excluded.entryCount);
+
+      RiverDaemonStopDirectory.Scan malformedIncluded = RiverDaemonStopDirectory.scan(
+          fixture.identity.directory(), true);
+      assertEquals(StatusCode.CORRUPTION, malformedIncluded.status);
+      assertEquals(0, malformedIncluded.entryCount);
+
+      Files.delete(malformed);
+      Files.writeString(stage, "corrupt payload");
+      Files.setPosixFilePermissions(stage, PRIVATE_FILE);
+      RiverDaemonStopDirectory.Scan tolerated = RiverDaemonStopDirectory.scan(
+          fixture.identity.directory(), true);
+      assertEquals(StatusCode.OK, tolerated.status);
+      assertEquals(0, tolerated.entryCount);
+
+      RiverDaemonStopDirectory.Scan openFailure = RiverDaemonStopDirectory.scan(
+          failingOpenDirectory(fixture.identity.directory(), stage.getFileName().toString()), true);
+      assertEquals(StatusCode.IO_FAILURE, openFailure.status);
+      RiverDaemonStopDirectory.Scan closeFailure = RiverDaemonStopDirectory.scan(
+          closeFailingDirectory(fixture.identity.directory()), true);
+      assertEquals(StatusCode.IO_FAILURE, closeFailure.status);
+
+      RiverFileResult probeResult = new RiverFileResult();
+      RiverDaemonStopRecordReader.Result first = RiverDaemonStopDirectory.probeRequest(
+          fixture.identity.directory(), probeResult);
+      RiverDaemonStopRecordReader.Result second = RiverDaemonStopDirectory.probeRequest(
+          fixture.identity.directory(), probeResult);
+      assertSame(first, second);
+      assertEquals(StatusCode.OK, first.status());
+      assertNull(first.entry());
+    } finally {
+      fixture.close();
+    }
+  }
+
+  private static RiverDirectory failingOpenDirectory(RiverDirectory delegate, String name) {
+    return (RiverDirectory) Proxy.newProxyInstance(
+        RiverDaemonRuntimeRecordsTest.class.getClassLoader(), new Class<?>[] {RiverDirectory.class},
+        (proxy, method, args) -> {
+          if ("openFile".equals(method.getName()) && name.equals(args[0])
+              && args[1] == RiverOpenMode.EXISTING) return StatusCode.IO_FAILURE;
+          return method.invoke(delegate, args);
+        });
+  }
+
+  private static RiverDirectory closeFailingDirectory(RiverDirectory delegate) {
+    return (RiverDirectory) Proxy.newProxyInstance(
+        RiverDaemonRuntimeRecordsTest.class.getClassLoader(), new Class<?>[] {RiverDirectory.class},
+        (proxy, method, args) -> {
+          if ("openFile".equals(method.getName()) && args[1] == RiverOpenMode.EXISTING) {
+            StatusCode status = (StatusCode) method.invoke(delegate, args);
+            if (status.isOk()) {
+              RiverFileResult result = (RiverFileResult) args[2];
+              result.set(closeFailingFile(result.file()));
+            }
+            return status;
+          }
+          return method.invoke(delegate, args);
+        });
+  }
+
+  private static RiverFile closeFailingFile(RiverFile delegate) {
+    return (RiverFile) Proxy.newProxyInstance(
+        RiverDaemonRuntimeRecordsTest.class.getClassLoader(), new Class<?>[] {RiverFile.class},
+        (proxy, method, args) -> {
+          if (!"close".equals(method.getName())) return method.invoke(delegate, args);
+          StatusCode close = (StatusCode) method.invoke(delegate, args);
+          return close.isOk() ? StatusCode.IO_FAILURE : close;
+        });
   }
 
   private static void awaitPath(Path path) throws Exception {

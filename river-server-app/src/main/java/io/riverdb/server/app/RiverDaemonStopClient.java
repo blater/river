@@ -81,9 +81,9 @@ final class RiverDaemonStopClient {
           StatusCode status = target.revalidate(true);
           if (!status.isOk()) return status;
           RiverDaemonStopRecords.Stage stage = RiverDaemonStopRecords.createStage(target, stageName);
-          if (stage.status == StatusCode.CONFLICT) continue;
-          if (!stage.status.isOk()) return stage.status;
-          ownedIdentity = stage.identity;
+          if (stage.status() == StatusCode.CONFLICT) continue;
+          if (!stage.status().isOk()) return stage.status();
+          ownedIdentity = stage.identity();
         }
         StatusCode status = target.revalidate(true);
         if (!status.isOk()) return status;
