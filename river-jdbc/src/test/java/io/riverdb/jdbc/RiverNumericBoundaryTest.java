@@ -1,6 +1,7 @@
 package io.riverdb.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.riverdb.base.error.StatusCode;
@@ -60,8 +61,17 @@ final class RiverNumericBoundaryTest {
     RiverJdbcResultSet result = new RiverJdbcResultSet(null, new NumericRowsQuery());
     assertEquals(true, result.next());
     assertEquals((short) -7, result.getShort(1));
+    assertEquals(Short.valueOf((short) -7), result.getObject(1, Short.class));
+    SQLException shortOverflow = assertThrows(SQLException.class,
+        () -> result.getObject(2, Short.class));
+    assertEquals("22003", shortOverflow.getSQLState());
+    assertFalse(result.wasNull());
     assertEquals(Integer.valueOf(80_000), result.getObject(2));
     assertEquals(Long.MAX_VALUE, result.getLong(3));
+    SQLException integerOverflow = assertThrows(SQLException.class,
+        () -> result.getObject(3, Integer.class));
+    assertEquals("22003", integerOverflow.getSQLState());
+    assertFalse(result.wasNull());
     assertEquals(new java.math.BigDecimal("123.45"), result.getBigDecimal(4));
     assertEquals(1.5f, result.getFloat(5));
     assertEquals(Float.valueOf(1.5f), result.getObject(5));

@@ -2,25 +2,25 @@ package io.riverdb.jdbc;
 
 import io.riverdb.base.type.SqlTypeDescriptor;
 import java.math.BigDecimal;
+import java.sql.Date;
 import java.sql.SQLException;
+import java.sql.Time;
+import java.sql.Timestamp;
 
-/** Converts one River scalar into the JDBC target class requested by a caller. */
+/** Converts one admitted River scalar into an object requested by a JDBC caller. */
 final class RiverJdbcObjectConversion {
-  private final RiverJdbcResultSet resultSet;
+  private RiverJdbcObjectConversion() { }
 
-  RiverJdbcObjectConversion(RiverJdbcResultSet resultSet) {
-    this.resultSet = resultSet;
-  }
-
-  <T> T getObject(int column, Class<T> type) throws SQLException {
+  static <T> T getObject(
+      RiverJdbcScalarConversion scalarConversion, int column, Class<T> type) throws SQLException {
     if (type == null) throw JdbcExceptions.invalid("target type must not be null");
+    RiverJdbcResultSet resultSet = scalarConversion.resultSet();
     long value = resultSet.value(column);
-    requireSupported(column, type);
+    scalarConversion.requireObjectType(column, type);
     if (resultSet.lastWasNull()) return null;
     Object converted;
     if (resultSet.metadata().isVarchar(column)) {
-      if (type != String.class) throw JdbcExceptions.unsupported();
-      converted = resultSet.getString(column);
+      converted = scalarConversion.stringValue(column, value);
     } else if (RiverJdbcTemporalValues.isTemporal(
         resultSet.metadata().typeDescriptor(column))) {
       converted = RiverJdbcTemporalValues.convert(
@@ -30,19 +30,22 @@ final class RiverJdbcObjectConversion {
         && (type == Boolean.class || type == Boolean.TYPE)) {
       converted = Boolean.valueOf(value != 0);
     } else if (type == Short.class || type == Short.TYPE) {
-      converted = Short.valueOf(resultSet.getShort(column));
+      converted = Short.valueOf(
+          scalarConversion.checkedShort(scalarConversion.integralNumericValue(column, value)));
     } else if (type == Integer.class || type == Integer.TYPE) {
-      converted = Integer.valueOf(resultSet.getInt(column));
+      converted = Integer.valueOf(
+          scalarConversion.checkedInt(scalarConversion.integralNumericValue(column, value)));
     } else if (type == Long.class || type == Long.TYPE) {
-      converted = Long.valueOf(resultSet.getLong(column));
+      converted = Long.valueOf(scalarConversion.integralNumericValue(column, value));
     } else if (type == Float.class || type == Float.TYPE) {
-      converted = Float.valueOf(resultSet.getFloat(column));
+      converted = Float.valueOf(scalarConversion.checkedFloat(
+          scalarConversion.floatingNumericValue(column, value)));
     } else if (type == Double.class || type == Double.TYPE) {
-      converted = Double.valueOf(resultSet.getDouble(column));
+      converted = Double.valueOf(scalarConversion.floatingNumericValue(column, value));
     } else if (type == String.class) {
-      converted = stringValue(column, value);
+      converted = scalarConversion.stringValue(column, value);
     } else if (type == BigDecimal.class) {
-      converted = resultSet.getBigDecimal(column);
+      converted = scalarConversion.bigDecimalValue(column, value);
     } else {
       throw JdbcExceptions.unsupported();
     }
@@ -51,37 +54,66 @@ final class RiverJdbcObjectConversion {
     return result;
   }
 
-  private Object stringValue(int column, long value) throws SQLException {
-    if (resultSet.metadata().isBoolean(column)) return Boolean.toString(value != 0);
-    return resultSet.getString(column);
-  }
-
-  private void requireSupported(int column, Class<?> type) throws SQLException {
+  static Date getDate(RiverJdbcScalarConversion scalarConversion, int column)
+      throws SQLException {
+    RiverJdbcResultSet resultSet = scalarConversion.resultSet();
+    long value = resultSet.value(column);
     int descriptor = resultSet.metadata().typeDescriptor(column);
-    boolean supported = switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_SMALLINT,
-          SqlTypeDescriptor.TYPE_ID_INTEGER,
-          SqlTypeDescriptor.TYPE_ID_BIGINT,
-          SqlTypeDescriptor.TYPE_ID_REAL,
-          SqlTypeDescriptor.TYPE_ID_DOUBLE -> numericTarget(type);
-      case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> type == Boolean.class
-          || type == Boolean.TYPE || type == Long.class || type == Long.TYPE
-          || type == Integer.class || type == Integer.TYPE
-          || type == BigDecimal.class || type == String.class;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL ->
-          type == BigDecimal.class || type == String.class;
-      case SqlTypeDescriptor.TYPE_ID_VARCHAR -> type == String.class;
-      default -> RiverJdbcTemporalValues.supportsObjectClass(descriptor, type);
-    };
-    if (!supported) throw JdbcExceptions.unsupported();
+    if (!RiverJdbcTemporalValues.supportsObjectClass(descriptor, Date.class)) {
+      throw JdbcExceptions.unsupported();
+    }
+    return resultSet.lastWasNull() ? null : RiverJdbcTemporalValues.date(value, descriptor);
   }
 
-  private static boolean numericTarget(Class<?> type) {
-    return type == Short.class || type == Short.TYPE
-        || type == Integer.class || type == Integer.TYPE
-        || type == Long.class || type == Long.TYPE
-        || type == Float.class || type == Float.TYPE
-        || type == Double.class || type == Double.TYPE
-        || type == BigDecimal.class || type == String.class;
+  static Time getTime(RiverJdbcScalarConversion scalarConversion, int column)
+      throws SQLException {
+    RiverJdbcResultSet resultSet = scalarConversion.resultSet();
+    long value = resultSet.value(column);
+    int descriptor = resultSet.metadata().typeDescriptor(column);
+    if (!RiverJdbcTemporalValues.supportsObjectClass(descriptor, Time.class)) {
+      throw JdbcExceptions.unsupported();
+    }
+    return resultSet.lastWasNull() ? null : RiverJdbcTemporalValues.time(value, descriptor);
   }
+
+  static Timestamp getTimestamp(RiverJdbcScalarConversion scalarConversion, int column)
+      throws SQLException {
+    RiverJdbcResultSet resultSet = scalarConversion.resultSet();
+    long value = resultSet.value(column);
+    int descriptor = resultSet.metadata().typeDescriptor(column);
+    if (!RiverJdbcTemporalValues.supportsObjectClass(descriptor, Timestamp.class)) {
+      throw JdbcExceptions.unsupported();
+    }
+    return resultSet.lastWasNull()
+        ? null : RiverJdbcTemporalValues.timestamp(value, descriptor);
+  }
+
+  static Object getObject(RiverJdbcScalarConversion scalarConversion, int column)
+      throws SQLException {
+    RiverJdbcResultSet resultSet = scalarConversion.resultSet();
+    long value = resultSet.value(column);
+    if (resultSet.lastWasNull()) return null;
+    if (resultSet.metadata().isVarchar(column)) {
+      return scalarConversion.stringValue(column, value);
+    }
+    if (resultSet.metadata().isDecimal(column)) {
+      return scalarConversion.decimalValue(column, value);
+    }
+    int descriptor = resultSet.metadata().typeDescriptor(column);
+    int type = SqlTypeDescriptor.typeId(descriptor);
+    if (type == SqlTypeDescriptor.TYPE_ID_SMALLINT) return Short.valueOf((short) value);
+    if (type == SqlTypeDescriptor.TYPE_ID_INTEGER) return Integer.valueOf((int) value);
+    if (type == SqlTypeDescriptor.TYPE_ID_REAL) {
+      return Float.valueOf(Float.intBitsToFloat((int) value));
+    }
+    if (type == SqlTypeDescriptor.TYPE_ID_DOUBLE) {
+      return Double.valueOf(Double.longBitsToDouble(value));
+    }
+    if (RiverJdbcTemporalValues.isTemporal(descriptor)) {
+      return RiverJdbcTemporalValues.object(value, descriptor);
+    }
+    return resultSet.metadata().isBoolean(column)
+        ? Boolean.valueOf(value != 0) : Long.valueOf(value);
+  }
+
 }
