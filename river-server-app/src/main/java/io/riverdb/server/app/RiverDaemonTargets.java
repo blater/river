@@ -36,8 +36,8 @@ final class RiverDaemonTargets {
     result.reset();
     RiverDaemonEndpoint requested = endpoint == null ? null : RiverDaemonEndpoint.parse(endpoint);
     if (endpoint != null && requested == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
-    StatusCode status = RiverDaemonPaths.resolve(explicitDatadir, null, home, paths);
+    RiverDaemonPathSelection.Result paths = new RiverDaemonPathSelection.Result();
+    StatusCode status = RiverDaemonPathSelection.resolve(explicitDatadir, null, home, paths);
     if (!status.isOk()) return status;
     if (explicitDatadir != null || requested == null) {
       return openExact(filesystem, paths.datadir, paths.runtimeRoot, requested, result);
@@ -50,8 +50,8 @@ final class RiverDaemonTargets {
     if (filesystem == null || home == null || out == null || errors == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
-    StatusCode status = RiverDaemonPaths.resolve(null, null, home, paths);
+    RiverDaemonPathSelection.Result paths = new RiverDaemonPathSelection.Result();
+    StatusCode status = RiverDaemonPathSelection.resolve(null, null, home, paths);
     if (!status.isOk()) return status;
     RiverDirectoryResult runtimeRootResult = new RiverDirectoryResult();
     status = filesystem.openDirectory(paths.runtimeRoot, runtimeRootResult);

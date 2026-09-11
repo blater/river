@@ -26,12 +26,12 @@ final class RiverDaemonPathsTest {
   void verifiedPreflightAcceptsIndependentMissingLeaves(@TempDir Path root) throws Exception {
     root = root.toRealPath();
     Files.setPosixFilePermissions(root, PRIVATE);
-    RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
+    RiverDaemonPathSelection.Result paths = new RiverDaemonPathSelection.Result();
     paths.datadir = root.resolve("instance");
     paths.runtimeRoot = root.resolve("runtimeRoot");
     paths.ready = root.resolve("ready").resolve("riverd.ready");
     RiverDaemonFileSystem filesystem = new ApfsRiverDaemonFileSystem();
-    assertEquals(StatusCode.OK, RiverDaemonPaths.verify(filesystem, paths));
+    assertEquals(StatusCode.OK, RiverDaemonPathInspection.verify(filesystem, paths));
   }
 
   @Test
@@ -41,12 +41,13 @@ final class RiverDaemonPathsTest {
     Path ready = root.resolve("ready");
     Files.createDirectory(ready);
     Files.setPosixFilePermissions(ready, PRIVATE);
-    RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
+    RiverDaemonPathSelection.Result paths = new RiverDaemonPathSelection.Result();
     paths.datadir = root.resolve("instance");
     paths.runtimeRoot = root.resolve("runtimeRoot");
     paths.ready = ready;
     RiverDaemonFileSystem filesystem = new ApfsRiverDaemonFileSystem();
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, RiverDaemonPaths.verify(filesystem, paths));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        RiverDaemonPathInspection.verify(filesystem, paths));
   }
 
   @Test
@@ -60,11 +61,11 @@ final class RiverDaemonPathsTest {
         PosixFilePermission.OWNER_WRITE));
     Path ready = root.resolve("ready");
     Files.createSymbolicLink(ready, target.getFileName());
-    RiverDaemonPaths.Result paths = new RiverDaemonPaths.Result();
+    RiverDaemonPathSelection.Result paths = new RiverDaemonPathSelection.Result();
     paths.datadir = root.resolve("instance");
     paths.runtimeRoot = root.resolve("runtimeRoot");
     paths.ready = ready;
     RiverDaemonFileSystem filesystem = new ApfsRiverDaemonFileSystem();
-    assertNotEquals(StatusCode.OK, RiverDaemonPaths.verify(filesystem, paths));
+    assertNotEquals(StatusCode.OK, RiverDaemonPathInspection.verify(filesystem, paths));
   }
 }
