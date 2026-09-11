@@ -2507,3 +2507,34 @@ or incomplete scores. Evidence under `/private/tmp/river-score-20260911`:
 JVM distribution is refreshed; standalone refresh follows the adjacent startup
 refactor, retaining the recent first-nineteen native smoke as the prior checkpoint.
 Checkpoint: `perf-checkpoint-20260911-score-first25`.
+
+
+## 2026-09-11: startup, acquisition, program capture and lifetime cleanup
+
+Accepted eight independently merged slices: tic-c886 (b4b2e7e7), tic-3b68
+(b56ee021), tic-6d7c (da7f4f4b), tic-ed05 (58c545cf), tic-2792
+(4fb5f823), tic-c55f (0c21686a), tic-97c6 (8d80e72a), tic-a3a5
+(b7d250a2). Luna/high implemented; Sol/high and lead reviewed. Ticket pages
+record exact scores, commands and focused evidence. Live resource and transaction
+owners remain unchanged; shared validation, acquisition and fixture responsibilities
+replace duplicated paths.
+
+Individual external light runs passed at 310.71, 305.75, 317.40, 313.42,
+302.06, 311.07 and 303.24 TPS, with zero failed/unknown outcomes, valid
+invariants and graceful cleanup. The transaction-program slice used the Java
+TPS workload that actually exercises that path: short control/candidate
+470.600/464.900 TPS; longer control/candidate/adjacent control
+502.467/558.367/551.167 TPS. The adjacent unchanged control reproduced the
+rare, fully reconciled deadlock retries. No observed regression or speedup claim.
+These two harness implementations' figures are not compared with each other.
+
+Clean full `check :river-bench:installTps` passed in 4m26s with --no-daemon.
+Approved O3/PGO standalone build passed in 1m48s. The actual executable passed
+isolated start, ps identification, generated credential loading, authenticated
+create/insert/select and endpoint-based stop, with clean owned-instance shutdown.
+Unchanged scan: 2,602 Java files, 49 remaining at or above 90, no new offenders
+and no incomplete scores. Evidence: `/private/tmp/river-score-20260911/` files
+`integration-first33-check.log`, `integration-first33-native.log`,
+`integration-first33-native-smoke.log`, `integration-first33-scores.json`.
+Frozen JVM control: `river-control-first33`. Checkpoint:
+`perf-checkpoint-20260911-score-first33`.

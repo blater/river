@@ -1,6 +1,6 @@
 ---
 id: tic-6c32
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,13 @@ File: `river-tx/src/main/java/io/riverdb/tx/TransactionManager.java`. Baseline s
 
 ## Approach
 
-Review `TransactionManager.terminalizeAcceptedCommitGroup`, `TransactionManager.failCommitGroup`, `TransactionManager.abortPreparedCommitGroup` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
+Consolidate repeated commit-group member validation: owned transaction, admitted
+state, non-null result and duplicate transaction/result checks. Keep distinct
+PREPARED, COMMITTING and accepted-either-state contracts explicit, including their
+existing status codes. Share group completion loops through the existing completion
+owner where exact. Keep every public operation under the same manager monitor,
+validate the whole group before mutation, preserve publication/durability ordering
+and result resets, and add no per-group allocation or new lock/state owner.
 
 ## Acceptance
 
