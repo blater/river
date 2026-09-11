@@ -152,27 +152,8 @@ final class SqlAggregateAccumulatorSet {
     }
     long value = row.value(lane);
     int descriptor = aggregates.inputDescriptor(invocation);
-    if (SqlNumericTypeRules.isNumeric(descriptor)) {
-      return numeric.accumulate(
-          highs, values, counts, nulls,
-          invocation, kind, row.highValue(lane), value, descriptor);
-    }
-    if (kind == SqlAggregateKind.SUM || kind == SqlAggregateKind.AVG) {
-      long previous = values[invocation];
-      values[invocation] += value;
-      highs[invocation] += (value < 0 ? -1 : 0)
-          + (Long.compareUnsigned(values[invocation], previous) < 0 ? 1 : 0);
-      counts[invocation]++;
-      nulls[invocation] = false;
-      return StatusCode.OK;
-    }
-    if (nulls[invocation]
-        || kind == SqlAggregateKind.MIN && value < values[invocation]
-        || kind == SqlAggregateKind.MAX && value > values[invocation]) {
-      values[invocation] = value;
-    }
-    nulls[invocation] = false;
-    return StatusCode.OK;
+    return accumulateScalarValue(
+        invocation, kind, descriptor, row.highValue(lane), value);
   }
 
   private StatusCode addDistinct(
@@ -230,10 +211,16 @@ final class SqlAggregateAccumulatorSet {
     }
     long value = row.value(lane);
     int descriptor = aggregates.inputDescriptor(invocation);
+    return accumulateScalarValue(
+        invocation, kind, descriptor, row.highValue(lane), value);
+  }
+
+  private StatusCode accumulateScalarValue(
+      int invocation, int kind, int descriptor, long high, long value) {
     if (SqlNumericTypeRules.isNumeric(descriptor)) {
       return numeric.accumulate(
           highs, values, counts, nulls,
-          invocation, kind, row.highValue(lane), value, descriptor);
+          invocation, kind, high, value, descriptor);
     }
     if (kind == SqlAggregateKind.SUM || kind == SqlAggregateKind.AVG) {
       long previous = values[invocation];
