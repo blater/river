@@ -1,6 +1,6 @@
 ---
 id: tic-8c5e
-status: open
+status: closed
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,10 @@ File: `river-bench/src/main/java/io/riverdb/bench/harness/BenchmarkSchemaValidat
 
 ## Approach
 
-Review `BenchmarkSchemaValidator.validateStreamingManifestSemantics`, `BenchmarkSchemaValidator.validateSampleSemantics`, `BenchmarkSchemaValidator.validate` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
+Keep parsing and recursive JSON Schema validation in BenchmarkSchemaValidator.
+Move the existing sample, result and streaming-manifest cross-field rules into
+one concrete artifact-semantics owner. Preserve schema dispatch, malformed-input
+handling, error strings and error ordering. Add no schema framework or new rules.
 
 ## Acceptance
 
@@ -24,3 +27,29 @@ new per-row allocation, or arbitrary file splitting. Luna/high codes; Sol/high
 reviews; the lead reviews architectural effects across adjacent owners.
 Run focused `river-bench` checks and the epic's light performance check, record the
 before/after score and result, then integrate this ticket independently.
+
+
+## Validation
+
+Implementation `ba04b7ac` (initial extraction `9881c2f4`) on
+`ticket/tic-8c5e-benchmark-schema`. BenchmarkSchemaValidator falls from 94.224
+to 13.1147; BenchmarkArtifactSemantics scores 40.8154 and the specialized
+BenchmarkStreamingManifestSemantics 27.3697. Root and Sol reviewed the exact
+schema dispatch, malformed-object handling, error strings and ordering, and
+cross-field predicates. Missing retained imports and an inaccurate comment were
+fixed before building. Structural and semantic validation still both report
+errors for invalid objects in their original order.
+
+With `--no-daemon`, BenchmarkSchemaValidatorTest (6) and
+StreamingBenchmarkArtifactWriterTest (8) passed: 14 tests, no failures/errors/skips.
+Bench checks and TPS installation passed in 9 seconds. Log:
+`/private/tmp/river-score-jdbc-tic-8c5e-gradle.log`.
+
+Light JVM sample all, four workers, one warehouse, seed 42, 20 retries,
+5-second warmup/10-second measurement: **271.98 TPS**, p99 **64.094 ms**,
+zero failed/unknown outcomes, passed invariants and graceful inactive cleanup.
+The result is within current short-run variation; no performance claim.
+Version `tic-8c5e-ba04b7ac-jvm`; artifact
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260911_071144_ff4c1be9`.
+
+Delivered in `perf-checkpoint-20260911-score-first51`.
