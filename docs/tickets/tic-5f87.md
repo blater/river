@@ -1,6 +1,6 @@
 ---
 id: tic-5f87
-status: open
+status: in_progress
 type: story
 priority: 2
 delivery: code
@@ -13,7 +13,13 @@ File: `river-platform/src/main/java/io/riverdb/platform/riverd/ntfs/WindowsFileB
 
 ## Approach
 
-Review `WindowsFileBridge.verifyOwnerAndDacl`, `WindowsFileBridge.open`, `WindowsFileBridge.queryDirectory` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
+Build on `tic-e334`. Give Windows native bindings, status capture and call-state
+storage one owner, and move the existing ACL/security-descriptor policy into a
+concrete security owner. Keep actual file operations in WindowsFileBridge.
+Preserve typed signatures, capture options, the single status state, UTF-16 and
+security-descriptor lifetimes, and all caller ordering. Remove old forwarding
+paths together; add no per-call allocation. The package-wide runtime-init rule
+from `tic-e12b` covers new native owners.
 
 ## Acceptance
 
