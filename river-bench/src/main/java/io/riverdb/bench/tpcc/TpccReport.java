@@ -38,7 +38,7 @@ final class TpccReport {
     System.out.println("completed_transactions=" + metrics.total());
     System.out.println("drain_completed_transactions=" + metrics.drainTotal());
     System.out.println("transaction_attempts=" + metrics.retry().transactionAttempts());
-    System.out.println("drain_transaction_attempts=" + metrics.drainTransactionAttempts());
+    System.out.println("drain_transaction_attempts=" + metrics.retry().drainTransactionAttempts());
     System.out.println("attempt_id_first=" + metrics.retry().firstAttemptId());
     System.out.println("attempt_id_last=" + metrics.retry().lastAttemptId());
     System.out.println("unclassified_retry_failures=" + metrics.retry().unclassifiedRetryFailures());

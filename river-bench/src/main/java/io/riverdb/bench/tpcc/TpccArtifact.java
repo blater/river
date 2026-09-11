@@ -144,7 +144,7 @@ final class TpccArtifact {
     values.setProperty("measurement.transaction_attempts",
         Long.toString(metrics.retry().transactionAttempts()));
     values.setProperty("measurement.drain_transaction_attempts",
-        Long.toString(metrics.drainTransactionAttempts()));
+        Long.toString(metrics.retry().drainTransactionAttempts()));
     values.setProperty("measurement.attempt_id_first",
         Long.toString(metrics.retry().firstAttemptId()));
     values.setProperty("measurement.attempt_id_last",
