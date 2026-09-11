@@ -102,6 +102,7 @@ final class RiverClientConnectionTest {
     assertEquals(2, metadata.columnCount());
     assertEquals(28, metadata.maximumEncodedTextBytes());
     assertTrue(metadata.reservationGeneration() > 0);
+    long firstGeneration = metadata.reservationGeneration();
     RowResult row = new RowResult();
     assertEquals(StatusCode.OK, row.reserve(metadata, null));
     assertTrue(row.isReservedFor(metadata));
@@ -115,6 +116,7 @@ final class RiverClientConnectionTest {
 
     assertEquals(StatusCode.OK, session.beginQuery(
         "SELECT id, label FROM remote_metadata WHERE id=99", openedQuery));
+    assertTrue(openedQuery.metadata().reservationGeneration() > firstGeneration);
     query = openedQuery.query();
     requests = client.completedRequests();
     assertEquals(StatusCode.OK, query.next(row));

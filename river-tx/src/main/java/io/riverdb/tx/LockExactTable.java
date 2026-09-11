@@ -84,8 +84,8 @@ final class LockExactTable {
     } else if (resource >= 0 && scheduler.blocked(resource, request.mode())) {
       return StatusCode.RETRY;
     }
-    return createHolding(transactionId, transactionGeneration, transactionStartOrder,
-        resource, request, token);
+    return admissions.createHolding(
+        transactionId, transactionGeneration, transactionStartOrder, resource, request, token);
   }
 
   StatusCode enqueue(
@@ -197,12 +197,6 @@ final class LockExactTable {
   }
   boolean deadlocked(long transactionId, long transactionGeneration) {
     return lifecycle.deadlocked(transactionId, transactionGeneration);
-  }
-
-  private StatusCode createHolding(
-      long id, long generation, long startOrder,
-      long resource, LockRequest request, LockToken token) {
-    return admissions.createHolding(id, generation, startOrder, resource, request, token);
   }
 
   static boolean valid(long id, long generation, LockRequest request) {
