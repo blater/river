@@ -30,6 +30,8 @@ final class RiverDaemonPathParents {
     if (!status.isOk()) return status;
     status = runtimeRootResult.directory().close();
     if (!status.isOk() && status != StatusCode.CLOSED) return status;
+    // Parent creation changed the namespace; revalidate every prospective object before
+    // identity/database mutation begins.
     return RiverDaemonPathInspection.verify(filesystem, paths);
   }
 
