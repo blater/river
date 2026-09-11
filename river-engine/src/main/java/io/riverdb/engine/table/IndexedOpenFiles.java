@@ -2,6 +2,9 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.file.DurableFile;
+import io.riverdb.platform.file.DirectoryOperationResult;
+import io.riverdb.platform.file.DurableDirectory;
+import io.riverdb.platform.file.FileIoMode;
 
 /** Exhaustive cleanup of unpublished indexed-store file capabilities. */
 final class IndexedOpenFiles {
@@ -19,6 +22,30 @@ final class IndexedOpenFiles {
       StatusCode primary, DurableFile versions, DurableFile rows, DurableFile pages) {
     StatusCode cleanup = close(versions, rows, pages);
     return cleanup.isOk() ? primary : cleanup;
+  }
+
+  static StatusCode openAuxiliary(
+      DurableDirectory directory,
+      DurableFile pages,
+      DirectoryOperationResult rows,
+      DirectoryOperationResult versions) {
+    StatusCode status = reopenOrCreate(
+        directory, IndexedTableStore.ROW_DIRECTORY_FILE_NAME, rows);
+    if (!status.isOk()) return close(status, null, null, pages);
+    status = reopenOrCreate(
+        directory, IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, versions);
+    return status.isOk() ? StatusCode.OK : close(status, null, rows.file(), pages);
+  }
+
+  private static StatusCode reopenOrCreate(
+      DurableDirectory directory,
+      String fileName,
+      DirectoryOperationResult result) {
+    StatusCode status = directory.reopen(fileName, FileIoMode.POSITIONAL, result);
+    if (status == StatusCode.CONFLICT) {
+      status = directory.createFile(fileName, FileIoMode.POSITIONAL, result);
+    }
+    return status;
   }
 
   private static StatusCode close(DurableFile file) {

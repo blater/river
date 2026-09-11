@@ -120,14 +120,8 @@ final class IndexedTableStoreFactory {
     if (!status.isOk()) {
       return status;
     }
-    status = reopenOrCreate(directory, IndexedTableStore.ROW_DIRECTORY_FILE_NAME, rows);
-    if (!status.isOk()) {
-      return IndexedOpenFiles.close(status, null, null, operation.file());
-    }
-    status = reopenOrCreate(directory, IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, versions);
-    if (!status.isOk()) {
-      return IndexedOpenFiles.close(status, null, rows.file(), operation.file());
-    }
+    status = IndexedOpenFiles.openAuxiliary(directory, operation.file(), rows, versions);
+    if (!status.isOk()) return status;
     return IndexedTableStoreConstruction.open(
         directory, operation, rows, versions, wal, database, generation,
         providerLease, storeLease, result);
@@ -181,14 +175,8 @@ final class IndexedTableStoreFactory {
     if (!status.isOk()) {
       return status == StatusCode.CONFLICT ? StatusCode.CORRUPTION : status;
     }
-    status = reopenOrCreate(directory, IndexedTableStore.ROW_DIRECTORY_FILE_NAME, rows);
-    if (!status.isOk()) {
-      return IndexedOpenFiles.close(status, null, null, operation.file());
-    }
-    status = reopenOrCreate(directory, IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, versions);
-    if (!status.isOk()) {
-      return IndexedOpenFiles.close(status, null, rows.file(), operation.file());
-    }
+    status = IndexedOpenFiles.openAuxiliary(directory, operation.file(), rows, versions);
+    if (!status.isOk()) return status;
     return IndexedTableStoreConstruction.openCheckpoint(
         directory, operation, rows, versions, wal, database, generation,
         checkpoint, providerLease, storeLease, result);
@@ -208,17 +196,6 @@ final class IndexedTableStoreFactory {
     return checkpoint != null
         && checkpoint.isAvailable()
         && checkpoint.database().equals(database);
-  }
-
-  private static StatusCode reopenOrCreate(
-      DurableDirectory directory,
-      String fileName,
-      DirectoryOperationResult result) {
-    StatusCode status = directory.reopen(fileName, FileIoMode.POSITIONAL, result);
-    if (status == StatusCode.CONFLICT) {
-      status = directory.createFile(fileName, FileIoMode.POSITIONAL, result);
-    }
-    return status;
   }
 
   private static boolean validInput(
