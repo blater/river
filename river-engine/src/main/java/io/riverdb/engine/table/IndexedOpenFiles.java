@@ -15,6 +15,12 @@ final class IndexedOpenFiles {
     return status.isOk() ? pagesStatus : status;
   }
 
+  static StatusCode close(
+      StatusCode primary, DurableFile versions, DurableFile rows, DurableFile pages) {
+    StatusCode cleanup = close(versions, rows, pages);
+    return cleanup.isOk() ? primary : cleanup;
+  }
+
   private static StatusCode close(DurableFile file) {
     return file == null ? StatusCode.OK : file.close();
   }

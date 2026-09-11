@@ -60,11 +60,11 @@ final class IndexedTableStoreFactory {
     }
     status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, rows);
     if (!status.isOk()) {
-      return cleanup(status, null, operation.file());
+      return IndexedOpenFiles.close(status, null, null, operation.file());
     }
     status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, FileIoMode.POSITIONAL, versions);
     if (!status.isOk()) {
-      return cleanup(status, rows.file(), operation.file());
+      return IndexedOpenFiles.close(status, null, rows.file(), operation.file());
     }
     return IndexedTableStoreConstruction.construct(
         directory, operation, rows, versions, wal, database, generation, result,
@@ -122,11 +122,11 @@ final class IndexedTableStoreFactory {
     }
     status = reopenOrCreate(directory, IndexedTableStore.ROW_DIRECTORY_FILE_NAME, rows);
     if (!status.isOk()) {
-      return cleanup(status, null, operation.file());
+      return IndexedOpenFiles.close(status, null, null, operation.file());
     }
     status = reopenOrCreate(directory, IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, versions);
     if (!status.isOk()) {
-      return cleanup(status, rows.file(), operation.file());
+      return IndexedOpenFiles.close(status, null, rows.file(), operation.file());
     }
     return IndexedTableStoreConstruction.open(
         directory, operation, rows, versions, wal, database, generation,
@@ -183,11 +183,11 @@ final class IndexedTableStoreFactory {
     }
     status = reopenOrCreate(directory, IndexedTableStore.ROW_DIRECTORY_FILE_NAME, rows);
     if (!status.isOk()) {
-      return cleanup(status, null, operation.file());
+      return IndexedOpenFiles.close(status, null, null, operation.file());
     }
     status = reopenOrCreate(directory, IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, versions);
     if (!status.isOk()) {
-      return cleanup(status, rows.file(), operation.file());
+      return IndexedOpenFiles.close(status, null, rows.file(), operation.file());
     }
     return IndexedTableStoreConstruction.openCheckpoint(
         directory, operation, rows, versions, wal, database, generation,
@@ -219,14 +219,6 @@ final class IndexedTableStoreFactory {
       status = directory.createFile(fileName, FileIoMode.POSITIONAL, result);
     }
     return status;
-  }
-
-  private static StatusCode cleanup(
-      StatusCode operation,
-      io.riverdb.platform.file.DurableFile rows,
-      io.riverdb.platform.file.DurableFile pages) {
-    StatusCode cleanup = IndexedOpenFiles.close(null, rows, pages);
-    return cleanup.isOk() ? operation : cleanup;
   }
 
   private static boolean validInput(
