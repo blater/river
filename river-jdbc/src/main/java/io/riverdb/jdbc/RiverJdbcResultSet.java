@@ -1,7 +1,6 @@
 package io.riverdb.jdbc;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
@@ -22,8 +21,8 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   private final CommandResult completion = new CommandResult();
   private char[] textCharacters = RiverJdbcTextScratch.EMPTY;
   private final RiverResultSetMetaData metadata;
-  private final RiverJdbcObjectConversion objectConversion =
-      new RiverJdbcObjectConversion(this);
+  private final RiverJdbcValueConversion valueConversion =
+      new RiverJdbcValueConversion(this);
   private int rowNumber;
   private boolean rowAvailable;
   private boolean completed;
@@ -93,166 +92,72 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public String getString(int column) throws SQLException {
-    long value = value(column);
-    if (lastWasNull) {
-      return null;
-    }
-    if (metadata.isBoolean(column)) {
-      return Boolean.toString(value != 0);
-    }
-    if (metadata.isDecimal(column)) {
-      return decimalValue(column, value).toPlainString();
-    }
-    int descriptor = metadata.typeDescriptor(column);
-    if (metadata.isApproximate(column)) {
-      return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_REAL
-          ? Float.toString(Float.intBitsToFloat((int) value))
-          : Double.toString(Double.longBitsToDouble(value));
-    }
-    if (RiverJdbcTemporalValues.isTemporal(descriptor)) {
-      textCharacters = RiverJdbcTextScratch.require(
-          textCharacters, RiverJdbcTextScratch.TEMPORAL_CHARACTERS);
-      return RiverJdbcTemporalValues.string(value, descriptor, textCharacters);
-    }
-    if (!metadata.isVarchar(column)) {
-      return Long.toString(value);
-    }
-    int bytes = row.textLengthAt(column - 1);
-    char[] characters = RiverJdbcTextScratch.require(textCharacters, bytes);
-    textCharacters = characters;
-    int length = row.copyTextAt(column - 1, characters, 0);
-    if (length < 0) {
-      throw JdbcExceptions.invalid("VARCHAR value is invalid");
-    }
-    return new String(characters, 0, length);
+    return valueConversion.getString(column);
   }
 
   @Override
   public boolean getBoolean(int column) throws SQLException {
-    long value = numericValue(column);
-    if (lastWasNull) return false;
-    if (metadata.isDecimal(column)) return decimalValue(column, value).signum() != 0;
-    return metadata.isApproximate(column)
-        ? approximateValue(value, metadata.typeDescriptor(column)) != 0.0d : value != 0;
+    return valueConversion.getBoolean(column);
   }
 
   @Override
   public byte getByte(int column) throws SQLException {
-    long value = integralNumericValue(column);
-    if (value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) {
-      throw numericOverflow();
-    }
-    return (byte) value;
+    return valueConversion.getByte(column);
   }
 
   @Override
   public short getShort(int column) throws SQLException {
-    long value = integralNumericValue(column);
-    if (value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
-      throw numericOverflow();
-    }
-    return (short) value;
+    return valueConversion.getShort(column);
   }
 
   @Override
   public int getInt(int column) throws SQLException {
-    long value = integralNumericValue(column);
-    if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
-      throw numericOverflow();
-    }
-    return (int) value;
+    return valueConversion.getInt(column);
   }
 
   @Override
   public long getLong(int column) throws SQLException {
-    return integralNumericValue(column);
+    return valueConversion.getLong(column);
   }
 
   @Override
   public float getFloat(int column) throws SQLException {
-    double value = floatingNumericValue(column);
-    if (value > Float.MAX_VALUE || value < -Float.MAX_VALUE) throw numericOverflow();
-    return (float) value;
+    return valueConversion.getFloat(column);
   }
 
   @Override
   public double getDouble(int column) throws SQLException {
-    return floatingNumericValue(column);
+    return valueConversion.getDouble(column);
   }
 
   @Override
   public BigDecimal getBigDecimal(int column) throws SQLException {
-    long value = numericValue(column);
-    if (lastWasNull) return null;
-    if (metadata.isDecimal(column)) {
-      return decimalValue(column, value);
-    }
-    return metadata.isApproximate(column)
-        ? BigDecimal.valueOf(approximateValue(value, metadata.typeDescriptor(column)))
-        : BigDecimal.valueOf(value);
+    return valueConversion.getBigDecimal(column);
   }
 
   @Override
   public Object getObject(int column) throws SQLException {
-    long value = value(column);
-    if (lastWasNull) {
-      return null;
-    }
-    if (metadata.isVarchar(column)) {
-      return getString(column);
-    }
-    if (metadata.isDecimal(column)) {
-      return decimalValue(column, value);
-    }
-    int descriptor = metadata.typeDescriptor(column);
-    int type = SqlTypeDescriptor.typeId(descriptor);
-    if (type == SqlTypeDescriptor.TYPE_ID_SMALLINT) return Short.valueOf((short) value);
-    if (type == SqlTypeDescriptor.TYPE_ID_INTEGER) return Integer.valueOf((int) value);
-    if (type == SqlTypeDescriptor.TYPE_ID_REAL) {
-      return Float.valueOf(Float.intBitsToFloat((int) value));
-    }
-    if (type == SqlTypeDescriptor.TYPE_ID_DOUBLE) {
-      return Double.valueOf(Double.longBitsToDouble(value));
-    }
-    if (RiverJdbcTemporalValues.isTemporal(descriptor)) {
-      return RiverJdbcTemporalValues.object(value, descriptor);
-    }
-    return metadata.isBoolean(column) ? Boolean.valueOf(value != 0) : Long.valueOf(value);
+    return valueConversion.getObject(column);
   }
 
   @Override
   public <T> T getObject(int column, Class<T> type) throws SQLException {
-    return objectConversion.getObject(column, type);
+    return valueConversion.getObject(column, type);
   }
 
   @Override
   public Date getDate(int column) throws SQLException {
-    long value = value(column);
-    int descriptor = metadata.typeDescriptor(column);
-    if (!RiverJdbcTemporalValues.supportsObjectClass(descriptor, Date.class)) {
-      throw JdbcExceptions.unsupported();
-    }
-    return lastWasNull ? null : RiverJdbcTemporalValues.date(value, descriptor);
+    return valueConversion.getDate(column);
   }
 
   @Override
   public Time getTime(int column) throws SQLException {
-    long value = value(column);
-    int descriptor = metadata.typeDescriptor(column);
-    if (!RiverJdbcTemporalValues.supportsObjectClass(descriptor, Time.class)) {
-      throw JdbcExceptions.unsupported();
-    }
-    return lastWasNull ? null : RiverJdbcTemporalValues.time(value, descriptor);
+    return valueConversion.getTime(column);
   }
 
   @Override
   public Timestamp getTimestamp(int column) throws SQLException {
-    long value = value(column);
-    int descriptor = metadata.typeDescriptor(column);
-    if (!RiverJdbcTemporalValues.supportsObjectClass(
-        descriptor, Timestamp.class)) throw JdbcExceptions.unsupported();
-    return lastWasNull ? null : RiverJdbcTemporalValues.timestamp(
-        value, descriptor);
+    return valueConversion.getTimestamp(column);
   }
 
   @Override
@@ -452,55 +357,6 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     return row.valueAt(column - 1);
   }
 
-  private long numericValue(int column) throws SQLException {
-    long result = value(column);
-    if (metadata.isVarchar(column)) throw JdbcExceptions.unsupported();
-    if (RiverJdbcTemporalValues.isTemporal(metadata.typeDescriptor(column))) {
-      throw JdbcExceptions.unsupported();
-    }
-    return result;
-  }
-
-  private long integralNumericValue(int column) throws SQLException {
-    long value = numericValue(column);
-    if (lastWasNull) return 0;
-    if (!metadata.isDecimal(column)) {
-      if (!metadata.isApproximate(column)) return value;
-      double converted = approximateValue(value, metadata.typeDescriptor(column));
-      if (converted < Long.MIN_VALUE || converted > Long.MAX_VALUE) throw numericOverflow();
-      return (long) converted;
-    }
-    try {
-      return decimalValue(column, value).longValueExact();
-    } catch (ArithmeticException failure) {
-      throw numericOverflow();
-    }
-  }
-
-  private double floatingNumericValue(int column) throws SQLException {
-    long result = numericValue(column);
-    if (metadata.isDecimal(column)) {
-      return lastWasNull ? 0.0d : decimalValue(column, result).doubleValue();
-    }
-    return lastWasNull ? 0.0d : metadata.isApproximate(column)
-        ? approximateValue(result, metadata.typeDescriptor(column)) : result;
-  }
-
-  private static double approximateValue(long bits, int descriptor) {
-    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_REAL
-        ? Float.intBitsToFloat((int) bits) : Double.longBitsToDouble(bits);
-  }
-
-  private BigDecimal decimalValue(int column, long low) throws SQLException {
-    return RiverJdbcDecimal128.value(
-        row.decimalUnscaledHighAt(column - 1), low, metadata.decimalScale(column));
-  }
-
-  SQLException numericOverflow() {
-    return JdbcExceptions.failure(
-        StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, "convert numeric result");
-  }
-
   RiverResultSetMetaData metadata() {
     return metadata;
   }
@@ -509,6 +365,23 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     textCharacters = RiverJdbcTextScratch.require(
         textCharacters, RiverJdbcTextScratch.TEMPORAL_CHARACTERS);
     return textCharacters;
+  }
+
+  char[] textCharacters(int minimumCharacters) throws SQLException {
+    textCharacters = RiverJdbcTextScratch.require(textCharacters, minimumCharacters);
+    return textCharacters;
+  }
+
+  int textLength(int column) {
+    return row.textLengthAt(column - 1);
+  }
+
+  int copyText(int column, char[] target, int offset) {
+    return row.copyTextAt(column - 1, target, offset);
+  }
+
+  long decimalUnscaledHigh(int column) {
+    return row.decimalUnscaledHighAt(column - 1);
   }
 
   boolean lastWasNull() {
