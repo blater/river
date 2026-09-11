@@ -49,16 +49,17 @@ final class IndexedRelationalWalCommitTest {
     IndexedRelationalMutation invalid = liveBaseMutation(99, 811);
     check(commitRelationalQuiescent(created.store(), TRANSACTION_ID, invalid, commit)
         == StatusCode.CORRUPTION, "invalid live evidence reached WAL publication");
-    check(created.store().rowCount() == 0 && created.store().currentCommitSequence() == 1,
+    check(created.store().kernel.rowCount() == 0 && created.store().currentCommitSequence() == 1,
         "failed live group changed current state");
 
     IndexedRelationalMutation valid = liveBaseMutation(SCALAR_ROOT, 811);
     requireOk(commitRelationalQuiescent(created.store(), TRANSACTION_ID, valid, commit));
-    check(commit.commitSequence() == 2 && created.store().rowCount() == 1,
+    check(commit.commitSequence() == 2 && created.store().kernel.rowCount() == 1,
         "live grouped commit did not publish one frontier");
     HeapRowResult row = new HeapRowResult();
     long space = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
-    requireOk(created.store().fetchByKey(space, 1, row));
+    requireOk(created.store().kernel.fetchByKeyAt(
+        created.store().lastCommitSequence, space, 1, row));
     check(row.getLong(0) == 811, "live grouped base row mismatch");
     requireOk(created.store().flush());
     requireOk(created.store().close());
@@ -130,12 +131,13 @@ final class IndexedRelationalWalCommitTest {
         0, 1, tuple, tuple.position(), tuple.remaining()));
     requireOk(group.seal());
     requireOk(commitRelationalQuiescent(created.store(), TRANSACTION_ID + 2, group, commit));
-    check(commit.commitSequence() == 4 && created.store().rowCount() == 4,
+    check(commit.commitSequence() == 4 && created.store().kernel.rowCount() == 4,
         "base-and-tuple group did not publish one frontier");
     assertRecoveredRegistry(
         created.store(), 1_000, 4, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
     HeapRowResult fetched = new HeapRowResult();
-    requireOk(created.store().fetchByKey(
+    requireOk(created.store().kernel.fetchByKeyAt(
+        created.store().lastCommitSequence,
         CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID),
         1, fetched));
     check(fetched.getLong(0) == 991, "atomic base row missing");
@@ -269,11 +271,12 @@ final class IndexedRelationalWalCommitTest {
     requireOk(session.commit(outcome));
 
     HeapRowResult fetched = new HeapRowResult();
-    requireOk(created.store().fetchByKey(baseSpace, 1, fetched));
+    requireOk(created.store().kernel.fetchByKeyAt(
+        created.store().lastCommitSequence, baseSpace, 1, fetched));
     check(fetched.getLong(0) == 991, "hybrid base row missing");
     assertRecoveredRegistry(
         created.store(), 1_000, 4, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
-    check(created.store().rowCount() == 4,
+    check(created.store().kernel.rowCount() == 4,
         "hybrid base and registry did not publish one heap frontier");
     IndexedSavepoint savepoint = new IndexedSavepoint();
     requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
@@ -311,7 +314,8 @@ final class IndexedRelationalWalCommitTest {
     requireOk(session.abort(outcome));
     check(outcome.state() == TransactionState.ABORTED,
         "hybrid abort did not report ABORTED");
-    check(created.store().fetchByKey(baseSpace, 2, fetched) == StatusCode.CONFLICT,
+    check(created.store().kernel.fetchByKeyAt(
+        created.store().lastCommitSequence, baseSpace, 2, fetched) == StatusCode.CONFLICT,
         "hybrid abort published a base row");
     assertRecoveredRegistry(
         created.store(), 1_000, 4, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
@@ -431,9 +435,11 @@ final class IndexedRelationalWalCommitTest {
             && Math.abs(firstOutcome.commitSequence() - secondOutcome.commitSequence()) == 1,
         "hybrid cohort did not retain independent consecutive decisions");
     HeapRowResult fetched = new HeapRowResult();
-    requireOk(created.store().fetchByKey(baseSpace, 1, fetched));
+    requireOk(created.store().kernel.fetchByKeyAt(
+        created.store().lastCommitSequence, baseSpace, 1, fetched));
     check(fetched.getLong(0) == 991, "first grouped hybrid row missing");
-    requireOk(created.store().fetchByKey(baseSpace, 2, fetched));
+    requireOk(created.store().kernel.fetchByKeyAt(
+        created.store().lastCommitSequence, baseSpace, 2, fetched));
     check(fetched.getLong(0) == 992, "second grouped hybrid row missing");
     assertTuple(created.store(), descriptor, 991, 1);
     assertTuple(created.store(), descriptor, 992, 2);
@@ -938,8 +944,10 @@ final class IndexedRelationalWalCommitTest {
     assertReadyRegistry(
         created.store(), 1_001, SECOND_OWNER_OBJECT_ID, secondBuilding.rootPageId(), 2);
     HeapRowResult scalar = new HeapRowResult();
-    requireOk(created.store().fetchByKey(77, 1, scalar));
-    requireOk(created.store().fetchByKey(77, 2, scalar));
+    requireOk(created.store().kernel.fetchByKeyAt(
+        created.store().lastCommitSequence, 77, 1, scalar));
+    requireOk(created.store().kernel.fetchByKeyAt(
+        created.store().lastCommitSequence, 77, 2, scalar));
 
     requireOk(created.store().flush());
     requireOk(created.store().close());
@@ -1056,7 +1064,8 @@ final class IndexedRelationalWalCommitTest {
         "combined root publication and tuple DML did not commit");
     assertRecoveredRegistry(created.store(), 1_000, 4, OWNER_OBJECT_ID, 2, KEY_SCHEMA_ID);
     HeapRowResult row = new HeapRowResult();
-    requireOk(created.store().fetchByKey(baseSpace, 1, row));
+    requireOk(created.store().kernel.fetchByKeyAt(
+        created.store().lastCommitSequence, baseSpace, 1, row));
     requireOk(created.store().flush());
     requireOk(created.store().close());
     requireOk(wal.close());

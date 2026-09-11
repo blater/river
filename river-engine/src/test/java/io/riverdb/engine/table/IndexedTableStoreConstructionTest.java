@@ -73,6 +73,58 @@ final class IndexedTableStoreConstructionTest {
     assertEquals(1, versions.closeCount);
   }
 
+  @Test
+  void publishedCloseRetriesOnlyUnfinishedOwnersAndPreservesFirstFailure() {
+    CloseFile pages = new CloseFile(StatusCode.IO_FAILURE);
+    CloseFile rows = new CloseFile(StatusCode.CLOSED);
+    CloseFile versions = new CloseFile(StatusCode.RETRY);
+    var providers = io.riverdb.engine.TestDatabaseResources.databaseProviderLease(4);
+    DatabaseStoreLease ownership = new DatabaseStoreLease();
+    DatabaseIncarnation database = DatabaseIncarnation.of(71, 73);
+    WalGeneration generation = WalGeneration.of(1);
+    assertEquals(StatusCode.OK,
+        providers.claimStore(database.high(), database.low(), generation.value(), ownership));
+    IndexedTableStore store = new IndexedTableStore(
+        null, pages, rows, versions, null, database, generation, providers, ownership);
+
+    assertEquals(StatusCode.RETRY, store.close());
+    assertEquals(1, versions.closeCount);
+    assertEquals(1, rows.closeCount);
+    assertEquals(1, pages.closeCount);
+    assertEquals(false, providers.storeClaimed());
+
+    versions.closeStatus = StatusCode.CLOSED;
+    pages.closeStatus = StatusCode.CLOSED;
+    assertEquals(StatusCode.OK, store.close());
+    assertEquals(2, versions.closeCount);
+    assertEquals(2, rows.closeCount);
+    assertEquals(2, pages.closeCount);
+    assertEquals(StatusCode.CLOSED, store.close());
+    assertEquals(2, pages.closeCount);
+  }
+
+  @Test
+  void publishedCloseRetainsFailedProviderReleaseForRetry() {
+    CloseFile pages = new CloseFile(StatusCode.CLOSED);
+    CloseFile rows = new CloseFile(StatusCode.CLOSED);
+    CloseFile versions = new CloseFile(StatusCode.CLOSED);
+    var providers = io.riverdb.engine.TestDatabaseResources.databaseProviderLease(4);
+    DatabaseStoreLease ownership = new DatabaseStoreLease();
+    DatabaseIncarnation database = DatabaseIncarnation.of(71, 73);
+    WalGeneration generation = WalGeneration.of(1);
+    IndexedTableStore store = new IndexedTableStore(
+        null, pages, rows, versions, null, database, generation, providers, ownership);
+
+    assertEquals(StatusCode.NOT_OWNER, store.close());
+    assertEquals(StatusCode.OK,
+        providers.claimStore(database.high(), database.low(), generation.value(), ownership));
+    assertEquals(StatusCode.OK, store.close());
+    assertEquals(1, versions.closeCount);
+    assertEquals(1, rows.closeCount);
+    assertEquals(1, pages.closeCount);
+    assertEquals(false, providers.storeClaimed());
+  }
+
   private static DirectoryOperationResult opened(DurableFile file) {
     DirectoryOperationResult result = new DirectoryOperationResult();
     result.set(file, DirectoryDurability.VISIBLE_NOT_DURABLE);
@@ -80,7 +132,7 @@ final class IndexedTableStoreConstructionTest {
   }
 
   private static final class CloseFile implements DurableFile {
-    private final StatusCode closeStatus;
+    private StatusCode closeStatus;
     private int closeCount;
 
     private CloseFile(StatusCode status) { closeStatus = status; }
