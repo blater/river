@@ -9,7 +9,7 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 
 final class RiverDaemonIdentityBootstrapCreate {
-  private static final int MAX_RECORD_BYTES = RiverDaemonIdentityRecords.MAX_RECORD_BYTES;
+  private static final int MAX_RECORD_BYTES = RiverDaemonRecordEnvelope.MAX_RECORD_BYTES;
   private RiverDaemonIdentityBootstrapCreate() {}
   static StatusCode createBootstrap(
       Path datadir,

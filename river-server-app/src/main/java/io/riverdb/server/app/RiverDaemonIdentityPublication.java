@@ -12,7 +12,7 @@ import java.util.Arrays;
 import java.util.List;
 
 final class RiverDaemonIdentityPublication {
-  private static final int MAX_RECORD_BYTES = RiverDaemonIdentityRecords.MAX_RECORD_BYTES;
+  private static final int MAX_RECORD_BYTES = RiverDaemonRecordEnvelope.MAX_RECORD_BYTES;
   private RiverDaemonIdentityPublication() {}
   static StatusCode completeCreate(RiverDaemonIdentity.IdentityResult result) {
     if (result == null || !result.readyForPublication()) return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -66,7 +66,7 @@ final class RiverDaemonIdentityPublication {
     if (status.isOk()) {
       if (stage == null) stage = stageResult.file();
       if (!existed) {
-        String body = RiverDaemonIdentityRecords.record(List.of(
+        String body = RiverDaemonRecordEnvelope.record(List.of(
             "format=" + RiverDaemonIdentityRecords.INSTANCE_FORMAT,
             "database-incarnation-high=" + result.incarnation().high(),
             "database-incarnation-low=" + result.incarnation().low(),

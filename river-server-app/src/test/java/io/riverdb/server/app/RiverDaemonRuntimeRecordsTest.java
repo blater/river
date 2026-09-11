@@ -423,7 +423,7 @@ final class RiverDaemonRuntimeRecordsTest {
 
   private static String mismatchedReady(Fixture fixture) {
     Path datadir = fixture.datadir;
-    return RiverDaemonIdentityRecords.record(List.of(
+    return RiverDaemonRecordEnvelope.record(List.of(
         "format=riverd-ready-v2",
         "datadir=" + datadir,
         "database-incarnation-high=" + INCARNATION.high(),

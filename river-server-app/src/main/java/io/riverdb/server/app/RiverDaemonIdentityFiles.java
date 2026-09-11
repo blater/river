@@ -12,7 +12,7 @@ import java.util.Arrays;
 import java.util.List;
 
 final class RiverDaemonIdentityFiles {
-  private static final int MAX_RECORD_BYTES = RiverDaemonIdentityRecords.MAX_RECORD_BYTES;
+  private static final int MAX_RECORD_BYTES = RiverDaemonRecordEnvelope.MAX_RECORD_BYTES;
   private RiverDaemonIdentityFiles() {}
   static StatusCode readRecord(RiverFile file, byte[] target, String name) {
     FileSizeResult size = new FileSizeResult();
@@ -57,7 +57,7 @@ final class RiverDaemonIdentityFiles {
       long pid,
       long start,
       String nonce) {
-    String body = RiverDaemonIdentityRecords.record(List.of(
+    String body = RiverDaemonRecordEnvelope.record(List.of(
       "format=" + RiverDaemonIdentityRecords.LOCK_FORMAT,
       "datadir=" + datadir,
         "database-incarnation-high=" + incarnation.high(),
@@ -75,7 +75,7 @@ final class RiverDaemonIdentityFiles {
       long start,
       String nonce) {
     String stageName = ".bootstrap-" + nonce + ".stage";
-    String body = RiverDaemonIdentityRecords.record(List.of(
+    String body = RiverDaemonRecordEnvelope.record(List.of(
         "format=" + RiverDaemonIdentityRecords.BOOTSTRAP_FORMAT,
         "database-incarnation-high=" + incarnation.high(),
         "database-incarnation-low=" + incarnation.low(),

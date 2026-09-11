@@ -1,18 +1,10 @@
 package io.riverdb.server.app;
 
 import io.riverdb.base.id.DatabaseIncarnation;
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.util.HexFormat;
-import java.util.List;
 
 /** Concrete codecs and validated values for the bounded riverd identity records. */
 final class RiverDaemonIdentityRecords {
-  static final int MAX_RECORD_BYTES = 4096;
   static final String INSTANCE_FORMAT = "riverd-instance-v1";
   static final String BOOTSTRAP_FORMAT = "riverd-bootstrap-v3";
   static final String LOCK_FORMAT = "riverd-lock-v2";
@@ -20,21 +12,13 @@ final class RiverDaemonIdentityRecords {
   private RiverDaemonIdentityRecords() {
   }
 
-  static String record(List<String> fields) {
-    StringBuilder body = new StringBuilder(MAX_RECORD_BYTES);
-    for (String field : fields) body.append(field).append('\n');
-    byte[] digest = digest(body.toString().getBytes(StandardCharsets.UTF_8));
-    body.append("record-sha256=").append(HexFormat.of().formatHex(digest)).append('\n');
-    java.util.Arrays.fill(digest, (byte) 0);
-    return body.toString();
-  }
-
   static InstanceRecord parseInstance(byte[] bytes) {
-    String[] fields = envelope(bytes, 4, INSTANCE_FORMAT);
-    if (fields == null || !"initial-wal-generation=1".equals(fields[3])) return null;
+    RiverDaemonRecordEnvelope.Envelope envelope =
+        RiverDaemonRecordEnvelope.decodePadded(bytes, 4, INSTANCE_FORMAT);
+    if (envelope == null || !"initial-wal-generation=1".equals(envelope.fields[3])) return null;
     try {
-      long high = canonicalLong(value(fields[1], "database-incarnation-high="));
-      long low = canonicalLong(value(fields[2], "database-incarnation-low="));
+      long high = canonicalLong(value(envelope.fields[1], "database-incarnation-high="));
+      long low = canonicalLong(value(envelope.fields[2], "database-incarnation-low="));
       return new InstanceRecord(DatabaseIncarnation.of(high, low), 1L);
     } catch (RuntimeException failure) {
       return null;
@@ -42,8 +26,10 @@ final class RiverDaemonIdentityRecords {
   }
 
   static LockRecord parseLock(byte[] bytes) {
-    String[] fields = envelope(bytes, 7, LOCK_FORMAT);
-    if (fields == null) return null;
+    RiverDaemonRecordEnvelope.Envelope envelope =
+        RiverDaemonRecordEnvelope.decodePadded(bytes, 7, LOCK_FORMAT);
+    if (envelope == null) return null;
+    String[] fields = envelope.fields;
     try {
       long high = canonicalLong(value(fields[2], "database-incarnation-high="));
       long low = canonicalLong(value(fields[3], "database-incarnation-low="));
@@ -61,8 +47,10 @@ final class RiverDaemonIdentityRecords {
   }
 
   static BootstrapRecord parseBootstrap(byte[] bytes) {
-    String[] fields = envelope(bytes, 10, BOOTSTRAP_FORMAT);
-    if (fields == null) return null;
+    RiverDaemonRecordEnvelope.Envelope envelope =
+        RiverDaemonRecordEnvelope.decodePadded(bytes, 10, BOOTSTRAP_FORMAT);
+    if (envelope == null) return null;
+    String[] fields = envelope.fields;
     try {
       long high = canonicalLong(value(fields[1], "database-incarnation-high="));
       long low = canonicalLong(value(fields[2], "database-incarnation-low="));
@@ -84,44 +72,6 @@ final class RiverDaemonIdentityRecords {
     }
   }
 
-  static String[] envelope(byte[] bytes, int fieldCount, String format) {
-    if (bytes == null) return null;
-    int length = bytes.length;
-    for (int index = 0; index < bytes.length; index++) {
-      if (bytes[index] == 0) {
-        for (int tail = index; tail < bytes.length; tail++) {
-          if (bytes[tail] != 0) return null;
-        }
-        length = index;
-        break;
-      }
-    }
-    String text;
-    try {
-      text = StandardCharsets.UTF_8.newDecoder()
-          .onMalformedInput(CodingErrorAction.REPORT)
-          .onUnmappableCharacter(CodingErrorAction.REPORT)
-          .decode(ByteBuffer.wrap(bytes, 0, length)).toString();
-    } catch (CharacterCodingException failure) {
-      return null;
-    }
-    int checksumStart = text.indexOf("\nrecord-sha256=");
-    if (checksumStart < 0) return null;
-    int end = checksumStart + 1;
-    String prefix = text.substring(0, end);
-    if (!prefix.endsWith("\n")) return null;
-    String[] fields = prefix.substring(0, prefix.length() - 1).split("\\n", -1);
-    String checksumLine = text.substring(end + "record-sha256=".length());
-    if (fields.length != fieldCount || !checksumLine.endsWith("\n")) return null;
-    String checksum = checksumLine.substring(0, checksumLine.length() - 1);
-    if (!checksum.matches("[0-9a-f]{64}")) return null;
-    byte[] expected = digest(prefix.getBytes(StandardCharsets.UTF_8));
-    boolean valid = checksum.equals(HexFormat.of().formatHex(expected));
-    java.util.Arrays.fill(expected, (byte) 0);
-    if (!valid || !format.equals(value(fields[0], "format="))) return null;
-    return fields;
-  }
-
   private static String value(String field, String key) {
     return field.startsWith(key) ? field.substring(key.length()) : "";
   }
@@ -134,33 +84,16 @@ final class RiverDaemonIdentityRecords {
   }
 
   static boolean validDatadir(String value) {
-    if (!validAbsoluteNormalizedPath(value)) return false;
-    try {
-      Path path = Path.of(value);
-      return path.getFileName() != null && path.getFileName().toString().indexOf('=') < 0;
-    } catch (RuntimeException failure) {
-      return false;
-    }
-  }
-
-  private static boolean validAbsoluteNormalizedPath(String value) {
     if (value == null || value.isEmpty()) return false;
     for (int index = 0; index < value.length(); index++) {
       if (Character.isISOControl(value.charAt(index))) return false;
     }
     try {
       Path path = Path.of(value);
-      return path.isAbsolute() && path.normalize().toString().equals(value);
+      return path.isAbsolute() && path.normalize().toString().equals(value)
+          && path.getFileName() != null && path.getFileName().toString().indexOf('=') < 0;
     } catch (RuntimeException failure) {
       return false;
-    }
-  }
-
-  private static byte[] digest(byte[] bytes) {
-    try {
-      return MessageDigest.getInstance("SHA-256").digest(bytes);
-    } catch (Exception failure) {
-      throw new IllegalStateException(failure);
     }
   }
 

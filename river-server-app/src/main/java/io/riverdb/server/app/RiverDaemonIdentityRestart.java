@@ -12,7 +12,7 @@ import java.util.Arrays;
 import java.util.List;
 
 final class RiverDaemonIdentityRestart {
-  private static final int MAX_RECORD_BYTES = RiverDaemonIdentityRecords.MAX_RECORD_BYTES;
+  private static final int MAX_RECORD_BYTES = RiverDaemonRecordEnvelope.MAX_RECORD_BYTES;
   private RiverDaemonIdentityRestart() {}
   static StatusCode openExisting(
       Path datadir,
