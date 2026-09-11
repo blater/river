@@ -15,6 +15,12 @@ File: `river-protocol/src/main/java/io/riverdb/protocol/ProtocolSqlRequestEncode
 
 Review `ProtocolSqlRequestEncoder.encode`, `ProtocolSqlRequestEncoder.utf8Length`, `ProtocolSqlRequestEncoder.encodedTextBytes` first. Separate their distinct validation, execution and cleanup responsibilities into concrete local operations; flatten status-dependent control flow while preserving ordering and ownership. Reuse an existing owner where one exists, and avoid new delegation layers that merely move branches.
 
+Plan: keep request validation, payload sizing, framing, and parameter headers in
+`ProtocolSqlRequestEncoder`. Move SQL and program-argument UTF-8 length/write
+operations into one protocol-local offset writer because the public base UTF-8
+API is position-relative and cannot preserve this encoder's absolute-offset,
+unchanged-position contract without a buffer view or transient mutation.
+
 ## Acceptance
 
 The file and any extracted files score below 90 with the unchanged full-repository
