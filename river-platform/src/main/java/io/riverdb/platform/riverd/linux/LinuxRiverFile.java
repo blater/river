@@ -64,7 +64,7 @@ final class LinuxRiverFile implements RiverFile {
     if (mode == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (closed) return StatusCode.CLOSED;
     return LinuxFileBridge.force(fd) == 0 ? StatusCode.OK
-        : LinuxRiverDaemonFileSystem.status(LinuxFileBridge.errno());
+        : LinuxRiverDaemonFileSystem.status(LinuxNativeBindings.errno());
   }
 
   @Override
@@ -80,15 +80,15 @@ final class LinuxRiverFile implements RiverFile {
     if (sizeBytes < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (closed) return StatusCode.CLOSED;
     return LinuxFileBridge.truncate(fd, sizeBytes) == 0 ? StatusCode.OK
-        : LinuxRiverDaemonFileSystem.status(LinuxFileBridge.errno());
+        : LinuxRiverDaemonFileSystem.status(LinuxNativeBindings.errno());
   }
 
   @Override
   public synchronized StatusCode size(FileSizeResult result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (closed) return StatusCode.CLOSED;
-    LinuxFileBridge.Stat stat = LinuxFileBridge.stat(fd);
-    if (stat == null) return LinuxRiverDaemonFileSystem.status(LinuxFileBridge.errno());
+    LinuxNamespaceBridge.Stat stat = LinuxNamespaceBridge.stat(fd);
+    if (stat == null) return LinuxRiverDaemonFileSystem.status(LinuxNativeBindings.errno());
     result.setSizeBytes(stat.size);
     return StatusCode.OK;
   }
@@ -98,11 +98,11 @@ final class LinuxRiverFile implements RiverFile {
     if (closed) return StatusCode.CLOSED;
     closed = true;
     return LinuxFileBridge.close(fd) == 0 ? StatusCode.OK
-        : LinuxRiverDaemonFileSystem.status(LinuxFileBridge.errno());
+        : LinuxRiverDaemonFileSystem.status(LinuxNativeBindings.errno());
   }
 
   private StatusCode failure(IoResult result) {
     result.setBytesTransferred(0);
-    return LinuxRiverDaemonFileSystem.status(LinuxFileBridge.errno());
+    return LinuxRiverDaemonFileSystem.status(LinuxNativeBindings.errno());
   }
 }

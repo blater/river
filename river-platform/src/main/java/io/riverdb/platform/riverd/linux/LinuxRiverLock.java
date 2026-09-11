@@ -18,9 +18,9 @@ final class LinuxRiverLock implements RiverLock {
     if (closed) return StatusCode.CLOSED;
     closed = true;
     int unlock = LinuxFileBridge.unlock(lockFd);
-    int unlockError = unlock == 0 ? 0 : LinuxFileBridge.errno();
+    int unlockError = unlock == 0 ? 0 : LinuxNativeBindings.errno();
     int close = LinuxFileBridge.close(lockFd);
-    int closeError = close == 0 ? 0 : LinuxFileBridge.errno();
+    int closeError = close == 0 ? 0 : LinuxNativeBindings.errno();
     file.releaseLockReservation();
     if (unlock != 0) return LinuxRiverDaemonFileSystem.status(unlockError);
     return close == 0 ? StatusCode.OK : LinuxRiverDaemonFileSystem.status(closeError);
