@@ -51,29 +51,55 @@ mechanism claim is removal of the witnessed repeated bitmap allocation, not a
 promised throughput multiplier. Record the profile/correctness result and promote
 immediately with commit/tag/merge/push when accepted.
 
-### Implementation and evidence, 2026-09-13
+### Implementation and final validation, 2026-09-13
 
-The branch was originally claimed at ef935596, then fast-forwarded to published
-shutdown checkpoint 17fa42f2 before implementation validation; base-commit records
-that updated branch point. Luna implemented the bit/column unit correction;
-independent Astra approved source correctness and the measured allocation proof.
-The identical regression test fails on the old implementation at 4,800,000 bytes
-and passes the candidate's <=256-byte bound over 100,000 warmed command/row
-cleanup pairs. All 32 engine-api tests ran without skips or failures. Slopmark
-for PublicResultValues remains 12.0027. Source/module policy checks passed.
+Originally claimed at ef935596; the branch was fast-forwarded to published
+17fa42f2 before validation, as recorded by base-commit. Luna implemented the
+bit/column unit correction. Independent Astra approved source correctness and
+its allocation proof: the old implementation fails at 4,800,000 bytes over
+100,000 warmed command/row cleanup pairs; the candidate passes the unchanged
+<=256-byte bound. All 32 engine-api tests executed without skips. Slopmark for
+PublicResultValues remains 12.0027; source/module policy checks passed.
 
-Clean testClasses and TPS distribution installation passed in six seconds, using
-an isolated worktree and Gradle caches. Completed checkpoint batches retain
-1,336 test outcomes: 1,320 passed, 16 platform-conditional skips, zero failures.
-This is partial full-checkpoint coverage, not a passed full test build. Explicit
-engine batches 22 and 31 exceeded the command deadline; the isolated
-SqlBlockRowPagedStoreTest.mergesMoreThanSixtyFourConfiguredRunsAndOddTail also
-exceeded it. The supervisor stopped each command; process checks found no
-remaining Java workers. Aggregate timeouts and unfinished classes remain recorded.
-Do not rerun those workloads unchanged or relax the stop to obtain a green gate.
+Clean testClasses and installTps completed in six seconds with isolated Gradle
+caches and the build cache enabled. The default clean JVM test checkpoint was
+completed through sequential Gradle batches and direct JUnit execution: 1,942
+passed, 18 expected skips (16 platform-conditional and two opt-in wider TPC-C
+lifecycle tests). This does not claim one aggregate clean-check command passed.
+Every test-bearing source class is accounted for by completed XML or JUnit logs.
 
-TPS tiny/standard, four terminals, one warehouse, serializable, seed 42,
-one-second warmup, server/client heaps 1 GiB/512 MiB:
+An existing graph-sort allocation test failed at 808 bytes, then 576 bytes in a
+matched-order check (limit 512). The failures remain in the evidence. A prescribed
+control/candidate pair with identical classpaths passed; complete class-load logs
+prove neither JVM loaded PublicResultValues or its public result owners. The
+changed code did not execute in that measurement. Independent review attributes
+neither failure to this bitmap change; the exact allocation source remains
+unexplained test variability. No assertion or allocation limit was weakened.
+
+### Correct progress deadline and long-test completion
+
+The initial absolute 15-second command budget was an incorrect interpretation
+of the user's requirement. The deadline measures lack of meaningful progress,
+not elapsed runtime; AGENTS.md now makes this distinction explicit.
+
+Temporary, independently reviewed instrumentation binds the exact test thread
+and reports only successful finite work completions. An unrelated thread,
+observer heartbeat or busy CPU cannot extend the external deadline. Timestamped
+progress prevents old buffered messages from reviving a stalled operation;
+escalation remains latched, without blocking cleanup. A healthy fixture passed
+in 17.116 seconds. A spinning owner with an active unrelated worker and stuck
+shutdown hook was killed in 14.047 seconds with no surviving Java process.
+
+The unchanged 65-run merge passed in 32.188 seconds (643,785 completed work units).
+The unchanged 65,537-row sort/join/checkpoint/reopen test passed in 60.652 seconds
+(1,802,342 units). Both JVMs exited normally. Instrumentation was restricted to
+these two correctness runs; allocation and TPS evidence remains uninstrumented.
+No remote CI run or deadline exception was needed.
+
+### Matched TPS evidence and promotion
+
+Tiny/standard, four terminals, one warehouse, serializable, seed 42, one-second
+warmup, server/client heaps 1 GiB/512 MiB, JFR off:
 
 - Three-second controls: 613.000, 621.333 TPS; candidates: 574.667, 570.667 TPS.
 - Five-second interleaved control/candidate/control/candidate:
@@ -82,12 +108,15 @@ one-second warmup, server/client heaps 1 GiB/512 MiB:
   reported zero errors, and left zero active transactions/locks/waiters.
 
 The initial downward shift did not repeat in the longer interleaved samples;
-these short diagnostics do not establish a throughput improvement. Only the
-PublicResultValues class differs between the installed control/candidate jars.
-Retain the measured allocation reduction as the mechanism result. The full
-checkpoint remains incomplete, so this ticket stays in progress and the feature
-must remain unmerged and untagged pending that gate.
+these short diagnostics establish no throughput improvement. Only
+PublicResultValues.class differs between the installed control/candidate jars.
+The mechanism benefit is the measured removal of repeated bitmap allocation.
 
-Exact versions, commands, per-family latency buckets, logs and completed test XML:
+Exact versions, commands, per-family latency buckets, failed attempts, completed
+XML, direct JUnit logs and the progress monitor are retained at
 `/Users/blater/src/river-performance-evidence/20260913-twofoot/`.
-See the corresponding entry in [performance checkpoints](../performance-checkpoints.md).
+See FOLLOWUP.md there and [performance checkpoints](../performance-checkpoints.md).
+
+Independent Astra promotion review reconciled the completed class/method coverage
+and 1,942 passing tests plus 18 expected skips, and approved this allocation
+reduction for integration.
