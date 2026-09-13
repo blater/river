@@ -2926,3 +2926,53 @@ Exact configuration, logs and command supervisor are retained under
 see [the investigation](plans/checkpoint-kernel-hang-20260913.md).
 Promotion tag: `perf-checkpoint-20260913-shutdown-deadline`.
 Reviewed implementation `aef2cab5` merged and pushed as `55dc899e` with that tag.
+
+## 2026-09-13 — result bitmap allocation candidate (tic-twofoot, not promoted)
+
+Branch `ticket/tic-twofoot-result-bitmap`, validated on published base 17fa42f2.
+PublicResultValues now compares bitmap capacities in bits rounded to whole words;
+retained column counts previously caused the same one-word bitmap to be freed and
+reallocated after ordinary cleanup. Erasure, high-water shedding and budget
+ownership remain unchanged. Luna implemented; independent Astra approved source
+correctness and the allocation proof. Slopmark stayed at 12.0027.
+
+The old implementation fails the new warmed allocation test at 4,800,000 bytes
+for 100,000 command/row cleanup pairs. The candidate passes the <=256-byte bound,
+with all 32 engine-api tests executing without skips. Source/module policies pass.
+Clean testClasses and installTps completed in six seconds. The clean checkpoint
+has 1,320 passing tests and 16 platform-conditional skips in retained completed
+batches. It is incomplete: oversized aggregate batches and engine batches 22/31
+hit the absolute command limit, as did the isolated existing 65-run external-sort
+method. No Java process remained after those stops. Missing coverage has not been
+treated as passing, and no checkpoint tag or integration is accepted.
+
+Host/JDK: the same macOS M5 and GraalVM 25 used for controls and candidate.
+TPS configuration: tiny/standard, four terminals, one warehouse, seed 42,
+serializable, one-second warmup, server heap 1 GiB/client heap 512 MiB, JFR off.
+Every command used the external absolute 15-second process-group supervisor;
+start timeout 3s, server stop timeout 5s. Runner timeout was 8s for the initial
+3s measured samples and 10s for the paired 5s investigation.
+
+| Version suffix (all prefixed `twofoot-`) | Measured seconds | Committed TPS |
+| --- | --- | --- |
+| control-1 | 3 | 613.000 |
+| control-2 | 3 | 621.333 |
+| candidate-1 | 3 | 574.667 |
+| candidate-2 | 3 | 570.667 |
+| interleaved-control-1 | 5 | 626.400 |
+| interleaved-candidate-1 | 5 | 614.200 |
+| interleaved-control-2 | 5 | 599.800 |
+| interleaved-candidate-2 | 5 | 615.400 |
+
+All eight samples completed CHECKPOINT, passed invariants, reported zero errors,
+reconciled deadlocks/retries and ended with zero active transactions/locks/waiters.
+Only control-1 and interleaved-control-1 recorded a retry (one each). Exact
+per-family attempts, commits, protocol requests and latency upper-bound buckets
+remain in each console log. The initial downward TPS shift prompted the longer
+interleaved samples; it did not repeat there. No throughput gain or kernel fix is
+claimed. Jar-content comparison found only PublicResultValues.class changed.
+
+Decision: retain the reviewed allocation candidate on its feature branch; do not
+merge, tag or close until the full checkpoint is completed under the stop policy.
+Evidence, negative-control XML, completed test batches and command configuration:
+`/Users/blater/src/river-performance-evidence/20260913-twofoot/`.
