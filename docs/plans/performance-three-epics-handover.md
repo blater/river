@@ -270,3 +270,7 @@ current executable/runtime and workload configuration, and produce the admission
 matrix. Preserve the existing tic-1dda claim; coordinate resumption explicitly.
 The lead receives an actionable investigation frontier and bounded downstream
 contracts, not permission to implement all hypothetical optimizations blindly.
+
+Planning delivery `674e64b8` was merged and pushed as `453a2ede`; tic-lalaith
+records the delivered commit. The three performance epics remain open for the
+lead's evidence-gated execution. No performance implementation was started.

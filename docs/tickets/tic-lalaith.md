@@ -1,12 +1,13 @@
 ---
 id: tic-lalaith
-status: in_progress
+status: closed
 type: chore
 priority: 1
 assignee: blater
 delivery: documentation
 base-commit: 5f7e6eb0ffba622a0899960842241fc44645ccd9
 branch: ticket/tic-lalaith-performance-roadmap
+delivered-commit: 674e64b8ed22743e1f99b148c99fd97642607c25
 tags:
     - planning
     - performance
