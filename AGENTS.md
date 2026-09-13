@@ -286,6 +286,9 @@ descriptors, source/workspace fingerprints, host leases, terminal receipts, or
 parallel provenance validators to make a diagnostic run admissible.
 
 - All process waits and shutdown paths must enforce a maximum 15-second unresponsiveness deadline, report failure and stop automatic retries when exceeded, and never assume that timeout or SIGKILL releases kernel-held resources.
+  Measure absence of meaningful progress by the owned operation, not total
+  elapsed runtime: healthy builds and tests may run longer than 15 seconds,
+  and an unrelated worker or observer heartbeat does not establish progress.
 
 ## Hot-path engineering
 

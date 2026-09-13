@@ -196,10 +196,12 @@ final class PublicResultValues {
   StatusCode releaseHighWater() {
     reset();
     int lanesToKeep = Math.min(lanes.capacity(), RETAINED_COLUMN_FLOOR);
+    int nullBitsToKeep = (int) (
+        (((long) lanesToKeep + Long.SIZE - 1) / Long.SIZE) * Long.SIZE);
     int textToKeep = Math.min(text.capacity(), RETAINED_TEXT_FLOOR);
     int scratchToKeep = Math.min(characterScratch.length, RETAINED_TEXT_FLOOR);
     if (lanes.capacity() > lanesToKeep) lanes.release();
-    if (nulls.capacity() > lanesToKeep) nulls.release();
+    if (nulls.capacity() > nullBitsToKeep) nulls.release();
     if (text.capacity() > textToKeep) text.release();
     if (characterScratch.length > scratchToKeep) characterScratch = new char[scratchToKeep];
     StatusCode status = reserve(lanesToKeep, textToKeep);

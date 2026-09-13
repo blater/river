@@ -98,6 +98,132 @@ final class PublicResultCapacityTest {
   }
 
   @Test
+  void warmedReleaseHighWaterRetainsCommandAndRowBitmapsWithoutAllocation() {
+    ThreadMXBean bean = allocationBean();
+    RowResult row = new RowResult();
+    CommandResult command = new CommandResult();
+    assertEquals(StatusCode.OK, row.reserve(8, 0));
+    assertEquals(StatusCode.OK, command.reserve(8, 0));
+    assertEquals(StatusCode.OK, row.releaseHighWater());
+    assertEquals(StatusCode.OK, command.releaseHighWater());
+    exerciseReleaseHighWater(row, command, 10_000);
+
+    long thread = Thread.currentThread().threadId();
+    long before = bean.getThreadAllocatedBytes(thread);
+    exerciseReleaseHighWater(row, command, 100_000);
+    long allocated = bean.getThreadAllocatedBytes(thread) - before;
+    assertTrue(
+        allocated <= 256,
+        "warmed command and row releaseHighWater operations allocated: " + allocated);
+  }
+
+  @Test
+  void releaseHighWaterErasesWideResultStateAndPreservesExactLeaseAccounting() {
+    TrackingLease lease = new TrackingLease(Long.MAX_VALUE);
+    RowResult result = new RowResult(lease);
+    int columns = 128;
+    long[] values = new long[columns];
+    java.util.Arrays.fill(values, 37);
+    int[] descriptors = descriptors(columns);
+    descriptors[0] = SqlTypeDescriptor.varchar(5_000);
+    long[] nullWords = new long[2];
+    set(nullWords, 1);
+    set(nullWords, columns - 1);
+    char[] text = new char[5_000];
+    java.util.Arrays.fill(text, 'x');
+
+    assertEquals(StatusCode.OK, result.reserve(columns, 8_192));
+    assertEquals(StatusCode.OK,
+        result.complete(5, values, nullWords, nullWords.length, descriptors, columns));
+    assertEquals(StatusCode.OK, result.setTextAt(0, text, 0, text.length));
+    assertTrue(result.isAvailable());
+    assertEquals(37, result.valueAt(0));
+    assertEquals(5_000, result.textLengthAt(0));
+    assertTrue(result.isNull(1));
+    assertTrue(result.isNull(columns - 1));
+    assertTrue(result.retainedBytes() > RowResult.retainedFloorBytes());
+    assertEquals(result.retainedBytes(), lease.retainedBytes());
+
+    assertEquals(StatusCode.OK, result.releaseHighWater());
+    assertFalse(result.isAvailable());
+    assertEquals(0, result.columnCount());
+    assertEquals(0, result.valueAt(0));
+    assertEquals(0, result.typeDescriptorAt(0));
+    assertEquals(0, result.nullWordCount());
+    assertEquals(0, result.nullWord(0));
+    assertEquals(-1, result.textLengthAt(0));
+    assertEquals(0, result.textCharacterAt(0, 0));
+    assertEquals(RowResult.retainedFloorBytes(), result.retainedBytes());
+    assertEquals(result.retainedBytes(), lease.retainedBytes());
+
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        result.complete(1, new long[1], new long[1], 1, new int[1],
+            SqlShapeLimits.MAX_RESULT_COLUMNS + 1));
+    assertFalse(result.isAvailable());
+    assertEquals(RowResult.retainedFloorBytes(), lease.retainedBytes());
+
+    long[] narrowValues = new long[8];
+    narrowValues[0] = 91;
+    int[] narrowDescriptors = descriptors(8);
+    long[] narrowNullWords = {1};
+    assertEquals(StatusCode.OK,
+        result.complete(6, narrowValues, narrowNullWords, 1, narrowDescriptors, 8));
+    assertTrue(result.isAvailable());
+    assertEquals(91, result.valueAt(0));
+    assertEquals(SqlTypeDescriptor.BIGINT, result.typeDescriptorAt(0));
+    assertTrue(result.isNull(0));
+    assertEquals(1, result.nullWord(0));
+    assertEquals(StatusCode.OK, result.releaseHighWater());
+    assertFalse(result.isAvailable());
+    assertEquals(RowResult.retainedFloorBytes(), result.retainedBytes());
+    assertEquals(result.retainedBytes(), lease.retainedBytes());
+
+    narrowValues[0] = 92;
+    assertEquals(StatusCode.OK,
+        result.complete(7, narrowValues, new long[1], 1, narrowDescriptors, 8));
+    assertEquals(92, result.valueAt(0));
+    assertFalse(result.isNull(0));
+    assertEquals(-1, result.textLengthAt(0));
+    assertEquals(result.retainedBytes(), lease.retainedBytes());
+
+    assertEquals(StatusCode.OK, result.release());
+    assertEquals(0, result.retainedBytes());
+    assertEquals(0, lease.retainedBytes());
+  }
+
+  @Test
+  void rejectedReservationKeepsPriorBudgetChargeAndZeroColumnReleaseKeepsNoBitmap() {
+    TrackingLease lease = new TrackingLease(512);
+    RowResult result = new RowResult(lease);
+    assertEquals(StatusCode.OK, result.reserve(8, 0));
+    long priorCharge = result.retainedBytes();
+    assertTrue(priorCharge > 0);
+    assertEquals(priorCharge, lease.retainedBytes());
+
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, result.reserve(64, 1_024));
+    assertEquals(priorCharge, result.retainedBytes());
+    assertEquals(priorCharge, lease.retainedBytes());
+
+    long[] values = new long[8];
+    values[0] = 14;
+    assertEquals(StatusCode.OK, result.complete(7, values, 0, descriptors(8), 8));
+    assertEquals(14, result.valueAt(0));
+    assertEquals(StatusCode.OK, result.release());
+    assertEquals(0, result.retainedBytes());
+    assertEquals(0, lease.retainedBytes());
+
+    TrackingLease emptyLease = new TrackingLease(512);
+    CommandResult empty = new CommandResult(emptyLease);
+    assertEquals(StatusCode.OK,
+        empty.complete(0, 0, false, false, 0, new long[0], 0, new int[0], 0));
+    assertEquals(StatusCode.OK, empty.releaseHighWater());
+    assertEquals(0, empty.nullWordCount());
+    assertEquals(0, empty.nullWord(0));
+    assertEquals(0, empty.retainedBytes());
+    assertEquals(0, emptyLease.retainedBytes());
+  }
+
+  @Test
   void carriesMaximumDeclaredVarcharWithoutAConvenienceScratchLimit() {
     int scalars = io.riverdb.base.text.Utf8Text.MAXIMUM_SCALARS;
     char[] value = new String(new char[] {(char) 0xD83D, (char) 0xDE00})
@@ -202,6 +328,14 @@ final class PublicResultCapacityTest {
     }
   }
 
+  private static void exerciseReleaseHighWater(
+      RowResult row, CommandResult command, int iterations) {
+    for (int index = 0; index < iterations; index++) {
+      allocationGuard += row.releaseHighWater().ordinal();
+      allocationGuard += command.releaseHighWater().ordinal();
+    }
+  }
+
   private static int[] descriptors(int columns) {
     int[] descriptors = new int[columns];
     java.util.Arrays.fill(descriptors, SqlTypeDescriptor.BIGINT);
@@ -219,6 +353,27 @@ final class PublicResultCapacityTest {
     Assumptions.assumeTrue(bean.isThreadAllocatedMemorySupported());
     bean.setThreadAllocatedMemoryEnabled(true);
     return bean;
+  }
+
+  private static final class TrackingLease implements RetainedMemoryLease {
+    private final long budget;
+    private long current;
+
+    private TrackingLease(long maximumBytes) { budget = maximumBytes; }
+
+    @Override
+    public StatusCode resize(long bytes) {
+      if (bytes < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+      if (bytes > budget) return StatusCode.RESOURCE_EXHAUSTED;
+      current = bytes;
+      return StatusCode.OK;
+    }
+
+    @Override
+    public StatusCode awaitResize(long bytes) { return resize(bytes); }
+
+    @Override
+    public long retainedBytes() { return current; }
   }
 
   private static final class MutableMetadata implements QueryMetadata {
