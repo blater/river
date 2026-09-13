@@ -2925,3 +2925,4 @@ Exact configuration, logs and command supervisor are retained under
 `/Users/blater/src/river-performance-evidence/20260913-checkpoint-deadline/`;
 see [the investigation](plans/checkpoint-kernel-hang-20260913.md).
 Promotion tag: `perf-checkpoint-20260913-shutdown-deadline`.
+Reviewed implementation `aef2cab5` merged and pushed as `55dc899e` with that tag.

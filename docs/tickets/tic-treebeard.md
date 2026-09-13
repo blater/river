@@ -1,12 +1,14 @@
 ---
 id: tic-treebeard
-status: in_progress
+status: closed
 type: bug
 assignee: blater
 parent: tic-rowlie
 delivery: code
 base-commit: ef935596225eb78cf400379bfbb5d0d78de4a530
 branch: ticket/tic-treebeard-shutdown-deadline
+delivered-commit: 55dc899e8ba2a6ae2f6b8dc92cd83410573fea3b
+checkpoint-tag: perf-checkpoint-20260913-shutdown-deadline
 tags:
     - safety
     - process
@@ -77,3 +79,4 @@ verifyModuleGraph. The initial combined app-suite command reached the absolute
 the coverage within the same per-command bound (unit/policy batch 5 seconds,
 CLI batch 2 seconds, process-test class 8 seconds; instance class 10 seconds).
 This is a lifecycle correctness delivery, not a throughput improvement claim.
+
