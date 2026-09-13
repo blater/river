@@ -3,7 +3,7 @@ id: tic-ca05
 status: open
 type: investigation
 assignee: blater
-parent: tic-e5ff
+parent: tic-rowlie
 delivery: evidence
 tags:
     - performance
@@ -21,14 +21,14 @@ Determine exactly whether the current source already seals and admits one
 immutable logical commit before enqueue without moving physical work ahead of
 the canonical writer.
 
-## Design
+### Design
 
 Trace the direct and group call paths from session-owned logical preparation to
 commit-queue admission and terminal cleanup. Map every contract clause to its
 production owner, state transition, existing test, and current evidence. Record
 a gap; do not change code to close it under this ticket.
 
-## Outcome
+### Outcome
 
 An exact, evidence-backed current-source contract and gap inventory establishes
 whether one immutable logical commit and its admitted demand are prepared before
@@ -37,7 +37,7 @@ satisfied, close this ticket as satisfied. If any clause is not, name a
 separately scoped code ticket and update downstream dependencies before that
 code work begins.
 
-## In Scope / Owning Mechanism
+### In Scope / Owning Mechanism
 
 This investigation owns only the source/test trace and contract matrix for the
 existing session-owned logical-preparation and admission path: logical mutation
@@ -46,7 +46,7 @@ receipts, direct/group equivalence, and exact-once cleanup. It must identify the
 canonical physical writer that alone turns the description into pages, versions,
 or WAL; it does not modify either owner.
 
-## Non-goals
+### Non-goals
 
 - Commit-sequence assignment, physical compilation, page staging or freezing,
   final conflict validation, WAL append or force, publication, and lock policy.
@@ -56,7 +56,7 @@ or WAL; it does not modify either owner.
 - Production, test, fixture, build, benchmark, or diagnostic-tool changes of
   any kind.
 
-## Stop Conditions
+### Stop Conditions
 
 - Close as satisfied when every clause is mapped to current source and adequate
   existing evidence.
@@ -67,7 +67,7 @@ or WAL; it does not modify either owner.
   creates an independently prepared page image or another representation/
   executor, or adds an earlier scan without reducing canonical-writer work.
 
-## Maximum Change Shape
+### Maximum Change Shape
 
 Documentation and evidence references only. This ticket may update its contract
 matrix and cite immutable existing evidence; it may not change production code,
@@ -75,7 +75,7 @@ tests, fixtures, build logic, benchmarks, or tools. Any recommended code ticket
 must preserve one logical description, one authoritative sizing pass, one set
 of receipts, and one canonical physical writer.
 
-## Acceptance Criteria
+### Acceptance Criteria
 
 - The evidence names the current logical-preparation owner, immutable carrier,
   queue transition, canonical physical writer, receipt owner, and cleanup owner
@@ -89,7 +89,7 @@ of receipts, and one canonical physical writer.
   this ticket. Every gap names a separately scoped follow-up, and downstream
   dependencies are updated before follow-up implementation begins.
 
-## Notes
+### Notes
 
 ### 2026-09-04 ten-terminal architecture priority review
 
@@ -101,3 +101,7 @@ remaining physical preflight time. Reject a change that repeatedly scans New
 Order work while locks are retained without reducing the canonical writer's
 measured service cost. This is a correctness and scalability enabler; it has no
 independent throughput promise.
+
+### 2026-09-13 performance realignment
+
+Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled correctness gates remain authoritative. Follow [the current handover](../plans/performance-three-epics-handover.md); this move certifies no implementation or performance outcome.

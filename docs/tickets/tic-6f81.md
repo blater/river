@@ -3,7 +3,7 @@ id: tic-6f81
 status: open
 type: investigation
 assignee: blater
-parent: tic-e5ff
+parent: tic-rowlie
 delivery: evidence
 tags:
     - performance
@@ -20,14 +20,14 @@ Determine exactly whether the current source already streams an admitted large
 decision through budget-derived, provider-owned WAL chunks shared by direct and
 group commits.
 
-## Design
+### Design
 
 Trace the direct and group paths through the canonical relational WAL plan,
 reservation, encode, append, force, cleanup, and recovery owners. Map every
 contract clause to current source, existing tests, and evidence. Record a gap;
 do not change code to close it under this ticket.
 
-## Outcome
+### Outcome
 
 An exact, evidence-backed current-source contract and gap inventory establishes
 whether one admitted logical decision can span budget-derived WAL chunks while
@@ -36,7 +36,7 @@ every clause is satisfied, close this ticket as satisfied. If any clause is not,
 name a separately scoped code ticket and update downstream dependencies before
 that code work begins.
 
-## In Scope / Owning Mechanism
+### In Scope / Owning Mechanism
 
 This investigation owns only the source/test trace and contract matrix for the
 existing canonical relational WAL plan, reservation, and append path: chunk
@@ -45,7 +45,7 @@ equivalence, aggregate byte/record reconciliation, and cleanup across partial
 append, force failure, indeterminate outcome, cancellation, and recovery. It
 does not modify those owners.
 
-## Non-goals
+### Non-goals
 
 - A new WAL record or durable format, recovery protocol, commit decision model,
   cohort-admission policy, or coalescing/force tuning.
@@ -56,7 +56,7 @@ does not modify those owners.
 - Production, test, fixture, build, benchmark, or diagnostic-tool changes of
   any kind.
 
-## Stop Conditions
+### Stop Conditions
 
 - Close as satisfied when every clause is mapped to current source and adequate
   existing evidence.
@@ -68,7 +68,7 @@ does not modify those owners.
   Reject a throughput-only follow-up because ordinary TPC-C decisions normally
   remain within one WAL record.
 
-## Maximum Change Shape
+### Maximum Change Shape
 
 Documentation and evidence references only. This ticket may update its contract
 matrix and cite immutable existing evidence; it may not change production code,
@@ -76,7 +76,7 @@ tests, fixtures, build logic, benchmarks, or tools. Any recommended code ticket
 must retain one encoding representation, one append path, one force result, and
 one publication outcome shared by direct and group commits.
 
-## Acceptance Criteria
+### Acceptance Criteria
 
 - The evidence names the current plan, reservation, encode, append, force,
   publication, cleanup, and recovery owners for both direct and group calls.
@@ -91,7 +91,7 @@ one publication outcome shared by direct and group commits.
   this ticket. Every gap names a separately scoped follow-up, and downstream
   dependencies are updated before follow-up implementation begins.
 
-## Notes
+### Notes
 
 ### 2026-09-04 ten-terminal architecture priority review
 
@@ -102,3 +102,7 @@ path. Ordinary TPC-C writes normally remain within one record, so this ticket
 has no independent ten-terminal TPS hypothesis. Accept neutral throughput only
 with unchanged copy/allocation counts and proved large-decision, failure, and
 recovery behavior.
+
+### 2026-09-13 performance realignment
+
+Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled correctness gates remain authoritative. Follow [the current handover](../plans/performance-three-epics-handover.md); this move certifies no implementation or performance outcome.

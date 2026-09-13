@@ -1,5 +1,13 @@
 # River TPS performance review and priority order
 
+> 2026-09-13 execution-order update: [the three-epic handover](plans/performance-three-epics-handover.md)
+> and current ticket dependencies supersede this document's blanket phase order
+> and historical performance baseline. Fresh profiling is immediate; execution
+> and transport do not wait for complete P1/Payment delivery. Explicit P0,
+> durability, semantic and formal-claims gates remain binding. The material below
+> is historical diagnosis/architecture context, not current-source proof.
+
+
 Status: P1 implementation and evidence in progress  
 Date: 2026-09-03  
 Scope: River JDBC TPC-C engineering workload and the proposed transaction

@@ -12,24 +12,42 @@ tags:
     - benchmark
 deps:
     - tic-8561
+    - tic-e305
 created: 2026-09-04T15:10:08.162434Z
 ---
-# Verify river-harness automation of the 500 TPS gate
+# Verify external artifact production and independent 500-TPS evaluation
 
-Verify that river-harness implements the accepted interim contract as a
-mechanically runnable, machine-verifiable stress gate without hiding phase
-failures or emitting misleading zero-TPS results.
+### Outcome and owners
 
-## Design
+Verify the accepted tic-8561 interim contract through two independently versioned
+processes. River-harness executes the declared target workload and emits immutable
+versioned artifacts with workload configuration, outcomes, invariants and owned
+lifecycle cleanup. The separate sidecar consumes artifacts and owns semantic/
+configuration eligibility, pairing, confidence/statistics and gate evaluation.
+Neither River nor the harness owns the comparator or comparison thresholds.
 
-Implementation belongs to the river-harness repository and carries its own
-ticket and commit. It must preserve semantic validation and persist
-source/configuration fingerprints, riverd identity, sample identities, raw
-outcomes, confidence calculation, invariants, and artifact paths. No gate code
-is added to River core.
+### Scope and dependencies
 
-## Acceptance Criteria
+Consume the independently delivered sidecar boundary/extraction in tic-e305 and
+the promotion contract in tic-8561. Link each external repository's actual ticket,
+commit/release and process/file contract. This is an evidence-only verification;
+missing producer or comparator behavior becomes a ticket in its owning repository.
+No source/workspace fingerprint, host lease, terminal receipt or duplicate
+provenance validator is introduced to admit diagnostic evidence.
 
-A linked external commit has focused invalid-run and statistics tests; the
-runner rejects mismatched or incomplete samples; a documented command
-reproduces the gate through riverd without changing database behavior.
+### Acceptance
+
+Demonstrate artifact production through the public installed-server lifecycle,
+then separately demonstrate sidecar evaluation from those artifact paths without
+starting databases. Producer tests cover phase failures, outcome accounting and
+cleanup; sidecar tests reject mismatched/incomplete/ineligible artifacts and verify
+statistics against known fixtures. Record a reproducible invocation for each
+process, supported artifact versions, immutable samples and the gate result.
+No external commit is considered delivered until its repository reference is
+available; no workload or database contract changes are hidden in this verification.
+
+### 2026-09-13 disposition
+
+Retained under tic-c7bb, with the stale harness-owned confidence/gate assignment
+replaced by the current independent-sidecar boundary. The additional tic-e305
+dependency is real: this ticket cannot verify a comparator that is not delivered.

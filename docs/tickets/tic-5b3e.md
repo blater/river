@@ -3,7 +3,7 @@ id: tic-5b3e
 status: open
 type: story
 assignee: blater
-parent: tic-e5ff
+parent: tic-rowlie
 delivery: code
 tags:
     - performance
@@ -19,18 +19,18 @@ created: 2026-09-04T15:10:07.259189Z
 
 Form cohorts by cumulative admitted page, version, staging, and WAL demand rather than fixed transaction or record counts.
 
-## Design
+### Design
 
 Reserve against compiled runtime budgets before side effects. Apply cancellable backpressure or split admission while retaining one canonical physical writer and one transaction outcome.
 
-## Outcome
+### Outcome
 
 One cumulative admission decision selects the largest safe cohort prefix, or
 returns an explicit pre-side-effect pressure/impossible-request outcome, using
 all admitted page, version, staging, and WAL demand. Every reservation is held
 and released exactly once with the transaction outcome.
 
-## In Scope / Owning Mechanism
+### In Scope / Owning Mechanism
 
 The commit coordinator owns one cumulative cohort-admission policy shared by
 direct and group commits. It consumes sealed per-transaction demand from
@@ -44,7 +44,7 @@ reservation point and lifetime, impossible-versus-transient status, prefix or
 backpressure rule, cancellation behavior, and exact release owner. No
 implementation begins while any of those semantics are unresolved.
 
-## Non-goals
+### Non-goals
 
 - Separate admission algorithms, queues, or resource policies for individual
   page, version, staging, or WAL budgets.
@@ -53,7 +53,7 @@ implementation begins while any of those semantics are unresolved.
 - Logical preparation, physical staging, WAL representation or append, durable
   publication, lock policy, or a second transaction outcome.
 
-## Stop Conditions
+### Stop Conditions
 
 - Stop before coding if the complete pre-implementation contract above cannot
   be stated using the existing budget authorities. Create a named design
@@ -65,7 +65,7 @@ implementation begins while any of those semantics are unresolved.
   where an admitted ordered prefix could proceed, cannot cancel backpressure,
   or cannot reconcile every reservation and release.
 
-## Maximum Change Shape
+### Maximum Change Shape
 
 One coordinator-owned cumulative admission policy, one cumulative demand
 carrier, and one reservation lifecycle shared by direct and group commits may
@@ -73,11 +73,11 @@ change, plus their focused tests and counters. Existing budget owners may be
 called but not duplicated. No second writer, executor, queue, WAL path,
 transaction outcome, or per-budget admission framework may be introduced.
 
-## Acceptance Criteria
+### Acceptance Criteria
 
 Concurrent admission, partial-cohort failure, cancellation, overflow, cleanup, and direct/group equivalence tests pass; counters reconcile cumulative demand without arbitrary caps.
 
-## Notes
+### Notes
 
 ### 2026-09-04 ten-terminal architecture priority review
 
@@ -88,3 +88,7 @@ every budget that split or rejected a cohort, cancellable backpressure, and
 head-of-line effects. A configured budget becoming the next limit after
 durability overlap is acceptable; silent underfilled cohorts or whole-cohort
 failure are not.
+
+### 2026-09-13 performance realignment
+
+Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled correctness gates remain authoritative. Follow [the current handover](../plans/performance-three-epics-handover.md); this move certifies no implementation or performance outcome.

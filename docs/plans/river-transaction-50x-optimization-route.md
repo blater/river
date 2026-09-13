@@ -1,5 +1,13 @@
 # River transaction 50x optimisation route
 
+> 2026-09-13 execution-order update: [the three-epic handover](performance-three-epics-handover.md)
+> and current ticket dependencies supersede this document's blanket phase order
+> and historical performance baseline. Fresh profiling is immediate; execution
+> and transport do not wait for complete P1/Payment delivery. Explicit P0,
+> durability, semantic and formal-claims gates remain binding. The material below
+> is historical diagnosis/architecture context, not current-source proof.
+
+
 Status: Conditionally approved for implementation after review amendments
 
 Audience: relational/execution, protocol/client, storage/WAL, transaction,

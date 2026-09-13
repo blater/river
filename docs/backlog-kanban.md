@@ -1,5 +1,24 @@
 # River delivery Kanban and priority queue
 
+## Current performance frontier — 2026-09-13
+
+Follow [the lead handover](plans/performance-three-epics-handover.md) and ticket
+frontmatter. The new ordered priorities are reusable execution metadata
+[tic-carcharoth](tickets/tic-carcharoth.md), commit-force overlap
+[tic-rowlie](tickets/tic-rowlie.md), then protocol waits/writes
+[tic-primula](tickets/tic-primula.md). Start with the ready shared profile
+[tic-da4e](tickets/tic-da4e.md). Preserve the active P0 investigation tic-1dda and
+all explicit overlap prerequisites. Later code candidates require an affirmative
+profile/contract decision, not simply an open status.
+
+The earlier first62/9e2f/055b cleanup sequence is complete. Old e5ff/723f phase
+containers and the unconditional Payment pilot are superseded with explicit
+mapping in the handover. The historical phase queue below remains evidence/context;
+it cannot impose the removed Payment-before-profile or blanket P1-before-execution
+ordering. Existing lifecycle, formal comparison, score and functional campaigns
+retain their independent owners and dependencies.
+
+
 This document is River's human-readable delivery queue. Ticket front matter is
 authoritative for status, ownership, dependencies, and acceptance criteria.
 This view adds the sequencing decision needed when several tickets are ready at
