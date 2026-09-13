@@ -285,6 +285,8 @@ JFR processes on success, failure, and interruption. Do not add runtime
 descriptors, source/workspace fingerprints, host leases, terminal receipts, or
 parallel provenance validators to make a diagnostic run admissible.
 
+- All process waits and shutdown paths must enforce a maximum 15-second unresponsiveness deadline, report failure and stop automatic retries when exceeded, and never assume that timeout or SIGKILL releases kernel-held resources.
+
 ## Hot-path engineering
 
 - Do not impose arbitrary low row, byte, cardinality, or concurrency caps to

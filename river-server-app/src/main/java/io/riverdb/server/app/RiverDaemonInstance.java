@@ -106,6 +106,9 @@ public final class RiverDaemonInstance {
 
     if (server != null) {
       StatusCode closedServer = server.close();
+      // A timed-out worker can still own database memory and file mappings.
+      // Retain every dependency and the identity lock until terminal shutdown.
+      if (!terminal(closedServer)) return closedServer;
       status = firstFailure(status, closedServer);
       if (terminal(closedServer)) server = null;
     }

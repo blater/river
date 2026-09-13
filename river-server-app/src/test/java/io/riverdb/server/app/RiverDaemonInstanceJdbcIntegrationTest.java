@@ -3,6 +3,7 @@ package io.riverdb.server.app;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
@@ -13,6 +14,7 @@ import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.platform.riverd.apfs.ApfsRiverDaemonFileSystem;
 import io.riverdb.server.LoopbackServerLimits;
+import io.riverdb.server.StalledShutdownWorker;
 import java.net.InetAddress;
 import java.nio.file.Path;
 import java.security.SecureRandom;
@@ -24,6 +26,45 @@ import org.junit.jupiter.api.io.TempDir;
 
 /** Exercises the generated client file through the real JDBC client-file URL. */
 final class RiverDaemonInstanceJdbcIntegrationTest {
+  @Test
+  void failedServerCloseRetainsAllWorkerDependencies(@TempDir Path root) throws Exception {
+    Assumptions.assumeTrue("Mac OS X".equals(System.getProperty("os.name")));
+    DatabaseResourcePlanRequest plan = new DatabaseResourcePlanRequest()
+        .memory(256_000_000L, 0, 0, 0, 64_000_000L)
+        .lockProviderBytes(8_000_000L)
+        .versionWorkspaceBytes(8_000_000L)
+        .indexedPageCache(32_000_000L, 8_000_000L)
+        .capacity(8, Integer.MAX_VALUE, 800L, 64_000_000L)
+        .maximumDelivery(Integer.MAX_VALUE, 800L, 64_000_000L);
+    RiverDaemonInstance.OpenResult opened = new RiverDaemonInstance.OpenResult();
+    assertEquals(StatusCode.OK, RiverDaemonInstance.open(
+        root.toRealPath().resolve("instance"), new ApfsRiverDaemonFileSystem(),
+        new SecureRandom(), DatabaseIncarnation.of(53, 59), "127.0.0.1",
+        InetAddress.getByName("127.0.0.1"), 0, LoopbackServerLimits.defaults(8),
+        plan, EmbeddedLockDiagnosticsConfig.disabled(), 8, opened));
+    RiverDaemonInstance instance = opened.instance();
+    Object[] owners = {instance.server, instance.database, instance.databaseDirectory,
+        instance.securityDirectory, instance.material, instance.tls,
+        instance.validityFence, instance.identity};
+    StalledShutdownWorker worker = new StalledShutdownWorker(instance.server());
+    try {
+      assertEquals(StatusCode.TIMEOUT, instance.close());
+      assertEquals(StatusCode.TIMEOUT, instance.close());
+      assertFalse(instance.servicesClosed());
+      Object[] retained = {instance.server, instance.database, instance.databaseDirectory,
+          instance.securityDirectory, instance.material, instance.tls,
+          instance.validityFence, instance.identity};
+      for (int index = 0; index < owners.length; index++) {
+        assertSame(owners[index], retained[index]);
+      }
+    } finally {
+      worker.close();
+      // Only the fixture may detach a failed server, after proving its threads exited.
+      instance.server = null;
+      assertEquals(StatusCode.OK, instance.close());
+    }
+  }
+
   @Test
   void failedDatabaseCloseRetainsIdentityUntilOpenSessionCloses(@TempDir Path root)
       throws Exception {

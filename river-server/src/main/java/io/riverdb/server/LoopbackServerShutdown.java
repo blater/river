@@ -10,9 +10,9 @@ final class LoopbackServerShutdown {
   private LoopbackServerShutdown() { }
 
   static StatusCode close(LoopbackRiverServer server) {
+    long deadline = System.nanoTime() + SHUTDOWN_TIMEOUT_MILLIS * 1_000_000L;
     server.running = false;
     StatusCode status = closeListener(server);
-    long deadline = System.nanoTime() + SHUTDOWN_TIMEOUT_MILLIS * 1_000_000L;
     status = joinUntil(server.acceptor, deadline, status);
     Thread[] workers = new Thread[server.slots.length];
     synchronized (server) {
@@ -30,7 +30,17 @@ final class LoopbackServerShutdown {
       }
     }
     for (Thread worker : workers) {
-      status = joinUnbounded(worker, status);
+      status = joinUntil(worker, deadline, status);
+    }
+    if (server.acceptor != null && server.acceptor.isAlive()) {
+      server.lastStatus = StatusCode.TIMEOUT;
+      return StatusCode.TIMEOUT;
+    }
+    for (Thread worker : workers) {
+      if (worker != null && worker.isAlive()) {
+        server.lastStatus = StatusCode.TIMEOUT;
+        return StatusCode.TIMEOUT;
+      }
     }
     if (server.validityFence != null) {
       StatusCode fenceStatus = server.validityFence.close();
@@ -68,18 +78,4 @@ final class LoopbackServerShutdown {
     }
   }
 
-  private static StatusCode joinUnbounded(Thread thread, StatusCode current) {
-    if (thread == null) return current;
-    boolean interrupted = false;
-    while (thread.isAlive()) {
-      try {
-        thread.join();
-      } catch (InterruptedException interruption) {
-        interrupted = true;
-        current = StatusCode.CANCELLED;
-      }
-    }
-    if (interrupted) Thread.currentThread().interrupt();
-    return current;
-  }
 }

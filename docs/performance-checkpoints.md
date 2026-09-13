@@ -2897,3 +2897,31 @@ passed the public-server sample/all smoke (one worker, seed42, retries20,
 1s warmup/3s measured): `river_harness_20260911_151305_76415185`.
 Manifest checksums, warmup/measured outcomes, invariants and graceful shutdown
 passed. Logs: `/private/tmp/river-m5-main/postmerge-055b-{install,smoke}.log`.
+
+## 2026-09-13 — bounded shutdown correctness checkpoint (tic-treebeard)
+
+Branch: `ticket/tic-treebeard-shutdown-deadline`, base `ef935596`.
+The delivery replaces unbounded shell/process and Java worker joins, preserves
+live-worker dependencies and evidence on timeout, and rejects forced/nonzero
+server termination as successful workload evidence. Independent Astra review
+approved this lifecycle scope, not a hard guarantee for kernel calls.
+
+Validation: full river-server tests; every river-server-app test class in bounded
+batches; source/module policy checks; shell syntax and simulated shutdown tests;
+focused mapped-file close/reopen and checkpoint/recovery tests. The aggregate
+app-suite command hit the conservative absolute command limit; no JVM remained,
+and named batches completed its coverage. No clean/full-repository benchmark
+campaign was run for this lifecycle correction.
+
+The rebuilt four-worker tiny/standard serializable TPS smoke (seed 42, one
+warehouse, one-second warmup and measurement, 1 GiB/512 MiB heaps) passed at
+474 TPS with zero errors, completed CHECKPOINT and normal shutdown. This short
+sample is correctness evidence only. The earlier unchanged-Java four-worker
+sample passed at 496 TPS; the single-worker 455 TPS sample is excluded because
+the then-current supervisor could misclassify forced termination as success.
+No throughput improvement or resolved kernel trigger is claimed.
+
+Exact configuration, logs and command supervisor are retained under
+`/Users/blater/src/river-performance-evidence/20260913-checkpoint-deadline/`;
+see [the investigation](plans/checkpoint-kernel-hang-20260913.md).
+Promotion tag: `perf-checkpoint-20260913-shutdown-deadline`.
