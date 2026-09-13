@@ -1,6 +1,6 @@
 ---
 id: tic-e5ff
-status: open
+status: closed
 type: epic
 assignee: blater
 parent: tic-30c3
@@ -11,26 +11,30 @@ tags:
     - p1
     - transactions
     - wal
-deps:
-    - tic-5db4
+deps: []
 created: 2026-09-04T14:59:38.401234Z
+resolution: superseded
+superseded-by:
+    - tic-rowlie
+superseded-deps:
+  - tic-5db4
 ---
 # P1: break the serialized commit and lock ceiling
 
 Reduce the independently measured singleton-force and broad lock-ownership ceilings without weakening serializable isolation or acknowledged durability.
 
-## Design
+### Design
 
 Implement the smallest scalable P1 route in docs/perf_review.md: logical sealing, resource admission, cumulative cohort reservation, canonical physical staging, chunked WAL, durable publication, and exact cleanup.
 
-## Outcome
+### Outcome
 
 P1 closes only when its child tickets preserve one end-to-end commit mechanism,
 pass correctness and recovery gates, and either move a declared ten-terminal
 denominator or explicitly expose the next measured ceiling. This epic records
 that integrated decision; it does not implement it.
 
-## In Scope / Owning Mechanism
+### In Scope / Owning Mechanism
 
 The epic owns child ordering, dependency boundaries, the shared P1 invariants,
 the declared performance denominators, and the final promotion decision. Each
@@ -38,7 +42,7 @@ child ticket owns exactly one design, audit, enabler, implementation, or
 evidence responsibility; production ownership remains with those tickets and
 the canonical commit-path components they name.
 
-## Non-goals
+### Non-goals
 
 - Production implementation, opportunistic fixes, or use as a catch-all for
   discoveries made while executing a child ticket.
@@ -47,7 +51,7 @@ the canonical commit-path components they name.
 - Duplicating child acceptance criteria or allowing one child to absorb another
   child's mechanism for delivery convenience.
 
-## Stop Conditions
+### Stop Conditions
 
 - Do not begin a production P1 child until its own prerequisites and scope contract
   are satisfied. A new prerequisite blocks that child; independent work becomes
@@ -59,7 +63,7 @@ the canonical commit-path components they name.
   verification proves its contract; do not invent replacement work to keep the
   epic active.
 
-## Maximum Change Shape
+### Maximum Change Shape
 
 This epic may change only planning, dependencies, aggregate evidence, and the
 promotion decision. It may not carry production code. No child may introduce a
@@ -67,11 +71,11 @@ second executor, writer, queue, logical representation, WAL path, durability
 state machine, transaction outcome, or compatibility route; a required new
 owner is a separate architectural decision.
 
-## Acceptance Criteria
+### Acceptance Criteria
 
 P1 funnel and stage metrics reconcile; eligible writes form effective cohorts or the remaining force path is explicitly explained; lock footprint is semantically justified; correctness and recovery gates pass.
 
-## Notes
+### Notes
 
 ### 2026-09-04 ten-terminal architecture priority review
 
@@ -83,7 +87,7 @@ pre-force durability overlap required from `tic-f1bb`. Exposing WAL force,
 physical preflight, or relational execution as the next ceiling is acceptable;
 retaining a mechanism that moves no declared denominator is not.
 
-## 2026-09-07 user-directed follow-up mapping
+### 2026-09-07 user-directed follow-up mapping
 
 The user selected three ordered outcomes, represented by existing owners and
 one missing architecture story:
@@ -110,3 +114,7 @@ its own complete correctness, clean, review, slopmark and matched TPS gates.
 This is an explicit dependency correction, not a declaration that P0 passed.
 Reconcile stale post-force descriptions before accepting b368; do not recreate
 already-delivered pre-force publication, lock release or observed-read barriers.
+
+### 2026-09-13 performance realignment
+
+Superseded by `tic-rowlie`. Original scope above is retained as historical context, not the active execution contract. No code or performance result is certified by this closure. The delivered artifact is the reviewed backlog disposition in [the handover](../plans/performance-three-epics-handover.md). Pending consumers/dependencies are explicitly mapped there.

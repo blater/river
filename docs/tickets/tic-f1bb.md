@@ -3,7 +3,7 @@ id: tic-f1bb
 status: open
 type: story
 assignee: blater
-parent: tic-e5ff
+parent: tic-rowlie
 delivery: code
 tags:
     - performance
@@ -29,14 +29,14 @@ for their required durability. The canonical writer nevertheless blocks in that
 force and cannot prepare the next queued cohort. Remove that serialization while
 preserving the existing SQL/workload/isolation/durability contract.
 
-## Outcome
+### Outcome
 
 Eligible queued work is physically prepared, appended and published while an
 earlier captured local force is outstanding. Repeated matched standard-workload
 TPS improves and declared queue/lock-residence or force/cohort denominators move.
 The existing transaction, WAL, publication and budget owners remain authoritative.
 
-## In scope and maximum change shape
+### In scope and maximum change shape
 
 Implement the accepted b368/92e3 contract as one end-to-end extension of the
 existing path. Replace single-pending-cohort assumptions atomically: retained
@@ -50,14 +50,14 @@ must be explicitly accepted under 92e3, with bounded handoff and provider/memory
 ownership proof. No duplicate commit executor, outcome state machine, fallback,
 logical representation, dependency policy or compatibility mode.
 
-## Non-goals
+### Non-goals
 
 No new WAL format, weaker acknowledgement, SQL transaction-program collapse,
 client/protocol changes, lock/retry tuning or artificial batching delay. Merely
 repeating existing pre-force publication or rearranging work after force returns
 is not the selected mechanism. No unrelated lifecycle or transaction cleanup.
 
-## Acceptance
+### Acceptance
 
 - Held-force tests prove physical successor work progresses before force return;
   successive mutations of the same page retain exact generations and dependencies.
@@ -76,7 +76,7 @@ is not the selected mechanism. No unrelated lifecycle or transaction cleanup.
   capture/cleanup receipts must pass. Slopmark, independent concurrency/recovery
   review, affected tests, clean full gate and pushed checkpoint complete delivery.
 
-## Stop conditions and readiness
+### Stop conditions and readiness
 
 Do not begin until every dependency closes and the 92e3 execution/provider/resource
 contract is accepted. Reject the optimization if no declared mechanism moves, no
@@ -87,3 +87,7 @@ unproductive scheduling complexity. The b368 timing model is not a TPS promise.
 This reconciliation supersedes the 2026-09-04 post-force publication assumptions
 and requirement that force-per-write alone demonstrate progress. The canonical
 mapping remains in [tic-e5ff](tic-e5ff.md).
+
+### 2026-09-13 performance realignment
+
+Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled correctness gates remain authoritative. Follow [the current handover](../plans/performance-three-epics-handover.md); this move certifies no implementation or performance outcome.
