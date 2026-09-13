@@ -18,6 +18,7 @@ import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
@@ -49,6 +50,8 @@ public final class LoopbackRiverServer {
   private final AtomicLong authorizationFailures = new AtomicLong();
   volatile StatusCode lastStatus = StatusCode.OK;
   volatile boolean running = true;
+  private final AtomicBoolean shutdownStarted = new AtomicBoolean();
+  private volatile StatusCode shutdownStatus = StatusCode.RETRY;
   Thread acceptor;
 
   private LoopbackRiverServer(
@@ -165,10 +168,11 @@ public final class LoopbackRiverServer {
   }
 
   public StatusCode close() {
-    if (!running) {
-      return StatusCode.CLOSED;
+    if (!shutdownStarted.compareAndSet(false, true)) {
+      return shutdownStatus.isOk() ? StatusCode.CLOSED : shutdownStatus;
     }
-    return LoopbackServerShutdown.close(this);
+    shutdownStatus = LoopbackServerShutdown.close(this);
+    return shutdownStatus;
   }
 
   private void runAccepts() {

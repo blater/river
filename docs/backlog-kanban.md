@@ -2,6 +2,17 @@
 
 ## Current performance frontier — 2026-09-13
 
+Host-safety override: the user has reauthorized Java builds and TPS with an
+enforced 15-second stop deadline. Run one guarded diagnostic at a time and retain
+failure evidence; no automatic retries after a timeout. The repeated
+checkpoint/termination hang is tracked in [tic-osgiliath](tickets/tic-osgiliath.md).
+The immediate source slice is [tic-treebeard](tickets/tic-treebeard.md), one
+15-second shutdown budget and preservation of unreaped-process data, followed
+by the request-progress contract in [tic-nimloth](tickets/tic-nimloth.md).
+The saved kernel stacks now establish the blocked Java/launchd lock relationship;
+see [the investigation](plans/checkpoint-kernel-hang-20260913.md). A shutdown
+timeout does not establish kernel safety or release kernel-held resources.
+
 Follow [the lead handover](plans/performance-three-epics-handover.md) and ticket
 frontmatter. The new ordered priorities are reusable execution metadata
 [tic-carcharoth](tickets/tic-carcharoth.md), commit-force overlap

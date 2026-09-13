@@ -35,7 +35,7 @@ Options:
   --server-start-timeout-seconds=N
                                 Server readiness timeout (default: 30)
   --server-stop-timeout-seconds=N
-                                Graceful server-stop timeout (default: 20)
+                                Total runner/server shutdown budget (default: 15, maximum: 15)
   --resource-maximum-bytes=N    Managed database root budget (default: 1073741824)
   --resource-delivery-bytes=N   Aggregate transaction/WAL budget (default: 268435456)
   --resource-lock-provider-bytes=N
@@ -129,7 +129,7 @@ warmup_seconds=1
 measured_seconds=10
 runner_timeout_seconds=
 server_start_timeout_seconds=30
-server_stop_timeout_seconds=20
+server_stop_timeout_seconds=15
 resource_maximum_bytes=1073741824
 resource_delivery_bytes=268435456
 resource_lock_provider_bytes=67108864
@@ -237,6 +237,7 @@ require_positive warmup_seconds "$warmup_seconds"
 require_positive measured_seconds "$measured_seconds"
 require_positive server_start_timeout_seconds "$server_start_timeout_seconds"
 require_positive server_stop_timeout_seconds "$server_stop_timeout_seconds"
+((server_stop_timeout_seconds <= 15)) || die "server-stop-timeout-seconds must not exceed 15"
 require_positive resource_maximum_bytes "$resource_maximum_bytes"
 require_positive resource_delivery_bytes "$resource_delivery_bytes"
 require_positive resource_lock_provider_bytes "$resource_lock_provider_bytes"
@@ -258,10 +259,11 @@ if [[ -n $seed ]]; then require_uint seed "$seed"; fi
 
 java_bin=${RIVER_JAVA:-java}
 command -v "$java_bin" >/dev/null 2>&1 || die "Java launcher not found: $java_bin"
-java_runtime_home=$(
-  "$java_bin" -XshowSettings:properties -version 2>&1 |
-    sed -n 's/^[[:space:]]*java\.home = //p' | head -1
-)
+java_runtime_output=$("$java_bin" -XshowSettings:properties -version 2>&1)
+java_runtime_home=$(printf '%s\n' "$java_runtime_output" |
+  sed -n 's/^[[:space:]]*java\.home = //p' | head -1)
+java_version=$(printf '%s\n' "$java_runtime_output" |
+  sed -nE '/^[[:space:]]*(openjdk|java)[[:space:]].*version/p' | head -1)
 if [[ -n $client_jfr && -z $server_jfr ]]; then
   case $client_jfr in
     *.jfr) server_jfr="${client_jfr%.jfr}.server.jfr" ;;
@@ -295,6 +297,14 @@ temp_dir=$(cd -- "$temp_dir" && pwd -P)
 server_pid=
 runner_pid=
 owned_process_cleanup_valid=true
+shutdown_deadline_initialized=false
+shutdown_deadline_seconds=0
+shutdown_failure_reported=false
+runner_term_sent=false
+runner_kill_sent=false
+server_kill_sent=false
+server_exit_status=0
+reaped_child_status=0
 server_stop=
 runner_status=125
 runner_timed_out=false
@@ -376,7 +386,7 @@ write_metadata() {
     printf 'run.command_line=%s\n' "$(redacted_command_line)"
     printf 'environment.java_launcher=%s\n' "$java_bin"
     printf 'environment.java_home=%s\n' "${java_runtime_home:-unavailable}"
-    printf 'environment.java_version=%s\n' "$("$java_bin" -version 2>&1 | head -1 || true)"
+    printf 'environment.java_version=%s\n' "${java_version:-unavailable}"
     printf 'environment.os=%s\n' "$(uname -srm)"
     printf 'configuration.backend=%s\n' "$backend"
     printf 'configuration.profile=%s\n' "$profile"
@@ -421,64 +431,160 @@ write_metadata() {
   persist_file "$staged" "$metadata"
 }
 
+# BEGIN owned-process shutdown helpers
+initialize_shutdown_deadline() {
+  if [[ $shutdown_deadline_initialized != true ]]; then
+    # SECONDS has whole-second resolution; reserve one second for poll overshoot.
+    shutdown_deadline_seconds=$((SECONDS + server_stop_timeout_seconds - 1))
+    shutdown_deadline_initialized=true
+  fi
+}
+
+shutdown_deadline_open() {
+  ((SECONDS < shutdown_deadline_seconds))
+}
+
+shutdown_deadline_near() {
+  ((SECONDS >= shutdown_deadline_seconds - 1))
+}
+
+child_is_reapable() {
+  local pid=$1 job_snapshot job_line job_marker job_pid job_state job_command
+  # River launches each owned process as one direct Bash child and never disowns it.
+  # One jobs snapshot avoids an external process-table helper and status races.
+  job_snapshot=$(jobs -l 2>/dev/null) || return 1
+  while IFS= read -r job_line; do
+    read -r job_marker job_pid job_state job_command <<<"$job_line"
+    [[ $job_pid == "$pid" ]] || continue
+    case $job_state in
+      Running|Stopped*) return 1 ;;
+      Done|Exit|Terminated|Killed) return 0 ;;
+      *) return 1 ;;
+    esac
+  done <<<"$job_snapshot"
+  return 0
+}
+
+reap_child_if_exited() {
+  local pid=$1
+  child_is_reapable "$pid" || return 1
+  if wait "$pid" 2>/dev/null; then reaped_child_status=0;
+  else reaped_child_status=$?; fi
+  return 0
+}
+
+reap_server_if_exited() {
+  reap_child_if_exited "$server_pid" || return 1
+  server_exit_status=$reaped_child_status
+  server_pid=
+  return 0
+}
+
+record_server_shutdown_failure() {
+  if [[ $server_kill_sent == true ]]; then
+    run_result=cleanup_failed; run_phase=cleanup
+    run_status=SERVER_FORCED_TERMINATION; run_exit_status=1
+  elif ((server_exit_status != 0)); then
+    run_result=cleanup_failed; run_phase=cleanup
+    run_status=SERVER_EXIT_FAILED; run_exit_status=1
+  else
+    return 1
+  fi
+}
+
+report_unresponsive_processes() {
+  [[ $shutdown_failure_reported != true ]] || return 0
+  shutdown_failure_reported=true
+  printf 'result=cleanup_failed phase=cleanup status=OWNED_PROCESS_UNRESPONSIVE exit_status=1\n' >&2
+  [[ -z ${runner_pid:-} ]] || printf 'unresponsive_runner_pid=%s\n' "$runner_pid" >&2
+  [[ -z ${server_pid:-} ]] || printf 'unresponsive_server_pid=%s\n' "$server_pid" >&2
+  printf 'retained_database=%s/database\n' "$temp_dir" >&2
+  printf 'retained_evidence_dir=%s\n' "$temp_dir" >&2
+  printf 'error: owned process remained live after SIGKILL; preserving database and evidence\n' >&2
+}
+
 stop_server() {
   [[ -n ${server_pid:-} ]] || return 0
-  [[ -e $server_stop ]] || : >"$server_stop"
-  local attempt=0
-  while kill -0 "$server_pid" 2>/dev/null && ((attempt < server_stop_timeout_seconds * 10)); do
-    sleep 0.1
-    ((attempt += 1))
-  done
-  if kill -0 "$server_pid" 2>/dev/null; then
-    kill "$server_pid" 2>/dev/null || true
-    attempt=0
-    while kill -0 "$server_pid" 2>/dev/null &&
-        ((attempt < server_stop_timeout_seconds * 10)); do
+  if reap_server_if_exited; then return 0; fi
+  initialize_shutdown_deadline
+  if [[ $owned_process_cleanup_valid == true ]] && shutdown_deadline_open &&
+      ! shutdown_deadline_near; then
+    [[ -e $server_stop ]] || : >"$server_stop"
+    while ! child_is_reapable "$server_pid" && shutdown_deadline_open &&
+        ! shutdown_deadline_near; do
       sleep 0.1
-      ((attempt += 1))
     done
+    if reap_server_if_exited; then return 0; fi
   fi
-  if kill -0 "$server_pid" 2>/dev/null; then
-    owned_process_cleanup_valid=false
+
+  if [[ $server_kill_sent != true ]]; then
+    if reap_server_if_exited; then return 0; fi
     kill -KILL "$server_pid" 2>/dev/null || true
+    server_kill_sent=true
   fi
-  wait "$server_pid" 2>/dev/null || true
-  server_pid=
+  while ! child_is_reapable "$server_pid" && shutdown_deadline_open; do
+    sleep 0.1
+  done
+  if reap_server_if_exited; then return 0; fi
+
+  owned_process_cleanup_valid=false
+  report_unresponsive_processes
+  return 1
 }
 
 stop_runner() {
   [[ -n ${runner_pid:-} ]] || return 0
-  if kill -0 "$runner_pid" 2>/dev/null; then
+  if reap_child_if_exited "$runner_pid"; then runner_pid=; return 0; fi
+  initialize_shutdown_deadline
+
+  if [[ $runner_term_sent != true && $runner_kill_sent != true ]]; then
     kill "$runner_pid" 2>/dev/null || true
-    local attempt=0
-    while kill -0 "$runner_pid" 2>/dev/null &&
-        ((attempt < server_stop_timeout_seconds * 10)); do
-      sleep 0.1
-      ((attempt += 1))
-    done
+    runner_term_sent=true
   fi
-  if kill -0 "$runner_pid" 2>/dev/null; then
-    owned_process_cleanup_valid=false
+  while ! child_is_reapable "$runner_pid" && shutdown_deadline_open &&
+      ! shutdown_deadline_near; do
+    sleep 0.1
+  done
+  if reap_child_if_exited "$runner_pid"; then runner_pid=; return 0; fi
+
+  if [[ $runner_kill_sent != true ]]; then
+    if reap_child_if_exited "$runner_pid"; then runner_pid=; return 0; fi
     kill -KILL "$runner_pid" 2>/dev/null || true
+    runner_kill_sent=true
   fi
-  wait "$runner_pid" 2>/dev/null || true
-  runner_pid=
+  while ! child_is_reapable "$runner_pid" && shutdown_deadline_open; do
+    sleep 0.1
+  done
+  if reap_child_if_exited "$runner_pid"; then runner_pid=; return 0; fi
+
+  owned_process_cleanup_valid=false
+  report_unresponsive_processes
+  return 1
 }
 
+shutdown_owned_processes() {
+  if [[ $owned_process_cleanup_valid == true ]]; then stop_runner || true; fi
+  stop_server
+}
+# END owned-process shutdown helpers
+
+# BEGIN cleanup function
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
   set +e
-  stop_runner
-  stop_server
+  shutdown_owned_processes
   if ((status != 0)) && [[ $run_status == NOT_STARTED ]]; then
     run_result=tool_failed; run_phase=startup
     run_status=TOOL_FAILED; run_exit_status=$status
   fi
   if [[ $owned_process_cleanup_valid != true ]]; then
     run_result=cleanup_failed; run_phase=cleanup
-    run_status=OWNED_PROCESS_LEAK; run_exit_status=1; status=1
+    run_status=OWNED_PROCESS_UNRESPONSIVE; run_exit_status=1; status=1
+    report_unresponsive_processes
+    exit 1
   fi
+  if record_server_shutdown_failure; then status=1; fi
   if [[ -f $artifact ]]; then
     if persist_file "$artifact" "$artifact_destination"; then artifact_published=true; fi
   fi
@@ -503,6 +609,7 @@ cleanup() {
   fi
   exit "$status"
 }
+# END cleanup function
 trap cleanup EXIT
 trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run_exit_status=130; exit 130' INT
 trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run_exit_status=143; exit 143' TERM
@@ -547,7 +654,7 @@ server_pid=$!
 server_ready_status=false
 for ((attempt = 0; attempt < server_start_timeout_seconds * 10; attempt++)); do
   if [[ -s $server_ready ]]; then server_ready_status=true; break; fi
-  if ! kill -0 "$server_pid" 2>/dev/null; then break; fi
+  if child_is_reapable "$server_pid"; then break; fi
   sleep 0.1
 done
 if [[ $server_ready_status != true ]]; then
@@ -598,16 +705,21 @@ echo "profile=$profile mix=$mix warmup_seconds=$warmup_seconds measured_seconds=
   "${runner_args[@]}" >"$stdout_log" 2>"$stderr_log" &
 runner_pid=$!
 runner_started=$SECONDS
-while kill -0 "$runner_pid" 2>/dev/null; do
+while ! child_is_reapable "$runner_pid"; do
   if ((SECONDS - runner_started >= runner_timeout_seconds)); then
     runner_timed_out=true
-    stop_runner
+    if ! stop_runner; then exit 1; fi
     runner_status=124
     break
   fi
   sleep 0.1
 done
 if [[ -n $runner_pid ]]; then
+  if ! child_is_reapable "$runner_pid"; then
+    owned_process_cleanup_valid=false
+    report_unresponsive_processes
+    exit 1
+  fi
   set +e; wait "$runner_pid"; runner_status=$?; set -e
   runner_pid=
 fi
@@ -615,7 +727,7 @@ fi
 echo "=== TPS runner output ==="; cat "$stdout_log"
 if [[ -s $stderr_log ]]; then echo "=== runner stderr ===" >&2; cat "$stderr_log" >&2; fi
 
-stop_server
+if ! stop_server; then exit 1; fi
 diagnostic_status=SERVER_METRICS_MISSING
 performance_capture_status=SERVER_METRICS_MISSING
 server_measured_deadlocks=0
@@ -734,7 +846,9 @@ phase_state=$(awk '
   /^phase_complete=/ { split($0, f, "="); if (active==f[2]) active="" }
   END { print (active == "" ? "none" : active) }
 ' "$combined_log")
-if [[ $runner_timed_out == true ]]; then
+if record_server_shutdown_failure; then
+  :
+elif [[ $runner_timed_out == true ]]; then
   run_result="${phase_state}_failed"; [[ $phase_state == none ]] && run_result=startup_failed
   run_phase=${phase_state/none/startup}; run_status=TIMEOUT; run_exit_status=124
 elif ((runner_status != 0)); then
