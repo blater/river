@@ -2949,13 +2949,16 @@ failures remain recorded, rather than being removed from the evidence.
 The user clarified that 15 seconds bounds lack of meaningful progress, not total
 runtime. A reviewed temporary monitor observes successful finite work on the exact
 test thread; unrelated workers, CPU activity and observer heartbeats cannot extend
-the deadline. Its healthy fixture ran for 17.116 seconds; a stuck owner with an
-active unrelated worker and stuck shutdown hook was killed in 14.047 seconds.
+the deadline. Its healthy fixture passed in 17.116 seconds. The watchdog
+failure-mode test also passed: the deliberately stalled owner, active unrelated
+worker and deliberately stuck shutdown hook were stopped in 14.047 seconds.
+That injected condition was not an observed River hang or a test failure.
 The unchanged 65-run sort passed in 32.188 seconds and the 65,537-row SQL
 checkpoint/reopen test passed in 60.652 seconds, with 643,785/1,802,342 completed
 work units respectively. Both exited normally. Only those two correctness runs
 used instrumentation; allocation and TPS samples remain uninstrumented. No remote
-CI exception was needed. AGENTS.md now states the intended distinction explicitly.
+CI exception was needed. The user subsequently withdrew the timeout policy on
+2026-09-14; these monitor results remain historical evidence only.
 
 Existing graph-sort allocation assertions failed at 808/576 bytes (limit 512).
 A prescribed identical-classpath control/candidate check passed and complete
@@ -2996,3 +2999,69 @@ improvement or kernel-safety guarantee is claimed.
 Evidence, negative-control XML, completed test batches and command configuration:
 `/Users/blater/src/river-performance-evidence/20260913-twofoot/`.
 Promotion tag: `perf-checkpoint-20260913-result-bitmap`.
+
+## 2026-09-14 — withdrawal of timeout policy
+
+The user withdrew the 15-second rule and all work introduced to enforce it.
+AGENTS.md no longer imposes it. TPS restores its prior configurable 20-second
+stop default without a maximum-15 restriction; the added Java worker cutoff and
+its fixtures are withdrawn. The isolated startup change `ce7645e1` is reversed
+in the working tree. Eight unintegrated TLS files and prior draft notes are
+archived outside source at `/private/tmp/river-withdrawn-scope-20260914-zz5y0kd6/`.
+Prior deadline test results above are historical, not acceptance requirements.
+Ownership, failure reporting, bitmap and retry correctness fixes are preserved.
+This withdrawal is not a CHECKPOINT crash fix. No Java or database workload was
+run for the withdrawal.
+
+
+## 2026-09-14 — execution epic disposition (tic-miriel)
+
+Published execution source: 27033027, feature6d5bc571 and annotated
+perf-checkpoint-20260913-result-bitmap. Integration3cfe00e7 has identical
+production classes; later changes record evidence only. The sole accepted
+mechanism is twofoot's measured bitmap allocation removal, with the clean
+checkpoint, exact samples and independent approval recorded above. No TPS gain
+is attributed to it. Eowyn is rejected without code; telemnar's independently
+reviewed candidate45c694cc remains only on ticket/tic-telemnar-unchanged-discovery;
+bracegirdle is rejected without adding a reverse catalogue. Miriel/carcharoth
+conclude this bounded subset. WAL and protocol retain their separate gates.
+
+Evidence root:
+`/Users/blater/src/river-performance-evidence/20260914-performance-epics/`.
+It retains frozen control/candidate runtimes, source identity, commands, test
+logs, all failed/intermediate checks, complete JFR and readers. The `reports/`
+subdirectory retains the immutable harness reports below, also available in
+river-harness/runs. No source fingerprint framework or new runtime gate is added.
+
+Telemnar configuration: sample/all, four workers, one warehouse, seed42,
+retries20, 5s warmup; GraalVM25.0.4+7.1, heap1GiB, READ COMMITTED with explicit
+FOR UPDATE, TCP/TLS1.3, local durable WAL. Original harnessaba7c43 unchanged.
+
+| Order | Variant | Seconds | TPS | p99 ms | Report suffix (river_harness_) |
+| --- | --- | ---: | ---: | ---: | --- |
+| 1 | control | 30 | 573.28 | 31.752 | 20260914_002520_ab40ca7c |
+| 2 | control | 30 | 561.37 | 32.735 | 20260914_002645_2d027ede |
+| 3 | candidate | 30 | 561.94 | 32.621 | 20260914_003419_1105d3b5 |
+| 4 | candidate | 30 | 547.93 | 32.997 | 20260914_003515_c233e9ff |
+| 5 | control | 120 | 553.57 | 32.915 | 20260914_003632_bfc63bcf |
+| 6 | candidate | 120 | 450.40 | 40.665 | 20260914_003843_f9ba7c1f |
+| 7 | candidate | 120 | 452.78 | 41.091 | 20260914_004054_07a05969 |
+| 8 | control | 120 | 438.00 | 41.746 | 20260914_004305_c807bb65 |
+
+All eight pass invariants, exact attempt accounting, zero failed/unknown outcomes,
+graceful stop and owned-data removal. The longer C/A/A/C order was predeclared.
+The last control also slows: no candidate cause or host cause is proved, and
+no repeatable useful benefit is established. Reject the change, issue no
+candidate clean-build checkpoint or tag, and retain its41 passing focused tests,
+zero-allocation predicate proof, unchanged slopmark and independent source review.
+
+The aligned current-source profile (report20260914_004815_40a4747e) and adjacent
+control(20260914_004934_857ef89e) pass at513.66/535.28TPS. The29.979189s selected
+window covers18,054attempts and15,399commits. There are1,578 selected request/
+commit stacks,53FK-scan/fivebinding-view/37prepare samples and1,006,320 socket
+writes (55.74/attempt,65.35/commit). These are inclusive sampled presence and
+aggregate events, not CPU-time or per-family exchange counts. Seven channel
+forces total43.712ms; complete mapped-force and unmounted lock/queue waits remain
+unmeasured. The -4.04% adjacent timing difference does not isolate profiler cost.
+Independent execution_admission_review accepts da4e's limited admission conclusion
+and the explicit accepted/rejected dispositions, with no wider performance claim.

@@ -1,6 +1,6 @@
 ---
 id: tic-carcharoth
-status: open
+status: closed
 type: epic
 priority: 1
 assignee: blater
@@ -42,3 +42,12 @@ parity remains owned by `tic-9c58`, outside this implementation epic.
 
 [Lead handover](../plans/performance-three-epics-handover.md) owns current sequence
 and shared validation. Original historical plans remain architecture evidence.
+
+### Completed bounded outcome, 2026-09-14
+
+All child dispositions are recorded: da4e concludes the admission investigation
+with explicit attribution limits; twofoot is delivered at published 27033027;
+eowyn, bracegirdle and telemnar are rejected without integration of their code;
+miriel accepts the bitmap allocation benefit and passing integrated behavior.
+No SQL metadata cache, reverse catalogue or duplicate equality policy is added.
+This closes the execution epic; the separate WAL and protocol gates remain open.
