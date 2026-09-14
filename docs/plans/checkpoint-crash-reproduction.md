@@ -5,7 +5,8 @@ and all three raw panics: [tic-emeldir](../tickets/tic-emeldir.md).
 
 The user selected preparation for later execution on 2026-09-14, then authorized
 step 1: rehearse capture against the controlled held-write test and revise the
-plan under independent review. Two controlled rehearsals are complete. **The
+plan under independent review. Two controlled rehearsals are complete. The user then authorized the bounded
+pending-write diagnostic and its downstream-gate validation. **The
 actual host-crash workload below remains unexecuted and deferred.** The fixture
 pauses before the native write; it does not reproduce the kernel fault.
 
@@ -36,34 +37,95 @@ collector commands and exit results; the additional first-attempt Java dump is
 retained as `second.threads.json`, with its own JVM timestamp. The first startup capture is retained as a failed
 checkpoint-timing attempt, not relabelled as a successful held capture.
 
-The revised next steps are:
+The missing-argument observation is now implemented and validated at the
+provider boundary, as recorded below. The revised remaining sequence is:
 
-1. **Close the in-flight argument gap in another controlled rehearsal.** Prefer
-   a small diagnostic at the existing file-I/O owner that exposes the current
-   operation, file identity, explicit position/count, Java thread and start time
-   before entering the provider call, and completion afterward. It must remain
-   inspectable without acquiring the transaction-manager or blocked I/O lock.
-   Prove it against independently known fixture arguments while a controlled
-   gate is held **after snapshot publication and before the underlying I/O call**,
-   including cleanup after returned failure. The current external
-   `CheckpointPageFile` gate runs before `delegate.write`, so it cannot validate
-   a snapshot inside `NioDurableFile`. A downstream test seam belongs to that
-   separately proposed implementation, not this completed rehearsal.
-   Do not add a second I/O path, executor,
-   per-write log stream, or general tracing framework. This diagnostic is a
-   proposed next implementation boundary, **not delivered in this rehearsal**.
-2. Establish working filesystem/native capture on the disposable host. Treat
-   different OS/JDK/filesystem configurations as separate experiments.
-3. Only then consider one instrumented run of the original workload. Require a
+1. Establish working filesystem/native capture on the disposable host. Treat
+   different OS/JDK/filesystem configurations as separate experiments. Validate
+   that tracing actually records a controlled write before its crash workload.
+2. Only then consider one instrumented run of the original workload. Require a
    captured in-flight operation and its ordering against cancellation/signals;
-   stop on missing capture rather than repeat an unchanged experiment.
-4. Minimize the identified operation sequence; choose one evidence-driven
+   stop on missing capture rather than repeat an unchanged experiment. A sampled
+   call still needs native stack/descriptor association. If only uncaptured
+   calls remain, the argument gap is unresolved for those calls.
+3. Minimize the identified operation sequence; choose one evidence-driven
    comparison afterward. No workload sweep or provider replacement is justified.
 
 Independent `execution_admission_review` inspected both attempts and independently
 decoded the JFR files. It accepted the second controlled capture and required the
 attribution, virtual-thread, timing, and filesystem-authentication limits above.
 
+
+## Pending-write diagnostic contract
+
+Enable before opening file handles with
+`-Driver.diagnostics.pendingFileWrites=true` and record JFR. The custom
+`river.PendingFileWrite` event defaults to a 100 ms period and is enabled by the
+existing profile recording. The isolated command below supplies the property
+through the existing `--server-java-option` option.
+
+Each handle retains one immutable sampled invocation at the existing positional
+`FileChannel.write` boundary. This covers ordinary positional writes and the
+one-byte extension write; it does not cover mapped stores, force, truncate,
+unmap or close as pending operations. Publication precedes the call, so a sample
+is not proof of native entry. It does not change write admission or scheduling.
+
+| Event field | Interpretation |
+| --- | --- |
+| `handleId`, `path` | JVM-local diagnostic handle identity and opened path. Different handles at the same path have separate IDs/counters; neither is an OS descriptor or durable file identity. |
+| `active`, `sampleAvailable` | A tracked call remains pending; exact arguments exist only when a sample is available. |
+| `position`, `requestedRemainingBytes` | Exact arguments for the sampled physical attempt, including retries/partial-write attempts. |
+| `writerThreadId`, `writerThreadName` | Java writer identity, distinct from the periodic event's emitting thread. |
+| `writeStartMonotonicNanos` | Sampled invocation start in the JVM's monotonic clock domain, not wall time. |
+| `currentUncapturedOperationCount` | Currently pending overlapping calls whose arguments are unavailable. A missing sample does not imply idle when this count is nonzero. |
+| `cumulativeSkippedOperationCount` | Total uncaptured attempts over this handle's diagnostic lifetime; historical gaps do not disappear when calls return. |
+
+Read each event as one coherent observation; do not substitute the latest
+completed JFR FileWrite for an uncaptured call. An empty recording is a capture
+gap until configuration and collection are verified. Neither Java thread identity
+nor a path establishes the OS thread/descriptor association still required by
+the native investigation.
+
+Diagnostics are disabled by default. Enabled capture allocates immutable state
+on write transitions and emits periodic events, including idle observations
+until the handle closes. Its timing and allocation effects make the instrumented
+run diagnostic evidence, not a throughput comparison. The callback acquires no
+file, directory or transaction-manager lock. It remains registered through
+closure while tracked calls are pending, and unregisters after physical closure
+and their completion. Calls arriving after retirement use the unchanged closed
+channel path and cannot newly enter native write.
+
+## Downstream-gate validation, 2026-09-14
+
+`NioPendingFileWriteTest` holds a forwarding test FileChannel after production
+publication and before its real delegate write. The earlier outer
+`CheckpointPageFile` gate cannot establish this ordering. No production test
+hook, alternate I/O provider, or checkpoint workload is introduced.
+
+All three focused tests passed on GraalVM Java 25.0.4 / macOS 26.6.2. An external
+`jcmd JFR.dump` attached to test JVM 6220 while the gates were held; the fixture
+used an ordinary `Recording(profile)` with no explicit custom-event enablement.
+The retained dump contains eight active observations at
+17:35:42.208–17:35:42.512 UTC:
+
+| Controlled observation | Result |
+| --- | --- |
+| First handle at `pending.dat` | Handle 2, position 128, requested 4 bytes, writer 45 (`pending-write-captured`), monotonic start 16030994828250. All matched independently known gate arguments and writer identity. |
+| Concurrent call on that handle | Its gate was entered without waiting for the captured call. Current uncaptured and cumulative skipped counts were both 1; the first sample was unchanged. |
+| Second handle at the same path | Handle 3, position 512, requested 5 bytes, writer 48, no coverage gaps. Handle identity distinguished it from handle 2. |
+| Event-emitting thread | Java thread 38, `JFR Periodic Tasks`; it was not either writer. Its OS thread ID cannot be attributed to the pending write. |
+| First call completed before its overlap | JFR subsequently showed active=true, sampleAvailable=false, currentUncaptured=1; then idle with cumulativeSkipped=1 after completion. |
+| Extension and returned error | Size 4096 exposed offset 4095/count 1; the injected error exposed offset 700/count 3, returned IO_FAILURE and cleared its pending state. |
+| Closure and disabled path | Direct file close and directory-owned close removed their actual JFR hooks after drain. A directory-closed pending call remained observable until it returned CLOSED. Property-disabled handles created no diagnostic owner. |
+
+The tests release all controlled gates, terminate owned virtual-thread workers,
+close recordings/files/directories and reap the external jcmd process. The live
+JFR file was copied into persistent evidence before fixture cleanup. Raw JFR,
+decoded events, jcmd output, exact Gradle command, test XML, module-validation
+logs and slopmark output are under
+`/Users/blater/src/river/benchmark-results/checkpoint-pending-write-20260914/`.
+This closes the sampled Java argument-capture gap; it does not reproduce native
+stuck I/O, guarantee a native descriptor association, or resolve the kernel cause.
 
 ## What the next run must distinguish
 
@@ -133,6 +195,7 @@ tools/tps-test.sh --version=checkpoint-isolated-01 --profile=tiny \
   --evidence=diagnostic --fresh-load=true --warehouses=1 --batch-rows=32 \
   --maximum-attempts=32 --warmup-seconds=2 --measured-seconds=60 \
   --seed=42 --isolation=serializable --sample-id=checkpoint-isolated-01 \
+  --server-java-option=-Driver.diagnostics.pendingFileWrites=true \
   --server-jfr="$incident_dir/server.jfr" \
   --output-dir="$incident_dir/run" > "$incident_dir/console.log" 2>&1
 ```
@@ -172,6 +235,8 @@ ps -p "$server_pid" -o pid,ppid,state,etime,command > "$incident_dir/$capture.pr
 /usr/bin/sample "$server_pid" 2 1 -file "$incident_dir/$capture.native.txt"
 "$JAVA_HOME/bin/jcmd" "$server_pid" JFR.dump \
   filename="$incident_dir/$capture.jfr" > "$incident_dir/$capture.jfr-dump.txt" 2>&1
+"$JAVA_HOME/bin/jfr" print --json --events river.PendingFileWrite \
+  "$incident_dir/$capture.jfr" > "$incident_dir/$capture.pending-writes.json"
 ```
 
 Run native sampling and descriptor capture from separate terminals if a jcmd
