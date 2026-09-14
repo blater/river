@@ -1,6 +1,6 @@
 ---
 id: tic-b1b7
-status: in_progress
+status: closed
 type: task
 priority: 1
 assignee: blater
@@ -8,6 +8,9 @@ parent: tic-5db4
 delivery: code
 base-commit: 590c4bfdfd486303e158377abba23c72f78c5e6c
 branch: ticket/tic-b1b7-general-concurrency
+delivered-commit: abdc506506efa487e459ed6adde6d5896754e536
+evidence:
+    - /Users/blater/src/river/benchmark-results/tic-b1b7-20260914/README.md
 tags:
     - p0
     - concurrency
