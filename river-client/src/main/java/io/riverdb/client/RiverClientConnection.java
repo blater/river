@@ -203,6 +203,12 @@ public final class RiverClientConnection implements RiverDatabase {
 
   StatusCode fail(StatusCode status) {
     lastStatus = status;
+    // A failed exchange admits no more input; TLS close must not wait for peer data.
+    try {
+      socket.shutdownInput();
+    } catch (IOException ignored) {
+      // Preserve the failure status and still close the transport.
+    }
     closeSocket();
     lastStatus = status;
     return status;

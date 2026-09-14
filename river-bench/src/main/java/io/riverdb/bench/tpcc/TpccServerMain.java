@@ -11,6 +11,7 @@ import io.riverdb.platform.riverd.RiverDaemonFileSystems;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.app.RiverDaemonInstance;
+import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -86,11 +87,34 @@ public final class TpccServerMain {
         waitFor(configuration.stopFile());
       }
     } finally {
-      if (recording != null) recording.close();
-      writeMetrics(
-          configuration.metricsFile(), database, configuration.maximumConnections(),
-          performanceCapture);
-      close(instance);
+      shutdown(
+          instance, recording, configuration.metricsFile(),
+          configuration.maximumConnections(), performanceCapture);
+    }
+  }
+
+  static void shutdown(
+      RiverDaemonInstance instance,
+      TpccTraceRecording recording,
+      Path metricsFile,
+      int admittedConnections,
+      TpccPerformanceCapture.ServerResult performanceCapture) throws IOException {
+    StatusCode serverStatus = StatusCode.RETRY;
+    try {
+      serverStatus = instance.server().close();
+    } finally {
+      try {
+        if (recording != null) recording.close();
+      } finally {
+        try {
+          if (serverStatus.isOk() || serverStatus == StatusCode.CLOSED) {
+            writeMetrics(
+                metricsFile, instance.database(), admittedConnections, performanceCapture);
+          }
+        } finally {
+          close(instance, serverStatus);
+        }
+      }
     }
   }
 
@@ -154,10 +178,12 @@ public final class TpccServerMain {
     while (!Files.exists(file)) Thread.sleep(10);
   }
 
-  private static void close(RiverDaemonInstance instance) {
+  private static void close(RiverDaemonInstance instance, StatusCode serverStatus) {
     StatusCode status = instance.close();
-    if (!status.isOk() && status != StatusCode.CLOSED) {
-      System.err.println("TPS server shutdown failed: instance=" + status);
+    if (!serverStatus.isOk() && serverStatus != StatusCode.CLOSED) {
+      System.err.println("TPS server shutdown failed: phase=server_stop status=" + serverStatus);
+    } else if (!status.isOk() && status != StatusCode.CLOSED) {
+      System.err.println("TPS server shutdown failed: phase=instance_close status=" + status);
     }
   }
 

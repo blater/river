@@ -189,3 +189,71 @@ whether the first stall preceded termination. No causal finding supports a
 production change or ticket closure. The current P0 campaign is separate; a
 passing checkpoint demonstrates that run's operation, not repair of the
 historical kernel stall. No new reproduction or instrumentation was added.
+
+
+## Controlled reproduction and later host run, 2026-09-14
+
+The user explicitly requested a controlled IO_FAILURE reproduction and clean
+exit, then selected preparation of the actual kernel-hang run for later
+execution. The [isolated reproduction procedure](checkpoint-crash-reproduction.md)
+retains the workload and specifies capture before termination. It has not been
+executed.
+
+Two source findings now narrow the next experiment:
+
+- `RiverClientConnector` applies a 30-second socket read timeout.
+  `RiverClientWireExchange` maps that IOException to IO_FAILURE, as it does
+  transport failures. Its existing completed-request counter increments only
+  after a full response; the checkpoint runner can distinguish a returned server
+  error from no completed response without inventing another protocol status.
+- `TpccServerMain` originally read live database metrics before stopping server
+  workers. `activeTransactionCount` takes the same transaction-manager monitor
+  held by `commitMaintenance` across the checkpoint participant. Thus diagnostics
+  could block the shutdown path before cancellation was requested. Server
+  cancellation/join must precede those metrics.
+
+Neither finding proves the original error was a socket timeout or identifies the
+initiating kernel write. The old bounded-worker-join description above is
+historical: commit `1cbe1b9f` restored the user's authorized unbounded join policy.
+The current work preserves that policy. An uninterruptible kernel operation
+cannot be made terminal by reordering userspace cleanup.
+
+Independent review also checked persistent returned page-write failures. Ordinary
+close deliberately stops at a failed flush; the table refuses to detach dirty
+pages/sidecars. Construction/open-failure abandonment APIs are not a safe
+substitute for published-database shutdown. A permanent-error discard-close
+contract would need proven WAL/checkpoint recovery coverage and explicit
+ownership semantics. This investigation does not silently ignore the error or
+claim that forced process termination is clean shutdown.
+
+### Controlled live-stack result
+
+The real JDBC held-write test captured an additional cleanup delay, not just an
+assumed socket timeout. At 35 seconds, the client thread was in:
+
+```text
+NioSocketImpl.timedRead
+SSLSocketInputRecord.deplete
+SSLSocketImpl$AppInputStream.readLockedDeplete
+SSLSocketImpl.bruteForceCloseInput
+SSLSocketImpl.duplexCloseOutput
+SSLSocketImpl.close
+RiverClientConnection.closeSocket
+RiverClientConnection.fail
+RiverClientWireExchange.transfer
+```
+
+IO_FAILURE became visible after **60,010 ms** with zero completed response
+requests. The server remained at the test's releasable page-write gate. After
+release, the server instance closed, the child JVM exited normally, and a new
+process recovered the committed row. The separate server-returned IO_FAILURE
+case also passed normal process exit and recovery after restoring the provider;
+its completed-response delta was one.
+
+Baseline XML, including the full mounted Java stack, is retained at
+`/Users/blater/src/river/benchmark-results/checkpoint-20260914/before-tls-close.xml`.
+This identifies the controlled client's extra wait precisely. It does not prove
+the historical host crash began the same way or identify the server's native
+write in that crash. The targeted correction discards inbound transport only
+after an exchange has already failed, then uses the existing socket-close owner.
+Ordinary graceful close, cancellation, and production timeout values stay intact.

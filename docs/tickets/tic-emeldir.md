@@ -209,6 +209,9 @@ No workload was launched for this ticket's investigation.
 
 ## Embedded complete runtime failure evidence
 
+Tabs are expanded to spaces for repository source policy. The attachment retains
+the byte-for-byte original logs.
+
 ```text
 version=wal-admission-79c4da2e
 branch=ticket/tic-5b3e-cohort-admission
@@ -240,14 +243,14 @@ phase_complete=drain
 phase_start=checkpoint
 === runner stderr ===
 Exception in thread "main" java.sql.SQLException: execute update failed: IO_FAILURE
-	at io.riverdb.jdbc.JdbcExceptions.failure(JdbcExceptions.java:23)
-	at io.riverdb.jdbc.JdbcExceptions.require(JdbcExceptions.java:15)
-	at io.riverdb.jdbc.RiverJdbcStatement.completeUpdate(RiverJdbcStatement.java:411)
-	at io.riverdb.jdbc.RiverJdbcStatement.executeUpdateSql(RiverJdbcStatement.java:70)
-	at io.riverdb.jdbc.RiverJdbcStatement.executeUpdate(RiverJdbcStatement.java:61)
-	at io.riverdb.bench.tpcc.TpccRunPhase.checkpointAndIdentify(TpccRunPhase.java:64)
-	at io.riverdb.bench.tpcc.TpccRunPhase.execute(TpccRunPhase.java:30)
-	at io.riverdb.bench.tpcc.TpccAcceptanceMain.main(TpccAcceptanceMain.java:14)
+  at io.riverdb.jdbc.JdbcExceptions.failure(JdbcExceptions.java:23)
+  at io.riverdb.jdbc.JdbcExceptions.require(JdbcExceptions.java:15)
+  at io.riverdb.jdbc.RiverJdbcStatement.completeUpdate(RiverJdbcStatement.java:411)
+  at io.riverdb.jdbc.RiverJdbcStatement.executeUpdateSql(RiverJdbcStatement.java:70)
+  at io.riverdb.jdbc.RiverJdbcStatement.executeUpdate(RiverJdbcStatement.java:61)
+  at io.riverdb.bench.tpcc.TpccRunPhase.checkpointAndIdentify(TpccRunPhase.java:64)
+  at io.riverdb.bench.tpcc.TpccRunPhase.execute(TpccRunPhase.java:30)
+  at io.riverdb.bench.tpcc.TpccAcceptanceMain.main(TpccAcceptanceMain.java:14)
 result=cleanup_failed phase=cleanup status=OWNED_PROCESS_UNRESPONSIVE exit_status=1
 unresponsive_server_pid=57024
 retained_database=/private/var/folders/s8/j683tdnx0hl_8jnrts2r0bkh0000gn/T/river-tps-test.BaUqm0/database
@@ -710,3 +713,13 @@ repository ticket validation has 153 pre-existing issues and no newly introduced
 issue. Every archived file was checked against its manifest hash.
 
 Archive SHA-256: `ea5c8f5272b84f51089f9a7e53826f2181fec5e25bbbba222dd7bd8e1ee00785`.
+
+
+### Follow-up reproduction preparation
+
+The user selected preparation of the actual kernel-hang reproduction for later
+execution. [tic-osgiliath](tic-osgiliath.md#accepted-failure-handling-slice) records
+the controlled JDBC reproductions, confirmed TLS cleanup delay and bounded
+shutdown corrections. The [isolated procedure](../plans/checkpoint-crash-reproduction.md)
+is prepared but unexecuted. This incident ticket remains open: the initiating
+server write in the host panic has not been identified.

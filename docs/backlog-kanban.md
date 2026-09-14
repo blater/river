@@ -40,6 +40,15 @@ Ticket frontmatter and the [lead handover](plans/performance-three-epics-handove
 remain authoritative. Historical phase queues below cannot reinstate the retired
 Payment-before-profile or blanket P1-before-execution ordering.
 
+## Current incident priority — 2026-09-14
+
+The user prioritized reproducing checkpoint IO_FAILURE and establishing clean
+server exit after the third host panic. [tic-osgiliath](tickets/tic-osgiliath.md)
+is in progress, with incident evidence in [tic-emeldir](tickets/tic-emeldir.md).
+Controlled I/O-failure and shutdown tests precede any further WAL measurements.
+The initiating kernel write remains unresolved; a fault-injection pass cannot
+close the host-crash investigation. P0 scaling/accounting remain deferred.
+
 ## Impact-first WAL sequence — 2026-09-14
 
 The immediate performance objective is [tic-f1bb](tickets/tic-f1bb.md): overlap
@@ -53,7 +62,7 @@ P0 as a WAL prerequisite and deferred its scaling/accounting work.
 | Critical path to force overlap | tic-ca05 → tic-5b3e → tic-6f81 → tic-92e3 → tic-f1bb | Keep audits to their existing contract decisions. Deliver cumulative admission as a necessary resource-safety enabler, then force overlap with demonstrated runtime benefit. |
 | Deferred, conditional optimization | tic-4d14 → tic-845d | After the force-overlap decision, consider exactly one proved redundant lock rule. No current cycle proves a lock is redundant. |
 | Final acceptance | tic-7a5a | Evaluate the accepted mechanisms once its existing dependencies are resolved; do not run a promotion campaign ahead of implementation. |
-| Outside the active performance queue | tic-osgiliath and formal comparison/reporting work | Retain existing owners and requirements. Resume checkpoint diagnosis for new actionable evidence or a recurrence blocking this path, rather than repeat the retained-data audit. |
+| Incident priority above WAL | tic-osgiliath / tic-emeldir | Reproduce returned checkpoint failures, verify cleanup, and identify the initiating kernel write. Formal comparison/reporting remains deferred. |
 
 The lock stream is deferred, not removed from epic completion dependencies.
 tic-ca05 is now closed: its existing logical contract passed review and 43
