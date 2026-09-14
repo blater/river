@@ -3138,3 +3138,14 @@ The final verdict completes primula with gwindor accepted, morgoth rejected and
 nimloth correctness-only. Carcharoth is complete as recorded above. Rowlie remains
 open behind the independently confirmed missing P0 mixed-isolation reproducer;
 no new fixture scope, cohort/force implementation or gate waiver is introduced.
+
+
+## 2026-09-14 — checkpoint failure handling, correctness only
+
+`checkpoint-20260914-io-failure-reproducer` records the accepted bounded slice in
+[tic-osgiliath](tickets/tic-osgiliath.md#accepted-failure-handling-slice): controlled
+IO_FAILURE/process-exit/recovery proof, removal of the confirmed duplicate TLS
+read wait, and shutdown-before-metrics ordering. Validation and individual
+timings are recorded in the ticket. This is not throughput evidence, a WAL
+feature acceptance, or a kernel-crash fix. Actual host reproduction is prepared
+for later isolated execution; P0 scaling/accounting remain deferred.

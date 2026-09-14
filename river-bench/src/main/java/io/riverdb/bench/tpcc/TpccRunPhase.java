@@ -1,5 +1,6 @@
 package io.riverdb.bench.tpcc;
 
+import io.riverdb.jdbc.RiverConnectionMetrics;
 import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -46,7 +47,7 @@ final class TpccRunPhase {
       TpccInvariants.verifyLoaded(connection, config);
       if (config.freshLoad()) {
         try (Statement statement = connection.createStatement()) {
-          if (statement.executeUpdate("CHECKPOINT") != 0) {
+          if (executeCheckpoint(connection, statement, "load") != 0) {
             throw new SQLException("load checkpoint changed rows");
           }
         }
@@ -61,11 +62,33 @@ final class TpccRunPhase {
     try (Connection connection = DriverManager.getConnection(config.url());
         Statement statement = connection.createStatement()) {
       TpccInvariants.verifyBusiness(connection, config);
-      if (statement.executeUpdate("CHECKPOINT") != 0) {
+      if (executeCheckpoint(connection, statement, "post_run") != 0) {
         throw new SQLException("checkpoint changed rows");
       }
       System.out.println("post_run_invariants=passed checkpoint=completed");
       return TpccDatabaseIdentity.capture(connection, config);
+    }
+  }
+
+  static int executeCheckpoint(Connection connection, Statement statement, String phase)
+      throws SQLException {
+    RiverConnectionMetrics metrics = connection.unwrap(RiverConnectionMetrics.class);
+    long requestsBefore = metrics.completedRequests();
+    long started = System.nanoTime();
+    try {
+      return statement.executeUpdate("CHECKPOINT");
+    } catch (SQLException failure) {
+      long elapsed = System.nanoTime() - started;
+      long requestDelta = metrics.completedRequests() - requestsBefore;
+      String response = requestDelta == 1 ? "received"
+          : requestDelta == 0 ? "missing" : "ambiguous";
+      System.err.println(
+          "TPS checkpoint failed: phase=" + phase
+              + " elapsed_nanos=" + elapsed
+              + " completed_requests_delta=" + requestDelta
+              + " response=" + response
+              + " sql_state=" + failure.getSQLState());
+      throw failure;
     }
   }
 }

@@ -1,6 +1,7 @@
 ---
 id: tic-osgiliath
-status: open
+status: in_progress
+branch: ticket/tic-osgiliath-checkpoint-exit
 type: bug
 priority: 1
 assignee: blater
@@ -106,3 +107,72 @@ This confirms recurrence, not the initiating Java write/file or a repair. The
 60-second candidate failed CHECKPOINT/cleanup and is not accepted performance
 evidence. Root-cause/fix ownership remains here; emeldir owns this incident's
 missing-write evidence investigation. No reproduction was run for ticket creation.
+
+### Checkpoint failure/exit work, 2026-09-14
+
+User explicitly requested reproduction and clean exit after IO_FAILURE. Claimed by
+root integrator on base d97b1084, branch `ticket/tic-osgiliath-checkpoint-exit`,
+worktree `/private/tmp/river-checkpoint-exit`. Scope: controlled returned-I/O-error
+and blocked-checkpoint shutdown tests, fixes demonstrated by those tests, and
+identifying evidence needed for the initiating kernel write. No performance
+feature changes. Kernel-hang reproduction requires an isolated environment;
+ordinary fault-injection tests do not establish that the host panic is fixed.
+
+### Accepted failure-handling slice
+
+Checkpoint: `checkpoint-20260914-io-failure-reproducer`, correctness/diagnostics
+only. The incident remains in progress; the native write that initiated the
+macOS stall is still unknown.
+
+- Controlled general JDBC CHECKPOINT tests reproduce both a returned page-write
+  IO_FAILURE and a missing response while a write is deliberately held. They
+  use real authenticated server instances in child JVMs, require normal exit,
+  restart in the parent only after the original owner exits, and verify the
+  committed row. No TPC-C constructs are required.
+- The held-write capture showed a second TLS read during failed-transport close:
+  IO_FAILURE appeared at 60,010 ms. Failure-only input shutdown removes that
+  duplicate wait; the same scenario then reported IO_FAILURE at 30,009 ms before
+  the write was released. This is not a universal socket-close time bound.
+- The TPS server now stops connection workers before JFR/metrics capture. Tests
+  prove socket cancellation precedes a held transaction-manager monitor and
+  instance cleanup still happens after a JFR dump failure.
+- CHECKPOINT error diagnostics reuse the connection's completed-request counter:
+  one response means a received server error, zero means no completed response,
+  other deltas are ambiguous. The original SQLException is preserved.
+
+Validation on GraalVM Java 25.0.4 / macOS 26.6.2: 20 client tests, 75 server-app
+tests, and six selected benchmark tests passed (101 total, zero skips/failures),
+plus source and module policies. The final test-cleanup adjustment passed the
+same two child-process tests again (30,009 ms held-case error visibility). No TPS sample or host-crash workload was run.
+Slopmark: client connection 87.9892 → 87.4761; TPS server 75.118 unchanged;
+run phase 0 unchanged. Independent execution_admission_review approved the
+source, ownership, and test boundaries.
+
+```sh
+JAVA_HOME=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Contents/Home \
+GRADLE_USER_HOME=/private/tmp/river-checkpoint-gradle \
+./gradlew --no-daemon --offline --project-cache-dir /private/tmp/river-checkpoint-cache \
+  :river-client:test :river-server-app:test :river-bench:test \
+  --tests io.riverdb.bench.tpcc.TpccRunPhaseTest \
+  --tests io.riverdb.bench.tpcc.TpccServerMainShutdownTest \
+  --tests io.riverdb.bench.tpcc.TpccMetricsTest \
+  verifySourcePolicy verifyModuleGraph
+```
+
+The standalone reproduction is also runnable with just
+`:river-server-app:test --tests io.riverdb.server.app.RiverDaemonCheckpointJdbcTest`
+using the same Gradle invocation prefix. Baseline XML with the 35-second live
+stack, final validation logs, and final reproducer XML are retained under
+`/Users/blater/src/river/benchmark-results/checkpoint-20260914/`. The
+[source investigation](../plans/checkpoint-kernel-hang-20260913.md#controlled-live-stack-result)
+embeds the relevant stack and causal limits.
+
+| Outcome | Status |
+| --- | --- |
+| Returned IO_FAILURE reproduction, clean exit after provider recovery, committed-data restart | Verified |
+| Held-write client timeout, removal of second TLS wait, clean exit/recovery after release | Verified |
+| Shutdown-before-metrics ordering and diagnostic-failure cleanup | Fixed and tested |
+| Actual kernel-stall reproduction | Prepared for later isolated execution at the user's direction; [procedure](../plans/checkpoint-crash-reproduction.md) |
+| Initiating kernel write and clean termination while kernel I/O never returns | Unresolved; no userspace termination guarantee |
+| Persistent storage failure with no recovery of the provider | Close remains unsuccessful with ownership retained; no dirty-state discard contract added |
+| WAL acceptance and P0 scaling/accounting | No new acceptance; existing deferrals remain |
