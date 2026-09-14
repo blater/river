@@ -24,6 +24,11 @@ public final class GeneratedClientFileTestFixture {
   }
 
   public static GeneratedClientFileTestFixture open(Path root) throws IOException {
+    return open(root, EmbeddedLockDiagnosticsConfig.disabled());
+  }
+
+  public static GeneratedClientFileTestFixture open(
+      Path root, EmbeddedLockDiagnosticsConfig diagnostics) throws IOException {
     if (root == null) throw new IOException("missing test root");
     RiverDaemonFileSystemResult filesystem = new RiverDaemonFileSystemResult();
     StatusCode status = RiverDaemonFileSystems.current(filesystem);
@@ -38,7 +43,7 @@ public final class GeneratedClientFileTestFixture {
         datadir, filesystem.fileSystem(), random,
         INCARNATION, "127.0.0.1", InetAddress.getByName("127.0.0.1"), 0,
         LoopbackServerLimits.defaults(16), resources.request(),
-        EmbeddedLockDiagnosticsConfig.disabled(), resources.maximumActiveTransactions(), opened);
+        diagnostics, resources.maximumActiveTransactions(), opened);
     if (!status.isOk()) throw new IOException("open authenticated test instance: " + status);
     return new GeneratedClientFileTestFixture(opened);
   }
