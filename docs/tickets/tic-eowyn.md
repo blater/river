@@ -1,16 +1,18 @@
 ---
 id: tic-eowyn
-status: open
+status: closed
 type: story
 priority: 1
 assignee: blater
 parent: tic-carcharoth
-delivery: code
+delivery: evidence
+evidence:
+    - docs/tickets/tic-da4e.md
 tags:
     - performance
+links:
+    - tic-da4e
 created: 2026-09-13T11:46:48.620348Z
-deps:
-  - tic-da4e
 ---
 # Reuse derived table binding metadata by schema identity
 
@@ -43,3 +45,15 @@ uninstrumented runs establish performance. No per-row allocation, unbounded
 retention, extra execution path, weakened isolation/durability, or benchmark-family
 policy may be introduced. A negative result is a documented rejection, not a
 performance delivery. Independent review is required before promotion.
+
+### Reviewed rejection, 2026-09-14
+
+Rejected without production changes. The retained current-owner profile records
+one binding-view preparation stack among 1,185 selected request/commit samples.
+Independent `execution_admission_review` confirms that mutable view construction
+would need an ownership/invalidation change unsupported by that measured cost.
+This disposes of the present candidate; it does not claim the cost is always zero.
+No cache, retained view, implementation or performance benefit is delivered.
+The integrated tic-miriel gate must explicitly account for this rejected outcome.
+Evidence: tic-da4e and its retained profile-summary.txt under
+`/Users/blater/src/river-performance-evidence/20260913-da4e/`.
