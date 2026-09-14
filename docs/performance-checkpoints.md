@@ -3149,3 +3149,16 @@ read wait, and shutdown-before-metrics ordering. Validation and individual
 timings are recorded in the ticket. This is not throughput evidence, a WAL
 feature acceptance, or a kernel-crash fix. Actual host reproduction is prepared
 for later isolated execution; P0 scaling/accounting remain deferred.
+
+
+## 2026-09-14 — pending file-write observation, diagnostics only
+
+`checkpoint-20260914-pending-write-observation` records the bounded
+[tic-osgiliath](tickets/tic-osgiliath.md#accepted-pending-write-observation) sampler
+and downstream-gate proof. External JFR capture identifies a sampled pending
+write before it returns, with exact arguments, Java writer identity and explicit
+overlap gaps. It is opt-in and allocates when enabled; no throughput gain or
+native-kernel repair is claimed. All 28 applicable platform/JDBC tests and source/
+module policies passed; 16 existing platform-specific tests skipped on macOS.
+Independent review accepted the source and raw capture. Actual crash execution
+and P0 scaling/accounting remain deferred; WAL acceptance is unchanged.

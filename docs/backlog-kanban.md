@@ -45,9 +45,11 @@ Payment-before-profile or blanket P1-before-execution ordering.
 The user prioritized reproducing checkpoint IO_FAILURE and establishing clean
 server exit after the third host panic. [tic-osgiliath](tickets/tic-osgiliath.md)
 is in progress, with incident evidence in [tic-emeldir](tickets/tic-emeldir.md).
-Controlled I/O-failure and shutdown tests precede any further WAL measurements.
-The initiating kernel write remains unresolved; a fault-injection pass cannot
-close the host-crash investigation. P0 scaling/accounting remain deferred.
+Controlled I/O-failure, shutdown and pending-write capture tests are accepted.
+The [revised isolated plan](plans/checkpoint-crash-reproduction.md) next requires
+working native/filesystem tracing before any crash workload. The initiating
+kernel write remains unresolved; controlled passes cannot close the host-crash
+investigation. Actual crash execution and P0 scaling/accounting remain deferred.
 
 ## Impact-first WAL sequence — 2026-09-14
 

@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
 
 final class NioDurableFile implements DurableFile {
   private static final int MAX_ZERO_PROGRESS = 16;
@@ -19,6 +20,7 @@ final class NioDurableFile implements DurableFile {
   private final long generation;
   private final int slot;
   private final long slotEpoch;
+  private final PendingFileWriteDiagnostics.Entry pendingWriteDiagnostics;
   private final ByteBuffer extensionByte = ByteBuffer.allocate(1);
   private volatile boolean closed;
   private final NioMappedWindow mappedHeader;
@@ -31,6 +33,7 @@ final class NioDurableFile implements DurableFile {
       long generation,
       int slot,
       long slotEpoch,
+      Path path,
       FileIoMode mode) {
     this.owner = owner;
     this.channel = channel;
@@ -39,6 +42,7 @@ final class NioDurableFile implements DurableFile {
     this.slotEpoch = slotEpoch;
     mappedHeader = mode == FileIoMode.MAPPED ? new NioMappedWindow(channel, 4096) : null;
     mappedData = mode == FileIoMode.MAPPED ? new NioMappedWindow(channel, NioMappedWindow.BYTES) : null;
+    pendingWriteDiagnostics = PendingFileWriteDiagnostics.register(path);
   }
 
   @Override
@@ -104,7 +108,7 @@ final class NioDurableFile implements DurableFile {
     int zeroProgress = 0;
     try {
       while (source.hasRemaining()) {
-        int written = channel.write(source, position + transferred);
+        int written = writeChannel(source, position + transferred);
         if (written == 0) {
           if (++zeroProgress == MAX_ZERO_PROGRESS) {
             result.setBytesTransferred(transferred);
@@ -215,7 +219,7 @@ final class NioDurableFile implements DurableFile {
         extensionByte.clear();
         int zeroProgress = 0;
         while (extensionByte.hasRemaining()) {
-          int written = channel.write(extensionByte, sizeBytes - 1);
+          int written = writeChannel(extensionByte, sizeBytes - 1);
           if (written == 0 && ++zeroProgress == MAX_ZERO_PROGRESS) return StatusCode.RETRY;
         }
         owner.counters().recordWrite(1);
@@ -250,8 +254,29 @@ final class NioDurableFile implements DurableFile {
     }
     closed = true;
     StatusCode mappedStatus = closeMappings();
-    StatusCode channelStatus = owner.closeHandle(this, channel, generation, slot, slotEpoch);
+    StatusCode channelStatus;
+    try {
+      channelStatus = owner.closeHandle(this, channel, generation, slot, slotEpoch);
+    } finally {
+      retireWriteDiagnosticsAfterChannelClose();
+    }
     return mappedStatus.isOk() ? channelStatus : mappedStatus;
+  }
+
+  private int writeChannel(ByteBuffer source, long position) throws IOException {
+    PendingFileWriteDiagnostics.Entry diagnostics = pendingWriteDiagnostics;
+    if (diagnostics == null) return channel.write(source, position);
+    int tracking = diagnostics.begin(position, source.remaining());
+    try {
+      return channel.write(source, position);
+    } finally {
+      diagnostics.end(tracking);
+    }
+  }
+
+  private void retireWriteDiagnosticsAfterChannelClose() {
+    PendingFileWriteDiagnostics.Entry diagnostics = pendingWriteDiagnostics;
+    if (diagnostics != null && !channel.isOpen()) diagnostics.retire();
   }
 
   private StatusCode transferMapped(long position, ByteBuffer buffer, IoResult result, boolean write) {
@@ -305,6 +330,8 @@ final class NioDurableFile implements DurableFile {
       return mappedStatus;
     } catch (IOException failure) {
       return NioStatusMapper.known(failure);
+    } finally {
+      retireWriteDiagnosticsAfterChannelClose();
     }
   }
 }

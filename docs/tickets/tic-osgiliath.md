@@ -1,7 +1,7 @@
 ---
 id: tic-osgiliath
 status: in_progress
-branch: ticket/tic-osgiliath-capture-rehearsal
+branch: ticket/tic-osgiliath-pending-write
 type: bug
 priority: 1
 assignee: blater
@@ -203,3 +203,69 @@ Actual host-crash execution remains deferred and the bug remains in progress.
 Independent review required and verified the downstream-gate clarification and
 the distinction between completed rehearsal and proposed implementation. Delivery
 tag: `checkpoint-20260914-capture-rehearsal` (evidence only).
+
+### Pending-write observation claim, 2026-09-14
+
+User authorized taking the review feedback forward. Root integrator owns this
+bounded diagnostic slice on stable base `f007b0f8`, branch
+`ticket/tic-osgiliath-pending-write`, worktree `/private/tmp/river-checkpoint-exit`.
+The platform owner will publish exact pending positional-write arguments before
+the provider call; a downstream controlled gate and independent review will
+validate observation and cleanup. Concurrent writes must remain unconstrained,
+with explicit sampled coverage limits. No new tracing framework, performance
+feature, or kernel-crash workload is included. The actual isolated run remains
+deferred.
+
+### Accepted pending-write observation
+
+Delivery checkpoint: `checkpoint-20260914-pending-write-observation`.
+Independent `execution_admission_review` approved production concurrency/lifetime,
+the corrected downstream tests, and independently decoded the retained live JFR.
+The incident remains in progress; this is diagnostic capability, not a kernel
+repair, WAL optimization acceptance, or throughput evidence.
+
+- Opt-in `river.diagnostics.pendingFileWrites` publishes one immutable pending
+  invocation per handle at both existing positional-write sites, including file
+  extension. `river.PendingFileWrite` reports exact offset/count, Java writer and
+  monotonic start, plus handle identity and explicit current/cumulative overlap
+  gaps. Defaults are off; enabled diagnostics allocate and alter timing.
+- Three controlled tests passed. External jcmd captured JVM 6220 while downstream
+  gates remained held: handle 2 at offset 128/count 4, virtual writer 45, one
+  uncaptured overlap; same-path handle 3 at offset 512/count 5, writer 48.
+  The periodic emitting thread was Java 38, distinct from the writers.
+- Tests verify uncaptured-only pending state after the sampled write completes,
+  resize offset/count, returned IO_FAILURE clearing, disabled handles, direct
+  close and directory-owned close, and actual JFR callback removal after drain.
+- Final affected validation passed 26 platform tests and both existing controlled
+  JDBC checkpoint/exit/recovery tests; 16 existing Linux/Windows-only tests skipped
+  on macOS. JDBC held-case error visibility was 30,008 ms. Source/module policies
+  passed. The three focused tests also passed separately. No host-crash or TPS
+  workload was run.
+- Slopmark: NioDurableDirectory 77.2063 and NioDurableFile 42.98 unchanged;
+  new diagnostics owner 0. The shared write helper preserves original I/O/status
+  handling, and the sampler acquires no file/directory/transaction lock.
+
+```sh
+JAVA_HOME=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Contents/Home \
+GRADLE_USER_HOME=/private/tmp/river-checkpoint-gradle \
+./gradlew --no-daemon --offline --project-cache-dir /private/tmp/river-checkpoint-cache \
+  :river-platform:test :river-server-app:test \
+  --tests io.riverdb.server.app.RiverDaemonCheckpointJdbcTest \
+  verifySourcePolicy verifyModuleGraph
+```
+
+The focused invocation replaces the task suffix with `:river-platform:test
+--tests io.riverdb.platform.file.nio.NioPendingFileWriteTest`. Source base is
+`f007b0f8`; final feature source is retained by this ticket branch and checkpoint.
+Exact capture fields, causal limits and revised next steps are in the
+[reproduction plan](../plans/checkpoint-crash-reproduction.md#downstream-gate-validation-2026-09-14).
+Raw live JFR, decoded JSON, jcmd output, commands, XML and validation logs:
+`/Users/blater/src/river/benchmark-results/checkpoint-pending-write-20260914/`.
+
+| Outcome | Disposition |
+| --- | --- |
+| Sampled pending Java write arguments, truthful overlap gaps, bounded lifecycle | Implemented, tested and independently accepted |
+| Actual kernel entry, OS thread/descriptor association and kernel root cause | Unresolved; pending record alone cannot establish them |
+| Filesystem/native capture readiness | Requires working administrator tracing on the disposable host; prior local fs_usage authentication gap remains |
+| Actual crash workload | Deferred for later isolated execution; not run here |
+| WAL feature acceptance and P0 scaling/accounting | Unchanged; existing P0 deferrals remain |

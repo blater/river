@@ -402,7 +402,7 @@ public final class NioDurableDirectory implements DurableDirectory {
         epoch = nextSlotEpoch++;
       }
       NioDurableFile handle = new NioDurableFile(
-          this, channel, generation, slot, epoch, mode);
+          this, channel, generation, slot, epoch, path, mode);
       handles[slot] = handle;
       slotEpochs[slot] = epoch;
       counters.recordHandleOpened();
