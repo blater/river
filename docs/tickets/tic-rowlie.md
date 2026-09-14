@@ -53,3 +53,17 @@ f1bb must establish its declared mechanism and benefit. No extra batching delay,
 weaker durability or fixed convenience caps. Shared protocol in
 [the handover](../plans/performance-three-epics-handover.md) applies. Formal parity
 is separately gated; it is not a prerequisite for diagnostic development.
+
+### Existing gate blocks completion, 2026-09-14
+
+The independent current-source readiness audit in tic-1dda confirms its required
+correlated, controlled Payment/New Order mixed-isolation reproducer is still
+missing. Phase-start barriers and the district-lock preflight are insufficient.
+The gap is already recorded in the historical failed P0 evidence; af29/8e74 did
+not deliver it. Ordinary workload runs cannot substitute for that requirement.
+
+Keep this epic and all unpassed children open. No force overlap, cohort admission
+or lock removal is implemented, and no P1 checkpoint is issued. The user forbids
+increasing scope, so this delivery records the existing blocker without creating
+a new fixture workstream or bypassing the mandatory P0 dependency. Execution and
+protocol decisions do not certify this WAL gate.

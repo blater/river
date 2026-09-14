@@ -112,3 +112,28 @@ The historical `tic-ed12` and `tic-d7c2` path is no longer an active dependency.
 This investigation's workload, statistical rules, cleanup, and other P0 stop
 conditions are unchanged; branch and variation labels identify the tested
 scenario, and no correctness or scaling gate is waived.
+
+### Readiness audit, 2026-09-14
+
+Independent execution_admission_review reconfirmed the first unmet prerequisite
+at current stable integration3cfe00e7: the correlated mixed-isolation reproducer
+required by docs/perf_review.md (Deterministic reproducer and P0 acceptance gate)
+is absent. This is the same gap retained in the 2026-09-04 evidence, not a new
+requirement. The old in-progress claim remains authoritative; this read-only
+audit does not claim a new campaign or overwrite its failed scaling evidence.
+
+Current MIXED_DIAGNOSTIC selects isolation levels but cannot control lock-boundary
+interleavings. TerminalRunner barriers synchronize phase startup only.
+TpccConflictProbe uses opposing district locks with tags; it does not execute
+real Payment/New Order transactions, both isolation combinations, the required
+three-terminal case or deterministic victim identity. TpccPaymentOrderTest uses
+mocked JDBC ordering. The delivered af29/8e74 diagnostics classify blocks and
+count retained snapshots; neither supplies this missing reproducer.
+
+No additional ordinary mixed/standard runs can fill the missing deterministic
+criterion. This ticket prohibits source, fixture, harness and tooling changes;
+the user explicitly prohibits increasing scope. Therefore the P0 gate remains
+unpassed, ca05/4d14/f1bb remain blocked by their existing dependency, and no WAL
+implementation or P1 promotion starts. No new ticket, diagnostic framework,
+workload family, timeout policy or relaxed criterion is introduced. This is a
+readiness blocker, not a fresh failed workload or permission to close P0.
