@@ -1,10 +1,11 @@
 ---
 id: tic-ca05
-status: open
+status: closed
 type: investigation
 assignee: blater
 parent: tic-rowlie
 delivery: evidence
+delivered-commit: 2333ab60f0daf4e309f4379d847f27caaf5710ec
 tags:
     - performance
     - tpcc
@@ -111,3 +112,14 @@ explicitly removed tic-1dda as a prerequisite for WAL improvement. This ticket
 may proceed through its remaining dependencies and existing WAL-specific safety,
 resource, review and performance checks. P0 remains unpassed; its campaign is not
 part of this delivery. No additional mechanism or ticket is added.
+
+### Current-source acceptance, 2026-09-14
+
+Claim: ticket/tic-ca05-current-admission, /private/tmp/river-wal-ca05,
+base 699ddf5d (production unchanged from 05c27d36). Independent review accepted
+the existing logical seal and admission contract. The complete source/test map
+and cumulative-admission boundary are in
+[the acceptance record](../delivery/evidence/2026-09-14-tic-ca05-admission.md).
+Focused existing tests: 43 passed, zero failures/errors. No code or performance
+claim is delivered. Continue existing tic-5b3e for full cohort demand and prefix
+selection; no extra preparation representation or ticket is required.
