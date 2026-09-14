@@ -133,3 +133,28 @@ The original missing-reproducer requirement is in
 above are the user-approved refinement; the Payment/New Order case remains an
 integration obligation, not a special concurrency policy.
 
+## Delivery evidence, 2026-09-14
+
+Implementation: `5373ea1ded2cb48c7d68a2ef9167383b55760177`, based on stable
+`590c4bfdfd486303e158377abba23c72f78c5e6c`.
+[Declared matrix, proof limits and commands](../plans/p0-general-concurrency-reproducers.md).
+
+All 46 controlled database cases passed: 38 general SQL cases, including 12
+selected cycles, and eight real Payment/New Order integration cases. The final
+focused run passed all 15 JUnit invocations with no skips. Final affected suites:
+engine 1,030 passed; benchmark 101 passed with two existing environment-gated
+promotion tests skipped; server-app 74 passed. `verifySourcePolicy` and
+`verifyModuleGraph` passed. Full affected validation completed in 3m 6s;
+no P0 campaign, external harness run or production change was made.
+
+Independent concurrency and relational review by `execution_admission_review`
+approved the final schedules, exact cycle and resource assertions, isolation
+evidence, bounded worker waits, victim cleanup/session reuse, acyclic controls,
+real workload regression and stated limits. No database defect was exposed.
+
+Full commands, individual results, tagged SQL, scheduler edges, resource digests,
+block classification and cleanup output are retained locally at
+`/Users/blater/src/river/benchmark-results/tic-b1b7-20260914/README.md`.
+The evidence remains in the workspace's ignored artifact directory.
+`tic-1dda` links this fixture and command; its historical failed scaling result
+and remaining P0 correctness/scaling requirements are unchanged.

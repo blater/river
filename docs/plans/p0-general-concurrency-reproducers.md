@@ -90,7 +90,7 @@ Delivery used `JAVA_HOME=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Conten
 `--project-cache-dir /private/tmp/river-b1b7-cache` in the isolated
 `/private/tmp/river-b1b7` checkout on branch `ticket/tic-b1b7-general-concurrency`.
 The full logs and JUnit case/SQL/edge/resource/capture output are retained at
-`/Users/blater/src/river-performance-evidence/20260914-b1b7/`.
+`/Users/blater/src/river/benchmark-results/tic-b1b7-20260914/`.
 Independent concurrency and relational review by `execution_admission_review`
 approved the final test-only source and causal assertions; affected-suite results
 are recorded in the ticket's delivery note. No database defect was exposed by
