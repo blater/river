@@ -78,3 +78,15 @@ tic-1dda dependencies from ca05, 4d14 and f1bb. All other dependencies and the
 WAL-specific durability, concurrency, recovery and resource checks remain intact.
 Add no tickets or speculative mechanisms; the deferred P0 campaign remains
 unpassed and outside this implementation path. The [current backlog](../backlog-kanban.md) owns the scheduling order.
+
+### Delivery disposition, 2026-09-14
+
+Completed: user-directed removal of P0 admission and ca05 logical preparation
+audit (43 tests passed; independent review; evidence commit 2333ab60).
+Blocked: 5b3e has no pre-staging demand/ownership contract for cumulative frozen
+page generations within its present change boundary. Its exact source and
+existing-test evidence are recorded on that ticket; this blocks 6f81, 92e3 and
+f1bb through their remaining dependencies. No runtime optimization is delivered
+or claimed. Deferred: P0 scaling/accounting, the conditional 4d14/845d lock
+stream, and 7a5a promotion pending accepted implementations. Keep osgiliath open
+for actionable new checkpoint evidence. No new tickets or mechanisms were added.

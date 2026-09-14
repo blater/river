@@ -99,3 +99,12 @@ explicitly removed tic-1dda as a prerequisite for WAL improvement. This ticket
 may proceed through its remaining dependencies and existing WAL-specific safety,
 resource, review and performance checks. P0 remains unpassed; its campaign is not
 part of this delivery. No additional mechanism or ticket is added.
+
+### Current WAL readiness, 2026-09-14
+
+The user deferred P0 scaling/accounting and removed it from WAL admission.
+ca05 is accepted and closed. The remaining chain is blocked by the existing
+[5b3e physical admission boundary](tic-5b3e.md): cumulative frozen-page demand
+is discovered after staging, with no accepted pre-stage prefix contract within
+its current scope. Keep this ticket open and its remaining dependencies intact;
+no implementation, acceptance claim or new follow-up ticket is added here.
