@@ -1,6 +1,6 @@
 ---
 id: tic-primula
-status: open
+status: closed
 type: epic
 priority: 1
 assignee: blater
@@ -44,3 +44,14 @@ outcomes and cross-repository consumer deliveries are accounted for.
 
 [Lead handover](../plans/performance-three-epics-handover.md) specifies shared
 acceptance and independently owned harness/comparison boundaries.
+
+### Completed bounded outcome, 2026-09-14
+
+Edoras establishes the admitted common-binding ownership contract. Gwindor's
+prepared catalogue and exact cleanup are locally delivered in river-harness
+at4ff2a71d, with no remote publication at the user's instruction. Morgoth is
+rejected without code. Nimloth's separately reviewed rollback safety fix is
+integrated3d70a826. Rian accepts repeated local workload benefit, compatibility,
+mechanism and cleanup evidence after independent review. No driver cache,
+pipelining, second outcome policy or transport rewrite is introduced. This
+completes the protocol epic; WAL/P0 and formal comparison gates remain separate.

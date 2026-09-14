@@ -1,37 +1,40 @@
 # River delivery Kanban and priority queue
 
-## Current performance frontier — 2026-09-13
+## Current performance frontier — 2026-09-14
 
-Host-safety override: the user has reauthorized Java builds and TPS with an
-enforced 15-second stop deadline. Run one guarded diagnostic at a time and retain
-failure evidence; no automatic retries after a timeout. The repeated
-checkpoint/termination hang is tracked in [tic-osgiliath](tickets/tic-osgiliath.md).
-The shutdown slice [tic-treebeard](tickets/tic-treebeard.md) is delivered at
-`55dc899e`, tagged `perf-checkpoint-20260913-shutdown-deadline`. The active next
-slice is [tic-twofoot](tickets/tic-twofoot.md), the independently admitted bitmap
-retention correction. Broader profile gaps do not block that narrow mechanism;
-request-progress work remains in [tic-nimloth](tickets/tic-nimloth.md).
-The saved kernel stacks now establish the blocked Java/launchd lock relationship;
-see [the investigation](plans/checkpoint-kernel-hang-20260913.md). A shutdown
-timeout does not establish kernel safety or release kernel-held resources.
+Two of the three bounded performance epics are complete:
 
-Follow [the lead handover](plans/performance-three-epics-handover.md) and ticket
-frontmatter. The new ordered priorities are reusable execution metadata
-[tic-carcharoth](tickets/tic-carcharoth.md), commit-force overlap
-[tic-rowlie](tickets/tic-rowlie.md), then protocol waits/writes
-[tic-primula](tickets/tic-primula.md). The shared profile
-[tic-da4e](tickets/tic-da4e.md) has admitted twofoot while broader attribution
-remains open. Preserve the active P0 investigation tic-1dda and
-all explicit overlap prerequisites. Later code candidates require an affirmative
-profile/contract decision, not simply an open status.
+- [Execution metadata](tickets/tic-carcharoth.md): accept the published bitmap
+  allocation correction; reject binding-view, reverse-catalogue and early-FK-skip
+  candidates with explicit evidence. [Miriel](tickets/tic-miriel.md) records the
+  integrated result; no throughput gain is claimed for the bitmap fix.
+- [Protocol](tickets/tic-primula.md): accept the common binding's prepared
+  catalogue and exact cleanup, locally integrated in river-harness at4ff2a71d.
+  The user selected local delivery with no remote. Pipelining is rejected;
+  the separate rollback/retry safety correction is integrated3d70a826.
+  [Rian](tickets/tic-rian.md) records reviewed workload and compatibility evidence.
+- [WAL overlap](tickets/tic-rowlie.md) remains open: the mandatory
+  [P0 gate](tickets/tic-1dda.md) still lacks its existing correlated Payment/New
+  Order reproducer with controlled lock interleavings and three terminals.
+  Ordinary runs cannot replace it. No new fixture workstream, overlap code,
+  lock removal or relaxed gate is introduced under the user's scope lock.
 
-The earlier first62/9e2f/055b cleanup sequence is complete. Old e5ff/723f phase
-containers and the unconditional Payment pilot are superseded with explicit
-mapping in the handover. The historical phase queue below remains evidence/context;
-it cannot impose the removed Payment-before-profile or blanket P1-before-execution
-ordering. Existing lifecycle, formal comparison, score and functional campaigns
-retain their independent owners and dependencies.
+[Performance checkpoints](performance-checkpoints.md) records exact source,
+individual measurements, tests, local/publication status and durable evidence.
+The shared [admission investigation](tickets/tic-da4e.md) concludes with explicit
+mapped-force, unmounted-wait and message-family attribution limits. Those limits
+certify neither P0 nor a wider performance claim.
 
+The user withdrew the 15-second rule and policy-derived timeout work. The
+existing CHECKPOINT investigation remains in [tic-osgiliath](tickets/tic-osgiliath.md);
+[its evidence](plans/checkpoint-kernel-hang-20260913.md) is not resolved by these
+performance results. Unrelated local shutdown/timeout changes retain their owners.
+Ubuntu qualification remains deferred at the user's direction. Existing lifecycle,
+formal comparison, score and functional campaigns retain their independent gates.
+
+Ticket frontmatter and the [lead handover](plans/performance-three-epics-handover.md)
+remain authoritative. Historical phase queues below cannot reinstate the retired
+Payment-before-profile or blanket P1-before-execution ordering.
 
 This document is River's human-readable delivery queue. Ticket front matter is
 authoritative for status, ownership, dependencies, and acceptance criteria.
