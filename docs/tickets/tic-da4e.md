@@ -16,6 +16,7 @@ links:
     - tic-telemnar
     - tic-twofoot
     - tic-eowyn
+    - tic-edoras
 created: 2026-09-04T15:10:07.987949Z
 ---
 # Establish current-master mechanism baselines for the three performance epics

@@ -1,16 +1,18 @@
 ---
 id: tic-morgoth
-status: open
+status: closed
 type: story
 priority: 1
 assignee: blater
 parent: tic-primula
-delivery: code
+delivery: evidence
+evidence:
+    - docs/tickets/tic-edoras.md
 tags:
     - performance
+links:
+    - tic-edoras
 created: 2026-09-13T11:46:48.680882Z
-deps:
-  - tic-edoras
 ---
 # Pipeline admitted requests through the existing ordered transport
 
@@ -43,3 +45,13 @@ uninstrumented runs establish performance. No per-row allocation, unbounded
 retention, extra execution path, weakened isolation/durability, or benchmark-family
 policy may be introduced. A negative result is a documented rejection, not a
 performance delivery. Independent review is required before promotion.
+
+### Reviewed rejection, 2026-09-14
+
+Rejected without production changes. Independent protocol reviewer
+`execution_admission_review` confirms that the identified batching consumer is
+loading outside measured transaction TPS. No actual transaction request sequence
+has both independent inputs and measured removable waiting. Aggregate socket
+counts do not establish that contract, and Payment retains dependent values and
+statuses. No pipelining, buffering, executor or protocol version is delivered.
+The tic-rian gate must account for this rejected outcome explicitly.
