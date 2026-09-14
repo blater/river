@@ -17,8 +17,10 @@ Two of the three bounded performance epics are complete:
   [P0 gate](tickets/tic-1dda.md) now has the accepted
   [general SQL concurrency reproducer](tickets/tic-b1b7.md), covering controlled
   lock paths, deadlocks and isolation, with Payment/New Order integration.
-  P0 revalidation remains a separate evidence-only campaign with its existing
-  correctness/scaling criteria; WAL overlap is not yet admitted.
+  P0 revalidation stopped after two of 40 planned cells: warmup client attempt
+  and retry dispositions are not emitted, preventing required phase accounting.
+  Exemplar capacity also saturated; increasing it cannot repair missing records.
+  The existing correctness/scaling criteria remain unpassed.
 
 [Performance checkpoints](performance-checkpoints.md) records exact source,
 individual measurements, tests, local/publication status and durable evidence.
@@ -29,13 +31,40 @@ certify neither P0 nor a wider performance claim.
 The user withdrew the 15-second rule and policy-derived timeout work. The
 existing CHECKPOINT investigation remains in [tic-osgiliath](tickets/tic-osgiliath.md);
 [its evidence](plans/checkpoint-kernel-hang-20260913.md) is not resolved by these
-performance results. Unrelated local shutdown/timeout changes retain their owners.
+performance results. The authorized timeout-policy withdrawal is integrated;
+passing normal shutdown does not resolve the historical checkpoint stall.
 Ubuntu qualification remains deferred at the user's direction. Existing lifecycle,
 formal comparison, score and functional campaigns retain their independent gates.
 
 Ticket frontmatter and the [lead handover](plans/performance-three-epics-handover.md)
 remain authoritative. Historical phase queues below cannot reinstate the retired
 Payment-before-profile or blanket P1-before-execution ordering.
+
+## Impact-first WAL sequence — 2026-09-14
+
+The immediate performance objective is [tic-f1bb](tickets/tic-f1bb.md): overlap
+successor physical work with an outstanding WAL force. It is the primary runtime
+optimization, not yet implementation-ready. Remaining WAL dependencies still govern admission. The user explicitly removed
+P0 as a WAL prerequisite and deferred its scaling/accounting work.
+
+| Scheduling order | Existing tickets | Contribution and boundary |
+| --- | --- | --- |
+| Deferred outside WAL admission | tic-1dda | Scaling revalidation and warmup accounting remain incomplete and are explicitly deferred by the user; neither blocks WAL work. |
+| Critical path to force overlap | tic-ca05 → tic-5b3e → tic-6f81 → tic-92e3 → tic-f1bb | Keep audits to their existing contract decisions. Deliver cumulative admission as a necessary resource-safety enabler, then force overlap with demonstrated runtime benefit. |
+| Deferred, conditional optimization | tic-4d14 → tic-845d | After the force-overlap decision, consider exactly one proved redundant lock rule. No current cycle proves a lock is redundant. |
+| Final acceptance | tic-7a5a | Evaluate the accepted mechanisms once its existing dependencies are resolved; do not run a promotion campaign ahead of implementation. |
+| Outside the active performance queue | tic-osgiliath and formal comparison/reporting work | Retain existing owners and requirements. Resume checkpoint diagnosis for new actionable evidence or a recurrence blocking this path, rather than repeat the retained-data audit. |
+
+The lock stream is deferred, not removed from epic completion dependencies.
+Start tic-ca05 now, then continue the remaining force-overlap chain. P0 remains
+unpassed; its missing accounting does not require a new ticket on this path.
+Do not reopen completed execution/protocol candidates, add speculative optimizations,
+or manufacture production changes for an already satisfied prerequisite. Required
+reviews and correctness checks remain part of delivery. A newly discovered gap
+must demonstrate that it blocks the selected mechanism; record it and seek explicit
+scope agreement before adding work. Prefer the smallest fix through an existing
+owner, with no new diagnostics framework, duplicate accounting or alternate commit
+path. This sequence supersedes historical competing streams below.
 
 This document is River's human-readable delivery queue. Ticket front matter is
 authoritative for status, ownership, dependencies, and acceptance criteria.
