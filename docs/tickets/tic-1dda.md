@@ -1,6 +1,7 @@
 ---
 id: tic-1dda
-status: in_progress
+status: open
+priority: 3
 type: investigation
 assignee: blater
 parent: tic-5db4
@@ -148,3 +149,22 @@ replace the missing-fixture readiness finding above. The fixture is an explicit
 prerequisite; its completion permits this evidence-only campaign to resume.
 It does not certify P0, erase the historical failed 10:2 scaling result, change
 this ticket's claim or promotion criteria, or admit WAL overlap implementation.
+
+### User-directed deferral, 2026-09-14
+
+The user explicitly deferred scaling-regression revalidation and the missing
+warmup client accounting, and removed this ticket as a WAL prerequisite.
+Return to open rather than retain an active campaign claim. Historical branch
+and base metadata describe the prior claim, not ongoing work. P0 is not passed.
+
+The resumed run on production 5dcee338 stopped after two of 40 planned cells.
+Both completed invariants and cleanup; standard b1-s2 had three reconciled
+measured DEADLOCK retries and an epoch-1 victim with attempt tag 340 whose
+warmup client disposition was not emitted. Exemplar capacity also saturated.
+No scaling inference follows; 38 cells were not run. Preserve raw artifacts at
+/Users/blater/src/river/benchmark-results/p0-20260914/. No replacement campaign
+or accounting code is part of the WAL delivery.
+
+WAL proceeds through its remaining source-backed resource, durability,
+concurrency, recovery and performance checks. Resumption of this independent
+campaign requires a later scheduling decision; its original scope is unchanged.
