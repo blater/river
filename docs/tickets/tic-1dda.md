@@ -148,3 +148,12 @@ replace the missing-fixture readiness finding above. The fixture is an explicit
 prerequisite; its completion permits this evidence-only campaign to resume.
 It does not certify P0, erase the historical failed 10:2 scaling result, change
 this ticket's claim or promotion criteria, or admit WAL overlap implementation.
+
+### Resumed campaign, 2026-09-14
+
+The existing claim resumes on published `5dcee338` after the accepted b1b7
+fixture and authorized shutdown-policy withdrawal. The finite
+[campaign and unchanged decision rules](../delivery/evidence/2026-09-14-tic-1dda-p0-revalidation.md)
+are declared before sampling. Five balanced blocks retain the existing mixes
+and terminal counts; 5s warmup/30s measurement addresses prior short-window
+variance. Historical failed evidence remains intact; no P0 pass is yet claimed.
