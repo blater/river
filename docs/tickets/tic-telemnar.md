@@ -1,16 +1,18 @@
 ---
 id: tic-telemnar
-status: open
+status: in_progress
 type: story
 priority: 1
 assignee: blater
 parent: tic-carcharoth
 delivery: code
+base-commit: 2f80dacda1e01f579d5f4c920084a7fb7d053c84
+branch: ticket/tic-telemnar-unchanged-discovery
 tags:
     - performance
-created: 2026-09-13T11:46:48.638206Z
 links:
-  - tic-da4e
+    - tic-da4e
+created: 2026-09-13T11:46:48.638206Z
 ---
 # Avoid reverse-reference discovery for unchanged referenced keys
 

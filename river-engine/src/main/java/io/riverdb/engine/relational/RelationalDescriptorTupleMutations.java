@@ -38,6 +38,14 @@ final class RelationalDescriptorTupleMutations {
     return plan.delete(table, values, logicalRowId);
   }
 
+  StatusCode checkUpdateReferences(
+      TableDescriptor table, SqlValueBuffer before, SqlValueBuffer after,
+      long logicalRowId, RelationalDescriptorForeignKeyChecks foreignKeys) {
+    // Equal complete physical keys imply equal inbound reference targets.
+    return plan.unchangedKeys(table) ? StatusCode.OK
+        : foreignKeys.checkUpdate(table, before, after, logicalRowId);
+  }
+
   StatusCode validateInsert(
       IndexedTransactionSession session, TableDescriptor table,
       long logicalRowId) {

@@ -306,8 +306,8 @@ public final class RelationalDescriptorTableAccess {
     if (!status.isOk()) return status;
     status = preflightMutation(table, rowAccess.length());
     if (status.isOk()) status = tupleMutations.protect(session, table);
-    if (status.isOk()) status = foreignKeyChecks.checkUpdate(
-        table, lockedRows.before(), values, logicalRowId);
+    if (status.isOk()) status = tupleMutations.checkUpdateReferences(
+        table, lockedRows.before(), values, logicalRowId, foreignKeyChecks);
     return status.isOk()
         ? tupleMutations.validateUpdate(
             session, table, lockedRows.before(), values, logicalRowId) : status;

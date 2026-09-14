@@ -59,6 +59,13 @@ final class RelationalDescriptorTupleDeltaPlan {
   }
 
   boolean matches(TableDescriptor descriptor) { return table == descriptor; }
+  boolean unchangedKeys(TableDescriptor descriptor) {
+    if (!matches(descriptor) || kind != UPDATE) return false;
+    for (int index = 0; index < keyCount(); index++) {
+      if (changedAt(index)) return false;
+    }
+    return true;
+  }
   int kind() { return kind; }
   int keyCount() { return storage.keyCount(); }
   KeyDescriptor keyAt(int index) { return storage.keyAt(index); }

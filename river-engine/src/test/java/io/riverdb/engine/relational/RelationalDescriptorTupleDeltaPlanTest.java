@@ -21,6 +21,53 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   private static volatile long allocationGuard;
 
   @Test
+  void unchangedKeyProofRequiresFreshUpdateOfTheIdenticalDescriptor() {
+    TableDescriptor table = threeKeyTable();
+    SqlValueBuffer values = threeValues(1, 10, 20);
+    RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
+    assertFalse(plan.unchangedKeys(table));
+    assertEquals(StatusCode.OK, plan.update(table, values, values, 7));
+    assertTrue(plan.unchangedKeys(table));
+    assertFalse(plan.unchangedKeys(threeKeyTable()));
+    assertEquals(StatusCode.OK, plan.update(table, values, threeValues(1, 10, 21), 7));
+    assertFalse(plan.unchangedKeys(table));
+    assertEquals(StatusCode.OK, plan.update(table, values, threeValues(1, 11, 20), 7));
+    assertFalse(plan.unchangedKeys(table));
+    assertEquals(StatusCode.OK, plan.update(table, values, threeValues(2, 10, 20), 7));
+    assertFalse(plan.unchangedKeys(table));
+    assertEquals(StatusCode.OK, plan.update(table, values, values, 8));
+    assertTrue(plan.unchangedKeys(table));
+    plan.reset();
+    assertFalse(plan.unchangedKeys(table));
+    assertEquals(StatusCode.OK, plan.insert(table, values, 9));
+    assertFalse(plan.unchangedKeys(table));
+    assertEquals(StatusCode.OK, plan.delete(table, values, 9));
+    assertFalse(plan.unchangedKeys(table));
+    assertEquals(StatusCode.OK, plan.update(table, values, values, 10));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        plan.update(table, values, textValue("invalid"), 10));
+    assertFalse(plan.unchangedKeys(table));
+  }
+
+  @Test
+  void successfulKeylessUpdateHasNoInboundTarget() {
+    ColumnDescriptorSet columns = columns(
+        new int[] {SqlTypeDescriptor.BIGINT}, new CharSequence[] {"value"});
+    TableDescriptor table = table(columns, null, new KeyDescriptor[0]);
+    SqlValueBuffer before = new SqlValueBuffer();
+    assertEquals(StatusCode.OK, before.reserve(1, 1, 0, 0));
+    assertEquals(StatusCode.OK, before.clearForSize(1));
+    assertEquals(StatusCode.OK, before.setFixed(0, SqlTypeDescriptor.BIGINT, 1));
+    RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
+    assertFalse(plan.unchangedKeys(table));
+    assertEquals(StatusCode.OK, plan.update(table, before, before, 1));
+    assertEquals(0, plan.keyCount());
+    assertTrue(plan.unchangedKeys(table));
+    plan.reset();
+    assertFalse(plan.unchangedKeys(table));
+  }
+
+  @Test
   void insertAndDeleteRetainEveryPhysicalIndexInKeyIdOrder() {
     TableDescriptor table = threeKeyTable();
     SqlValueBuffer values = threeValues(1, 10, 20);
@@ -134,12 +181,16 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
     assertEquals(StatusCode.OK, plan.update(table, before, after, 1));
     assertEquals(StatusCode.OK, plan.update(table, after, before, 1));
+    assertEquals(StatusCode.OK, plan.update(table, before, before, 1));
+    assertTrue(plan.unchangedKeys(table));
 
     long thread = Thread.currentThread().threadId();
     long allocatedBefore = allocations.getThreadAllocatedBytes(thread);
     for (int iteration = 0; iteration < 10; iteration++) {
       allocationGuard += plan.update(table, before, after, 1).stableCode();
       allocationGuard += plan.mutationCount();
+      allocationGuard += plan.update(table, before, before, 1).stableCode();
+      allocationGuard += plan.unchangedKeys(table) ? 1 : 0;
     }
     long allocated = allocations.getThreadAllocatedBytes(thread) - allocatedBefore;
     assertEquals(0, allocated);

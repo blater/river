@@ -10,6 +10,9 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
+import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.table.IndexedScanCursor;
+import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -22,6 +25,125 @@ final class SqlCompositeForeignKeyTest {
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x464f524549474e4bL, 0x4559544553543031L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+
+  @Test
+  void unchangedPhysicalKeysAvoidDiscoveryWhileChangedKeysKeepEnforcement(
+      @TempDir Path root) throws Exception {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY,code VARCHAR(12),"
+            + "amount NUMERIC(10,2),other INTEGER,payload INTEGER,UNIQUE(code,amount))",
+        result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE INDEX parent_other ON parents(other)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE children (id INTEGER PRIMARY KEY,code VARCHAR(12),"
+            + "amount NUMERIC(10,2),FOREIGN KEY(code,amount) REFERENCES parents(code,amount))",
+        result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO parents VALUES (1,'north',12.50,NULL,0)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO children VALUES (1,'north',12.50)", result));
+    InboundObservation observation = new InboundObservation(session);
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    observation.check(session, "UPDATE parents SET payload=1 WHERE id=1", StatusCode.OK, 0, 0);
+    observation.check(session,
+        "UPDATE parents SET code='north',amount=12.500,other=NULL WHERE id=1",
+        StatusCode.OK, 0, 0);
+    observation.check(session, "UPDATE parents SET other=2 WHERE id=1", StatusCode.OK, 1, 0);
+    assertEquals(StatusCode.OK, session.execute("SAVEPOINT before_change", result));
+    observation.check(session, "UPDATE parents SET amount=13.00 WHERE id=1",
+        StatusCode.FOREIGN_KEY_VIOLATION, 1, 1);
+    assertEquals(StatusCode.OK, session.execute("ROLLBACK TO SAVEPOINT before_change", result));
+    observation.check(session, "UPDATE parents SET payload=2 WHERE id=1", StatusCode.OK, 0, 0);
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM parents WHERE id=1", result));
+    assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION, session.execute("DROP TABLE parents", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void unchangedSelfReferenceStillValidatesOutboundKeys(@TempDir Path root) throws Exception {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE nodes (id INTEGER PRIMARY KEY,parent_id INTEGER,"
+            + "FOREIGN KEY(parent_id) REFERENCES nodes(id))", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO nodes VALUES (1,NULL),(2,1)", result));
+    InboundObservation observation = new InboundObservation(session);
+    observation.check(session, "UPDATE nodes SET parent_id=99 WHERE id=2",
+        StatusCode.FOREIGN_KEY_VIOLATION, 1, 0);
+    observation.check(session, "UPDATE nodes SET parent_id=NULL WHERE id=2", StatusCode.OK, 1, 0);
+    observation.check(session, "UPDATE nodes SET parent_id=2 WHERE id=2", StatusCode.OK, 1, 0);
+    observation.check(session, "UPDATE nodes SET parent_id=2 WHERE id=2", StatusCode.OK, 0, 0);
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void privateSchemaAndSavepointSuccessorsPrepareFreshKeyProof(@TempDir Path root)
+      throws Exception {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE private_parent (id INTEGER PRIMARY KEY,payload INTEGER)", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO private_parent VALUES (1,0)", result));
+    InboundObservation observation = new InboundObservation(session);
+    observation.check(session, "UPDATE private_parent SET payload=1 WHERE id=1", StatusCode.OK, 0, 0);
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, session.execute("SAVEPOINT before_index", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE INDEX private_payload ON private_parent(payload)", result));
+    observation.check(session, "UPDATE private_parent SET payload=2 WHERE id=1", StatusCode.OK, 1, 0);
+    assertEquals(StatusCode.OK, session.execute("ROLLBACK TO SAVEPOINT before_index", result));
+    observation.check(session, "UPDATE private_parent SET payload=3 WHERE id=1", StatusCode.OK, 0, 0);
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static final class InboundObservation {
+    private final IndexedScanCursor cursor;
+    private final Object probe;
+    private final Field scanOwner;
+    private final Field observedCommit;
+
+    InboundObservation(SqlSession sql) throws Exception {
+      Object coordinator = field(sql, "coordinator").get(sql);
+      RelationalSession relational = (RelationalSession) field(coordinator, "session").get(coordinator);
+      Object rows = relational.descriptorRows();
+      Object checks = field(rows, "foreignKeyChecks").get(rows);
+      cursor = (IndexedScanCursor) field(checks, "cursor").get(checks);
+      Object reference = field(checks, "referenceCheck").get(checks);
+      probe = field(reference, "probe").get(reference);
+      scanOwner = field(cursor, "owner");
+      observedCommit = field(probe, "observedCommitSequence");
+    }
+
+    void check(SqlSession session, String sql, StatusCode expected, int scans, int probes)
+        throws Exception {
+      assertEquals(StatusCode.OK, cursor.reset());
+      observedCommit.setLong(probe, -1);
+      assertEquals(expected, session.execute(sql, new SqlExecutionResult()), sql);
+      // Single-row fixtures have at most one matching inbound reference.
+      assertEquals(scans, scanOwner.get(cursor) == null ? 0 : 1, sql);
+      assertEquals(probes, observedCommit.getLong(probe) == -1 ? 0 : 1, sql);
+    }
+
+    private static Field field(Object owner, String name) throws Exception {
+      Field field = owner.getClass().getDeclaredField(name);
+      field.setAccessible(true);
+      return field;
+    }
+  }
 
   @Test
   void compositeForeignKeyUsesReferencedTupleIndexAcrossReopen(@TempDir Path root) {
