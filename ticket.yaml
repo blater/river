@@ -1,4 +1,5 @@
 tickets-directory: docs/tickets
+strategy: tolkien
 delivery:
   require-commit-links: true
   commit-trailer: Ticket
