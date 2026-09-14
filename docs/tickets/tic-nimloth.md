@@ -1,12 +1,13 @@
 ---
 id: tic-nimloth
-status: in_progress
+status: closed
 type: bug
 assignee: blater
 parent: tic-primula
 delivery: code
 base-commit: 3cfe00e7a1d5817a70308d106c4f27d2eba71a14
 branch: ticket/tic-nimloth-retry-safety
+delivered-commit: 7acf689a165910cde528cedb121ab99cb13cbbf6
 tags:
     - safety
     - protocol
