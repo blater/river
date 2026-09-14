@@ -1,16 +1,21 @@
 ---
 id: tic-gwindor
-status: open
+status: closed
 type: story
 priority: 1
 assignee: blater
 parent: tic-primula
-delivery: code
+external-ref: /Users/blater/src/ingres/river-harness@4ff2a71d673e736561ad3ed3b26f31b3121ebff8
+delivery: evidence
+base-commit: 3cfe00e7a1d5817a70308d106c4f27d2eba71a14
+branch: ticket/tic-gwindor-catalogue-consumer
+evidence:
+    - /Users/blater/src/ingres/river-harness/docs/tickets/prepared-catalogue.md
 tags:
     - performance
-created: 2026-09-13T11:46:48.671624Z
 deps:
-  - tic-edoras
+    - tic-edoras
+created: 2026-09-13T11:46:48.671624Z
 ---
 # Retain prepared handles across repeated client executions
 
@@ -223,3 +228,51 @@ transport, protocol operation or retry behavior. The test-first admission probes
 cover cancellation-driven discarded connections as well as idle/pinned release.
 External delivery is local only at the user's direction, on
 `ticket/prepared-catalogue` in river-harness. No remote is requested or configured.
+
+### Local implementation and review, 2026-09-14
+
+External feature ticket/prepared-catalogue contains production6c5f655 and final
+fault-test/documentationebdab46. The user selected local delivery; no harness
+remote is configured or required. Only the admitted common binding lifecycle and
+River database cleanup ownership change. One binding-owned DB.PrepareContext
+catalogue replaces every worker-owned Conn.PrepareContext catalogue; existing
+pinned workers and Tx.StmtContext remain. One Database cleanup latch and physical
+lifetime join capture discarded errors. No driver cache, duplicate statement
+inventory, transport rewrite, new timeout or server change is introduced.
+
+Actual database/sql tests prove two fully pinned workers across both phases:
+2N physical prepares and final releases for4N executions of the N-statement
+catalogue. Partial failure/cancellation releases only acquired parents and admits
+no worker. Active rows finish before catalogue cleanup. Idle/deferred release
+failure, pruning before asynchronous physical close, ordinary cancellation,
+opening cancellation concurrent with Close, remaining parents after failure and
+first release cause retention all pass under the race detector. A fully written
+COMMIT followed by EOF executes exactly once and remains a transport error,
+neither retryable nor definite rollback nor ErrBadConn; final physical close is
+exactly once. This establishes unknown delivery without replay, not the server's
+durable outcome. Earlier classification tests preserve the final unknown outcome.
+
+Baseline fixtures reproduce lost release failure and premature database close.
+Full Go tests, race tests and vet pass; the final affected adapter race test also
+passes after the COMMIT fixture. Independent execution_admission_review approves
+source ownership, fault evidence and scope. Slopmark remains unchanged for
+protocol26.8542, binding21.2396, driver11.6671 and database5.68752;
+transactions falls7.1648 to6.60964. Tests and evidence do not add production
+profiling or another outcome owner. Workload and final promotion evidence follow
+in tic-rian and the shared checkpoint ledger.
+
+### Accepted external delivery
+
+Local harness integration is 4ff2a71d673e736561ad3ed3b26f31b3121ebff8 on main,
+with annotated perf-checkpoint-20260914-prepared-catalogue. Feature commits are
+6c5f655 (production) and ebdab46 (final fault test and local delivery note).
+The installed harness executable now uses those tested production bytes; the
+baseline executable is retained in the evidence archive. River records this
+independently owned code delivery as evidence, following the existing external
+harness convention; it does not pretend the external commit belongs to River.
+The external reference and evidence identify the actual code repository.
+
+Independent execution_admission_review grants final promotion after all required
+checks and measured mechanism/workload results recorded in tic-rian. Harness
+publication remains local only at the user's instruction. No remote destination
+or extra publication work is introduced.

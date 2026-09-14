@@ -3065,3 +3065,76 @@ forces total43.712ms; complete mapped-force and unmounted lock/queue waits remai
 unmeasured. The -4.04% adjacent timing difference does not isolate profiler cost.
 Independent execution_admission_review accepts da4e's limited admission conclusion
 and the explicit accepted/rejected dispositions, with no wider performance claim.
+
+## 2026-09-14 — local prepared catalogue checkpoint (tic-gwindor/tic-rian)
+
+River evidence branch: ticket/tic-gwindor-catalogue-consumer. External harness
+feature: ticket/prepared-catalogue, production6c5f655, final tests/docs ebdab46;
+local integration4ff2a71d673e736561ad3ed3b26f31b3121ebff8 and annotated
+perf-checkpoint-20260914-prepared-catalogue. No harness remote is configured or
+requested; the user selected local delivery. River integration receives annotated
+perf-checkpoint-20260914-protocol-catalogue. The sole measured optimization is
+binding-owned DB.PrepareContext catalogue retention; no protocol/server change,
+driver cache, extra executor or retry policy. Morgoth is rejected without code.
+Nimloth's rollback safety is separately integrated3d70a826, source7acf689a,
+with no throughput claim. All final Java source differs from the measured
+27033027 production only in that Java-benchmark retry correction.
+
+Main configuration: sample/all, four workers, one warehouse, seed42, retries20,
+5s warmup; original harnessaba7c43 versus candidate6c5f655, same frozen River
+27033027 runtime, GraalVM25.0.4+7.1, heap1GiB, READ COMMITTED with explicit
+FOR UPDATE, loopback TCP/TLS1.3 and local durable WAL. Longer C/A/A/C order was
+predeclared. Exact commands and versions are archived; no target SQL/mix changes.
+
+| Order | Harness | Seconds | TPS | p99 ms | Retries | Report suffix (river_harness_) |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1 | control | 30 | 520.07 | 34.701 | 2595 | 20260914_010946_32ae6510 |
+| 2 | control | 30 | 530.11 | 35.127 | 2767 | 20260914_011024_b4291ab0 |
+| 3 | candidate | 30 | 758.97 | 24.674 | 3754 | 20260914_011104_27402575 |
+| 4 | candidate | 30 | 768.48 | 23.511 | 3757 | 20260914_011143_14a95358 |
+| 5 | control | 120 | 535.60 | 33.817 | 10396 | 20260914_011248_5a66d50d |
+| 6 | candidate | 120 | 691.81 | 26.018 | 12758 | 20260914_011459_67ebc9cf |
+| 7 | candidate | 120 | 685.50 | 26.313 | 12859 | 20260914_011711_cc9283fb |
+| 8 | control | 120 | 459.98 | 40.010 | 8864 | 20260914_011923_dac029d4 |
+
+All pass invariants, exact attempts, zero failed/unknown outcomes, graceful stop
+and owned-data removal; comparison keys match within each duration. Both longer
+candidates exceed both controls and improve p99. Retry/attempt rates improve
+from13.79–13.87% to13.27–13.47%; larger absolute retries reflect increased work.
+The falling final control demonstrates temporal variation without an identified
+cause. Accept a useful repeated benefit for this declared local workload;
+claim no universal percentage speedup, wait reduction, P0 or database parity.
+
+New Order low-contention control/candidate (one worker,2s/10s) passes225.28/330.90
+TPS,p998.110/5.890ms,zero retries; reports20260914_012241_62ddca2b and
+20260914_012256_57c4c480. Candidate profile/adjacent reports
+20260914_012347_25af3d17 and20260914_012426_97afe55e pass770.49/770.64TPS.
+The profile's full29.992426s window includes26,977attempts,23,109commits and
+784,569socket writes:29.08/attempt,33.95/commit, versus baseline55.74/65.35.
+No candidate preparation stack was sampled versus37 baseline; do not claim
+zero preparations. Socket durations are summed start-selected events, not
+clipped or fully attributed waits. Counting tests prove2N prepares/releases for
+4N executions across two fully pinned phases; existing pool ownership bounds
+physical handles. No unmounted-wait or message-family total is invented.
+
+Clean Go checkpoint: uncached go test -count=1 ./... and vet pass. Full race
+suite and the final affected adapter race pass. Existing fixture tests reproduce
+baseline lost cleanup failure; candidate covers partial preparation, rows,
+cancellation/opening, asynchronous discard/pruning, exact release and uncertain
+COMMIT delivery without replay. Slopmark production scores do not increase;
+transactions falls7.1648→6.60964. MariaDB common-binding smoke sample/all,one
+worker,1s/3s passes invariants,zero failed/unknown and authenticated graceful stop,
+service inactive→inactive; report20260914_012603_ead5460b. Its TPS is not compared.
+Java compatibility and retry checks pass128tests with two opt-in skips, plus
+source/module policies and installTps (one isolated no-daemon build,18s).
+No clean full River/native rebuild is added for unchanged server/client code;
+the accepted prior bitmap clean checkpoint and focused consumer proofs apply.
+
+Independent execution_admission_review approves source, exact cleanup,
+compatibility, workload and promotion. Evidence, XML, commands, individual
+results, manifests, frozen executables, profile/readers and failure fixtures:
+`/Users/blater/src/river-performance-evidence/20260914-performance-epics/`.
+The final verdict completes primula with gwindor accepted, morgoth rejected and
+nimloth correctness-only. Carcharoth is complete as recorded above. Rowlie remains
+open behind the independently confirmed missing P0 mixed-isolation reproducer;
+no new fixture scope, cohort/force implementation or gate waiver is introduced.
