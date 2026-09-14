@@ -93,3 +93,39 @@ failure are not.
 ### 2026-09-13 performance realignment
 
 Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled correctness gates remain authoritative. Follow [the current handover](../plans/performance-three-epics-handover.md); this move certifies no implementation or performance outcome.
+
+### Current implementation boundary, 2026-09-14
+
+ca05 is closed at evidence commit 2333ab60, integrated at 8bc05e3c. P0 is
+explicitly deferred and is not this ticket's blocker. Status remains open:
+the source audit found that the required pre-implementation contract cannot yet
+be satisfied within this ticket's physical-staging non-goal.
+
+| Budget or lifetime | Existing source authority | Remaining boundary |
+| --- | --- | --- |
+| Logical write entries, versions and WAL bytes | IndexedPreparedLogicalCommit.prepare; IndexedTransactionResourceAdmission; DatabaseResourceGovernor | Already leased per transaction before enqueue and included in database totals. A second cohort receipt must not double-charge them. |
+| Retained session workspaces | DatabaseRetainedLease through ensureRetainedDatabaseAccountedBytes | Remain charged until session close; transaction leases end at terminal cleanup. |
+| Version operation workspace and durable row IDs | IndexedPreparedCommitCohortDemand; IndexedHybridCommitGroup.preflight; IndexedDurableVersionAdmission | Existing cohort sum covers versions. Impossible demand returns RESOURCE_EXHAUSTED; reclaimable durable-version pressure returns RETRY. |
+| Staging pages | IndexedPageFrameCache.stageExisting/stageNew and IndexedPageState.addChangedPage | Existing configured per-operation checks precede page mutation, but session staged-page demand is only grown after compileCumulative discovers it. |
+| Frozen publication generations | IndexedPreparedPageBatch.freeze | Each changed member generation consumes a current-frame slot and pins its predecessor. The cumulative capacity is checked after staging; there is no sealed pre-stage demand or prefix-preserving member rollback. |
+
+The concrete existing test
+IndexedGroupCommitFaultTest.preflightFailureAbortsPreparedMembersWithoutWalOrFallbackAndAllowsNextCommit
+proves one member fits but the pair fails and both abort under a constrained
+page-cache plan. This is safe whole-cohort failure, not the required admitted
+prefix behavior. It passed in the 43-test ca05 validation at the same production
+source. No additional benchmark or new reproducer is necessary to establish it.
+
+A configured capacity is a legitimate structural bound. The blocker is not
+missing exactness alone: a proved safe demand bound could suffice, but none
+currently supports the ticket's prefix/no-underfill requirement. Reserving the
+whole pool or only summing existing logical receipts does not establish it.
+
+Implementing the full contract requires a decision in physical demand planning
+or staging/rollback ownership, both excluded by the current ticket. The Luna/high
+worker and independent admission reviewer found no existing route that satisfies
+the complete contract without that change. Apply the ticket's stop condition:
+retain this precise blocker, add no ticket, no duplicate policy, no partial code,
+and no performance claim. Do not reinterpret pre-cohort reservation as the
+existing per-page capacity check. Any continuation needs an explicit, bounded
+scope decision for this physical admission boundary; P0 work remains deferred.

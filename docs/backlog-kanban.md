@@ -56,7 +56,12 @@ P0 as a WAL prerequisite and deferred its scaling/accounting work.
 | Outside the active performance queue | tic-osgiliath and formal comparison/reporting work | Retain existing owners and requirements. Resume checkpoint diagnosis for new actionable evidence or a recurrence blocking this path, rather than repeat the retained-data audit. |
 
 The lock stream is deferred, not removed from epic completion dependencies.
-Start tic-ca05 now, then continue the remaining force-overlap chain. P0 remains
+tic-ca05 is now closed: its existing logical contract passed review and 43
+focused tests. tic-5b3e is the current implementation blocker: it has no admitted
+pre-staging demand for cumulative frozen-page generations, and a physical
+planning or staging/rollback change exceeds its present non-goals. The exact
+source and existing failure test are recorded on that ticket. Do not start
+dependent overlap code or add a follow-up without a bounded scope decision. P0 remains
 unpassed; its missing accounting does not require a new ticket on this path.
 Do not reopen completed execution/protocol candidates, add speculative optimizations,
 or manufacture production changes for an already satisfied prerequisite. Required
