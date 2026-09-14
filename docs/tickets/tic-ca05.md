@@ -1,10 +1,11 @@
 ---
 id: tic-ca05
-status: in_progress
+status: closed
 type: investigation
 assignee: blater
 parent: tic-rowlie
 delivery: evidence
+delivered-commit: 2333ab60f0daf4e309f4379d847f27caaf5710ec
 tags:
     - performance
     - tpcc
