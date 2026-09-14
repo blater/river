@@ -10,6 +10,8 @@ tags:
     - performance
     - recovery
     - platform
+links:
+    - tic-emeldir
 created: 2026-09-13T12:15:36.613653Z
 ---
 # Diagnose current-master TPS checkpoint disconnect and unreaped server exit
@@ -92,3 +94,15 @@ The [retained-data review](../plans/checkpoint-kernel-hang-20260913.md#retained-
 records the precise limit. Keep this bug open: successful P0 checkpoints cannot
 prove the original cause or a fix. No new production change, runtime probe or
 instrumentation is justified by the available evidence.
+
+
+### September 14 incident evidence
+
+New user-requested [tic-emeldir](tic-emeldir.md) embeds the latest full failure
+console, exact command and implicated kernel records, with a complete raw evidence
+attachment. The 14:08:48 panic identifies server57024/thread798645 holding the
+lock blocking launchd; all18 normalized frames match both earlier incidents.
+This confirms recurrence, not the initiating Java write/file or a repair. The
+60-second candidate failed CHECKPOINT/cleanup and is not accepted performance
+evidence. Root-cause/fix ownership remains here; emeldir owns this incident's
+missing-write evidence investigation. No reproduction was run for ticket creation.
