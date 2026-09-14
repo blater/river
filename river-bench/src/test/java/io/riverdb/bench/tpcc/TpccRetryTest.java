@@ -3,8 +3,10 @@ package io.riverdb.bench.tpcc;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.riverdb.base.error.StatusCode;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -71,8 +73,86 @@ final class TpccRetryTest {
 
     SQLException actual = org.junit.jupiter.api.Assertions.assertThrows(
         SQLException.class, () -> TpccRetry.rollbackAfterFailure(connection, primary));
-    assertSame(rollback, actual);
+    assertSame(primary, actual);
+    assertSame(rollback, actual.getSuppressed()[0]);
+  }
+
+  @Test
+  void timeoutAndLostResponseRemainTerminalWhenRollbackReportsConflict() throws Exception {
+    for (StatusCode primaryStatus : new StatusCode[] {
+        StatusCode.TIMEOUT, StatusCode.IO_FAILURE, StatusCode.CANCELLED}) {
+      SQLException primary = new SQLException(
+          "injected terminal request outcome", "HYT00", primaryStatus.stableCode());
+      SQLException rollback = new SQLException(
+          "injected rollback conflict", "40001", StatusCode.CONFLICT.stableCode());
+      SQLException actual = runWithFailedRollback(primary, rollback);
+      assertSame(primary, actual);
+      assertSame(rollback, actual.getSuppressed()[0]);
+    }
+  }
+
+  @Test
+  void failedRollbackPreventsReplayEvenWhenBothFailuresAreRetryable() throws Exception {
+    SQLException primary = new SQLException(
+        "injected serialization conflict", "40001", StatusCode.CONFLICT.stableCode());
+    SQLException rollback = new SQLException(
+        "injected rollback conflict", "40001", StatusCode.CONFLICT.stableCode());
+    SQLException actual = runWithFailedRollback(primary, rollback);
+    assertEquals(StatusCode.IO_FAILURE, TpccStatusCodes.decode(actual));
+    assertSame(rollback, actual.getCause());
     assertSame(primary, actual.getSuppressed()[0]);
+  }
+
+  @Test
+  void successfulRollbackStillAllowsTheNextAttemptToCommit() throws Exception {
+    TpccConfig config = TpccConfig.parse(new String[] {
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny", "--maximum-attempts=2"
+    });
+    SQLException conflict = new SQLException(
+        "injected serialization conflict", "40001", StatusCode.CONFLICT.stableCode());
+    int[] attempts = {0};
+    int[] rollbacks = {0};
+    Connection connection = (Connection) Proxy.newProxyInstance(
+        Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
+        (ignored, method, arguments) -> {
+          if (method.getName().equals("rollback")) rollbacks[0]++;
+          return null;
+        });
+    TpccRetry.Result result = TpccRetry.execute(() -> {
+      if (++attempts[0] == 1) throw TpccRetry.rollbackAfterFailure(connection, conflict);
+      return true;
+    }, config, System.nanoTime() + 5_000_000_000L, TpccRetryObserver.NONE);
+    assertTrue(result.committed());
+    assertFalse(result.retryExhausted());
+    assertEquals(1, result.retries());
+    assertEquals(2, attempts[0]);
+    assertEquals(1, rollbacks[0]);
+    assertEquals(0, conflict.getSuppressed().length);
+  }
+
+  private static SQLException runWithFailedRollback(
+      SQLException primary, SQLException rollback) throws Exception {
+    TpccConfig config = TpccConfig.parse(new String[] {
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny", "--maximum-attempts=2"
+    });
+    int[] attempts = {0};
+    int[] rollbacks = {0};
+    Connection connection = (Connection) Proxy.newProxyInstance(
+        Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
+        (ignored, method, arguments) -> {
+          if (method.getName().equals("rollback")) {
+            rollbacks[0]++;
+            throw rollback;
+          }
+          return null;
+        });
+    SQLException actual = assertThrows(SQLException.class, () -> TpccRetry.execute(() -> {
+      attempts[0]++;
+      throw TpccRetry.rollbackAfterFailure(connection, primary);
+    }, config, System.nanoTime() + 5_000_000_000L, TpccRetryObserver.NONE));
+    assertEquals(1, attempts[0]);
+    assertEquals(1, rollbacks[0]);
+    return actual;
   }
 
   @Test

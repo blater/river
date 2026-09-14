@@ -1,44 +1,52 @@
 ---
 id: tic-nimloth
-status: open
+status: closed
 type: bug
 assignee: blater
 parent: tic-primula
 delivery: code
+base-commit: 3cfe00e7a1d5817a70308d106c4f27d2eba71a14
+branch: ticket/tic-nimloth-retry-safety
+delivered-commit: 7acf689a165910cde528cedb121ab99cb13cbbf6
 tags:
     - safety
     - protocol
-    - deadline
+    - transactions
 created: 2026-09-13T16:13:56.814975Z
 ---
-# Enforce whole-request responsiveness deadlines without idle-workload false positives
+# Preserve terminal transaction failures after failed rollback
 
-Extend the existing transport owner with an explicit maximum 15-second pending-request no-progress contract covering writes, partial reads and cancellation; preserve legitimate idle time and never claim kernel lock release. The user has reauthorized sequential runtime diagnostics with an enforced stop deadline.
+The user withdrew the 15-second policy and its implementation on 2026-09-14.
+There is no maximum runtime, response-silence deadline, transport replacement,
+startup rewrite, or whole-epic admission gate in this ticket.
 
-### Owning boundary and admission
+The remaining scope is the existing rollback/retry correctness correction in
+local commit `1e463e6d`: preserve a terminal primary failure when rollback fails,
+and prevent replay when failed rollback cannot establish a clean transaction.
+Successful rollback retains the existing retry behavior. This change still needs
+integration; it makes no performance or CHECKPOINT kernel-safety claim.
 
-Keep the existing client exchange/transport owner and retry ownership. Current
-socket timeout is per blocking read and does not bound an entire request, blocked
-writes, partial response trickles or close. Specify one explicit operation-progress
-contract before coding. A silent checkpoint has no progress frames; after 15 seconds
-without response it is timed out, not proven deadlocked. No automatic replay of
-uncertain commits, hidden fallback, extra executor or benchmark-family policy.
+The startup changes from `ce7645e1` are withdrawn in the branch working tree.
+The eight unintegrated TLS draft files were removed from source and archived at
+`/private/tmp/river-withdrawn-scope-20260914-zz5y0kd6/` with the prior ticket notes.
+Their tests are historical evidence of a rejected design, not delivery requirements.
 
-Do not equate 15 seconds without stdout, aggregate commits or process exit with
-unresponsiveness. Standard scheduling permits intentional 18-second keying and
-longer bounded think time. Tests must distinguish healthy 30-second measured runs,
-intentional idle time, a stalled terminal masked by active peers, stalled load,
-checkpoint silence, partial responses, blocked writes and cancellation/close.
-Use simulated transport tests before the explicitly authorized guarded runtime
-diagnostics; do not retry automatically after a deadline failure. tic-treebeard owns
-bounded process shutdown; neither ticket promises release of kernel resources.
+Existing focused validation of the retry correction: nine focused tests and
+99 benchmark-module tests passed, with two opt-in skips; source/module policy
+checks passed. The original kernel failure remains under tic-osgiliath.
 
-### End-to-end admission gate
+### Scoped delivery validation, 2026-09-14
 
-Before permitting workload validation, also account for synchronous runtime
-discovery and readiness waits in the invoking runner. The current Java version
-probe and 30-second readiness loop are not covered by the shutdown deadline.
-Keep startup supervision in the runner and request progress in the transport;
-record one end-to-end deadline contract without duplicating retry ownership.
-Acceptance must name every remaining blocking boundary and prove that a timed-out
-request with an uncertain outcome cannot be replayed automatically.
+The production correction and test are byte-identical to reviewed 1e463e6d,
+rebased as the sole code mechanism onto stable 3cfe00e7. Independent
+execution_admission_review reconfirmed terminal cause preservation, non-retryable
+failed rollback and unchanged successful-rollback retry behavior. No deadline,
+startup, TLS or shutdown source is included.
+
+Fresh affected-module validation passes: 99 benchmark tests, including all nine
+retry tests, with two existing opt-in skips. The same no-daemon Gradle invocation
+passes ten retained-plan/DDL/authorization tests, 18 JDBC typed/prepared tests,
+one terminal cleanup test, source policy and module graph checks, and installTps.
+Total: 128 passed, two skipped; BUILD SUCCESSFUL in 18s. This correctness delivery
+makes no throughput, P0 or CHECKPOINT kernel-safety claim. Exact command, XML and
+logs are retained in the 20260914-performance-epics durable evidence directory.

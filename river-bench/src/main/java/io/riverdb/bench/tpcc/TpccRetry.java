@@ -19,8 +19,16 @@ final class TpccRetry {
       connection.rollback();
       return failure;
     } catch (SQLException rollbackFailure) {
-      rollbackFailure.addSuppressed(failure);
-      throw rollbackFailure;
+      StatusCode status = TpccStatusCodes.decode(failure);
+      if (status == null || !status.isRetryable()) {
+        if (rollbackFailure != failure) failure.addSuppressed(rollbackFailure);
+        throw failure;
+      }
+      // A failed rollback cannot certify a clean transaction for another attempt.
+      SQLException terminal = new SQLException(
+          "TPC-C rollback failed", "08006", StatusCode.IO_FAILURE.stableCode(), rollbackFailure);
+      terminal.addSuppressed(failure);
+      throw terminal;
     }
   }
 
