@@ -1,16 +1,18 @@
 ---
 id: tic-telemnar
-status: open
+status: closed
 type: story
 priority: 1
 assignee: blater
 parent: tic-carcharoth
-delivery: code
+delivery: evidence
+evidence:
+    - docs/tickets/tic-telemnar.md
 tags:
     - performance
-created: 2026-09-13T11:46:48.638206Z
 links:
-  - tic-da4e
+    - tic-da4e
+created: 2026-09-13T11:46:48.638206Z
 ---
 # Avoid reverse-reference discovery for unchanged referenced keys
 
@@ -144,3 +146,34 @@ show no useful benefit or an unexplained repeated regression.
 The published starting checkpoint is 27033027,
 `perf-checkpoint-20260913-result-bitmap`. Admission review is not implementation
 or performance approval.
+
+### Measured rejection, 2026-09-14
+
+Rejected; no production change is integrated. Candidate 45c694cc on the pushed
+branch ticket/tic-telemnar-unchanged-discovery implements only the admitted
+fresh-plan predicate in three production classes. Its 41 focused tests pass,
+including exact discovery/probe counts, zero-allocation plan inspection, reset,
+failed/mismatched plans, composite/null and self references, private index and
+savepoint reuse. Independent execution_admission_review accepts the source
+correctness and unchanged schema ownership. Slopmark is unchanged (TableAccess
+26.7219; the other two production classes zero).
+
+The separate performance gate rejects retention. Matched sample/all, four
+workers, one warehouse, seed42, retries20, 5s warmup/30s measurement produced
+control 573.28/561.37 TPS (p99 31.752/32.735 ms) and candidate 561.94/547.93
+(p99 32.621/32.997 ms). A predeclared 120s C/A/A/C sequence yielded
+553.57/450.40/452.78/438.00 TPS, with p99 32.915/40.665/41.091/41.746 ms.
+The final control also slowed: these data establish neither a candidate-caused
+regression nor its host cause, and establish no repeatable useful benefit.
+Do not widen the optimization or repeat samples solely to retain it.
+
+All eight runs passed invariants, attempt accounting, zero failed/unknown
+outcomes, graceful server stop and owned-data removal. The frozen control is
+the accepted 27033027 production runtime; only three class files differ in the
+candidate. GraalVM25.0.4+7.1, heap1GiB, READ COMMITTED with explicit FOR UPDATE,
+loopback TCP/TLS1.3 and local durable-WAL acknowledgement are unchanged.
+Commands, individual logs, source identity and all report paths are retained in
+/private/tmp/river-performance-20260914 (control/candidate logs, long-samples.log
+and telemnar-long-plan.txt). The durable evidence location is recorded in the
+shared checkpoint ledger. No clean full-build checkpoint or performance tag is
+issued for this rejected code. Independent execution_admission_review concurs.

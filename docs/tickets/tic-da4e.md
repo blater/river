@@ -1,11 +1,13 @@
 ---
 id: tic-da4e
-status: in_progress
+status: closed
 type: investigation
 priority: 1
 assignee: blater
 parent: tic-carcharoth
 delivery: evidence
+evidence:
+    - docs/tickets/tic-da4e.md
 tags:
     - performance
     - tpcc
@@ -174,3 +176,47 @@ not justify the proposed lifetime/invalidation mechanism; no code is delivered.
 Bracegirdle remains deferred until telemnar's remaining discovery cost is measured.
 The investigation remains open for its declared unresolved evidence. No new
 workstream, measurement framework or blanket implementation permission is added.
+
+### Concluded admission investigation, 2026-09-14
+
+Independent execution_admission_review accepts this bounded conclusion with
+explicit measurement limits. Current integration 3cfe00e7 has the accepted
+27033027 production classes (subsequent integration commits change evidence).
+The frozen runtime, exact commands, JFR reader and logs are retained under
+/Users/blater/src/river-performance-evidence/20260914-performance-epics/.
+
+The new recording covers the entire measured window, 00:48:23.196069Z through
+00:48:53.175258Z. Report river_harness_20260914_004815_40a4747e accounts for
+18,054 attempts = 15,399 commits + 2,578 retries + 73 expected rollbacks + four
+cancellations. Profile/adjacent-control TPS is 513.66/535.28; p99 is
+34.832/34.275 ms. Both pass invariants, zero failed/unknown outcomes, graceful
+shutdown and owned-data removal. Adjacent report is
+river_harness_20260914_004934_857ef89e. The observed -4.04% timing difference
+is not an isolated profiler-overhead estimate amid the retained host variation.
+Configuration matches the previous four-worker sample/all diagnostic anchor.
+
+There are 1,578 selected request/commit stack samples: FK scan 53 (52 UPDATE,
+one DELETE), binding-view preparation five, server preparation 37. These are
+inclusive sampled presence, not CPU-time fractions. Server preparation has
+85,772,264 weighted inclusive allocation bytes, also a sampling estimate.
+The aligned window contains 1,006,320 socket writes and 193,022,504 bytes:
+55.74 observed writes/attempt and 65.35/commit, 191.81 bytes/write. The summed
+write duration is 3.604s. Events are selected by start timestamp; durations are
+not clipped or attributed transaction waiting. No message-family split is claimed.
+Seven channel-force events total 43.712ms; they do not measure every mapped WAL
+barrier. Scheduler/lifecycle parks do not fill the missing unmounted request,
+lock or queue wait totals. Existing physical writer/force owners and dependencies
+remain as reconciled above; missing totals do not admit WAL overlap.
+
+Final execution decisions: accept twofoot's directly demonstrated allocation
+removal; reject telemnar after matched short/long tests show no repeatable useful
+benefit; reject eowyn and bracegirdle because the current evidence does not justify
+their additional lifetime/invalidation responsibilities. Protocol preparation
+churn admits only gwindor's existing database/sql consumer ownership contract;
+edoras rejects morgoth's unmeasured pipelining candidate. The independent P0 and
+mapped-provider gates remain mandatory for WAL. This concludes the investigation
+with reviewed decisions, not complete blocking attribution, P0 certification,
+a cross-database claim or permission for speculative code. No new profiling
+framework or additional sampling expansion is required for these decisions.
+The stale earlier request/startup deadline proposal is withdrawn; nimloth owns
+only the separately reviewed rollback/retry correction.

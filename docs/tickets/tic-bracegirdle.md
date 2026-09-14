@@ -1,16 +1,18 @@
 ---
 id: tic-bracegirdle
-status: open
+status: closed
 type: story
 priority: 1
 assignee: blater
 parent: tic-carcharoth
-delivery: code
+delivery: evidence
+evidence:
+    - docs/tickets/tic-bracegirdle.md
 tags:
     - performance
-created: 2026-09-13T11:46:48.629924Z
 deps:
-  - tic-da4e
+    - tic-da4e
+created: 2026-09-13T11:46:48.629924Z
 ---
 # Replace repeated reverse foreign-key catalog discovery
 
@@ -43,3 +45,20 @@ uninstrumented runs establish performance. No per-row allocation, unbounded
 retention, extra execution path, weakened isolation/durability, or benchmark-family
 policy may be introduced. A negative result is a documented rejection, not a
 performance delivery. Independent review is required before promotion.
+
+### Reviewed no-code rejection, 2026-09-14
+
+Rejected for this epic; no reverse catalogue is implemented. Fresh accepted-
+source profiling observes FK scan in 53/1,578 inclusive selected request/commit
+stacks (52 UPDATE, one DELETE). This is sampled presence, not avoidable CPU-time
+or a predicted throughput gain. The smaller tic-telemnar discovery avoidance
+passed its mechanism tests but did not establish repeatable useful workload
+benefit in eight matched short/long samples. That does not prove every reverse
+index useless; it does not justify the larger publication, lifetime and DDL
+invalidation responsibility under this bounded epic.
+
+Independent execution_admission_review recommends this no-code rejection using
+the current profile and telemnar outcome. Existing authoritative catalogue and
+reference enforcement remain the owners. No new cache, schema representation,
+follow-up workstream or production change is introduced. See tic-da4e for the
+profile limits and tic-telemnar for individual samples and immutable report IDs.
