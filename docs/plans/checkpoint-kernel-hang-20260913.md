@@ -58,7 +58,7 @@ server I/O status from transport failure. JFR was disabled in that failed run.
 The retained evidence directory is
 `/Users/blater/src/river-performance-evidence/20260913-da4e/checkpoint-failure-capture/`.
 
-## Guarded validation after explicit user reauthorization
+## Historical validation under the subsequently withdrawn timeout policy
 
 The user explicitly authorized Java builds and TPS again with the stop deadline.
 Every command below used an external monotonic, absolute 15-second process-group
@@ -122,6 +122,70 @@ terminal. Native closes and monitor acquisition remain outside that join bound.
 
 The next diagnostic must identify the specific file, offset and Java write frame
 before termination destroys that evidence. Do not replace the mapped provider
-or claim a checkpoint-format fix based solely on this kernel stack. Longer TPS
-needs pending-request supervision, not just the current 30-second socket read
-timeout or aggregate stdout activity; that contract remains in tic-nimloth.
+or claim a checkpoint-format fix based solely on this kernel stack. The user withdrew the timeout policy on 2026-09-14; the historical guards above
+are not current operating instructions or proof of crash prevention.
+
+
+## Source trace and evidence gap, 2026-09-14
+
+Read-only source inspection and independent review identify direct positional
+writes during CHECKPOINT. The TPS server opens its database through EmbeddedRiver;
+EmbeddedDatabaseOpener uses NioDurableDirectory even though daemon lifecycle
+capabilities use the APFS adapter. The checkpoint sequence is:
+
+1. EmbeddedCheckpoint.commit performs vacuum and table.flush.
+2. IndexedCheckpointCoordinator.flush writes dirty live pages, resizes the page
+   file, flushes row/version sidecars, forces the page file and directory.
+3. IndexedCheckpointWriter writes the next immutable checkpoint page file using
+   FileIoMode.POSITIONAL, then truncates, forces, closes and forces its directory.
+4. WAL rotation and checkpoint control installation follow before obsolete-file
+   removal.
+
+NioDurableFile.write calls positional FileChannel.write. Its resize path can
+also extend a file with a one-byte positional write. These calls are concrete
+candidates for the saved VNOP_WRITE/cluster_write stack; the native stack does
+not distinguish them or identify the target file. Do not attribute the failure
+specifically to mapped WAL force.
+
+Independent source review found no proven write/unmap race. Mapped transfer,
+force, truncation and close share the mappedData monitor. Checkpoint maintenance
+and database shutdown also have transaction/session ownership barriers. These
+observations narrow hypotheses; they do not prove every lifetime interleaving
+safe or resolve the kernel defect.
+
+The Java thread name ForkJoinPool-1-worker-9 does not identify a CHECKPOINT
+operation. River connection handlers, group-commit writer and deferred session
+cleanup use virtual threads; the carrier name alone cannot select the mounted
+Java operation.
+
+The retained sample.txt says the sampler could not examine Java PID1697 despite
+its apparent existence. process-state.txt records it in ?E state at elapsed
+04:15. Consequently that capture contains no server Java stack to connect the
+native write to a River file. The client stack does identify the actual
+CHECKPOINT call. The panic's terminated snapshot cannot establish whether
+termination initiated or followed the first kernel stall.
+
+The missing evidence is the mounted Java write stack, target file/vnode or file
+descriptor, offset/length and ordering of first blocked I/O against stop/signals.
+The existing records establish a severe kernel stall, but not its initiating
+River operation. No workload or Java process was launched for this source audit.
+
+
+## Retained-evidence review during WAL resumption, 2026-09-14
+
+Independent concurrency/operations review rechecked both saved panic records,
+the failed sampler and server log against published runtime `5dcee338`. The
+Java threads have kernel frames only: no user frames/registers or target file
+descriptor, vnode/path or write offset. The sampler retained no server Java
+stack, and server.log contains only startup information. Source comparison
+confirms EmbeddedCheckpoint, IndexedCheckpointCoordinator,
+IndexedCheckpointWriter and NioDurableFile are byte-identical to `ef935596`;
+several positional writes and extension writes remain possible. Source order
+cannot identify which one stalled.
+
+This closes the bounded retained-data inspection, not the bug. The missing
+evidence is the mounted Java write frame, target file and offset/length, and
+whether the first stall preceded termination. No causal finding supports a
+production change or ticket closure. The current P0 campaign is separate; a
+passing checkpoint demonstrates that run's operation, not repair of the
+historical kernel stall. No new reproduction or instrumentation was added.
