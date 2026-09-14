@@ -17,6 +17,7 @@ tags:
 deps:
     - tic-af29
     - tic-8e74
+    - tic-b1b7
 links:
     - tic-0636
     - tic-1fe7
@@ -137,3 +138,13 @@ unpassed, ca05/4d14/f1bb remain blocked by their existing dependency, and no WAL
 implementation or P1 promotion starts. No new ticket, diagnostic framework,
 workload family, timeout policy or relaxed criterion is introduced. This is a
 readiness blocker, not a fresh failed workload or permission to close P0.
+
+### Accepted general concurrency fixture, 2026-09-14
+
+The user-authorized [tic-b1b7](tic-b1b7.md) supplies the controlled general SQL
+lock/deadlock/isolation proofs and real Payment/New Order integration regression.
+Its [declared matrix, proof limits and reproducible command](../plans/p0-general-concurrency-reproducers.md)
+replace the missing-fixture readiness finding above. The fixture is an explicit
+prerequisite; its completion permits this evidence-only campaign to resume.
+It does not certify P0, erase the historical failed 10:2 scaling result, change
+this ticket's claim or promotion criteria, or admit WAL overlap implementation.

@@ -14,10 +14,11 @@ Two of the three bounded performance epics are complete:
   the separate rollback/retry safety correction is integrated3d70a826.
   [Rian](tickets/tic-rian.md) records reviewed workload and compatibility evidence.
 - [WAL overlap](tickets/tic-rowlie.md) remains open: the mandatory
-  [P0 gate](tickets/tic-1dda.md) still lacks its existing correlated Payment/New
-  Order reproducer with controlled lock interleavings and three terminals.
-  Ordinary runs cannot replace it. No new fixture workstream, overlap code,
-  lock removal or relaxed gate is introduced under the user's scope lock.
+  [P0 gate](tickets/tic-1dda.md) now has the accepted
+  [general SQL concurrency reproducer](tickets/tic-b1b7.md), covering controlled
+  lock paths, deadlocks and isolation, with Payment/New Order integration.
+  P0 revalidation remains a separate evidence-only campaign with its existing
+  correctness/scaling criteria; WAL overlap is not yet admitted.
 
 [Performance checkpoints](performance-checkpoints.md) records exact source,
 individual measurements, tests, local/publication status and durable evidence.
