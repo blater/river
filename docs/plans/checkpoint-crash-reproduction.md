@@ -3,9 +3,67 @@
 Owner: [tic-osgiliath](../tickets/tic-osgiliath.md). Original recipe, source bundle,
 and all three raw panics: [tic-emeldir](../tickets/tic-emeldir.md).
 
-The user selected preparation for later execution on 2026-09-14. This procedure
-has **not** been executed. The controlled JDBC tests exercise returned I/O errors
-and a releasable delayed write; they do not reproduce the kernel fault.
+The user selected preparation for later execution on 2026-09-14, then authorized
+step 1: rehearse capture against the controlled held-write test and revise the
+plan under independent review. Two controlled rehearsals are complete. **The
+actual host-crash workload below remains unexecuted and deferred.** The fixture
+pauses before the native write; it does not reproduce the kernel fault.
+
+## Rehearsal evidence and revised order
+
+Both attempts used accepted source `e2642598`, GraalVM Java 25.0.4, and the existing
+`RiverDaemonCheckpointJdbcTest.heldCheckpointWriteTimesOutAtJdbcClientThenServerClosesAndReopens`
+test. Its child owns the authenticated server and injected page-write gate; the
+parent verifies normal child exit before reopening and checking the committed row.
+No production or test source was changed for capture.
+
+| Observation | Evidence | Consequence |
+| --- | --- | --- |
+| A process-start trigger was too early | Attempt 1 PID 4693: first JSON at 16:47:42 UTC showed startup/WAL recovery. A second JSON at 16:48:10 showed the held checkpoint. | Do not label artifacts as checkpoint captures merely because Java started or a fixed interval elapsed. |
+| State-triggered capture worked | Attempt 2 PID 4762: probe 0 was early; probe 1 at 16:49:19.326706 UTC showed virtual thread 48, `river-connection-0`, TIMED_WAITING in the test latch and checkpoint chain. lsof/native/JFR capture followed at 16:49:19.35–21.64. All collectors returned zero. | Confirm the checkpoint stack before the coordinated capture. |
+| The direct wait evidence is Java JSON | `CountDownLatch.await → CheckpointPageFile.write → IndexedPageFrameIo.write → IndexedCheckpointCoordinator.writeDirtyPages/flush → EmbeddedCheckpoint.commit → TransactionManager.commitMaintenance`. | Native samples can establish collector usability here, but cannot show a blocked native file write that the fixture has not entered. |
+| Open-file inventory is not active-call attribution | lsof listed pages FD 44, rows FD 45, versions FD 46, and WAL FD 41. | Do not assign FD 44 or its displayed offset to the held invocation without an independent association. Positional writes need their explicit argument. |
+| JFR events arrive after operations complete | During-hold JFR: 27 FileWrite and 64 ThreadPark events; final: 45 and 112. Neither contained the checkpoint latch park. After release, FileWrite events on virtual thread 48 showed the test wrapper, `river.indexed.pages`, and 16,384 bytes. | The later completed writes corroborate the fixture path, not the missing during-hold offset. The roughly 30-second carrier park is unrelated and must not be substituted for the virtual-thread latch. |
+| Native write arguments are still missing | FileWrite fields were startTime, duration, eventThread, stackTrace, path, bytesWritten; no positional offset. The virtual event had osThreadId 0. | We cannot yet associate the held Java invocation with a native thread/descriptor/offset/count before completion. |
+| Filesystem tracing was unavailable | `sudo -n fs_usage ...` returned `sudo: a password is required`. | This was an OS authentication limit, not a negative trace result or an automatic approval rejection. Validate tracing on the isolated host before running its workload. |
+| Capture did not break cleanup | Both controlled tests passed. Attempt 2 reported IO_FAILURE after 30,004 ms, with the test asserting zero completed responses before release, normal child exit, and recovered data. | These are controlled-capture results, not evidence that native stuck I/O can be terminated. |
+
+Raw evidence, exact collector commands/timestamps, scripts, Java/native dumps,
+JFR files, decoded events, and test XML are retained under
+`/Users/blater/src/river/benchmark-results/checkpoint-capture-20260914/`;
+`attempt-2/` contains the revised rehearsal. `collectors.json` records scripted
+collector commands and exit results; the additional first-attempt Java dump is
+retained as `second.threads.json`, with its own JVM timestamp. The first startup capture is retained as a failed
+checkpoint-timing attempt, not relabelled as a successful held capture.
+
+The revised next steps are:
+
+1. **Close the in-flight argument gap in another controlled rehearsal.** Prefer
+   a small diagnostic at the existing file-I/O owner that exposes the current
+   operation, file identity, explicit position/count, Java thread and start time
+   before entering the provider call, and completion afterward. It must remain
+   inspectable without acquiring the transaction-manager or blocked I/O lock.
+   Prove it against independently known fixture arguments while a controlled
+   gate is held **after snapshot publication and before the underlying I/O call**,
+   including cleanup after returned failure. The current external
+   `CheckpointPageFile` gate runs before `delegate.write`, so it cannot validate
+   a snapshot inside `NioDurableFile`. A downstream test seam belongs to that
+   separately proposed implementation, not this completed rehearsal.
+   Do not add a second I/O path, executor,
+   per-write log stream, or general tracing framework. This diagnostic is a
+   proposed next implementation boundary, **not delivered in this rehearsal**.
+2. Establish working filesystem/native capture on the disposable host. Treat
+   different OS/JDK/filesystem configurations as separate experiments.
+3. Only then consider one instrumented run of the original workload. Require a
+   captured in-flight operation and its ordering against cancellation/signals;
+   stop on missing capture rather than repeat an unchanged experiment.
+4. Minimize the identified operation sequence; choose one evidence-driven
+   comparison afterward. No workload sweep or provider replacement is justified.
+
+Independent `execution_admission_review` inspected both attempts and independently
+decoded the JFR files. It accepted the second controlled capture and required the
+attribution, virtual-thread, timing, and filesystem-authentication limits above.
+
 
 ## What the next run must distinguish
 
@@ -86,9 +144,22 @@ PID 57024 from the incident or send jcmd commands to PID 0 (all JVMs).
 pgrep -fl 'io.riverdb.bench.tpcc.TpccServerMain'
 ```
 
-Set `server_pid` to that single observed PID. Capture once while work is healthy,
-and again as the measured interval ends, before the 30-second client timeout.
-Use distinct `capture` names, for example `healthy` and `checkpoint`.
+Set `server_pid` to that single observed PID. Retain a healthy capture separately.
+Use the workload phase as a cue, then confirm an actual checkpoint stack or the
+required in-flight operation record before describing a capture as checkpoint
+evidence. Do not use process startup or a fixed sleep as proof. For the controlled
+fixture the criterion was `CheckpointPageFile.write` under `CountDownLatch.await`;
+that test-only frame must not be expected in the real workload.
+
+Take Java probe dumps to distinct files; if a probe is early, retain it and retry
+within the pre-timeout observation window. Once checkpoint entry is observed,
+start native sampling and descriptor capture independently, then dump JFR while
+work is still pending. If attach stops responding, collect native/filesystem
+evidence immediately without waiting for a successful Java probe. Such a capture
+still needs its actual operation association before attribution.
+
+The commands below show the individual collectors, not a requirement to run them
+serially behind a potentially blocked attach. Use distinct `capture` names.
 
 ```sh
 server_pid=REPLACE_WITH_OBSERVED_PID
@@ -97,7 +168,7 @@ date -u > "$incident_dir/$capture.time.txt"
 ps -p "$server_pid" -o pid,ppid,state,etime,command > "$incident_dir/$capture.process.txt"
 "$JAVA_HOME/bin/jcmd" "$server_pid" Thread.dump_to_file -format=json \
   "$incident_dir/$capture.threads.json" > "$incident_dir/$capture.jcmd.txt" 2>&1
-/usr/sbin/lsof -nP -p "$server_pid" > "$incident_dir/$capture.files.txt" 2>&1
+/usr/sbin/lsof -nP -o -p "$server_pid" > "$incident_dir/$capture.files.txt" 2>&1
 /usr/bin/sample "$server_pid" 2 1 -file "$incident_dir/$capture.native.txt"
 "$JAVA_HOME/bin/jcmd" "$server_pid" JFR.dump \
   filename="$incident_dir/$capture.jfr" > "$incident_dir/$capture.jfr-dump.txt" 2>&1

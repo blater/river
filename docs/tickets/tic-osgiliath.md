@@ -1,7 +1,7 @@
 ---
 id: tic-osgiliath
 status: in_progress
-branch: ticket/tic-osgiliath-checkpoint-exit
+branch: ticket/tic-osgiliath-capture-rehearsal
 type: bug
 priority: 1
 assignee: blater
@@ -176,3 +176,30 @@ embeds the relevant stack and causal limits.
 | Initiating kernel write and clean termination while kernel I/O never returns | Unresolved; no userspace termination guarantee |
 | Persistent storage failure with no recovery of the provider | Close remains unsuccessful with ownership retained; no dirty-state discard contract added |
 | WAL acceptance and P0 scaling/accounting | No new acceptance; existing deferrals remain |
+
+### Capture rehearsal and plan iteration, 2026-09-14
+
+User authorized controlled step 1 and independent plan review. Claimed by root on
+base `e2642598`, branch `ticket/tic-osgiliath-capture-rehearsal`, worktree
+`/private/tmp/river-checkpoint-exit`. No production/test source changes.
+
+Two real held-write test runs passed normal child exit and parent recovery. The
+first process-start capture was too early; the second attempt used an observed
+checkpoint stack and captured Java/native/open-file/JFR evidence during the hold.
+The second test reported IO_FAILURE at 30,004 ms. The independent reviewer
+confirmed the result and attribution limits.
+
+The [revised plan](../plans/checkpoint-crash-reproduction.md#rehearsal-evidence-and-revised-order)
+records collector results and the new prerequisite: identify file/position/count
+while the operation is still pending. JFR had no checkpoint latch park or write
+offset, lsof was inventory only, and fs_usage lacked noninteractive administrator
+authentication. Do not proceed to the kernel workload with those gaps. The next
+bounded implementation is proposed, not implemented, and awaits authorization
+for that next step: an in-flight observation at the existing file owner, with a
+controlled gate after publication and before native I/O. The unchanged outer
+fixture gate cannot validate that observation. No tracing framework is added.
+Actual host-crash execution remains deferred and the bug remains in progress.
+
+Independent review required and verified the downstream-gate clarification and
+the distinction between completed rehearsal and proposed implementation. Delivery
+tag: `checkpoint-20260914-capture-rehearsal` (evidence only).
