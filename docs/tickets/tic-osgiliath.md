@@ -31,8 +31,8 @@ A fresh unchanged-source single-worker TPS smoke passed measured workload,
 checkpoint, recovery and cleanup; durable evidence is
 /Users/blater/src/river-performance-evidence/20260913-da4e/checkpoint-smoke/.
 That smoke did not establish host safety: a subsequent unchanged-source control
-again failed at checkpoint and server termination. No further workload is
-authorized on this Mac. Do not implement a guessed checkpoint fix or count the
+again failed at checkpoint and server termination. That historical run did not justify another reproduction. Do not implement a
+guessed checkpoint fix or count the
 failed samples as accepted performance evidence.
 
 ### Retained recurrence evidence and next boundary
@@ -53,13 +53,13 @@ Continue static inspection of mapped-file force, unmap, truncate and close
 ordering and independent review. Any runtime validation requires a
 user-designated isolated disposable host. Never reproduce the hang on this Mac,
 and never infer that a userspace timeout or SIGKILL releases kernel resources.
-tic-treebeard owns bounded supervisor shutdown; tic-nimloth owns pending-request
-responsiveness. Neither alone establishes the cause or authorizes another run.
+tic-treebeard retains shutdown ownership corrections; tic-nimloth retains only
+rollback/retry correctness. Neither establishes the kernel cause.
 
 ### Current authorization and findings
 
-The user subsequently explicitly reauthorized Java builds and TPS with the
-15-second stop deadline. Guarded builds, mapped-file lifecycle and checkpoint
+The user subsequently explicitly reauthorized Java builds and TPS, then withdrew
+the 15-second policy on 2026-09-14. Historical guarded builds, mapped-file lifecycle and checkpoint
 recovery tests passed. Short four-worker TPS passed checkpoint and cleanup;
 the original longer failure is not declared fixed.
 
@@ -71,3 +71,24 @@ the native `VNOP_WRITE` / `cluster_write` path. The earlier inspection of
 Java write frame still need identification; do not infer an mmap/unmap cause.
 The reproducible evidence and current decisions are recorded in
 [the investigation](../plans/checkpoint-kernel-hang-20260913.md).
+
+
+### Source trace, 2026-09-14
+
+CHECKPOINT flushes live pages and writes an immutable positional page file before
+WAL rotation/control installation. NioDurableFile's positional writes and file
+extension write are candidates for the native write stack. Independent review
+found no proven mapped-lifetime race. The retained process sampler failed after
+the process entered exiting state, so the mounted Java frame and target file
+remain unknown. The existing investigation now records the source chain and
+precise missing evidence. No runtime reproduction was performed.
+
+### WAL resumption evidence disposition, 2026-09-14
+
+Independent review exhausted the retained panic/sampler/server-log evidence
+without finding a mounted Java frame or target file/offset. The four traced
+checkpoint/write owners are unchanged from `ef935596` at current `5dcee338`.
+The [retained-data review](../plans/checkpoint-kernel-hang-20260913.md#retained-evidence-review-during-wal-resumption-2026-09-14)
+records the precise limit. Keep this bug open: successful P0 checkpoints cannot
+prove the original cause or a fix. No new production change, runtime probe or
+instrumentation is justified by the available evidence.
