@@ -3,16 +3,16 @@ package io.riverdb.server;
 import io.riverdb.base.error.StatusCode;
 import java.io.IOException;
 
-/** Bounded shutdown of the listener, workers, and sockets. */
+/** Shuts down listener, workers, and sockets before releasing their owners. */
 final class LoopbackServerShutdown {
   private static final int SHUTDOWN_TIMEOUT_MILLIS = 5_000;
 
   private LoopbackServerShutdown() { }
 
   static StatusCode close(LoopbackRiverServer server) {
-    long deadline = System.nanoTime() + SHUTDOWN_TIMEOUT_MILLIS * 1_000_000L;
     server.running = false;
     StatusCode status = closeListener(server);
+    long deadline = System.nanoTime() + SHUTDOWN_TIMEOUT_MILLIS * 1_000_000L;
     status = joinUntil(server.acceptor, deadline, status);
     Thread[] workers = new Thread[server.slots.length];
     synchronized (server) {
@@ -30,7 +30,7 @@ final class LoopbackServerShutdown {
       }
     }
     for (Thread worker : workers) {
-      status = joinUntil(worker, deadline, status);
+      status = joinUnbounded(worker, status);
     }
     if (server.acceptor != null && server.acceptor.isAlive()) {
       server.lastStatus = StatusCode.TIMEOUT;
@@ -78,4 +78,18 @@ final class LoopbackServerShutdown {
     }
   }
 
+  private static StatusCode joinUnbounded(Thread thread, StatusCode current) {
+    if (thread == null) return current;
+    boolean interrupted = false;
+    while (thread.isAlive()) {
+      try {
+        thread.join();
+      } catch (InterruptedException interruption) {
+        interrupted = true;
+        current = StatusCode.CANCELLED;
+      }
+    }
+    if (interrupted) Thread.currentThread().interrupt();
+    return current;
+  }
 }

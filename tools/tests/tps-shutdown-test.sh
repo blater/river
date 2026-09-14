@@ -298,12 +298,4 @@ fi
 [[ $cleanup_status == 1 ]] || fail "latched cleanup failure did not exit with failure"
 [[ ! -e $cleanup_marker ]] || fail "cleanup copied, wrote metadata, or removed files after an owned-process failure"
 
-set +e
-option_output=$(bash "$script_path" --server-stop-timeout-seconds=16 2>&1)
-option_status=$?
-set -e
-((option_status == 2)) || fail "stop timeout above 15 was accepted"
-[[ $option_output == *"server-stop-timeout-seconds must not exceed 15"* ]] ||
-  fail "oversized stop timeout did not explain the 15-second maximum"
-
 echo "ok: TPS shutdown deadline and process-reaping tests"

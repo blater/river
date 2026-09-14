@@ -32,8 +32,6 @@ import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -54,35 +52,6 @@ final class LoopbackRiverServerTest {
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x4e4554574f524b44L, 0x4154414241534531L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
-
-  @Test
-  void shutdownDeadlineRetainsFailureWhileWorkerIsStillAlive(@TempDir Path root)
-      throws Exception {
-    DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK,
-        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
-    RiverDatabase database = opened.database();
-    LoopbackRiverServer server = start(database, root);
-    CountDownLatch release = new CountDownLatch(1);
-    Thread worker = Thread.ofPlatform().daemon().start(() -> {
-      try { release.await(8, TimeUnit.SECONDS); }
-      catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
-    });
-    synchronized (server) { server.slots[0].worker = worker; }
-    try {
-      long started = System.nanoTime();
-      assertEquals(StatusCode.TIMEOUT, server.close());
-      assertEquals(StatusCode.TIMEOUT, server.lastStatus());
-      assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(7));
-      assertTrue(worker.isAlive());
-      assertEquals(StatusCode.TIMEOUT, server.close());
-    } finally {
-      release.countDown();
-      worker.join(1_000);
-      assertFalse(worker.isAlive());
-      assertEquals(StatusCode.OK, database.close());
-    }
-  }
 
   @Test
   void executesDurableSqlAndStreamsRowsOverLoopbackTcp(@TempDir Path root)

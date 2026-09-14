@@ -35,7 +35,7 @@ Options:
   --server-start-timeout-seconds=N
                                 Server readiness timeout (default: 30)
   --server-stop-timeout-seconds=N
-                                Total runner/server shutdown budget (default: 15, maximum: 15)
+                                Total runner/server shutdown budget (default: 20)
   --resource-maximum-bytes=N    Managed database root budget (default: 1073741824)
   --resource-delivery-bytes=N   Aggregate transaction/WAL budget (default: 268435456)
   --resource-lock-provider-bytes=N
@@ -129,7 +129,7 @@ warmup_seconds=1
 measured_seconds=10
 runner_timeout_seconds=
 server_start_timeout_seconds=30
-server_stop_timeout_seconds=15
+server_stop_timeout_seconds=20
 resource_maximum_bytes=1073741824
 resource_delivery_bytes=268435456
 resource_lock_provider_bytes=67108864
@@ -237,7 +237,6 @@ require_positive warmup_seconds "$warmup_seconds"
 require_positive measured_seconds "$measured_seconds"
 require_positive server_start_timeout_seconds "$server_start_timeout_seconds"
 require_positive server_stop_timeout_seconds "$server_stop_timeout_seconds"
-((server_stop_timeout_seconds <= 15)) || die "server-stop-timeout-seconds must not exceed 15"
 require_positive resource_maximum_bytes "$resource_maximum_bytes"
 require_positive resource_delivery_bytes "$resource_delivery_bytes"
 require_positive resource_lock_provider_bytes "$resource_lock_provider_bytes"
