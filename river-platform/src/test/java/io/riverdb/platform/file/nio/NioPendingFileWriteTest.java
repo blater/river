@@ -1,5 +1,7 @@
 package io.riverdb.platform.file.nio;
 
+import static io.riverdb.platform.file.nio.PendingFileWriteDiagnostics.OperationKind.POSITIONAL_WRITE;
+import static io.riverdb.platform.file.nio.PendingFileWriteDiagnostics.OperationKind.RESIZE_GROWTH;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -106,14 +108,15 @@ final class NioPendingFileWriteTest {
                 && event.active() && event.sampleAvailable()
                 && event.currentUncapturedOperationCount() == 1
                 && event.cumulativeSkippedOperationCount() == 1);
-        assertEvent(liveCaptured, fixture.path(), 128, 4, captured, capturedSubmittedNanos);
+        assertEvent(liveCaptured, POSITIONAL_WRITE, fixture.path(), 128, 4, captured,
+            capturedSubmittedNanos);
         assertEquals(1, liveCaptured.currentUncapturedOperationCount());
         assertEquals(1, liveCaptured.cumulativeSkippedOperationCount());
         PendingEvent liveIndependent = requireEvent(
             liveEvents, event -> event.path().equals(fixture.path().toString())
                 && event.handleId() == secondHandleId
                 && event.active() && event.sampleAvailable());
-        assertEvent(liveIndependent, fixture.path(), 512, 5, otherHandle,
+        assertEvent(liveIndependent, POSITIONAL_WRITE, fixture.path(), 512, 5, otherHandle,
             otherHandleSubmittedNanos);
         assertNotEquals(liveCaptured.handleId(), liveIndependent.handleId());
         System.out.printf(
@@ -218,13 +221,17 @@ final class NioPendingFileWriteTest {
         PendingEvent resizeEvent = requireEvent(events, event -> event.path().equals(fixture.path().toString())
             && event.sampleAvailable() && event.position() == 4095
             && event.requestedRemainingBytes() == 1
+            && event.operationKind().equals(RESIZE_GROWTH.name())
             && event.writerThreadName().equals("pending-write-resize-failure"));
         PendingEvent failedEvent = requireEvent(events, event -> event.path().equals(fixture.path().toString())
             && event.sampleAvailable() && event.position() == 700
             && event.requestedRemainingBytes() == 3
+            && event.operationKind().equals(POSITIONAL_WRITE.name())
             && event.writerThreadName().equals("pending-write-resize-failure"));
-        assertEvent(resizeEvent, fixture.path(), 4095, 1, resize, resizeSubmittedNanos);
-        assertEvent(failedEvent, fixture.path(), 700, 3, failed, failedSubmittedNanos);
+        assertEvent(resizeEvent, RESIZE_GROWTH, fixture.path(), 4095, 1, resize,
+            resizeSubmittedNanos);
+        assertEvent(failedEvent, POSITIONAL_WRITE, fixture.path(), 700, 3, failed,
+            failedSubmittedNanos);
         requireEvent(events, event -> event.path().equals(fixture.path().toString())
             && event.startTime().isAfter(failedCompletedAt)
             && !event.active() && !event.sampleAvailable());
@@ -401,6 +408,7 @@ final class NioPendingFileWriteTest {
   private static PendingEvent pendingEvent(RecordedEvent event) {
     return new PendingEvent(
         event.getStartTime(), event.getString("path"), event.getLong("handleId"),
+        event.getString("operationKind"),
         event.getLong("position"), event.getLong("requestedRemainingBytes"),
         event.getLong("writerThreadId"), event.getString("writerThreadName"),
         event.getLong("writeStartMonotonicNanos"), event.getBoolean("active"),
@@ -417,8 +425,10 @@ final class NioPendingFileWriteTest {
   }
 
   private static void assertEvent(
-      PendingEvent event, Path path, long position, long bytes, WriteGate gate,
+      PendingEvent event, PendingFileWriteDiagnostics.OperationKind operationKind,
+      Path path, long position, long bytes, WriteGate gate,
       long submittedNanos) {
+    assertEquals(operationKind.name(), event.operationKind());
     assertEquals(path.toString(), event.path());
     assertTrue(event.handleId() > 0);
     assertEquals(position, event.position());
@@ -478,6 +488,7 @@ final class NioPendingFileWriteTest {
       Instant startTime,
       String path,
       long handleId,
+      String operationKind,
       long position,
       long requestedRemainingBytes,
       long writerThreadId,
