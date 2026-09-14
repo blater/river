@@ -2088,7 +2088,8 @@ final class IndexedTransactionSessionTest {
     assertEquals(
         StatusCode.OK,
         table.preflightHybridCommitGroup(
-            prepared, prepared.length, manager.oldestVisibleCommitSequence()));
+            prepared, prepared.length, manager.oldestVisibleCommitSequence(),
+            new IndexedPreparedCommitCohortDemand()));
     assertEquals(StatusCode.OK, manager.beginCommitGroup(transactions, transactions.length));
     assertEquals(
         StatusCode.OK,

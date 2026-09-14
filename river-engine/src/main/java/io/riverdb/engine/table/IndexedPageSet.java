@@ -124,6 +124,12 @@ final class IndexedPageSet {
   }
   void resetChanges() { state.resetChanges(); }
   StatusCode beginPreparedBatch() { return cache.beginPreparedBatch(); }
+  StatusCode beginMemberStagingAdmission(IndexedPreparedLogicalCommit member) {
+    return cache.beginMemberStagingAdmission(member);
+  }
+  boolean memberCapacityPressure() { return cache.memberCapacityPressure(); }
+  void endMemberStagingAdmission() { cache.endMemberStagingAdmission(); }
+  void rollbackStagedMember() { cache.rollbackStagedMember(); }
   StatusCode freezeChangedPages(int member, long oldestVisibleCommitSequence) {
     return cache.freezeChangedPages(member, oldestVisibleCommitSequence);
   }

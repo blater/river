@@ -1,11 +1,13 @@
 ---
 id: tic-5b3e
-status: open
-priority: 1
+status: in_progress
 type: story
+priority: 1
 assignee: blater
 parent: tic-rowlie
 delivery: code
+base-commit: 39eb104cb83dc8f20b838d4bc8d9173433f00fb5
+branch: ticket/tic-5b3e-cohort-admission
 tags:
     - performance
     - tpcc
@@ -16,20 +18,37 @@ deps:
     - tic-ca05
 created: 2026-09-04T15:10:07.259189Z
 ---
-# Reserve cumulative cohort demand before physical staging
+# Admit resource-bounded cohort prefixes through canonical staging
 
 Form cohorts by cumulative admitted page, version, staging, and WAL demand rather than fixed transaction or record counts.
 
 ### Design
 
-Reserve against compiled runtime budgets before side effects. Apply cancellable backpressure or split admission while retaining one canonical physical writer and one transaction outcome.
+Use one cumulative admission policy for direct and group commits. Logical write,
+version and WAL demand is already sealed and leased per session before enqueue;
+the cohort consumes those receipts without reserving them twice. The canonical
+compiler admits each distinct changed page incrementally, before staging it,
+against the configured staging-page lease and the remaining structural
+`currentFrames` generation capacity. This per-page count admission does not
+guarantee that a physical frame will be available at freeze time: pin state and
+eviction I/O remain owned by the page cache and are resolved there. No page
+forecast or duplicate traversal is added.
+
+If a member cannot grow the ordered prefix because a cumulative budget is
+temporarily full, roll back only that unaccepted member before WAL append or
+publication, complete the accepted prefix through the existing writer, then
+return the deferred suffix to the head of the queue in arrival order. If the
+first member cannot fit the configured resource boundary by itself, terminalize
+that member with the existing RESOURCE_EXHAUSTED or RETRY status and then
+resume its suffix. Direct commits use the same policy with a one-member prefix.
 
 ### Outcome
 
 One cumulative admission decision selects the largest safe cohort prefix, or
-returns an explicit pre-side-effect pressure/impossible-request outcome, using
-all admitted page, version, staging, and WAL demand. Every reservation is held
-and released exactly once with the transaction outcome.
+returns an explicit pressure/impossible-request outcome before WAL append or
+publication, using all admitted page, version, staging, and WAL demand. Reversible
+member staging may be rolled back to preserve the accepted prefix. Every
+reservation is held and released exactly once with the transaction outcome.
 
 ### In Scope / Owning Mechanism
 
@@ -40,10 +59,21 @@ one ordered prefix, and passes that prefix to the one canonical physical writer.
 Budget owners retain responsibility for their units and capacity; this ticket
 owns only their cumulative cohort decision and reservation lifecycle.
 
-Before production work, record for every budget its unit, demand source,
-reservation point and lifetime, impossible-versus-transient status, prefix or
-backpressure rule, cancellation behavior, and exact release owner. No
-implementation begins while any of those semantics are unresolved.
+The per-page staging check uses the existing IndexedPageState changed-page
+admission and IndexedPreparedPageBatch generation owner. A failed member drops
+only its partial staged pages, pending generation slots, operation row/heap
+frontier and version-operation suffix; its frozen prefix remains intact,
+including when freeze fails partway through pages or a page already changed by
+an earlier member. Only recognized page-capacity pressure may split/defer a
+suffix. I/O, corruption and invariant failures retain their existing terminal
+failure handling. The session resource lease remains held through its eventual
+outcome, so any staged-page high-water already admitted remains reserved while
+the suffix waits.
+The durable row-ID owner is queried for available capacity so only the selected
+prefix reaches its mutating admission call; a whole-cohort miss must not latch
+maintenance when a prefix fits. WAL sizing receipts remain session-owned and
+LocalWal validates the selected prefix's exact record/address range before
+append. Provider page memory remains reserved once at database open.
 
 ### Non-goals
 
@@ -51,8 +81,9 @@ implementation begins while any of those semantics are unresolved.
   page, version, staging, or WAL budgets.
 - Retuning budget sizes or coalescing delays, redesigning the compiled database
   resource plan, or introducing fixed transaction/record/cohort caps.
-- Logical preparation, physical staging, WAL representation or append, durable
-  publication, lock policy, or a second transaction outcome.
+- Logical sizing or preparation, page-demand forecast/duplicate traversal, WAL
+  representation or append format, durable publication, lock policy, or a
+  second transaction outcome.
 
 ### Stop Conditions
 
@@ -124,8 +155,20 @@ whole pool or only summing existing logical receipts does not establish it.
 Implementing the full contract requires a decision in physical demand planning
 or staging/rollback ownership, both excluded by the current ticket. The Luna/high
 worker and independent admission reviewer found no existing route that satisfies
-the complete contract without that change. Apply the ticket's stop condition:
-retain this precise blocker, add no ticket, no duplicate policy, no partial code,
-and no performance claim. Do not reinterpret pre-cohort reservation as the
-existing per-page capacity check. Any continuation needs an explicit, bounded
-scope decision for this physical admission boundary; P0 work remains deferred.
+the complete contract without that change. This blocker is superseded by the
+user-directed amendment below; the earlier evidence remains as the reason for
+the amended scope.
+
+### 2026-09-14 user-directed physical-admission amendment
+
+The user authorized extending the existing page-staging owner with exact
+per-page pre-mutation admission and member-local rollback. This resolves the
+earlier stop condition without adding a forecast, second traversal, or new page
+budget owner. The work remains on the existing canonical writer and preserves a
+safe prefix; suffix requests resume at the queue head only after the prefix
+completes. Structural `currentFrames` admission does not promise that an
+unpinned physical slot will be available at freeze time; a member-local rollback
+handles that pressure before WAL append. Only recognized page-capacity pressure
+may defer a suffix. I/O, corruption and invariant failures retain terminal
+failure handling. The P0 scaling regression and warmup accounting gap remain
+deferred and are not prerequisites for this delivery.

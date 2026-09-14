@@ -17,8 +17,9 @@ final class IndexedHybridCommitGroup {
   private final IndexedPageSet pages;
   private final IndexedRelationalWalGroupAppender wal;
   private final IndexedHybridGroupPreflight preflight;
-  private final IndexedPreparedCommitCohortDemand cohortDemand =
+  private final IndexedPreparedCommitCohortDemand directDemand =
       new IndexedPreparedCommitCohortDemand();
+  private final IndexedCountResult versionCapacity = new IndexedCountResult();
   private final IndexedHybridGroupPublication publication;
   private final IndexedGroupCommitMetrics metrics;
   private final IndexedPreparedLogicalCommit[] directPrepared =
@@ -48,9 +49,10 @@ final class IndexedHybridCommitGroup {
 
   StatusCode preflight(
       IndexedPreparedLogicalCommit[] preparedCommits, int transactionCount,
-      long oldestVisibleCommitSequence) {
+      long oldestVisibleCommitSequence,
+      IndexedPreparedCommitCohortDemand demand) {
     return preflight(
-        preparedCommits, transactionCount, oldestVisibleCommitSequence,
+        preparedCommits, transactionCount, oldestVisibleCommitSequence, demand,
         IndexedCommitPath.SHARED_GROUP);
   }
 
@@ -69,6 +71,7 @@ final class IndexedHybridCommitGroup {
     if (status.isOk()) {
       status = preflight(
           directPrepared, 1, oldestVisibleCommitSequence,
+          directDemand,
           IndexedCommitPath.DIRECT_COMMIT);
     }
     recordDirect(IndexedCommitStage.DIRECT_PREFLIGHT, started, status);
@@ -103,27 +106,68 @@ final class IndexedHybridCommitGroup {
   private StatusCode preflight(
       IndexedPreparedLogicalCommit[] preparedCommits, int transactionCount,
       long oldestVisibleCommitSequence,
+      IndexedPreparedCommitCohortDemand demand,
       IndexedCommitPath path) {
     if (active || preparedCommits == null || transactionCount <= 0
         || transactionCount > preparedCommits.length || oldestVisibleCommitSequence < 0
-        || path == null) {
+        || demand == null || path == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = cohortDemand.measure(preparedCommits, transactionCount);
-    if (status.isOk()) {
-      status = store.admitDurableVersionOperations(cohortDemand.versionOperations());
+    StatusCode status = store.availableDurableVersionOperations(versionCapacity);
+    if (!status.isOk()) {
+      demand.rejectHead(status);
+      return status;
     }
-    if (status.isOk() && plans.length < transactionCount) {
+    status = demand.measure(
+        preparedCommits, transactionCount, versionCapacity.value());
+    if (!status.isOk()) return status;
+    if (demand.candidateCount() == 0) {
+      status = store.admitDurableVersionOperations(
+          preparedCommits[0].admittedVersionOperations());
+      if (status.isOk()) status = StatusCode.INVARIANT_BROKEN;
+      demand.rejectHead(status);
+      return status;
+    }
+    status = store.admitDurableVersionOperations(demand.versionOperations());
+    if (!status.isOk()) {
+      if (status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED) {
+        demand.rejectHead(status);
+      } else {
+        demand.rejectAll();
+      }
+      return status;
+    }
+    int candidateCount = demand.candidateCount();
+    if (plans.length < candidateCount) {
       status = StatusCode.RESOURCE_EXHAUSTED;
+      demand.rejectAll();
     }
     if (status.isOk()) status = begin();
-    if (status.isOk()) count = transactionCount;
-    if (status.isOk()) status = assignSequences(transactionCount);
-    if (status.isOk()) status = preflight.prepare(
-        preparedCommits, plans, mutations, rowEnds, heapPageEnds, sequences,
-        transactionCount, cohortDemand.versionOperations(),
-        oldestVisibleCommitSequence, path);
+    if (status.isOk()) count = candidateCount;
+    if (status.isOk()) status = assignSequences(candidateCount);
+    boolean preflightStarted = false;
+    if (status.isOk()) {
+      preflightStarted = true;
+      status = preflight.prepare(
+          preparedCommits, plans, mutations, rowEnds, heapPageEnds, sequences,
+          candidateCount, demand.versionOperations(), oldestVisibleCommitSequence,
+          path, demand);
+    }
     if (status.isOk()) return StatusCode.OK;
+    if (!preflightStarted) demand.rejectAll();
+    if (demand.memberRollbackSplit() && demand.acceptedCount() > 0) {
+      count = demand.acceptedCount();
+      long started = System.nanoTime();
+      status = kernel.admitOperationPublication();
+      metrics.recordStage(path, IndexedCommitStage.PREFLIGHT_OPERATION_ADMISSION,
+          System.nanoTime() - started);
+      if (status.isOk()) return demand.splitStatus();
+      demand.rejectAll();
+    } else if (demand.memberRollbackSplit() || demand.capacitySplit()) {
+      status = demand.splitStatus();
+    } else {
+      demand.rejectAll();
+    }
     StatusCode cleanup = cancel();
     return cleanup.isOk() ? status : cleanup;
   }
@@ -266,6 +310,7 @@ final class IndexedHybridCommitGroup {
   }
 
   private void cancelUnforcedGroup() {
+    pages.endMemberStagingAdmission();
     pages.clearStagedFlags();
     pages.cancelPreparedBatch();
     pages.resetChanges();

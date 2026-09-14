@@ -65,9 +65,10 @@ public final class IndexedTable extends IndexedRelationalTableAccess
 
   synchronized StatusCode preflightHybridCommitGroup(
       IndexedPreparedLogicalCommit[] prepared, int count,
-      long oldestVisibleCommitSequence) {
+      long oldestVisibleCommitSequence,
+      IndexedPreparedCommitCohortDemand demand) {
     return store.preflightHybridGroup(
-        prepared, count, oldestVisibleCommitSequence);
+        prepared, count, oldestVisibleCommitSequence, demand);
   }
 
   synchronized StatusCode reserveHybridCommitGroupCapacity(int required) {
