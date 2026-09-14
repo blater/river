@@ -1,6 +1,6 @@
 ---
 id: tic-twofoot
-status: in_progress
+status: closed
 type: story
 priority: 1
 assignee: blater
@@ -8,6 +8,8 @@ parent: tic-carcharoth
 delivery: code
 base-commit: 17fa42f22ad2a4ea9bec2f1721d7acde4c418ffb
 branch: ticket/tic-twofoot-result-bitmap
+delivered-commit: 2703302760d92059d23f361a9e7df3e8251bc4e6
+checkpoint-tag: perf-checkpoint-20260913-result-bitmap
 tags:
     - performance
 links:
@@ -87,8 +89,10 @@ and reports only successful finite work completions. An unrelated thread,
 observer heartbeat or busy CPU cannot extend the external deadline. Timestamped
 progress prevents old buffered messages from reviving a stalled operation;
 escalation remains latched, without blocking cleanup. A healthy fixture passed
-in 17.116 seconds. A spinning owner with an active unrelated worker and stuck
-shutdown hook was killed in 14.047 seconds with no surviving Java process.
+in 17.116 seconds. The watchdog failure-mode test also passed: its deliberately
+stalled owner, active unrelated worker and deliberately stuck shutdown hook were
+stopped in 14.047 seconds with no surviving Java process. This was an injected
+test condition, not an observed River hang or a test failure.
 
 The unchanged 65-run merge passed in 32.188 seconds (643,785 completed work units).
 The unchanged 65,537-row sort/join/checkpoint/reopen test passed in 60.652 seconds
@@ -120,3 +124,10 @@ See FOLLOWUP.md there and [performance checkpoints](../performance-checkpoints.m
 Independent Astra promotion review reconciled the completed class/method coverage
 and 1,942 passing tests plus 18 expected skips, and approved this allocation
 reduction for integration.
+
+
+### Publication completed, 2026-09-14
+
+Atomic push published integration 27033027, ticket/tic-twofoot-result-bitmap
+and perf-checkpoint-20260913-result-bitmap to origin. The prior publication
+block is resolved; the accepted allocation correction is closed.
