@@ -1,6 +1,7 @@
 ---
 id: tic-5b3e
 status: open
+priority: 1
 type: story
 assignee: blater
 parent: tic-rowlie

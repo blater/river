@@ -26,8 +26,8 @@ already exist; merely recreating them is not an optimization.
 
 Retain the existing source-backed contracts and move these open tickets here:
 `tic-ca05` → `tic-5b3e` → `tic-6f81` → `tic-92e3` → `tic-f1bb`.
-Accepted `tic-b368`/`tic-7352` remain historical dependencies. The independent
-P0 gate `tic-1dda` remains mandatory where currently specified, especially f1bb.
+Accepted `tic-b368`/`tic-7352` remain historical dependencies. The user removed P0 gate `tic-1dda` from WAL admission on 2026-09-14;
+its scaling and accounting work is deferred without claiming it passed.
 The adjacent `tic-4d14` → `tic-845d` audit/removal stream may remove only one
 proved redundant holding rule; it is not permission for broad lock redesign.
 `tic-7a5a` owns the composed promotion decision and concludes this epic.
@@ -54,16 +54,27 @@ weaker durability or fixed convenience caps. Shared protocol in
 [the handover](../plans/performance-three-epics-handover.md) applies. Formal parity
 is separately gated; it is not a prerequisite for diagnostic development.
 
-### Existing gate blocks completion, 2026-09-14
+### Current gate and impact priority, 2026-09-14
 
-The independent current-source readiness audit in tic-1dda confirms its required
-correlated, controlled Payment/New Order mixed-isolation reproducer is still
-missing. Phase-start barriers and the district-lock preflight are insufficient.
-The gap is already recorded in the historical failed P0 evidence; af29/8e74 did
-not deliver it. Ordinary workload runs cannot substitute for that requirement.
+The general concurrency reproducer tic-b1b7 is delivered. Resumed tic-1dda ran
+two of 40 planned cells and stopped: warmup client attempts and retry dispositions
+are omitted, so the required phase reconciliation cannot pass. Exemplar capacity
+also saturated; a configuration increase cannot restore the missing client data.
+No scaling result or P0 acceptance follows from those two samples.
 
-Keep this epic and all unpassed children open. No force overlap, cohort admission
-or lock removal is implemented, and no P1 checkpoint is issued. The user forbids
-increasing scope, so this delivery records the existing blocker without creating
-a new fixture workstream or bypassing the mandatory P0 dependency. Execution and
-protocol decisions do not certify this WAL gate.
+Prioritize the existing ca05 → 5b3e → 6f81 → 92e3 → f1bb critical path after
+the user-directed removal of P0 admission. The selected performance outcome is successor physical progress
+while force is outstanding; 5b3e is its resource-safety enabler. Keep the audit
+and provider decisions bounded to their current contracts, reusing existing proof.
+
+Defer 4d14 → 845d until the force-overlap decision. No lock removal is ready
+without one proved redundant rule and a credible service-cost or blocking effect.
+Keep 7a5a as final acceptance with its existing dependencies, including the lock
+stream's eventual disposition. The retained osgiliath audit does not identify a
+fix; resume it for actionable new evidence or an obstruction of this path.
+
+The user explicitly deferred P0 scaling and warmup accounting and removed
+tic-1dda dependencies from ca05, 4d14 and f1bb. All other dependencies and the
+WAL-specific durability, concurrency, recovery and resource checks remain intact.
+Add no tickets or speculative mechanisms; the deferred P0 campaign remains
+unpassed and outside this implementation path. The [current backlog](../backlog-kanban.md) owns the scheduling order.

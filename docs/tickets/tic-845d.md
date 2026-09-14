@@ -1,6 +1,7 @@
 ---
 id: tic-845d
 status: open
+priority: 3
 type: story
 assignee: blater
 parent: tic-rowlie

@@ -11,8 +11,6 @@ tags:
     - p1
     - transactions
     - admission
-deps:
-    - tic-1dda
 created: 2026-09-04T15:10:07.168483Z
 ---
 # Audit pre-queue logical commit sealing and admission
@@ -105,3 +103,11 @@ independent throughput promise.
 ### 2026-09-13 performance realignment
 
 Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled correctness gates remain authoritative. Follow [the current handover](../plans/performance-three-epics-handover.md); this move certifies no implementation or performance outcome.
+
+### User-directed WAL admission change, 2026-09-14
+
+The user deferred the P0 scaling regression and warmup accounting gap and
+explicitly removed tic-1dda as a prerequisite for WAL improvement. This ticket
+may proceed through its remaining dependencies and existing WAL-specific safety,
+resource, review and performance checks. P0 remains unpassed; its campaign is not
+part of this delivery. No additional mechanism or ticket is added.

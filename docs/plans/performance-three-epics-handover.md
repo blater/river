@@ -6,6 +6,18 @@ of this backlog delivery. Rebaseline from the latest pushed stable source when
 implementation begins. This document owns the current cross-epic sequence and
 shared admission/review contract; individual tickets own their deliverables.
 
+## Current scheduling override — 2026-09-14
+
+Execution and protocol epics are closed. The user now prioritizes impactful WAL
+implementation: pursue the existing prerequisites for tic-f1bb force overlap,
+with tic-5b3e as its resource-safety enabler. Defer the conditional 4d14 → 845d
+lock stream until the overlap decision; retain all completion dependencies.
+The [current backlog](../backlog-kanban.md#impact-first-wal-sequence--2026-09-14)
+owns the detailed order. The user explicitly deferred P0 scaling/accounting and
+removed tic-1dda from WAL admission; the remaining WAL safety gates still apply. Historical ready-frontier and
+cross-epic sequencing statements below do not override it. Keep existing scope
+and gates; obtain explicit scope agreement before adding a discovered follow-up.
+
 ## Decision and ownership
 
 | Epic | Lead responsibility | First actionable work | Completion gate |
@@ -31,9 +43,9 @@ discovery avoidance; tic-twofoot active-use scratch reset) → tic-miriel integr
 evidence. The unchanged-key and reverse-discovery candidates do not automatically
 depend on each other. Shared files still require serial implementation ownership.
 
-WAL: preserve the existing graph, including tic-1dda → tic-ca05 → tic-5b3e →
+WAL: follow the amended graph, including tic-ca05 → tic-5b3e →
 tic-6f81 → tic-92e3 → tic-f1bb, accepted historical b368/7352 inputs, and
-1dda → 4d14 → 845d. tic-7a5a evaluates the composed mechanisms. Existing failure
+4d14 → 845d. tic-7a5a evaluates the composed mechanisms. Existing failure
 criteria and independent reviews are retained. Audits may prove current code
 already satisfies a requirement; do not invent an implementation to keep them open.
 
