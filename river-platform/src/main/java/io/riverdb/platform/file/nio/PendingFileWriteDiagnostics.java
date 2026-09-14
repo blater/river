@@ -25,6 +25,11 @@ final class PendingFileWriteDiagnostics {
 
   private PendingFileWriteDiagnostics() { }
 
+  enum OperationKind {
+    POSITIONAL_WRITE,
+    RESIZE_GROWTH
+  }
+
   static Entry register(Path path) {
     if (!Boolean.getBoolean(ENABLE_PROPERTY)) return null;
     Entry entry = new Entry(Entry.NEXT_HANDLE_ID.incrementAndGet(), path.toString());
@@ -57,7 +62,8 @@ final class PendingFileWriteDiagnostics {
       registered = true;
     }
 
-    int begin(long position, long requestedRemainingBytes) {
+    int begin(
+        OperationKind operationKind, long position, long requestedRemainingBytes) {
       Thread writer = Thread.currentThread();
       long writerThreadId = writer.threadId();
       String writerThreadName = writer.getName();
@@ -69,7 +75,7 @@ final class PendingFileWriteDiagnostics {
         long skipped = current.skippedOperations();
         if (captured == null) {
           captured = new Invocation(
-              position, requestedRemainingBytes, writerThreadId, writerThreadName,
+              operationKind, position, requestedRemainingBytes, writerThreadId, writerThreadName,
               System.nanoTime());
           tracking = TRACKED_CAPTURED;
         } else {
@@ -134,6 +140,7 @@ final class PendingFileWriteDiagnostics {
           current.inFlightOperations() - (captured == null ? 0 : 1);
       event.cumulativeSkippedOperationCount = current.skippedOperations();
       if (captured != null) {
+        event.operationKind = captured.operationKind().name();
         event.position = captured.position();
         event.requestedRemainingBytes = captured.requestedRemainingBytes();
         event.writerThreadId = captured.writerThreadId();
@@ -152,6 +159,7 @@ final class PendingFileWriteDiagnostics {
       long skippedOperations) { }
 
   private record Invocation(
+      OperationKind operationKind,
       long position,
       long requestedRemainingBytes,
       long writerThreadId,
@@ -168,6 +176,7 @@ final class PendingFileWriteDiagnostics {
   public static final class PendingFileWriteEvent extends Event {
     @Label("Path") public String path;
     @Label("Diagnostic Handle ID") public long handleId;
+    @Label("Operation Kind") public String operationKind;
     @Label("Position") public long position;
     @Label("Requested Remaining Bytes") public long requestedRemainingBytes;
     @Label("Writer Thread ID") public long writerThreadId;

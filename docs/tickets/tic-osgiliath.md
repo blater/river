@@ -269,3 +269,35 @@ Raw live JFR, decoded JSON, jcmd output, commands, XML and validation logs:
 | Filesystem/native capture readiness | Requires working administrator tracing on the disposable host; prior local fs_usage authentication gap remains |
 | Actual crash workload | Deferred for later isolated execution; not run here |
 | WAL feature acceptance and P0 scaling/accounting | Unchanged; existing P0 deferrals remain |
+
+### Single call-site hypothesis preflight, 2026-09-14
+
+The focused [next-incident plan](../plans/checkpoint-stall-single-hypothesis.md)
+asks whether the identified stalled native write is the one-byte
+`NioDurableFile.resize` growth call or the ordinary positional-write call site.
+The existing pending-write event now declares `POSITIONAL_WRITE` or
+`RESIZE_GROWTH`; three focused tests pass and preserve the existing overlap,
+retirement, failure and disabled-mode behavior. Slopmark remained 42.98 for
+`NioDurableFile` and 0 for `PendingFileWriteDiagnostics`.
+
+The mandatory native-attribution preflight then ran one 15-second authenticated
+JDBC writer through the real `river-connection-0` virtual-thread path: 176
+CHECKPOINTs, 5,632 inserted rows, a completed 12-second `/usr/bin/sample`, and a
+completed JFR. Full-depth JFR found 15 actual `pwrite0` chains through
+`NioDurableFile.write` and checkpoint frames on virtual Java thread 49, but JFR
+reported OS thread ID 0. The native sample showed carrier-thread `pwrite0`
+frames but unresolved JIT frames, so it could not join a carrier OS thread to
+Java thread 49 and the River call site. Pending events recorded seven active
+`POSITIONAL_WRITE` observations and no active `RESIZE_GROWTH` observation;
+absence does not establish whether resize executed.
+
+The mandatory gate therefore failed and the hypothesis remains undecided. Per
+plan, no incident workload, speculative native instrumentation, provider change
+or host-security change followed. Raw evidence, including the retained scratch
+driver and a separately labelled initial transaction-mode setup failure, is in
+`/Users/blater/src/river/benchmark-results/checkpoint-20260914/operation-kind-preflight/`.
+The focused three-test diagnostic check and the final affected validation both
+passed; the latter ran 42 platform tests with 16 existing platform skips and no
+failures, followed by `verifySourcePolicy` and `verifyModuleGraph`.
+The larger uncommitted capture draft in `/private/tmp/river-checkpoint-exit`
+remains paused and was not adopted or changed.
