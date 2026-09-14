@@ -15,28 +15,21 @@ tags:
     - performance
 created: 2026-09-13T16:12:37.029801Z
 ---
-# Bound TPS process shutdown and preserve unreaped-server evidence
+# Preserve shutdown ownership and unreaped-server evidence
 
-Enforce one 15-second runner/server shutdown budget, never wait indefinitely for an unreaped process, preserve its database and evidence, and report failure without retry; this does not guarantee kernel resource release.
+### Policy withdrawal, 2026-09-14
 
-### Scope and validation boundary
+The user withdrew the 15-second rule and its implementation. The TPS maximum-15
+option restriction and default are removed; the prior configurable 20-second
+stop default is restored. The added Java worker-join cutoff and its specific
+fixtures are removed. Existing acceptor timing is restored.
 
-This ticket changes runner and Java server shutdown supervision. Use one overall deadline
-of at most 15 seconds for the owned runner and server; do not restart the budget
-for each signal/process or repeat cleanup on failure. Wait/reap only after the
-process is known terminal. If it remains live, report PID and retained paths and
-exit failure before copying logs, writing metadata or removing database files.
-Do not claim that SIGKILL, PID disappearance or a timeout releases a kernel lock.
+Conditional reaping, failure reporting, shutdown-status retention and protection
+of resources still owned by live threads remain correctness requirements. These
+changes do not establish the cause of the CHECKPOINT kernel stall.
 
-Required shell cases: normal exit; graceful/TERM/KILL stages within one
-budget; unreaped process; two processes sharing the budget; repeated cleanup;
-nonzero status and preservation on failure. The user subsequently reauthorized
-Java builds and TPS with the 15-second stop deadline. Run one guarded diagnostic
-at a time; never retry automatically after a deadline failure.
-
-Pending-request responsiveness during workload execution is separately owned by
-tic-nimloth; the shutdown fix alone cannot establish kernel safety.
-Independent source review must precede acceptance.
+The following implementation/validation record describes the original delivery;
+its timeout rules are withdrawn and must not be used as current instructions.
 
 ### Implementation and review status, 2026-09-13
 
@@ -80,3 +73,15 @@ the coverage within the same per-command bound (unit/policy batch 5 seconds,
 CLI batch 2 seconds, process-test class 8 seconds; instance class 10 seconds).
 This is a lifecycle correctness delivery, not a throughput improvement claim.
 
+
+### Policy-withdrawal integration, 2026-09-14
+
+The previously authorized local withdrawal is integrated before resuming P0.
+Worker joining and acceptor timing match the pre-policy owner; the TPS stop
+budget again defaults to 20 seconds without the withdrawn 15-second maximum.
+Removed only obsolete cutoff-specific tests/fixture. Live-thread dependency
+retention and unreaped-process evidence remain. Independent concurrency and
+operations review approved this change. Server/server-app module tests, source
+and dependency checks, and the shell shutdown/reaping test passed. This is a
+policy restoration, not a throughput optimization or checkpoint-stall fix.
+Evidence: `/Users/blater/src/river/benchmark-results/treebeard-policy-20260914/`.
