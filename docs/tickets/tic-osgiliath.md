@@ -301,3 +301,52 @@ passed; the latter ran 42 platform tests with 16 existing platform skips and no
 failures, followed by `verifySourcePolicy` and `verifyModuleGraph`.
 The larger uncommitted capture draft in `/private/tmp/river-checkpoint-exit`
 remains paused and was not adopted or changed.
+
+### Persisted write-boundary diagnostic, 2026-09-15
+
+The opt-in `river.diagnostics.persistedFileWrites=PATH` diagnostic now records
+every NIO positional-write attempt at the existing `FileChannel.write` boundary.
+Its process-owned log must not already exist and its parent must satisfy the
+existing macOS private-directory checks. Creation is made directory-durable
+before use. Every BEGIN is appended and forced through the existing APFS
+`RiverFile` path, whose file force is `fcntl(F_FULLFSYNC)`, before the target
+write is admitted. A failed append or full sync prevents the target write.
+RETURN or THROW uses the same operation ID after the pending-JFR state has been
+cleared; a failed RETURN record fences later attempts without hiding a completed
+target byte count, while a target exception remains primary.
+
+BEGIN contains the diagnostic handle and operation IDs, target path, operation
+kind, offset and requested bytes, process ID, Java thread ID/name/virtual state,
+nearest source file and line, and the full remaining Java caller stack. The
+required diagnostic native library obtains `pthread_threadid_np` and upcalls
+this boundary before returning, so the same native frame pins the virtual-thread
+carrier across BEGIN, the existing `FileChannel.write`, and RETURN or THROW.
+Missing native-library or thread-ID setup fails before the target write; there
+is no unknown-ID or unpinned fallback when the diagnostic is enabled.
+
+Eight focused regular-file tests pass, including the real APFS creation/write/
+full-sync path, ordinary and resize-growth records, persisted-BEGIN ordering,
+BEGIN failure before target mutation, RETURN failure fencing without byte-count
+replay ambiguity, target THROW preservation, disabled behavior, and absence of
+the log lock across the target write. The native control recorded PID 21675,
+virtual Java thread 38 and native thread 360079, then `/usr/bin/sample` found
+exact `Thread_360079` with the JNI trampoline in that thread's bounded stack
+section. Release completed the real write and durable matching RETURN with four
+bytes. Raw control source, binary, JSON, sample and test XML are retained under
+`benchmark-results/checkpoint-persisted-write-20260915/native-id-control/`.
+The affected platform suite and source/module policy checks pass. Slopmark
+remained 42.98 for `NioDurableFile`; the new diagnostic owner scored 31.4639.
+
+A short authenticated JDBC native diagnostic run retained 984 matched BEGIN/
+RETURN pairs under
+`benchmark-results/checkpoint-persisted-write-20260915/native-jdbc/`. It
+captured concrete native IDs and complete virtual-thread
+checkpoint request chains. Operation 17 records PID 21730, native thread 360853,
+virtual Java thread 42 `river-connection-0`, `river.indexed.versions`, offset
+35321811009504 and 16,384 requested/returned bytes; its stack runs from
+`IndexedPageFrameIo.java:75` through `EmbeddedCheckpoint`, SQL and server request
+dispatch to `VirtualThread.run`. The large offset is retained as an observation,
+not a new causal finding. Load and final checkpoints and post-run invariants
+passed and the server reaped. The three-second measured window had no committed
+transactions under per-write full sync, so the run is diagnostic path evidence,
+not accepted throughput evidence.
