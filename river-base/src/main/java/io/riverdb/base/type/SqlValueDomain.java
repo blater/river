@@ -6,9 +6,11 @@ public final class SqlValueDomain {
   }
 
   public static boolean validFixed(int descriptor, long value) {
-    if (!SqlTypeDescriptor.isValid(descriptor)) {
-      return false;
-    }
+    return SqlTypeDescriptor.isValid(descriptor) && fitsFixed(descriptor, value);
+  }
+
+  /** Checks a value against an already admitted descriptor, without revalidating the type. */
+  public static boolean fitsFixed(int descriptor, long value) {
     int precision = SqlTypeDescriptor.parameterOne(descriptor);
     return switch (SqlTypeDescriptor.typeId(descriptor)) {
       case SqlTypeDescriptor.TYPE_ID_SMALLINT -> value >= Short.MIN_VALUE && value <= Short.MAX_VALUE;
@@ -32,8 +34,12 @@ public final class SqlValueDomain {
 
   /** Validates the signed two-long unscaled representation of one DECIMAL value. */
   public static boolean validDecimal128(int descriptor, long high, long low) {
+    return SqlTypeDescriptor.isValid(descriptor) && fitsDecimal128(descriptor, high, low);
+  }
+
+  /** Checks a two-long value against an already admitted descriptor. */
+  public static boolean fitsDecimal128(int descriptor, long high, long low) {
     return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        && SqlTypeDescriptor.isValid(descriptor)
         && ExactDecimal128.fits(
             high, low, SqlTypeDescriptor.parameterOne(descriptor));
   }

@@ -3,15 +3,16 @@ package io.riverdb.format.page;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.format.FormatBytes;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32C;
 
-/** Fixed 16,384-byte v3 page codec over caller-owned storage. */
+/** Fixed 16,384-byte v4 pages with header-only integrity and caller-owned storage. */
 public final class PageCodec {
   public static final int PAGE_BYTES = 16 * 1024;
   public static final int HEADER_BYTES = 128;
   public static final int MAX_PAYLOAD_BYTES = PAGE_BYTES - HEADER_BYTES;
-  public static final int VERSION = 3;
+  public static final int VERSION = 4;
   public static final int PAGE_TYPE_SYNTHETIC = 1;
   public static final int PAYLOAD_KIND_SCALAR_BTREE = 1;
   public static final int PAYLOAD_KIND_TUPLE_BTREE = 2;
@@ -200,21 +201,8 @@ public final class PageCodec {
   }
 
   private static int checksum(ByteBuffer page, int start, CRC32C checksum) {
-    int originalPosition = page.position();
-    int originalLimit = page.limit();
-    checksum.reset();
-    page.position(start);
-    page.limit(start + CHECKSUM_OFFSET);
-    checksum.update(page);
-    for (int index = CHECKSUM_OFFSET; index < HEADER_BYTES; index++) {
-      checksum.update(0);
-    }
-    page.limit(start + PAGE_BYTES);
-    page.position(start + HEADER_BYTES);
-    checksum.update(page);
-    page.limit(originalLimit);
-    page.position(originalPosition);
-    return (int) checksum.getValue();
+    // Payload admission belongs to its structural codec; the page CRC covers identity only.
+    return FormatBytes.checksum(page, start, CHECKSUM_OFFSET, checksum);
   }
 
   private static void putInt(ByteBuffer target, int offset, int value) {

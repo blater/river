@@ -4,6 +4,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Objects;
 import java.util.zip.CRC32C;
 
 /** Canonical little-endian durable primitives independent of caller buffer order. */
@@ -44,8 +45,14 @@ public final class FormatBytes {
 
   public static int checksum(
       ByteBuffer source, int offset, int length, CRC32C checksum) {
+    Objects.checkFromIndexSize(offset, length, source.limit());
     checksum.reset();
-    for (int index = 0; index < length; index++) checksum.update(source.get(offset + index));
+    if (source.hasArray()) {
+      checksum.update(source.array(), source.arrayOffset() + offset, length);
+    } else {
+      // Absolute reads preserve marks and support direct/read-only buffers without a view allocation.
+      for (int index = 0; index < length; index++) checksum.update(source.get(offset + index));
+    }
     return (int) checksum.getValue();
   }
 }

@@ -7,9 +7,37 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.ReadOnlyBufferException;
+import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 
 final class FormatBytesTest {
+  @Test
+  void checksumPreservesBufferStateAndHonorsSliceAndLimit() {
+    ByteBuffer heap = ByteBuffer.allocate(80);
+    for (int i = 0; i < 80; i++) heap.put(i, (byte) (i * 31));
+    heap.position(7);
+    ByteBuffer sliced = heap.slice();
+    ByteBuffer direct = ByteBuffer.allocateDirect(sliced.capacity());
+    direct.put(sliced.duplicate()).clear();
+    CRC32C expected = new CRC32C();
+    expected.update(heap.array(), 10, 40);
+    for (ByteBuffer buffer : new ByteBuffer[] {
+        sliced, sliced.asReadOnlyBuffer(), direct, direct.asReadOnlyBuffer()}) {
+      buffer.order(ByteOrder.LITTLE_ENDIAN).position(2).mark().position(5).limit(60);
+      CRC32C checksum = new CRC32C();
+      checksum.update(99);
+      assertEquals((int) expected.getValue(), FormatBytes.checksum(buffer, 3, 40, checksum));
+      assertEquals(5, buffer.position());
+      assertEquals(60, buffer.limit());
+      assertEquals(ByteOrder.LITTLE_ENDIAN, buffer.order());
+      buffer.reset();
+      assertEquals(2, buffer.position());
+      assertThrows(IndexOutOfBoundsException.class,
+          () -> FormatBytes.checksum(buffer, 59, 2, checksum));
+      assertEquals(0, FormatBytes.checksum(buffer, 60, 0, checksum));
+    }
+  }
+
   @Test
   void writesCanonicalLittleEndianBytesToHeapAndDirectBuffers() {
     ByteBuffer heap = ByteBuffer.allocate(32).order(ByteOrder.BIG_ENDIAN);

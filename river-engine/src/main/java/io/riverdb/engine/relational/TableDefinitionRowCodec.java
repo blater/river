@@ -30,7 +30,7 @@ final class TableDefinitionRowCodec {
             ? ExactDecimal128.fits(
                 row.getLong(base + table.highValueOffset(column)), slot,
                 SqlTypeDescriptor.parameterOne(table.typeDescriptors[column]))
-            : SqlValueDomain.validFixed(table.typeDescriptors[column], slot);
+            : SqlValueDomain.fitsFixed(table.typeDescriptors[column], slot);
         boolean clear = slot == 0 && (!SqlTypeDescriptor.isWideDecimal(
             table.typeDescriptors[column])
             || row.getLong(base + table.highValueOffset(column)) == 0);

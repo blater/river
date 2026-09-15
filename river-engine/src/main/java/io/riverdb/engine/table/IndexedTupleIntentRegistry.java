@@ -7,7 +7,6 @@ import io.riverdb.format.btree.TupleIndexRootRecordCodec;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
-import java.util.zip.CRC32C;
 
 /** Reads one tuple root and stages its next BUILDING or READY generation. */
 final class IndexedTupleIntentRegistry {
@@ -21,7 +20,6 @@ final class IndexedTupleIntentRegistry {
   private final ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
   private final int[] descriptors =
       new int[io.riverdb.format.btree.TupleKeyCodec.MAX_INDEX_KEY_PARTS];
-  private final CRC32C checksum = new CRC32C();
   private long previousRowId;
 
   IndexedTupleIntentRegistry(
@@ -40,7 +38,7 @@ final class IndexedTupleIntentRegistry {
     bytes.clear();
     status = row.copyTo(bytes);
     bytes.flip();
-    if (status.isOk()) status = TupleIndexRootRecordCodec.decode(bytes, 0, record, checksum);
+    if (status.isOk()) status = TupleIndexRootRecordCodec.decode(bytes, 0, record);
     if (!status.isOk()) return pressure(status) ? status : StatusCode.CORRUPTION;
     previousRowId = lookup.rowId();
     return matches(journal, descriptor) ? StatusCode.OK : StatusCode.CORRUPTION;
@@ -67,7 +65,7 @@ final class IndexedTupleIntentRegistry {
             : TupleIndexRootRecordCodec.STATE_READY, resultingRoot,
         record.keyId(), record.ownerObjectId(), record.schemaId(),
         record.descriptorHash(), building ? privateOwner : 0, record.generation() + 1,
-        descriptors, 0, count, checksum);
+        descriptors, 0, count);
     bytes.position(0);
     bytes.limit(TupleIndexRootRecordCodec.BYTES);
     return status.isOk() ? writer.stage(
@@ -84,7 +82,7 @@ final class IndexedTupleIntentRegistry {
     status = row.copyTo(bytes);
     bytes.flip();
     status = status.isOk()
-        ? TupleIndexRootRecordCodec.decode(bytes, 0, record, checksum) : status;
+        ? TupleIndexRootRecordCodec.decode(bytes, 0, record) : status;
     return status;
   }
 

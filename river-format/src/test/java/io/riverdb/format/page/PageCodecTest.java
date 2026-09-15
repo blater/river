@@ -53,7 +53,7 @@ final class PageCodecTest {
   }
 
   @Test
-  void validatesEveryByteAndRejectsCorruption() {
+  void validatesEveryHeaderByteWithoutChecksummingPayload() {
     ByteBuffer page = ByteBuffer.allocate(PageCodec.PAGE_BYTES);
     page.position(PageCodec.HEADER_BYTES);
     page.put(new byte[] {1, 3, 3, 7});
@@ -77,7 +77,7 @@ final class PageCodecTest {
     assertEquals(PageCodec.PAYLOAD_KIND_TUPLE_BTREE, header.payloadKind());
     assertEquals(29, header.ownerKeyId());
 
-    for (int index = 0; index < page.capacity(); index++) {
+    for (int index = 0; index < PageCodec.HEADER_BYTES; index++) {
       byte previous = page.get(index);
       page.put(index, (byte) (previous ^ 1));
       assertEquals(
@@ -86,6 +86,12 @@ final class PageCodecTest {
           "byte " + index);
       page.put(index, previous);
     }
+    page.put(PageCodec.HEADER_BYTES, (byte) 99);
+    page.put(PageCodec.PAGE_BYTES - 1, (byte) 77);
+    assertEquals(StatusCode.OK, PageCodec.validate(page, header, new CRC32C()));
+    putInt(page, 8, 3);
+    rewriteChecksum(page);
+    assertEquals(StatusCode.CORRUPTION, PageCodec.validate(page, header, new CRC32C()));
   }
 
   @Test
@@ -174,8 +180,6 @@ final class PageCodecTest {
   private static void rewriteChecksum(ByteBuffer page) {
     CRC32C checksum = new CRC32C();
     checksum.update(page.array(), 0, 120);
-    checksum.update(new byte[8], 0, 8);
-    checksum.update(page.array(), PageCodec.HEADER_BYTES, PageCodec.MAX_PAYLOAD_BYTES);
     int value = (int) checksum.getValue();
     putInt(page, 120, value);
     putInt(page, 124, ~value);

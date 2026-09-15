@@ -51,4 +51,15 @@ final class SqlValueDomainTest {
         SqlTypeDescriptor.varchar(8), 0));
     assertFalse(SqlValueDomain.validFixed(0, 0));
   }
+
+  @Test
+  void boundaryValidationRejectsMalformedDescriptorsBeforeCheckingValues() {
+    assertFalse(SqlValueDomain.validFixed(SqlTypeDescriptor.INTEGER | 1 << 8, 1));
+    assertFalse(SqlValueDomain.validFixed(SqlTypeDescriptor.INTEGER | 1 << 24, 1));
+    assertFalse(SqlValueDomain.validDecimal128(
+        SqlTypeDescriptor.TYPE_ID_DECIMAL | 39 << 8, 0, 1));
+    assertFalse(SqlValueDomain.validDecimal128(
+        SqlTypeDescriptor.TYPE_ID_DECIMAL | 2 << 8 | 3 << 16, 0, 1));
+  }
+
 }
