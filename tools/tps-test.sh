@@ -12,7 +12,7 @@ Run one authenticated River JDBC TPC-C engineering sample. Run ./make.sh first t
 the runner and its dependencies. This tool never builds. It owns a
 temporary database and loopback server,
 keeps output safe on every exit path, and reports load, preflight, warmup,
-measured, drain, and checkpoint failures distinctly.
+measured, drain, and verification failures distinctly.
 
 Options:
   --version=NAME                Run label (default: current Git branch); name each experiment
@@ -80,6 +80,7 @@ and explicit serializable, repeatable-read, or mixed-diagnostic isolation.
 MariaDB remains unavailable because the Java acceptance path validates
 jdbc:river. Java-emitted metrics are printed verbatim when present; unavailable
 engine-private metrics are not fabricated.
+This TPS path selects the load-run phase and does not issue SQL CHECKPOINT.
 
 EOF
 }
@@ -685,6 +686,7 @@ else
 fi
 
 runner_args=( "--url=$url" "--fresh-load=$fresh_load" "--warmup-seconds=$warmup_seconds"
+  "--phase=load-run"
   "--measured-seconds=$measured_seconds" "--scheduling=$scheduling" "--mix=$mix"
   "--isolation=$isolation" "--warehouses=$warehouses"
   "--terminals=$terminals" "--batch-rows=$batch_rows" "--maximum-attempts=$maximum_attempts"
@@ -860,14 +862,14 @@ elif [[ $diagnostic_status != OK ]]; then
 elif [[ $performance_capture_status != OK ]]; then
   run_phase=diagnostics; run_result=diagnostics_failed
   run_status=$performance_capture_status; run_exit_status=1
-elif [[ $phase_state != none && $phase_state != checkpoint ]]; then
+elif [[ $phase_state != none ]]; then
   run_phase=$phase_state; run_result="${phase_state}_failed"; run_status=INCOMPLETE_PHASE; run_exit_status=1
 elif ((commits <= 0)); then
   run_phase=measured; run_result=measured_failed; run_status=NO_COMMITTED_TRANSACTIONS; run_exit_status=1
 elif ((errors > 0)); then
   run_phase=measured; run_result=measured_failed; run_status=TRANSACTION_ERRORS; run_exit_status=1
 else
-  run_phase=checkpoint; run_result=completed; run_status=OK; run_exit_status=0
+  run_phase=measured; run_result=completed; run_status=OK; run_exit_status=0
 fi
 
 echo; echo "=== TPS result ==="

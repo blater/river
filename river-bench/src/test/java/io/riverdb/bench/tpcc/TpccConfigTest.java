@@ -30,6 +30,16 @@ final class TpccConfigTest {
   }
 
   @Test
+  void parsesRunWithoutCheckpoint() {
+    TpccConfig config = TpccConfig.parse(new String[] {
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--phase=load-run"
+    });
+
+    assertEquals(TpccPhase.LOAD_RUN, config.phase());
+    assertFalse(config.phase().performsCheckpoint());
+  }
+
+  @Test
   void parsesDiagnosticMixAndIsolationWithoutPromotingIt() {
     TpccConfig config = TpccConfig.parse(new String[] {
         "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny",

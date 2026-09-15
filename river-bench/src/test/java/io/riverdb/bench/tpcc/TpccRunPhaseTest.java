@@ -1,5 +1,6 @@
 package io.riverdb.bench.tpcc;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -15,6 +16,21 @@ import java.sql.Statement;
 import org.junit.jupiter.api.Test;
 
 final class TpccRunPhaseTest {
+  @Test
+  void loadRunSkipsCheckpointStatements() throws Exception {
+    TpccConfig config = TpccConfig.parse(new String[] {
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--phase=load-run"
+    });
+    Connection connection = (Connection) Proxy.newProxyInstance(
+        Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
+        (ignored, method, arguments) -> {
+          throw new AssertionError("unexpected JDBC call: " + method.getName());
+        });
+
+    assertEquals(0, TpccRunPhase.checkpointIfSelected(config, connection, "load"));
+    assertEquals(0, TpccRunPhase.checkpointIfSelected(config, connection, "post_run"));
+  }
+
   @Test
   void reportsWhetherCheckpointFailureHadOneCompleteServerResponse() throws Exception {
     assertFailureEvidence(0, "completed_requests_delta=0", "response=missing");
