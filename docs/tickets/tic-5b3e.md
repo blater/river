@@ -1,11 +1,12 @@
 ---
 id: tic-5b3e
-status: open
+status: closed
 priority: 1
 type: story
 assignee: blater
 parent: tic-rowlie
 delivery: code
+delivered-commit: 9d14de924a2ad2b9e7d29035ac4df531a9b502d0
 tags:
     - performance
     - tpcc
@@ -16,34 +17,35 @@ deps:
     - tic-ca05
 created: 2026-09-04T15:10:07.259189Z
 ---
-# Reserve cumulative cohort demand before physical staging
+# Admit cumulative cohort prefixes before page mutation
 
 Form cohorts by cumulative admitted page, version, staging, and WAL demand rather than fixed transaction or record counts.
 
 ### Design
 
-Reserve against compiled runtime budgets before side effects. Apply cancellable backpressure or split admission while retaining one canonical physical writer and one transaction outcome.
+Use the existing logical resource leases, then admit each member's physical
+pages immediately before mutation. Publish the largest safe ordered prefix and
+roll back only the pressure-rejected member while retaining one canonical
+physical writer and one transaction outcome.
 
 ### Outcome
 
-One cumulative admission decision selects the largest safe cohort prefix, or
-returns an explicit pre-side-effect pressure/impossible-request outcome, using
-all admitted page, version, staging, and WAL demand. Every reservation is held
-and released exactly once with the transaction outcome.
+One cumulative admission decision selects the largest safe cohort prefix using
+the existing logical write, version and WAL leases plus exact per-page physical
+admission. A pressure-rejected member is restored before WAL append, and its
+suffix resumes at the queue head after the admitted prefix completes. Every
+reservation remains owned and released exactly once with its transaction
+outcome.
 
 ### In Scope / Owning Mechanism
 
 The commit coordinator owns one cumulative cohort-admission policy shared by
-direct and group commits. It consumes sealed per-transaction demand from
-`tic-ca05`, consults the existing authoritative budget owners, selects or splits
-one ordered prefix, and passes that prefix to the one canonical physical writer.
-Budget owners retain responsibility for their units and capacity; this ticket
-owns only their cumulative cohort decision and reservation lifecycle.
-
-Before production work, record for every budget its unit, demand source,
-reservation point and lifetime, impossible-versus-transient status, prefix or
-backpressure rule, cancellation behavior, and exact release owner. No
-implementation begins while any of those semantics are unresolved.
+direct and group commits. It consumes sealed logical demand from `tic-ca05`,
+uses each existing budget owner, and passes the safe prefix to the one canonical
+physical writer. `IndexedPageFrameCache` remains the physical-page owner and
+admits each page before mutation; the group preflight owns member-local rollback.
+Existing session leases remain the only receipts for logical writes, versions,
+staging capacity and WAL bytes, so cohort selection does not double-charge them.
 
 ### Non-goals
 
@@ -51,15 +53,12 @@ implementation begins while any of those semantics are unresolved.
   page, version, staging, or WAL budgets.
 - Retuning budget sizes or coalescing delays, redesigning the compiled database
   resource plan, or introducing fixed transaction/record/cohort caps.
-- Logical preparation, physical staging, WAL representation or append, durable
-  publication, lock policy, or a second transaction outcome.
+- A precomputed physical-page forecast, second compilation traversal, new page
+  budget owner, WAL representation change, lock-policy change, or second
+  transaction outcome.
 
 ### Stop Conditions
 
-- Stop before coding if the complete pre-implementation contract above cannot
-  be stated using the existing budget authorities. Create a named design
-  dependency for the unresolved semantic decision rather than absorbing it
-  into this implementation ticket.
 - Stop and split out unrelated work if a discovered budget defect can be fixed
   independently of cumulative cohort admission.
 - Reject an implementation that silently underfills or fails a whole cohort
@@ -69,10 +68,11 @@ implementation begins while any of those semantics are unresolved.
 ### Maximum Change Shape
 
 One coordinator-owned cumulative admission policy, one cumulative demand
-carrier, and one reservation lifecycle shared by direct and group commits may
-change, plus their focused tests and counters. Existing budget owners may be
-called but not duplicated. No second writer, executor, queue, WAL path,
-transaction outcome, or per-budget admission framework may be introduced.
+carrier, per-page pre-mutation admission in the existing page owner, and
+member-local rollback may change, plus their focused tests and counters.
+Existing leases and budget owners may be called but not duplicated. No second
+writer, executor, queue, WAL path, transaction outcome, physical forecast, or
+per-budget admission framework may be introduced.
 
 ### Acceptance Criteria
 
@@ -94,7 +94,7 @@ failure are not.
 
 Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled correctness gates remain authoritative. Follow [the current handover](../plans/performance-three-epics-handover.md); this move certifies no implementation or performance outcome.
 
-### Current implementation boundary, 2026-09-14
+### Historical implementation boundary, superseded 2026-09-14
 
 ca05 is closed at evidence commit 2333ab60, integrated at 8bc05e3c. P0 is
 explicitly deferred and is not this ticket's blocker. Status remains open:
@@ -124,8 +124,49 @@ whole pool or only summing existing logical receipts does not establish it.
 Implementing the full contract requires a decision in physical demand planning
 or staging/rollback ownership, both excluded by the current ticket. The Luna/high
 worker and independent admission reviewer found no existing route that satisfies
-the complete contract without that change. Apply the ticket's stop condition:
-retain this precise blocker, add no ticket, no duplicate policy, no partial code,
-and no performance claim. Do not reinterpret pre-cohort reservation as the
-existing per-page capacity check. Any continuation needs an explicit, bounded
-scope decision for this physical admission boundary; P0 work remains deferred.
+the complete contract without that change. This blocker is superseded by the
+user-directed amendment below; the earlier evidence remains as the reason for
+the amended scope.
+
+### 2026-09-14 user-directed physical-admission amendment
+
+The user authorized extending the existing page-staging owner with exact
+per-page pre-mutation admission and member-local rollback. This resolves the
+earlier stop condition without adding a forecast, second traversal, or new page
+budget owner. The work remains on the existing canonical writer and preserves a
+safe prefix; suffix requests resume at the queue head only after the prefix
+completes. Structural `currentFrames` admission does not promise that an
+unpinned physical slot will be available at freeze time; a member-local rollback
+handles that pressure before WAL append. Only recognized page-capacity pressure
+may defer a suffix. I/O, corruption and invariant failures retain terminal
+failure handling. The P0 scaling regression and warmup accounting gap remain
+deferred and are not prerequisites for this delivery.
+
+The current implementation reuses the reviewed `79c4da2e` engine/test delta on
+the latest checkpoint. Its historical checkpoint crash is tracked separately;
+validation here uses the no-checkpoint TPS path with write diagnostics disabled.
+
+### 2026-09-15 validation
+
+The reused mechanism passed the six focused affected test classes, including
+direct/group equivalence under both fitting and deterministic pinned-page
+pressure, prefix publication under pressure, member-local rollback, terminal
+force failure after a one-member prefix, and crash/reopen recovery. The terminal
+case leaves no active transaction, lock, waiter or visible suffix and restores
+the pre-cohort durable tail, commit sequence and row count.
+
+Matched no-checkpoint TPS controls at `bbbd3803` were **846.8 / 784.8 TPS**;
+candidate samples were **887.9 / 866.5 TPS**. All four used GraalVM 25.0.4,
+tiny standard mix, four terminals, one warehouse, serializable isolation,
+no-wait stress scheduling, seed 42, 2-second warmup and 10-second measurement.
+They passed invariants, reconciliation and cleanup with zero errors; control 2
+and candidate 2 each had one correlated deadlock retry. Persisted-write
+diagnostics were disabled and CHECKPOINT was skipped. These short samples show
+no repeated regression and support acceptance of the correctness mechanism;
+they are not a qualified throughput claim. Raw evidence is retained at
+`/private/tmp/river-tic-5b3e-evidence`.
+
+The final clean `clean check --continue` gate passed all repository checks in
+3m 3s, and independent correctness review found no remaining blocker after the
+direct/group pressure and terminal-prefix regressions were added. Delivered
+feature commit: `9d14de924a2ad2b9e7d29035ac4df531a9b502d0`.

@@ -4,6 +4,65 @@ This ledger records stable feature points for performance-sensitive work. It
 does not turn short local samples into performance claims. Its purpose is to
 make regressions visible, attribution reviewable, and rollback exact.
 
+## 2026-09-15 — cumulative physical cohort admission (`tic-5b3e`)
+
+Base: `bbbd3803d328819bf48b1f8a40bf70910bdf1879`, tagged
+`checkpoint-20260915-tps-no-checkpoint`. Branch:
+`ticket/tic-5b3e-cohort-admission-current`. The implementation reuses the
+reviewed engine/test delta from `79c4da2e` on the current no-checkpoint TPS
+baseline. Feature commit: `9d14de924a2ad2b9e7d29035ac4df531a9b502d0`.
+Persisted-write diagnostics were disabled for every sample.
+
+All four samples used GraalVM 25.0.4 on macOS/arm64, tiny standard mix, four
+terminals, one warehouse, serializable isolation, no-wait stress scheduling,
+seed 42, batch size 32, maximum 32 attempts, fresh load, 2-second warmup and
+10-second measurement. Substitute `control` or `candidate` and sample number in
+the version, sample ID and output path:
+
+```sh
+RIVER_JAVA=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Contents/Home/bin/java \
+  tools/tps-test.sh --version=tic-5b3e-VARIANT-N \
+  --profile=tiny --mix=standard --terminals=4 --scheduling=no-wait-stress \
+  --evidence=diagnostic --fresh-load=true --warehouses=1 --batch-rows=32 \
+  --maximum-attempts=32 --warmup-seconds=2 --measured-seconds=10 \
+  --seed=42 --isolation=serializable --sample-id=VARIANT-N \
+  --output-dir=/private/tmp/river-tic-5b3e-evidence/VARIANT-N
+```
+
+| Variant | TPS | Commits | Retries | Errors |
+| --- | ---: | ---: | ---: | ---: |
+| control-1 | 846.8 | 8,468 | 0 | 0 |
+| control-2 | 784.8 | 7,848 | 1 | 0 |
+| candidate-1 | 887.9 | 8,879 | 0 | 0 |
+| candidate-2 | 866.5 | 8,665 | 1 | 0 |
+
+All samples reported `status=OK`, passed pre/post-run invariants, deadlock
+reconciliation and performance capture, skipped CHECKPOINT, and ended with no
+active transactions, locks or waiters. Each retry was a fully correlated
+`DEADLOCK`. The candidate pair is directionally higher than the controls, but
+these short diagnostic samples are sufficient only to show no repeated
+regression; they do not establish a throughput claim.
+
+Focused validation covered the six affected engine test classes, including
+direct/group equivalence at both fitting and deterministic physical pressure,
+member-local rollback, prefix publication, a terminal force failure after a
+one-member pressure split, and crash/reopen recovery. The final clean command
+`./gradlew --no-daemon --no-build-cache clean check --continue` passed in 3m 3s
+with 156 actionable tasks. Slopmark evidence is retained at
+`/private/tmp/river-tic-5b3e-evidence/slopmark-{baseline,candidate}.txt`.
+`IndexedPageFrameCache` increased 87.1949 → 97.4843 and
+`IndexedGroupCommitCoordinator` 71.3503 → 83.9806; review accepted the added
+work as physical admission and ordered requeue responsibility in their existing
+owners, with no second writer, traversal, resource receipt or policy.
+
+Raw artifacts: `/private/tmp/river-tic-5b3e-evidence/control-1-live`,
+`control-2`, `candidate-1`, and `candidate-2`. Two earlier `control-1` launch
+directories contain command-sandbox startup failures before load and are not
+benchmark samples.
+
+Decision: accept as a correctness and resource-safety mechanism with no
+qualified performance claim.
+
 ## 2026-09-10 — contiguous WAL synchronization (`tic-c7e2`)
 
 Base: `7444f542`, `perf-checkpoint-20260910-atomic-wal-sync`.
