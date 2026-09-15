@@ -111,7 +111,9 @@ no implementation, acceptance claim or new follow-up ticket is added here.
 
 ### Current WAL readiness, 2026-09-15
 
-`tic-5b3e` and `tic-6f81` are closed. This implementation remains blocked only
-on its still-open declared dependencies, including acceptance of the `tic-92e3`
-execution/provider/resource contract. No duplicate WAL mechanism or additional
-chunking prerequisite is required.
+`tic-5b3e`, `tic-6f81`, and `tic-92e3` are closed. The accepted
+[execution/provider/resource contract](../delivery/evidence/2026-09-15-tic-92e3-force-contract.md)
+makes this ticket implementation-ready through its declared dependencies. Begin
+with the smallest atomic NIO-provider, force-worker, cohort-ownership, and
+resource-accounting slice specified there. No duplicate WAL mechanism or
+additional chunking prerequisite is required.

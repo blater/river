@@ -1,11 +1,12 @@
 ---
 id: tic-92e3
-status: in_progress
+status: closed
 type: investigation
 priority: 2
 assignee: blater
 parent: tic-rowlie
 delivery: evidence
+delivered-commit: 5dbffed7681ee18cc11944f7e9794d044f6b590d
 deps:
     - tic-b368
     - tic-7352

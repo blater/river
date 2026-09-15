@@ -56,13 +56,14 @@ investigation. Actual crash execution and P0 scaling/accounting remain deferred.
 
 The immediate performance objective is [tic-f1bb](tickets/tic-f1bb.md): overlap
 successor physical work with an outstanding WAL force. It is the primary runtime
-optimization, not yet implementation-ready. Remaining WAL dependencies still govern admission. The user explicitly removed
-P0 as a WAL prerequisite and deferred its scaling/accounting work.
+optimization and is now implementation-ready through its declared dependencies.
+The user explicitly removed P0 as a WAL prerequisite and deferred its
+scaling/accounting work.
 
 | Scheduling order | Existing tickets | Contribution and boundary |
 | --- | --- | --- |
 | Deferred outside WAL admission | tic-1dda | Scaling revalidation and warmup accounting remain incomplete and are explicitly deferred by the user; neither blocks WAL work. |
-| Critical path to force overlap | tic-92e3 → tic-f1bb | ca05, 5b3e, and 6f81 are closed prerequisites. Specify the bounded force-I/O contract next, then deliver overlap with demonstrated runtime benefit. |
+| Critical path to force overlap | tic-f1bb | ca05, 5b3e, 6f81, and 92e3 are closed prerequisites. Deliver the accepted bounded force-overlap mechanism with demonstrated runtime benefit. |
 | Deferred, conditional optimization | tic-4d14 → tic-845d | After the force-overlap decision, consider exactly one proved redundant lock rule. No current cycle proves a lock is redundant. |
 | Final acceptance | tic-7a5a | Evaluate the accepted mechanisms once its existing dependencies are resolved; do not run a promotion campaign ahead of implementation. |
 | Incident priority above WAL | tic-osgiliath / tic-emeldir | Reproduce returned checkpoint failures, verify cleanup, and identify the initiating kernel write. Formal comparison/reporting remains deferred. |
@@ -73,9 +74,10 @@ tests. tic-5b3e now admits exact physical pages before mutation, publishes the
 safe cohort prefix, rolls back only the pressure-rejected member, and requeues
 its suffix in order. Its direct/group, terminal failure, recovery and matched
 no-checkpoint evidence passed. tic-6f81 is closed with every chunked-WAL clause
-satisfied by the reviewed current-source contract. tic-92e3 is the next
-dependency. P0 remains unpassed and deferred; its missing accounting does not
-require a new ticket on this path.
+satisfied by the reviewed current-source contract. tic-92e3 is closed with its
+reviewed NIO force, execution, ownership, and retained-resource contract;
+tic-f1bb is the next implementation-ready delivery. P0 remains unpassed and
+deferred; its missing accounting does not require a new ticket on this path.
 Do not reopen completed execution/protocol candidates, add speculative optimizations,
 or manufacture production changes for an already satisfied prerequisite. Required
 reviews and correctness checks remain part of delivery. A newly discovered gap

@@ -1,7 +1,7 @@
 # tic-92e3 force overlap contract
 
-Date: 2026-09-15  
-Source commit: `61d24d0060cdb42495b4473c00e0f9d611104149`  
+Date: 2026-09-15
+Source commit: `61d24d0060cdb42495b4473c00e0f9d611104149`
 Status: design accepted for implementation; no implementation or workload evidence in this document
 
 ## Scope and immediate consumer
