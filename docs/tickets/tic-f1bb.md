@@ -1,11 +1,13 @@
 ---
 id: tic-f1bb
-status: in_progress
+status: closed
 priority: 1
 type: story
 assignee: blater
 parent: tic-rowlie
 delivery: code
+delivered-commit: a41f8385df816cde83942a5cadb35d976bd35260
+resolution: accepted
 tags:
     - performance
     - tpcc

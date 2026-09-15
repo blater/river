@@ -70,7 +70,8 @@ scaling/accounting work.
 | Final acceptance | tic-7a5a | Evaluate the accepted mechanisms once its existing dependencies are resolved; do not run a promotion campaign ahead of implementation. |
 | Incident priority above WAL | tic-osgiliath / tic-emeldir | Reproduce returned checkpoint failures, verify cleanup, and identify the initiating kernel write. Formal comparison/reporting remains deferred. |
 
-The lock stream is deferred, not removed from epic completion dependencies.
+The lock audit is now the immediate evidence task; any implementation remains
+conditional on one exact redundant rule proved by that audit.
 tic-ca05 is closed: its existing logical contract passed review and 43 focused
 tests. tic-5b3e now admits exact physical pages before mutation, publishes the
 safe cohort prefix, rolls back only the pressure-rejected member, and requeues

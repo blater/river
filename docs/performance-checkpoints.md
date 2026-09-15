@@ -15,6 +15,8 @@ page-generation ownership, local-versus-quorum durability, direct/maintenance
 drain, fencing and cleanup remain in the existing owners. Detailed design,
 test matrix and evidence: [tic-f1bb](tickets/tic-f1bb.md) and
 [delivery evidence](delivery/evidence/2026-09-15-tic-f1bb-force-overlap.md).
+The forthcoming integration checkpoint is
+`perf-checkpoint-20260915-force-overlap`.
 
 All samples pinned GraalVM 25.0.4, used tiny/standard serializable no-wait
 stress, seed 42, batch rows 32, maximum 32 attempts, a 2-second warmup, disabled
