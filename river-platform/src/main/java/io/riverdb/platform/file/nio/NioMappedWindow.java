@@ -8,19 +8,22 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 
-/** One bounded mapping; the file owner serializes access and closes it before truncation. */
+/** One bounded mapping; {@link NioDurableFile} owns its lifecycle lock and force pin. */
 final class NioMappedWindow implements AutoCloseable {
   static final int BYTES = 16 * 1024 * 1024;
   private final FileChannel channel;
   private final int windowBytes;
   private Arena arena;
-  private MappedByteBuffer mappedBytes;
-  private boolean metadataDirty;
+  private MappedByteBuffer writerBytes;
+  private MappedByteBuffer forceBytes;
   private boolean closed;
   private long offset;
   private boolean dirty;
   private int dirtyStart;
   private int dirtyEnd;
+  private boolean capturedDirty;
+  private int capturedDirtyStart;
+  private int capturedDirtyEnd;
 
   NioMappedWindow(FileChannel channel, int windowBytes) {
     this.channel = channel;
@@ -28,23 +31,28 @@ final class NioMappedWindow implements AutoCloseable {
   }
 
   int offset(long position) { return (int) (position - offset); }
-  int remaining(long position) { return mappedBytes.capacity() - offset(position); }
+  int remaining(long position) { return writerBytes.capacity() - offset(position); }
+  boolean covers(long position) {
+    return writerBytes != null && position >= offset && position - offset < writerBytes.capacity();
+  }
 
-  void map(long position, boolean writing) throws IOException {
+  boolean map(long position, boolean writing) throws IOException {
     if (closed) throw new ClosedChannelException();
-    if (mappedBytes != null && position >= offset && position - offset < mappedBytes.capacity()) return;
+    if (covers(position)) return false;
     release();
     long start = position - position % windowBytes;
     long oldSize = channel.size();
     long length = writing ? Math.min(windowBytes, Long.MAX_VALUE - start)
         : Math.min(windowBytes, oldSize - start);
-    metadataDirty |= writing && start + length > oldSize;
+    boolean metadataChanged = writing && start + length > oldSize;
     Arena opened = Arena.ofShared();
     try {
       MemorySegment mapped = channel.map(FileChannel.MapMode.READ_WRITE, start, length, opened);
-      mappedBytes = (MappedByteBuffer) mapped.asByteBuffer();
+      writerBytes = (MappedByteBuffer) mapped.asByteBuffer();
+      forceBytes = writerBytes.duplicate();
       arena = opened;
       offset = start;
+      return metadataChanged;
     } catch (IOException | RuntimeException | Error failure) {
       opened.close();
       throw failure;
@@ -53,14 +61,14 @@ final class NioMappedWindow implements AutoCloseable {
 
   void read(long position, ByteBuffer target, int count) {
     int targetPosition = target.position();
-    target.put(targetPosition, mappedBytes, offset(position), count);
+    target.put(targetPosition, writerBytes, offset(position), count);
     target.position(targetPosition + count);
   }
 
   void write(long position, ByteBuffer source, int count) {
     int start = offset(position);
     int sourcePosition = source.position();
-    mappedBytes.put(start, source, sourcePosition, count);
+    writerBytes.put(start, source, sourcePosition, count);
     source.position(sourcePosition + count);
     if (!dirty) {
       dirtyStart = start;
@@ -82,21 +90,43 @@ final class NioMappedWindow implements AutoCloseable {
       return;
     }
     int localStart = (int) Math.max(0, start - offset);
-    int localEnd = (int) Math.min(mappedBytes.capacity(), end - offset);
+    int localEnd = (int) Math.min(writerBytes.capacity(), end - offset);
     if (localStart >= localEnd) return;
-    mappedBytes.force(localStart, localEnd - localStart);
-    if (localStart <= dirtyStart && localEnd >= dirtyEnd) {
-      dirty = false;
-    } else if (localStart <= dirtyStart) {
-      dirtyStart = localEnd;
-    } else if (localEnd >= dirtyEnd) {
-      dirtyEnd = localStart;
-    }
-    if (dirtyStart >= dirtyEnd) dirty = false;
+    writerBytes.force(localStart, localEnd - localStart);
+    subtractDirty(localStart, localEnd);
   }
 
-  boolean metadataDirty() { return metadataDirty; }
-  void metadataForced() { metadataDirty = false; }
+  boolean captureForce(long start, long end, boolean range) {
+    capturedDirty = false;
+    if (!dirty) return false;
+    int localStart = dirtyStart;
+    int localEnd = dirtyEnd;
+    if (range) {
+      if (end <= start || start >= offset + dirtyEnd || end <= offset + dirtyStart) {
+        return false;
+      }
+      localStart = (int) Math.max(dirtyStart, start - offset);
+      localEnd = (int) Math.min(dirtyEnd, end - offset);
+    }
+    if (localStart >= localEnd) return false;
+    capturedDirtyStart = localStart;
+    capturedDirtyEnd = localEnd;
+    capturedDirty = true;
+    return true;
+  }
+
+  void forceCaptured() {
+    if (capturedDirty) {
+      forceBytes.force(capturedDirtyStart, capturedDirtyEnd - capturedDirtyStart);
+    }
+  }
+
+  void completeCapturedForce(boolean succeeded) {
+    if (succeeded && capturedDirty) subtractDirty(capturedDirtyStart, capturedDirtyEnd);
+    capturedDirty = false;
+    capturedDirtyStart = 0;
+    capturedDirtyEnd = 0;
+  }
 
   void release() {
     if (arena == null) return;
@@ -108,16 +138,31 @@ final class NioMappedWindow implements AutoCloseable {
     if (arena == null) return;
     arena.close();
     arena = null;
-    mappedBytes = null;
+    writerBytes = null;
+    forceBytes = null;
     dirty = false;
     dirtyStart = 0;
     dirtyEnd = 0;
+    capturedDirty = false;
+    capturedDirtyStart = 0;
+    capturedDirtyEnd = 0;
   }
 
   @Override
-  public synchronized void close() {
+  public void close() {
     closed = true;
     try { force(); }
     finally { unmap(); }
+  }
+
+  private void subtractDirty(int start, int end) {
+    if (start <= dirtyStart && end >= dirtyEnd) {
+      dirty = false;
+    } else if (start <= dirtyStart) {
+      dirtyStart = end;
+    } else if (end >= dirtyEnd) {
+      dirtyEnd = start;
+    }
+    if (dirtyStart >= dirtyEnd) dirty = false;
   }
 }
