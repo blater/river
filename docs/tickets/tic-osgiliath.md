@@ -324,6 +324,20 @@ carrier across BEGIN, the existing `FileChannel.write`, and RETURN or THROW.
 Missing native-library or thread-ID setup fails before the target write; there
 is no unknown-ID or unpinned fallback when the diagnostic is enabled.
 
+For the current macOS JVM diagnostic build and launch, compile the trampoline
+and pass both opt-in properties:
+
+```sh
+clang -dynamiclib -O2 -fno-optimize-sibling-calls -Wall -Wextra -Werror \
+  -I "$JAVA_HOME/include" -I "$JAVA_HOME/include/darwin" \
+  river-platform/src/main/native/macos/persisted_file_write.c \
+  -o /private/tmp/river-persisted-write.dylib
+
+java -Driver.diagnostics.persistedFileWrites=/private/path/write-boundary.jsonl \
+  -Driver.diagnostics.persistedFileWritesNativeLibrary=/private/tmp/river-persisted-write.dylib \
+  ...
+```
+
 Eight focused regular-file tests pass, including the real APFS creation/write/
 full-sync path, ordinary and resize-growth records, persisted-BEGIN ordering,
 BEGIN failure before target mutation, RETURN failure fencing without byte-count
