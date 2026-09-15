@@ -33,6 +33,8 @@ final class TpccArtifact {
     values.setProperty("run.label", "River engineering measurement; not official TPC-C; not tpmC");
     values.setProperty("run.scheduling_profile", config.scheduling() == TpccScheduling.STANDARD
         ? "standard_keying_and_think" : "nonstandard_no_wait_stress");
+    values.setProperty("run.checkpoint_completed",
+        Boolean.toString(config.phase().performsCheckpoint()));
     values.setProperty("database.digest.sha256", identity.digest());
     configuration(values, config);
     environment(values);
@@ -45,6 +47,8 @@ final class TpccArtifact {
     Properties values = readProperties(config.artifact());
     require("river-tpcc-acceptance-v2".equals(values.getProperty("artifact.schema")),
         "unsupported artifact schema");
+    require("true".equals(values.getProperty("run.checkpoint_completed")),
+        "artifact was not produced by a checkpoint run");
     require(Long.toString(config.seed()).equals(values.getProperty("config.seed")),
         "artifact seed differs from recovery configuration");
     require(Integer.toString(config.warehouses()).equals(values.getProperty("config.warehouses")),

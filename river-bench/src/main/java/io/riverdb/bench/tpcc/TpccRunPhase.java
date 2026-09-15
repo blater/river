@@ -7,7 +7,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-/** Load, measured run, invariant, checkpoint, and artifact phase. */
+/** Load, measured run, invariant, and artifact phase with an explicit checkpoint mode. */
 final class TpccRunPhase {
   private TpccRunPhase() {}
 
@@ -27,13 +27,20 @@ final class TpccRunPhase {
     System.out.println("phase_complete=measured");
     TpccPromotionGates.verify(metrics, probes.rollbacks(), probes.retries(), config);
     System.out.println("phase_complete=drain");
-    System.out.println("phase_start=checkpoint");
-    TpccDatabaseIdentity identity = checkpointAndIdentify(config);
+    String completionPhase = config.phase().performsCheckpoint() ? "checkpoint" : "verify";
+    System.out.println("phase_start=" + completionPhase);
+    TpccDatabaseIdentity identity = verifyAndIdentify(config);
     String runId = TpccArtifact.write(config, metrics, identity, before, after,
         probes.rollbacks(), probes.retries());
     TpccReport.results(config, metrics);
     System.out.println("run_id=" + runId + " artifact=" + config.artifact().toAbsolutePath());
-    System.out.println("phase=load-run-checkpoint complete; close/reopen River, then run recovery-verify");
+    System.out.println("phase_complete=" + completionPhase);
+    if (config.phase().performsCheckpoint()) {
+      System.out.println(
+          "phase=load-run-checkpoint complete; close/reopen River, then run recovery-verify");
+    } else {
+      System.out.println("phase=load-run complete");
+    }
   }
 
   private static void loadAndVerify(TpccConfig config) throws SQLException {
@@ -45,28 +52,34 @@ final class TpccRunPhase {
         System.out.println("load_seconds=" + TpccReport.secondsSince(start));
       }
       TpccInvariants.verifyLoaded(connection, config);
-      if (config.freshLoad()) {
-        try (Statement statement = connection.createStatement()) {
-          if (executeCheckpoint(connection, statement, "load") != 0) {
-            throw new SQLException("load checkpoint changed rows");
-          }
-        }
+      if (config.freshLoad() && checkpointIfSelected(config, connection, "load") != 0) {
+        throw new SQLException("load checkpoint changed rows");
+      }
+      if (config.freshLoad() && config.phase().performsCheckpoint()) {
         System.out.println("load_checkpoint=completed");
       }
     }
     System.out.println("pre_run_invariants=passed");
   }
 
-  private static TpccDatabaseIdentity checkpointAndIdentify(TpccConfig config)
+  private static TpccDatabaseIdentity verifyAndIdentify(TpccConfig config)
       throws SQLException {
-    try (Connection connection = DriverManager.getConnection(config.url());
-        Statement statement = connection.createStatement()) {
+    try (Connection connection = DriverManager.getConnection(config.url())) {
       TpccInvariants.verifyBusiness(connection, config);
-      if (executeCheckpoint(connection, statement, "post_run") != 0) {
+      if (checkpointIfSelected(config, connection, "post_run") != 0) {
         throw new SQLException("checkpoint changed rows");
       }
-      System.out.println("post_run_invariants=passed checkpoint=completed");
+      System.out.println("post_run_invariants=passed checkpoint="
+          + (config.phase().performsCheckpoint() ? "completed" : "skipped"));
       return TpccDatabaseIdentity.capture(connection, config);
+    }
+  }
+
+  static int checkpointIfSelected(TpccConfig config, Connection connection, String phase)
+      throws SQLException {
+    if (!config.phase().performsCheckpoint()) return 0;
+    try (Statement statement = connection.createStatement()) {
+      return executeCheckpoint(connection, statement, phase);
     }
   }
 

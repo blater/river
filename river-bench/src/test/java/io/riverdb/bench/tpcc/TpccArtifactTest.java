@@ -2,8 +2,10 @@ package io.riverdb.bench.tpcc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,6 +20,7 @@ final class TpccArtifactTest {
     TpccConfig config = TpccConfig.parse(new String[] {
         "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny", "--terminals=20000",
         "--retry-maximum-millis=" + Long.MAX_VALUE,
+        "--phase=load-run-checkpoint",
         "--artifact=" + artifact
     });
     TpccProcessObservation observation = new TpccProcessObservation(0, 0, 0, 0, 0, 0);
@@ -41,6 +44,23 @@ final class TpccArtifactTest {
     assertEquals(Long.toString(Long.MAX_VALUE), values.getProperty("config.retry_maximum_nanos"));
     assertFalse(values.containsKey("bound.jdbc_batch_statements"));
     assertFalse(Files.exists(stagedPath(artifact)));
+  }
+
+  @Test
+  void rejectsRecoveryForRunWithoutCheckpoint(@TempDir Path root) throws Exception {
+    Path artifact = root.resolve("tpcc.properties");
+    TpccConfig config = TpccConfig.parse(new String[] {
+        "--url=jdbc:river:client-file:/tmp/client.properties", "--tiny",
+        "--phase=load-run", "--artifact=" + artifact
+    });
+    TpccProcessObservation observation = new TpccProcessObservation(0, 0, 0, 0, 0, 0);
+
+    TpccArtifact.write(
+        config, new TpccMetrics(), new TpccDatabaseIdentity("database-digest"),
+        observation, observation, 0, 0);
+
+    IOException failure = assertThrows(IOException.class, () -> TpccArtifact.read(config));
+    assertEquals("artifact was not produced by a checkpoint run", failure.getMessage());
   }
 
   private static Path stagedPath(Path artifact) {
