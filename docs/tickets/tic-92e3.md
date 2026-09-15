@@ -1,6 +1,6 @@
 ---
 id: tic-92e3
-status: open
+status: in_progress
 type: investigation
 priority: 2
 assignee: blater
@@ -62,3 +62,14 @@ no implementation, acceptance claim or new follow-up ticket is added here.
 source and existing evidence. This ticket is now the next force-overlap
 dependency; its accepted execution/provider/resource contract remains required
 before `tic-f1bb` implementation.
+
+### Accepted force-overlap contract, 2026-09-15
+
+The [reviewed force-overlap contract](../delivery/evidence/2026-09-15-tic-92e3-force-contract.md)
+is accepted against source commit `61d24d00`. It preserves one writer and queue,
+defines the one-slot local-force handoff, exact local-durability versus quorum
+ordering, NIO mapped-view lifetime, completion-priority rule, and checked
+retained-byte accounting. Independent concurrency/provider review accepted the
+contract after its native-wrapper scope, mapping pins and thread confinement,
+and resource formulas were corrected. This evidence delivery implements no
+thread, provider, transaction, or workload change.
