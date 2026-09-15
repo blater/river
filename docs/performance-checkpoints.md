@@ -3334,3 +3334,54 @@ The implementation ticket retains the validation log path. Raw artifacts:
 `/private/tmp/river-gothmog-current/`, `/private/tmp/river-gothmog-deeper/`, and
 native report IDs under `/Users/blater/src/ingres/river-harness/runs/` listed in
 the accepted comparison. No new measurement run was required for this delivery.
+
+## 2026-09-15 — scalar B-tree routing candidate held (tic-waymeet)
+
+Ticket: [tic-waymeet](tickets/tic-waymeet.md), implementation `0a70f881`, branch
+`ticket/tic-waymeet-binary-routing`, based on pushed/tagged `64329eda`.
+The production diff is only `BTreePage.childForKey`: upper-bound binary search
+preserves equality-to-right-child and admitted-page ordering. At 256 separators,
+worst-case comparisons fall from 256 to nine; that is an algorithmic bound, not
+an end-to-end CPU claim. Existing validation, formats, split and recovery behavior
+are unchanged. Exhaustive occupancy/separator/gap tests and signed namespace
+boundaries passed. Independent correctness review approved.
+
+Clean full `./gradlew --no-daemon clean check` passed in 3m17s: 2,029 tests,
+zero failures/errors, 19 skips. Log:
+`/private/tmp/river-two-hotpaths/routing-clean-check.log`. Slopmark:
+BTreePage28.3441→28.4196, no new technical responsibility.
+
+Workload: standalone harness `run river tpcc sample new-order`, READ COMMITTED
+with explicit FOR UPDATE, worker1, warehouse1, seed42, max-retries3,
+warmup20s/duration30s, durable local WAL, GraalVM25.0.4 `-Xmx1g`, TCP/TLS.
+The candidate executable `/private/tmp/river-two-hotpaths/routing/river` differs
+from the stable baseline executable `/private/tmp/river-gothmog-current/river`
+in only BTreePage.class. It does not include either tuple-admission candidate.
+Version label: `0a70f881-binary-routing`; baseline label `64329eda-baseline`.
+The final three rows are the interleaved routing/control/routing sequence.
+
+| Sample | TPS | Server CPU ms/commit | p99 ms | Native report |
+| --- | ---: | ---: | ---: | --- |
+| baseline-a | 379.33 | 2.436 | 4.215 | `river_harness_20260915_212600_864436f6` |
+| baseline-b | 374.76 | 2.506 | 4.456 | `river_harness_20260915_212705_25b07ca9` |
+| baseline-adjacent | 383.48 | 2.474 | 4.379 | `river_harness_20260915_214754_a54c9f26` |
+| routing-a | 390.85 | 2.398 | 4.014 | `river_harness_20260915_215109_76359cb7` |
+| baseline-routing | 390.80 | 2.265 | 3.994 | `river_harness_20260915_215243_446f9cb3` |
+| routing-b | 388.23 | 2.473 | 4.239 | `river_harness_20260915_215418_4a67174f` |
+
+Every run passed status, comparison eligibility with identical key, invariants,
+accounting and owned cleanup. Warmup and measured windows have zero retries,
+failed or unknown commits; deadline cancellations and expected rollbacks remain
+in captures. CPU values are phase-bracket process estimates, not engine-only
+CPU. Exact commands, offsets, labels and counts:
+`/private/tmp/river-two-hotpaths/*-command.json`, `*-capture.json`, and
+`verified-results.json`. Native reports are under
+`/Users/blater/src/ingres/river-harness/runs/`.
+
+Decision: **hold integration**, independently reviewed. Routing CPU is higher
+than the adjacent unchanged control in both samples, with effectively flat TPS.
+Older slower baselines do not establish a win. This is an unexplained CPU
+increase and no established workload benefit, not proof that binary search
+intrinsically regresses. Publish the tested feature branch and documentation;
+leave the ticket open and create no performance integration tag. No root cache,
+lock-manager redesign, protocol change, or broader profiling campaign is included.

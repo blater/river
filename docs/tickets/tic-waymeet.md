@@ -1,6 +1,6 @@
 ---
 id: tic-waymeet
-status: in_progress
+status: open
 type: task
 priority: 1
 assignee: blater
@@ -37,3 +37,10 @@ Focused BTreePageTest and storage jar build passed in 3s. Independent review app
 
 Clean full checkpoint passed: ./gradlew --no-daemon clean check, 3m17s, 2,029 tests reported, zero failures/errors, 19 platform/opt-in skips. Existing engine split/recovery and module-policy checks passed. Log: /private/tmp/river-two-hotpaths/routing-clean-check.log. Workload samples remain pending; only BTreePage.childForKey is changed in production.
 
+### 2026-09-15T21:55:45Z
+
+Performance acceptance held. Interleaved identical20s-warmup/30s sample New-Order sequence: routingA390.85TPS/serverCPU2.398ms/p994.014ms; unchanged stable control390.80/2.265/3.994; routingB388.23/2.473/4.239. All READ COMMITTED, one worker/warehouse, seed42, retries3, durable WAL, same JVM/transport. All passed with zero retries/failures/unknowns, invariants/accounting/cleanup valid. Earlier slower baselines do not establish a win against this adjacent control. Preserve candidate0a70f881 on feature branch; do not merge an unestablished performance improvement. Raw commands/captures and verified-results.json: /private/tmp/river-two-hotpaths/.
+
+### 2026-09-15T21:56:35Z
+
+Independent performance review agrees: no established workload benefit, and server CPU is higher in both routing samples versus the adjacent unchanged control. This is not proof that binary search intrinsically regresses; attribution remains unresolved. Keep ticket open, publish tested feature branch and docs-only outcomes, and create no production integration checkpoint tag.
