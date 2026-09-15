@@ -89,21 +89,18 @@ public final class SqlTypeDescriptor {
     if ((descriptor & RESERVED_MASK) != 0) {
       return false;
     }
-    int type = typeId(descriptor);
-    int first = parameterOne(descriptor);
-    int second = parameterTwo(descriptor);
-    return switch (type) {
+    int parameters = descriptor >>> PARAMETER_ONE_SHIFT;
+    return switch (typeId(descriptor)) {
       case TYPE_ID_BIGINT, TYPE_ID_BOOLEAN, TYPE_ID_DATE,
-          TYPE_ID_SMALLINT, TYPE_ID_INTEGER, TYPE_ID_REAL, TYPE_ID_DOUBLE ->
-          first == 0 && second == 0;
-      case TYPE_ID_VARCHAR -> first >= 1
-          && first <= MAXIMUM_VARCHAR_SCALARS
-          && second == 0;
-      case TYPE_ID_DECIMAL -> first >= 1
-          && first <= MAXIMUM_DECIMAL_PRECISION
-          && second <= first;
+          TYPE_ID_SMALLINT, TYPE_ID_INTEGER, TYPE_ID_REAL, TYPE_ID_DOUBLE -> parameters == 0;
+      case TYPE_ID_VARCHAR -> parameters != 0;
+      case TYPE_ID_DECIMAL -> {
+        int precision = parameters & PARAMETER_MASK;
+        int scale = parameters >>> Byte.SIZE;
+        yield precision >= 1 && precision <= MAXIMUM_DECIMAL_PRECISION && scale <= precision;
+      }
       case TYPE_ID_TIME, TYPE_ID_TIMESTAMP, TYPE_ID_TIMESTAMP_WITH_TIME_ZONE ->
-          first <= MAXIMUM_TEMPORAL_PRECISION && second == 0;
+          parameters <= MAXIMUM_TEMPORAL_PRECISION;
       default -> false;
     };
   }
@@ -142,6 +139,10 @@ public final class SqlTypeDescriptor {
     if (!isValid(descriptor)) {
       return COMPARISON_NONE;
     }
+    return comparisonFamilyOfValid(descriptor);
+  }
+
+  private static int comparisonFamilyOfValid(int descriptor) {
     return switch (typeId(descriptor)) {
       case TYPE_ID_BOOLEAN -> COMPARISON_BOOLEAN;
       case TYPE_ID_SMALLINT, TYPE_ID_INTEGER, TYPE_ID_BIGINT, TYPE_ID_DECIMAL ->
@@ -154,10 +155,9 @@ public final class SqlTypeDescriptor {
     };
   }
 
-  /** True when a valid DECIMAL descriptor requires the two-long value lane. */
+  /** Requires an admitted descriptor; reports whether DECIMAL uses the two-long value lane. */
   public static boolean isWideDecimal(int descriptor) {
     return typeId(descriptor) == TYPE_ID_DECIMAL
-        && isValid(descriptor)
         && parameterOne(descriptor) > MAXIMUM_COMPACT_DECIMAL_PRECISION;
   }
 
@@ -168,11 +168,12 @@ public final class SqlTypeDescriptor {
     if (left == right) {
       return true;
     }
-    if (SqlNumericTypeRules.isNumeric(left) && SqlNumericTypeRules.isNumeric(right)) {
+    if (SqlNumericTypeRules.isNumericType(typeId(left))
+        && SqlNumericTypeRules.isNumericType(typeId(right))) {
       return true;
     }
-    int family = comparisonFamily(left);
-    if (family != comparisonFamily(right)) {
+    int family = comparisonFamilyOfValid(left);
+    if (family != comparisonFamilyOfValid(right)) {
       return false;
     }
     return family == COMPARISON_EXACT_NUMERIC
@@ -185,11 +186,16 @@ public final class SqlTypeDescriptor {
     if (!isValid(source) || !isValid(target)) {
       return false;
     }
+    return implicitCastOfValid(source, target);
+  }
+
+  private static boolean implicitCastOfValid(int source, int target) {
     if (source == target) {
       return true;
     }
-    if (SqlNumericTypeRules.isNumeric(source) && SqlNumericTypeRules.isNumeric(target)) {
-      return SqlNumericTypeRules.canImplicitlyCast(source, target);
+    if (SqlNumericTypeRules.isNumericType(typeId(source))
+        && SqlNumericTypeRules.isNumericType(typeId(target))) {
+      return SqlNumericTypeRules.canWiden(source, target);
     }
     if (typeId(source) == TYPE_ID_VARCHAR && typeId(target) == TYPE_ID_VARCHAR) {
       return parameterOne(source) <= parameterOne(target);
@@ -200,23 +206,20 @@ public final class SqlTypeDescriptor {
         && typeId(source) == typeId(target)) {
       return parameterOne(source) <= parameterOne(target);
     }
-    if (typeId(source) != TYPE_ID_DECIMAL || typeId(target) != TYPE_ID_DECIMAL) return false;
-    int sourceIntegerDigits = parameterOne(source) - parameterTwo(source);
-    int targetIntegerDigits = parameterOne(target) - parameterTwo(target);
-    return targetIntegerDigits >= sourceIntegerDigits
-        && parameterTwo(target) >= parameterTwo(source);
+    return false;
   }
 
   public static boolean canExplicitlyCast(int source, int target) {
     if (!isValid(source) || !isValid(target)) {
       return false;
     }
-    if (canImplicitlyCast(source, target)) {
+    if (implicitCastOfValid(source, target)) {
       return true;
     }
     int sourceType = typeId(source);
     int targetType = typeId(target);
-    if (SqlNumericTypeRules.isNumeric(source) && SqlNumericTypeRules.isNumeric(target)) {
+    if (SqlNumericTypeRules.isNumericType(typeId(source))
+        && SqlNumericTypeRules.isNumericType(typeId(target))) {
       return true;
     }
     if (sourceType == targetType) {

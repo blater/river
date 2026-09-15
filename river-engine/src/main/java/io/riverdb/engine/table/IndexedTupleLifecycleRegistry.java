@@ -7,7 +7,6 @@ import io.riverdb.format.btree.TupleIndexRootRecordCodec;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
-import java.util.zip.CRC32C;
 
 /** Reads and stages tuple-root registry records for semantic lifecycle batches. */
 final class IndexedTupleLifecycleRegistry {
@@ -20,7 +19,6 @@ final class IndexedTupleLifecycleRegistry {
   private final ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
   private final int[] descriptors =
       new int[io.riverdb.format.btree.TupleKeyCodec.MAX_INDEX_KEY_PARTS];
-  private final CRC32C checksum = new CRC32C();
   private long previousRowId;
 
   IndexedTupleLifecycleRegistry(
@@ -99,7 +97,7 @@ final class IndexedTupleLifecycleRegistry {
     bytes.clear();
     status = row.copyTo(bytes);
     bytes.flip();
-    if (status.isOk()) status = TupleIndexRootRecordCodec.decode(bytes, 0, record, checksum);
+    if (status.isOk()) status = TupleIndexRootRecordCodec.decode(bytes, 0, record);
     if (status.isOk()) status = kernel.prepareMutation(
         store.lastCommitSequence, CatalogKeyspace.INDEX_ROOT_SPACE, keyId, target);
     if (!status.isOk()) return pressure(status) ? status : StatusCode.CORRUPTION;
@@ -127,7 +125,7 @@ final class IndexedTupleLifecycleRegistry {
     if (status.isOk()) status = TupleIndexRootRecordCodec.encode(
         bytes, 0, state, root, batch.keyIdAt(index), batch.ownerAt(index),
         batch.schemaIdAt(index), shape.descriptorHash(), privateOwner, generation,
-        cleanupCursor, descriptors, 0, count, checksum);
+        cleanupCursor, descriptors, 0, count);
     bytes.position(0).limit(TupleIndexRootRecordCodec.BYTES);
     return status.isOk() ? writer.stage(
         CatalogKeyspace.INDEX_ROOT_SPACE, batch.keyIdAt(index),

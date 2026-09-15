@@ -2,6 +2,16 @@
 
 Status: Proposed — Phase 0 P09/prototype review required; K10/G1 validates the production crash matrix
 
+## Current integrity scope — 2026-09-15
+
+The page v4 decision in [ADR 0004](0004-durable-identities-pages-and-rows.md)
+replaces full-page CRC with header-only CRC at the user's direction. Recovery
+still checks identity, structure, lineage and WAL record checksums. It cannot
+use a page checksum to detect payload-only torn writes or corruption. Such
+payload damage may remain undetected when structure is valid; the historical
+full-page detection premise below is superseded. No complete torn-payload
+protection guarantee is claimed for the current implementation.
+
 ## Context
 
 Checksums detect torn or corrupt pages but cannot reconstruct them. The initial
@@ -37,7 +47,7 @@ required predecessor state are forced and covered by a published checkpoint.
 Writeback has two different completion facts:
 
 1. Under the page latch, capture an immutable `PageFlushImage` with identity,
-   allocation generation, dirty epoch, checksum, and exact `PageWalToken`.
+   allocation generation, dirty epoch, header checksum, and exact `PageWalToken`.
 2. Release the latch and wait for a same-lineage `DurableWalEnd` covering the
    image's exclusive `recordEndLsn`.
 3. Write the complete image. Successful full write completion makes it
@@ -50,7 +60,7 @@ Writeback has two different completion facts:
    redirtied, retain the earliest record not covered by the forced image and all
    newer epoch/FPI pins.
 
-Recovery detecting a bad page checksum restores a same-lineage validated FPI
+Recovery detecting a bad page header checksum restores a same-lineage validated FPI
 or checkpoint base and redoes the complete forced suffix in token order. A
 missing, corrupt, wrong-generation, or ambiguous base fails closed; it never
 becomes an empty or guessed page.
@@ -76,7 +86,7 @@ becomes an empty or guessed page.
   predecessor/undo, checkpoint, backup, and other lease pins must also release.
 - `safeTruncate` is the minimum of those exact per-page proofs and every other
   recovery/retention consumer. Written-but-unforced pages contribute no proof.
-- Recovery never repairs a checksum failure from an unverified image.
+- Recovery never repairs a detected header checksum failure from an unverified image.
 
 ## Consequences
 

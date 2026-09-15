@@ -54,7 +54,7 @@ final class SqlBlockPhysicalRowDecoding {
           destination.setDecimal128(column, high, value);
           continue;
         }
-        if (!SqlValueDomain.validFixed(descriptor, value)) {
+        if (!SqlValueDomain.fitsFixed(descriptor, value)) {
           return StatusCode.CORRUPTION;
         }
         destination.setValue(column, value);

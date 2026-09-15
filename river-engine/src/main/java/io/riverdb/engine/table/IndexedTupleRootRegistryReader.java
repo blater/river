@@ -6,7 +6,6 @@ import io.riverdb.format.btree.TupleIndexRootRecordCodec;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
-import java.util.zip.CRC32C;
 
 /** Validates one expected tuple-root registry CAS operand. */
 final class IndexedTupleRootRegistryReader {
@@ -16,7 +15,6 @@ final class IndexedTupleRootRegistryReader {
   private final IndexedRowPin pin = new IndexedRowPin();
   private final TupleIndexRootRecord record = new TupleIndexRootRecord();
   private final ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
-  private final CRC32C checksum = new CRC32C();
   private long rowId;
 
   IndexedTupleRootRegistryReader(IndexedTableKernel table, IndexedPageSet pages) {
@@ -47,7 +45,7 @@ final class IndexedTupleRootRegistryReader {
       if (status.isOk()) status = releaseStatus;
     }
     bytes.flip();
-    if (status.isOk()) status = TupleIndexRootRecordCodec.decode(bytes, 0, record, checksum);
+    if (status.isOk()) status = TupleIndexRootRecordCodec.decode(bytes, 0, record);
     if (!status.isOk()) return status;
     return matches(source, operation, descriptor) ? StatusCode.OK : StatusCode.CORRUPTION;
   }

@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.btree.TupleIndexRootRecordCodec;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import java.nio.ByteBuffer;
-import java.util.zip.CRC32C;
 
 /** Stages one resulting tuple-root registry record and scalar head. */
 final class IndexedTupleRootRegistryWriter {
@@ -12,7 +11,6 @@ final class IndexedTupleRootRegistryWriter {
   private final int[] descriptors =
       new int[io.riverdb.format.btree.TupleKeyCodec.MAX_INDEX_KEY_PARTS];
   private final ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
-  private final CRC32C checksum = new CRC32C();
 
   IndexedTupleRootRegistryWriter(IndexedTableKernel table, IndexedPageSet pages) {
     scalar = new IndexedRelationalScalarWriter(table, pages);
@@ -32,7 +30,7 @@ final class IndexedTupleRootRegistryWriter {
         source.descriptorOwnerObjectIdAt(descriptor), source.schemaIdAt(descriptor),
         source.descriptorHashAt(descriptor), source.resultingPrivateOwnerAt(operation),
         source.resultingGenerationAt(operation), source.resultingCleanupCursorAt(operation),
-        descriptors, 0, descriptorCount, checksum);
+        descriptors, 0, descriptorCount);
     bytes.position(0);
     bytes.limit(TupleIndexRootRecordCodec.BYTES);
     return status.isOk() ? scalar.stage(

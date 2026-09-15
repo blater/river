@@ -39,13 +39,13 @@ final class StoredTableRowBodyValidator {
     int descriptor = table.typeDescriptorAt(index);
     if (!StoredTableRowEncoder.isText(descriptor)) {
       if (SqlTypeDescriptor.isWideDecimal(descriptor)) {
-        return SqlValueDomain.validDecimal128(
+        return SqlValueDomain.fitsDecimal128(
             descriptor,
             StoredTableRowAccess.wideHigh(source, slot),
             StoredTableRowAccess.wideLow(source, slot)) ? textOffset : -1;
       }
       long value = StoredTableRowAccess.fixedValue(table, index, source, slot);
-      return SqlValueDomain.validFixed(descriptor, value) ? textOffset : -1;
+      return SqlValueDomain.fitsFixed(descriptor, value) ? textOffset : -1;
     }
     int offset = FormatBytes.getInt(source, slot);
     int bytes = FormatBytes.getInt(source, slot + Integer.BYTES);

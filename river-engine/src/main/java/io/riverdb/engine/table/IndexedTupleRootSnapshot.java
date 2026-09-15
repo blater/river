@@ -7,7 +7,6 @@ import io.riverdb.format.btree.TupleIndexRootRecordCodec;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
-import java.util.zip.CRC32C;
 
 /** Reusable decoded view of one durable tuple-index root record. */
 final class IndexedTupleRootSnapshot {
@@ -16,7 +15,6 @@ final class IndexedTupleRootSnapshot {
   private final HeapRowResult row = new HeapRowResult();
   private final TupleIndexRootRecord record = new TupleIndexRootRecord();
   private final ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
-  private final CRC32C checksum = new CRC32C();
 
   IndexedTupleRootSnapshot(IndexedTableKernel table) {
     kernel = table;
@@ -30,7 +28,7 @@ final class IndexedTupleRootSnapshot {
     status = row.copyTo(bytes);
     bytes.flip();
     if (status.isOk()) {
-      status = TupleIndexRootRecordCodec.decode(bytes, 0, record, checksum);
+      status = TupleIndexRootRecordCodec.decode(bytes, 0, record);
     }
     return status.isOk() || pressure(status) ? status : StatusCode.CORRUPTION;
   }

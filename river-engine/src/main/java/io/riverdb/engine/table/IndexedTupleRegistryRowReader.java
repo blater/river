@@ -7,7 +7,6 @@ import io.riverdb.format.btree.TupleIndexRootRecordCodec;
 import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
-import java.util.zip.CRC32C;
 
 /** Decodes one current registry head into a validated descriptor shape. */
 final class IndexedTupleRegistryRowReader {
@@ -21,7 +20,6 @@ final class IndexedTupleRegistryRowReader {
   private final int[] descriptors =
       new int[io.riverdb.format.btree.TupleKeyCodec.MAX_INDEX_KEY_PARTS];
   private final ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
-  private final CRC32C checksum = new CRC32C();
 
   IndexedTupleRegistryRowReader(IndexedPageSet pageSet, IndexedVersionState versionState) {
     pages = pageSet;
@@ -50,7 +48,7 @@ final class IndexedTupleRegistryRowReader {
       pages.unpinCurrentPage(pageId);
     }
     bytes.flip();
-    if (status.isOk()) status = TupleIndexRootRecordCodec.decode(bytes, 0, record, checksum);
+    if (status.isOk()) status = TupleIndexRootRecordCodec.decode(bytes, 0, record);
     if (!status.isOk()) return status;
     if (record.keyId() != keyId) {
       return StatusCode.CORRUPTION;

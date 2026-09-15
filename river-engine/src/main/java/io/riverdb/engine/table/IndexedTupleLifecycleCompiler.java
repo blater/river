@@ -157,9 +157,10 @@ final class IndexedTupleLifecycleCompiler {
         cleanupEnd, cursor + IndexedTupleGraphReclaimer.MAX_INSPECTED_PAGES);
     long heap = kernel.operationRowCount();
     long generation = registry.generation();
-    status = reclaimer.reclaimBatch(
+    // Grow the registry before releasing pages: allocation reads the committed free stack.
+    status = registry.stageReclaim(batch, index, resultingCursor);
+    if (status.isOk()) status = reclaimer.reclaimBatch(
         batch.keyIdAt(index), cursor, resultingCursor, cleanupEnd);
-    if (status.isOk()) status = registry.stageReclaim(batch, index, resultingCursor);
     return status.isOk() ? finish(
         batch, index, mutation, firstMutation,
         0, 0, scalarRoot, nextPage, heap,

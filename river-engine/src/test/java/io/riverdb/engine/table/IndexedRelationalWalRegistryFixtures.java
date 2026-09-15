@@ -14,7 +14,6 @@ import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.btree.TupleBTreePageReference;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
-import java.util.zip.CRC32C;
 
 
 
@@ -28,7 +27,7 @@ final class IndexedRelationalWalRegistryFixtures {
     requireOk(row.copyTo(bytes));
     bytes.flip();
     TupleIndexRootRecord record = new TupleIndexRootRecord();
-    requireOk(TupleIndexRootRecordCodec.decode(bytes, 0, record, new CRC32C()));
+    requireOk(TupleIndexRootRecordCodec.decode(bytes, 0, record));
     return record;
   }
 
@@ -78,7 +77,7 @@ final class IndexedRelationalWalRegistryFixtures {
     requireOk(row.copyTo(bytes));
     bytes.flip();
     TupleIndexRootRecord record = new TupleIndexRootRecord();
-    requireOk(TupleIndexRootRecordCodec.decode(bytes, 0, record, new CRC32C()));
+    requireOk(TupleIndexRootRecordCodec.decode(bytes, 0, record));
     check(record.state() == TupleIndexRootRecordCodec.STATE_READY
         && record.rootPageId() == rootPageId && record.generation() == generation
         && record.ownerObjectId() == ownerObjectId
@@ -104,7 +103,7 @@ final class IndexedRelationalWalRegistryFixtures {
     requireOk(row.copyTo(bytes));
     bytes.flip();
     TupleIndexRootRecord record = new TupleIndexRootRecord();
-    requireOk(TupleIndexRootRecordCodec.decode(bytes, 0, record, new CRC32C()));
+    requireOk(TupleIndexRootRecordCodec.decode(bytes, 0, record));
     check(record.state() == state && record.rootPageId() == rootPageId
         && record.generation() == generation && record.privateOwner() == privateOwner
         && record.cleanupCursor() == cleanupCursor,

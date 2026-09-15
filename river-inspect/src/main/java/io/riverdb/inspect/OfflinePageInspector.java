@@ -7,7 +7,7 @@ import io.riverdb.platform.file.nio.NioDurableDirectory;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32C;
 
-/** Validates page images and their database/generation identity. */
+/** Validates page headers and database/generation identity, not payload integrity. */
 final class OfflinePageInspector {
   private final OfflineInspectionFile file;
   private final PageHeader header = new PageHeader();

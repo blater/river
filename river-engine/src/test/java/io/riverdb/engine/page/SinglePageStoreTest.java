@@ -79,7 +79,7 @@ final class SinglePageStoreTest {
   }
 
   @Test
-  void recoversCorruptPageFromForcedWalAfterImage(@TempDir Path root) {
+  void recoversCorruptPageHeaderFromForcedWalAfterImage(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     SinglePageStore store = createStore(directory, wal);
@@ -97,7 +97,7 @@ final class SinglePageStoreTest {
     IoResult io = new IoResult();
     assertEquals(
         StatusCode.OK,
-        raw.write(PageCodec.HEADER_BYTES + 1, ByteBuffer.wrap(new byte[] {99}), io));
+        raw.write(0, ByteBuffer.wrap(new byte[] {99}), io));
     assertEquals(StatusCode.OK, raw.force(ForceMode.CONTENT_AND_METADATA));
     assertEquals(StatusCode.OK, raw.close());
 

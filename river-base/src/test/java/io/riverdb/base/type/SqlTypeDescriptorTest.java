@@ -78,6 +78,55 @@ final class SqlTypeDescriptorTest {
   }
 
   @Test
+  void admitsExactlyTheRepresentableDeclarations() {
+    for (int parameters = 0; parameters <= 0xffff; parameters++) {
+      for (int type = 1; type <= 12; type++) {
+        int descriptor = type | parameters << 8;
+        int canonical = switch (type) {
+          case SqlTypeDescriptor.TYPE_ID_VARCHAR -> SqlTypeDescriptor.varchar(parameters);
+          case SqlTypeDescriptor.TYPE_ID_DECIMAL ->
+              SqlTypeDescriptor.decimal(parameters & 0xff, parameters >>> 8);
+          case SqlTypeDescriptor.TYPE_ID_TIME -> SqlTypeDescriptor.time(parameters);
+          case SqlTypeDescriptor.TYPE_ID_TIMESTAMP -> SqlTypeDescriptor.timestamp(parameters);
+          case SqlTypeDescriptor.TYPE_ID_TIMESTAMP_WITH_TIME_ZONE ->
+              SqlTypeDescriptor.timestampWithTimeZone(parameters);
+          default -> type;
+        };
+        assertEquals(canonical == descriptor, SqlTypeDescriptor.isValid(descriptor));
+      }
+    }
+    for (int bit = 24; bit < Integer.SIZE; bit++) {
+      assertFalse(SqlTypeDescriptor.isValid(SqlTypeDescriptor.varchar(65_535) | 1 << bit));
+      assertFalse(SqlTypeDescriptor.isValid(SqlTypeDescriptor.decimal(38, 38) | 1 << bit));
+    }
+  }
+
+  @Test
+  void comparisonAndCastAdmissionStillRejectMalformedDescriptors() {
+    int[] malformed = {0, 255, SqlTypeDescriptor.INTEGER | 1 << 8,
+        SqlTypeDescriptor.TYPE_ID_DECIMAL | 39 << 8,
+        SqlTypeDescriptor.TYPE_ID_DECIMAL | 2 << 8 | 3 << 16,
+        SqlTypeDescriptor.TYPE_ID_TIME | 1 << 16,
+        SqlTypeDescriptor.varchar(10) | 1 << 24};
+    for (int descriptor : malformed) {
+      assertEquals(SqlTypeDescriptor.COMPARISON_NONE,
+          SqlTypeDescriptor.comparisonFamily(descriptor));
+      assertFalse(SqlTypeDescriptor.canCompare(descriptor, descriptor));
+      assertFalse(SqlTypeDescriptor.canCompare(SqlTypeDescriptor.INTEGER, descriptor));
+      assertFalse(SqlTypeDescriptor.canImplicitlyCast(descriptor, descriptor));
+      assertFalse(SqlTypeDescriptor.canImplicitlyCast(SqlTypeDescriptor.INTEGER, descriptor));
+      assertFalse(SqlTypeDescriptor.canExplicitlyCast(descriptor, descriptor));
+      assertFalse(SqlTypeDescriptor.canExplicitlyCast(SqlTypeDescriptor.varchar(10), descriptor));
+      assertFalse(SqlNumericTypeRules.isIntegral(descriptor));
+      assertFalse(SqlNumericTypeRules.isExact(descriptor));
+      assertFalse(SqlNumericTypeRules.isApproximate(descriptor));
+      assertFalse(SqlNumericTypeRules.isNumeric(descriptor));
+      assertFalse(SqlNumericTypeRules.canImplicitlyCast(descriptor, descriptor));
+      assertFalse(SqlNumericTypeRules.canAssign(descriptor, descriptor));
+    }
+  }
+
+  @Test
   void freezesComparisonAndCastFamiliesWithoutLossyImplicitConversion() {
     int decimalNineTwo = SqlTypeDescriptor.decimal(9, 2);
     int decimalTwelveFour = SqlTypeDescriptor.decimal(12, 4);

@@ -30,8 +30,9 @@ final class IndexedRelationalTupleApply {
     if (status.isOk()) status = prepare(source, operation, descriptor);
     if (status.isOk()) status = applyMutations(source, operation);
     if (status.isOk()) status = validateResult(source, operation);
-    if (status.isOk()) status = cleanup(source, operation, descriptor);
+    // Registry allocation precedes free-page publication; failure discards both staged changes.
     if (status.isOk()) status = registry.stage(source, operation);
+    if (status.isOk()) status = cleanup(source, operation, descriptor);
     return status.isOk() && resultingHeapMatches(source, operation)
         ? StatusCode.OK : status.isOk() ? StatusCode.CORRUPTION : status;
   }

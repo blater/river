@@ -22,10 +22,10 @@ dependency-neutral value type lives in `river-base`. It fences one
 process/storage-node lifetime and is not encoded into logical row identity.
 Phase 0 freezes both incarnation semantics; Phase 1 first persists them.
 
-Propose one 16 KB canonical v1 page size with no mixed page sizes inside a
+Use one 16 KiB canonical v4 page size with no mixed page sizes inside a
 database. Every durable file/page/row carries format version and database/file
 identity where applicable. Pages use a canonical byte order, page type,
-`PageId`, generation, free-space/slot bounds, checksum, and a
+`PageId`, generation, free-space/slot bounds, header checksum, and a
 `PageWalToken(DatabaseIncarnation, WalGeneration, recordStartLsn,
 recordEndLsn)`. The end is exclusive. A bare offset is not a durable page
 comparison value.
@@ -40,8 +40,12 @@ until an upgrade ADR and fixtures select it.
 
 ## Invariants
 
-- Durable decoding validates identity, version, length, bounds, and checksum
-  once before creating a trusted bounded view.
+- Durable decoding validates identity, version, length, bounds, and the checksum
+  defined by that format before creating a trusted bounded view. Page v4 CRC32C
+  covers bytes 0–119 of the header only; its value/complement occupy bytes
+  120–127. No page payload checksum is computed on reads or writes. Payload
+  structure is validated by its owning codec. Tuple-index root v4 records are
+  208 bytes with structural/identity validation and no record CRC.
 - A `PageId`, `RowId`, `Lsn`, or `JournalPosition` is never substituted for
   another unit because their integer representations happen to fit.
 - Page reuse is delayed until WAL, snapshots, cursors, and writeback cannot
@@ -56,6 +60,17 @@ until an upgrade ADR and fixtures select it.
 - Row/index changes and version pointers are journaled before dirty-page write.
 
 ## Consequences
+
+The 2026-09-15 user-directed performance change replaces whole-page CRC with
+header-only bulk CRC32C and removes tuple-root record CRC. Page and root v3
+formats are rejected; no compatibility path or migration is supplied. The
+remaining heap-backed checksum helper uses bulk CRC32C instead of byte-at-a-time
+updates; CRC32C itself is unchanged. WAL checksums continue to cover logged
+payloads. A persisted payload change that remains structurally valid is no
+longer detected by page admission or offline page inspection. This is an
+explicit reduction of detection coverage, not a new guarantee of atomic writes.
+Repeated tuple-root decode performs no checksum calculation or checksum caching.
+
 
 A single page size simplifies buffer, WAL, recovery, and access-method code.
 The 16 KB value and tuple header are provisional: K02 may implement codecs and

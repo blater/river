@@ -3291,3 +3291,46 @@ native-kernel repair is claimed. All 28 applicable platform/JDBC tests and sourc
 module policies passed; 16 existing platform-specific tests skipped on macOS.
 Independent review accepted the source and raw capture. Actual crash execution
 and P0 scaling/accounting remain deferred; WAL acceptance is unchanged.
+
+## 2026-09-15 — read-validation and page-header integrity checkpoint
+
+Implementation: [tic-fine-barad-dur](tickets/tic-fine-barad-dur.md), branch
+`ticket/tic-fine-barad-dur-read-validation`, based on pushed master
+`eede02521803a148abf09a8df8155c33e8d9affe`. The annotated merge checkpoint is
+`perf-checkpoint-20260915-read-validation`; the ticket's delivered commit
+identifies the implementation and the tag resolves its integration merge.
+
+The user directed removal of repeated descriptor checks and whole-page read CRC.
+Page v4 covers only the 120-byte header prefix; tuple-root v4 records have no CRC.
+Remaining accessible heap CRCs use bulk CRC32C. A record-packing regression
+required registry growth before page reclamation in both live compilation and
+WAL replay. Prior page/root versions are rejected; this deliberately reduces
+payload-corruption detection and is not an equivalent integrity guarantee.
+
+The [accepted comparison](delivery/evidence/2026-09-15-tic-gothmog-current-comparison.md)
+retains executable labels, source base, workload manifests, individual samples,
+CPU windows, JFR, outcome accounting, invariants and cleanup. Historical River
+one-worker samples were 376.24/354.20 TPS (5s warmup/30s measured), with a later
+20s/30s control at 378.45 TPS. Current 20s/30s River samples were 383.52/375.36
+TPS, versus MariaDB 919.65/937.79. Both used sample New-Order, one warehouse,
+seed 42, READ COMMITTED and retries 3. The current JVM used GraalVM 25.0.4,
+-Xmx1g and label `master-eede0252-local-crc-v4-descriptors-<run-label>`.
+Transport differs (River TCP/TLS; MariaDB Unix socket). No isolated or universal
+speedup is established; the historical build predates other changes as well.
+
+Current four-worker failures (River 123/115, MariaDB 360) remain primary
+contention evidence and are excluded from successful-TPS ranking. All current
+runs passed invariants, accounting and owned cleanup with zero unknown commits.
+The current profile identifies linear internal-node routing as a next candidate;
+that optimization and a versioned harness stock-order fix are not delivered here.
+
+Independent descriptor, durable-format, live/replay ordering and adversarial
+comparison reviews accepted the bounded changes and findings. The user's
+commit/merge/push instruction authorizes integration of this design change;
+acceptance does not claim a measured performance win or formal recovery parity.
+Clean full `./gradlew --no-daemon clean check` passed in 3m10s: 2,027 tests
+reported, zero failures/errors, 19 platform/opt-in skips; root policies passed.
+The implementation ticket retains the validation log path. Raw artifacts:
+`/private/tmp/river-gothmog-current/`, `/private/tmp/river-gothmog-deeper/`, and
+native report IDs under `/Users/blater/src/ingres/river-harness/runs/` listed in
+the accepted comparison. No new measurement run was required for this delivery.

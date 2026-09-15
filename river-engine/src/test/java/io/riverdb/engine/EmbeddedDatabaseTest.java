@@ -288,7 +288,8 @@ final class EmbeddedDatabaseTest {
 
     Path checkpointBase = root.resolve("river.indexed.pages.checkpoint.2");
     byte[] checkpointBytes = Files.readAllBytes(checkpointBase);
-    checkpointBytes[256] ^= 0x5a;
+    // Page v4 detects header damage; payload CRC is intentionally absent.
+    checkpointBytes[120] ^= 0x5a;
     Files.write(checkpointBase, checkpointBytes);
 
     assertEquals(
@@ -306,7 +307,7 @@ final class EmbeddedDatabaseTest {
     assertEquals(StatusCode.OK, database.close());
 
     byte[] mainBytes = Files.readAllBytes(root.resolve("river.indexed.pages"));
-    mainBytes[256] ^= 0x33;
+    mainBytes[120] ^= 0x33;
     Files.write(root.resolve("river.indexed.pages"), mainBytes);
     assertEquals(
         StatusCode.OK,
@@ -336,7 +337,8 @@ final class EmbeddedDatabaseTest {
 
     Path checkpointBase = root.resolve("river.indexed.pages.checkpoint.2");
     byte[] checkpointBytes = Files.readAllBytes(checkpointBase);
-    checkpointBytes[256] ^= 0x5a;
+    // Page v4 detects header damage; payload CRC is intentionally absent.
+    checkpointBytes[120] ^= 0x5a;
     Files.write(checkpointBase, checkpointBytes);
     assertEquals(
         StatusCode.CORRUPTION,
