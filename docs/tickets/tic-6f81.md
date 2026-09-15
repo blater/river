@@ -1,10 +1,11 @@
 ---
 id: tic-6f81
-status: open
+status: closed
 type: investigation
 assignee: blater
 parent: tic-rowlie
 delivery: evidence
+delivered-commit: d6b6f02c7c6a34f6ddd4e9cae90b30b68d8ed8e0
 tags:
     - performance
     - tpcc
@@ -107,7 +108,7 @@ recovery behavior.
 
 Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled correctness gates remain authoritative. Follow [the current handover](../plans/performance-three-epics-handover.md); this move certifies no implementation or performance outcome.
 
-### Current WAL readiness, 2026-09-14
+### Historical WAL readiness, 2026-09-14 (superseded)
 
 The user deferred P0 scaling/accounting and removed it from WAL admission.
 ca05 is accepted and closed. The remaining chain is blocked by the existing
@@ -115,3 +116,20 @@ ca05 is accepted and closed. The remaining chain is blocked by the existing
 is discovered after staging, with no accepted pre-stage prefix contract within
 its current scope. Keep this ticket open and its remaining dependencies intact;
 no implementation, acceptance claim or new follow-up ticket is added here.
+
+### Current-source contract audit, 2026-09-15
+
+The `tic-5b3e` physical-admission dependency is closed at `9d14de92` and merged
+at `dec2dafc`. The read-only source and existing-test audit found every clause
+satisfied compositionally: admitted whole-decision bytes and retained plan
+capacity, format-bounded relational chunks, provider-owned encoding, common
+prepared direct/group ownership, exact append/force/publication identity,
+terminal cleanup, recovery, and allocation/copy behavior. No new build, test,
+workload, code, fixture, or tool change was made for this investigation.
+An independent integrator review checked the source trace and clause matrix and
+accepted the compositional disposition.
+
+The complete clause matrix and its evidence limits are in
+[the WAL contract record](../delivery/evidence/2026-09-15-tic-6f81-wal-contract.md).
+No separately scoped gap remains; `tic-92e3` may proceed without a new
+dependency or duplicate WAL mechanism.

@@ -46,7 +46,7 @@ Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled cor
 
 The investigation must use current mapped WAL, atomic group footer and range-sync owners (6a91/9f2c/c7e2), including mapped writes concurrent with captured-range force, footer ordering, mapping lifetime and rotation/close. A positional-write-only provider proof is insufficient. Reconcile the accepted historical b368 design against these changes and record one complete execution/provider contract before f1bb starts.
 
-### Current WAL readiness, 2026-09-14
+### Historical WAL readiness, 2026-09-14 (superseded)
 
 The user deferred P0 scaling/accounting and removed it from WAL admission.
 ca05 is accepted and closed. The remaining chain is blocked by the existing
@@ -54,3 +54,11 @@ ca05 is accepted and closed. The remaining chain is blocked by the existing
 is discovered after staging, with no accepted pre-stage prefix contract within
 its current scope. Keep this ticket open and its remaining dependencies intact;
 no implementation, acceptance claim or new follow-up ticket is added here.
+
+### Current WAL readiness, 2026-09-15
+
+`tic-5b3e` is closed with exact per-page admission and prefix rollback.
+`tic-6f81` is closed with the reviewed chunked-WAL contract satisfied by current
+source and existing evidence. This ticket is now the next force-overlap
+dependency; its accepted execution/provider/resource contract remains required
+before `tic-f1bb` implementation.
