@@ -2,6 +2,7 @@ package io.riverdb.platform.file.nio;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.concurrent.FatalStateFence;
@@ -12,9 +13,15 @@ import io.riverdb.platform.file.FileIoMode;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -138,6 +145,296 @@ final class NioMappedFileTest {
   }
 
   @Test
+  void heldRangeForceAllowsSameWindowSuffixAndRetainsItsDirt(@TempDir Path root)
+      throws Exception {
+    NioDurableDirectory directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("mapped", FileIoMode.MAPPED, operation));
+    NioDurableFile file = (NioDurableFile) operation.file();
+    long prefixPosition = 8 * 1024;
+    byte[] prefix = {31, 32, 33, 34};
+    long suffixPosition = 16 * 1024;
+    byte[] suffix = {41, 42, 43, 44};
+    write(file, prefixPosition, prefix);
+
+    CountDownLatch captured = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicBoolean firstCapturedDirt = new AtomicBoolean();
+    file.installMappedForceGate((dataDirty, metadataDirty) -> {
+      firstCapturedDirt.set(dataDirty);
+      captured.countDown();
+      awaitGate(release);
+    });
+    AtomicReference<StatusCode> forceStatus = new AtomicReference<>();
+    Thread forceThread = Thread.ofVirtual().start(() -> forceStatus.set(
+        file.force(prefixPosition, prefixPosition + prefix.length, ForceMode.CONTENT)));
+    assertTrue(captured.await(5, TimeUnit.SECONDS));
+
+    IoResult suffixResult = new IoResult();
+    AtomicReference<StatusCode> suffixStatus = new AtomicReference<>();
+    CountDownLatch suffixDone = new CountDownLatch(1);
+    Thread suffixThread = Thread.ofVirtual().start(() -> {
+      suffixStatus.set(file.write(suffixPosition, ByteBuffer.wrap(suffix), suffixResult));
+      suffixDone.countDown();
+    });
+    try {
+      assertTrue(suffixDone.await(5, TimeUnit.SECONDS));
+      assertEquals(StatusCode.OK, suffixStatus.get());
+      assertEquals(suffix.length, suffixResult.bytesTransferred());
+    } finally {
+      release.countDown();
+    }
+    join(forceThread);
+    join(suffixThread);
+    assertTrue(firstCapturedDirt.get());
+    assertEquals(StatusCode.OK, forceStatus.get());
+
+    AtomicBoolean secondCapturedDirt = new AtomicBoolean();
+    file.installMappedForceGate((dataDirty, metadataDirty) -> secondCapturedDirt.set(dataDirty));
+    assertEquals(StatusCode.OK,
+        file.force(suffixPosition, suffixPosition + suffix.length, ForceMode.CONTENT));
+    assertTrue(secondCapturedDirt.get());
+    file.installMappedForceGate(null);
+    assertEquals(StatusCode.OK, file.close());
+
+    assertEquals(StatusCode.OK, directory.reopen("mapped", FileIoMode.MAPPED, operation));
+    DurableFile reopened = operation.file();
+    assertArrayEquals(prefix, read(reopened, prefixPosition, prefix.length));
+    assertArrayEquals(suffix, read(reopened, suffixPosition, suffix.length));
+    assertEquals(StatusCode.OK, reopened.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void boundaryCrossingWriteJoinsHeldForceWithoutPartialRetry(@TempDir Path root)
+      throws Exception {
+    NioDurableDirectory directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("mapped", FileIoMode.MAPPED, operation));
+    NioDurableFile file = (NioDurableFile) operation.file();
+    long prefixPosition = WINDOW_BYTES - 8;
+    byte[] prefix = {51, 52, 53, 54};
+    long suffixPosition = prefixPosition + prefix.length;
+    byte[] suffix = {61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72};
+    write(file, prefixPosition, prefix);
+
+    CountDownLatch captured = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    file.installMappedForceGate((dataDirty, metadataDirty) -> {
+      captured.countDown();
+      awaitGate(release);
+    });
+    AtomicReference<StatusCode> forceStatus = new AtomicReference<>();
+    Thread forceThread = Thread.ofVirtual().start(() -> forceStatus.set(
+        file.force(prefixPosition, suffixPosition, ForceMode.CONTENT)));
+    assertTrue(captured.await(5, TimeUnit.SECONDS));
+
+    IoResult writeResult = new IoResult();
+    AtomicReference<StatusCode> writeStatus = new AtomicReference<>();
+    CountDownLatch writeDone = new CountDownLatch(1);
+    Thread writer = Thread.ofVirtual().start(() -> {
+      writeStatus.set(file.write(suffixPosition, ByteBuffer.wrap(suffix), writeResult));
+      writeDone.countDown();
+    });
+    try {
+      assertTrue(awaitBytes(file, suffixPosition, Arrays.copyOf(suffix, 4)));
+      assertFalse(writeDone.await(100, TimeUnit.MILLISECONDS));
+      writer.interrupt();
+    } finally {
+      release.countDown();
+    }
+    join(forceThread);
+    join(writer);
+    assertEquals(StatusCode.OK, forceStatus.get());
+    assertEquals(StatusCode.OK, writeStatus.get());
+    assertEquals(suffix.length, writeResult.bytesTransferred());
+    assertTrue(writer.isInterrupted());
+    file.installMappedForceGate(null);
+    assertEquals(StatusCode.OK, file.force(ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.OK, file.close());
+
+    assertEquals(StatusCode.OK, directory.reopen("mapped", FileIoMode.MAPPED, operation));
+    DurableFile reopened = operation.file();
+    assertArrayEquals(suffix, read(reopened, suffixPosition, suffix.length));
+    assertEquals(StatusCode.OK, reopened.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void mappedForceFailureRetainsDirtAndReleasesLifecyclePin(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("mapped", FileIoMode.MAPPED, operation));
+    NioDurableFile file = (NioDurableFile) operation.file();
+    long position = 12 * 1024;
+    byte[] payload = {81, 82, 83, 84};
+    write(file, position, payload);
+
+    AtomicBoolean failedCapturedData = new AtomicBoolean();
+    AtomicBoolean failedCapturedMetadata = new AtomicBoolean();
+    file.installMappedForceGate((dataDirty, metadataDirty) -> {
+      failedCapturedData.set(dataDirty);
+      failedCapturedMetadata.set(metadataDirty);
+      throw new IOException("injected mapped force failure");
+    });
+    assertEquals(StatusCode.IO_FAILURE,
+        file.force(position, position + payload.length, ForceMode.CONTENT_AND_METADATA));
+    assertTrue(failedCapturedData.get());
+    assertTrue(failedCapturedMetadata.get());
+
+    AtomicBoolean retryCapturedData = new AtomicBoolean();
+    AtomicBoolean retryCapturedMetadata = new AtomicBoolean();
+    file.installMappedForceGate((dataDirty, metadataDirty) -> {
+      retryCapturedData.set(dataDirty);
+      retryCapturedMetadata.set(metadataDirty);
+    });
+    assertEquals(StatusCode.OK,
+        file.force(position, position + payload.length, ForceMode.CONTENT_AND_METADATA));
+    assertTrue(retryCapturedData.get());
+    assertTrue(retryCapturedMetadata.get());
+    file.installMappedForceGate(null);
+    assertEquals(StatusCode.OK, file.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void closeWaitsForMappedForcePinBeforeRetiringMapping(@TempDir Path root) throws Exception {
+    NioDurableDirectory directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("mapped", FileIoMode.MAPPED, operation));
+    NioDurableFile file = (NioDurableFile) operation.file();
+    long position = 8 * 1024;
+    write(file, position, new byte[] {91, 92, 93, 94});
+
+    CountDownLatch captured = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    file.installMappedForceGate((dataDirty, metadataDirty) -> {
+      captured.countDown();
+      awaitGate(release);
+    });
+    AtomicReference<StatusCode> forceStatus = new AtomicReference<>();
+    Thread forceThread = Thread.ofVirtual().start(() -> forceStatus.set(
+        file.force(position, position + 4, ForceMode.CONTENT_AND_METADATA)));
+    assertTrue(captured.await(5, TimeUnit.SECONDS));
+
+    AtomicReference<StatusCode> queuedForceStatus = new AtomicReference<>();
+    Thread queuedForceThread = Thread.ofVirtual().start(() -> queuedForceStatus.set(
+        file.force(position, position + 4, ForceMode.CONTENT_AND_METADATA)));
+    assertTrue(awaitThreadState(queuedForceThread, Thread.State.WAITING));
+
+    AtomicReference<StatusCode> closeStatus = new AtomicReference<>();
+    CountDownLatch closeEntered = new CountDownLatch(1);
+    CountDownLatch closeDone = new CountDownLatch(1);
+    Thread closeThread = Thread.ofVirtual().start(() -> {
+      closeEntered.countDown();
+      closeStatus.set(file.close());
+      closeDone.countDown();
+    });
+    assertTrue(closeEntered.await(5, TimeUnit.SECONDS));
+    try {
+      assertTrue(awaitClosed(file, position));
+      assertFalse(closeDone.await(100, TimeUnit.MILLISECONDS));
+    } finally {
+      release.countDown();
+    }
+    join(forceThread);
+    join(queuedForceThread);
+    join(closeThread);
+    assertEquals(StatusCode.OK, forceStatus.get());
+    assertEquals(StatusCode.CLOSED, queuedForceStatus.get());
+    assertEquals(StatusCode.OK, closeStatus.get());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void generationChangeJoinsForceWithoutDirectoryFileLockInversion(@TempDir Path root)
+      throws Exception {
+    NioDurableDirectory directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("mapped", FileIoMode.MAPPED, operation));
+    NioDurableFile file = (NioDurableFile) operation.file();
+    long position = 8 * 1024;
+    write(file, position, new byte[] {95, 96, 97, 98});
+
+    CountDownLatch captured = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    file.installMappedForceGate((dataDirty, metadataDirty) -> {
+      captured.countDown();
+      awaitGate(release);
+    });
+    AtomicReference<StatusCode> forceStatus = new AtomicReference<>();
+    Thread forceThread = Thread.ofVirtual().start(() -> forceStatus.set(
+        file.force(position, position + 4, ForceMode.CONTENT_AND_METADATA)));
+    assertTrue(captured.await(5, TimeUnit.SECONDS));
+
+    AtomicReference<StatusCode> queuedForceStatus = new AtomicReference<>();
+    Thread queuedForceThread = Thread.ofVirtual().start(() -> queuedForceStatus.set(
+        file.force(position, position + 4, ForceMode.CONTENT_AND_METADATA)));
+    assertTrue(awaitThreadState(queuedForceThread, Thread.State.WAITING));
+
+    AtomicReference<StatusCode> generationStatus = new AtomicReference<>();
+    Thread generationThread = Thread.ofVirtual().start(
+        () -> generationStatus.set(directory.advanceGeneration()));
+    assertTrue(awaitThreadState(generationThread, Thread.State.WAITING));
+    release.countDown();
+
+    join(forceThread);
+    join(queuedForceThread);
+    join(generationThread);
+    assertEquals(StatusCode.OK, forceStatus.get());
+    assertEquals(StatusCode.CANCELLED, queuedForceStatus.get());
+    assertEquals(StatusCode.OK, generationStatus.get());
+    assertEquals(StatusCode.CLOSED, file.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void truncateWaitsForMappedForcePinBeforeRemapping(@TempDir Path root) throws Exception {
+    NioDurableDirectory directory = openDirectory(root);
+    DirectoryOperationResult operation = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("mapped", FileIoMode.MAPPED, operation));
+    NioDurableFile file = (NioDurableFile) operation.file();
+    long position = WINDOW_BYTES + 8;
+    write(file, position, new byte[] {101, 102, 103, 104});
+
+    CountDownLatch captured = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    file.installMappedForceGate((dataDirty, metadataDirty) -> {
+      captured.countDown();
+      awaitGate(release);
+    });
+    AtomicReference<StatusCode> forceStatus = new AtomicReference<>();
+    Thread forceThread = Thread.ofVirtual().start(() -> forceStatus.set(
+        file.force(position, position + 4, ForceMode.CONTENT_AND_METADATA)));
+    assertTrue(captured.await(5, TimeUnit.SECONDS));
+
+    AtomicReference<StatusCode> truncateStatus = new AtomicReference<>();
+    CountDownLatch truncateEntered = new CountDownLatch(1);
+    CountDownLatch truncateDone = new CountDownLatch(1);
+    Thread truncateThread = Thread.ofVirtual().start(() -> {
+      truncateEntered.countDown();
+      truncateStatus.set(file.truncate(4096));
+      truncateDone.countDown();
+    });
+    assertTrue(truncateEntered.await(5, TimeUnit.SECONDS));
+    try {
+      assertFalse(truncateDone.await(100, TimeUnit.MILLISECONDS));
+    } finally {
+      release.countDown();
+    }
+    join(forceThread);
+    join(truncateThread);
+    assertEquals(StatusCode.OK, forceStatus.get());
+    assertEquals(StatusCode.OK, truncateStatus.get());
+    FileSizeResult size = new FileSizeResult();
+    assertEquals(StatusCode.OK, file.size(size));
+    assertEquals(4096, size.sizeBytes());
+    file.installMappedForceGate(null);
+    assertEquals(StatusCode.OK, file.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
   void supportsSparseWriteBeyondTwoGiBWithSmallBuffers(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     DirectoryOperationResult operation = new DirectoryOperationResult();
@@ -245,5 +542,52 @@ final class NioMappedFileTest {
       bytes[index] = (byte) (seed + index * 13);
     }
     return bytes;
+  }
+
+  private static boolean awaitBytes(NioDurableFile file, long position, byte[] expected)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    do {
+      if (Arrays.equals(expected, read(file, position, expected.length))) return true;
+      Thread.onSpinWait();
+    } while (System.nanoTime() < deadline);
+    return false;
+  }
+
+  private static boolean awaitClosed(NioDurableFile file, long position)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    IoResult result = new IoResult();
+    do {
+      StatusCode status = file.read(position, ByteBuffer.allocate(1), result);
+      if (status == StatusCode.CLOSED) return true;
+      if (status != StatusCode.OK) return false;
+      Thread.onSpinWait();
+    } while (System.nanoTime() < deadline);
+    return false;
+  }
+
+  private static boolean awaitThreadState(Thread thread, Thread.State expected)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    do {
+      if (thread.getState() == expected) return true;
+      Thread.onSpinWait();
+    } while (System.nanoTime() < deadline);
+    return false;
+  }
+
+  private static void awaitGate(CountDownLatch release) throws IOException {
+    try {
+      release.await();
+    } catch (InterruptedException failure) {
+      Thread.currentThread().interrupt();
+      throw new IOException("interrupted while holding mapped force", failure);
+    }
+  }
+
+  private static void join(Thread thread) throws InterruptedException {
+    thread.join(TimeUnit.SECONDS.toMillis(5));
+    assertFalse(thread.isAlive());
   }
 }

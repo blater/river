@@ -138,6 +138,12 @@ final class IndexedPageSet {
     return cache.installPreparedPages(commitSequences, memberCount, start, end);
   }
   StatusCode releasePreparedBatch() { return cache.releasePreparedBatch(); }
+  StatusCode transferPreparedBatch(long ownerToken, IndexedCountResult result) {
+    return cache.transferPreparedBatch(ownerToken, result);
+  }
+  StatusCode releaseDurabilityChain(long ownerToken, int head) {
+    return cache.releaseDurabilityChain(ownerToken, head);
+  }
   void cancelPreparedBatch() { cache.cancelPreparedBatch(); }
 
   StatusCode markCurrentChanged(int pageId, long start, long end) {

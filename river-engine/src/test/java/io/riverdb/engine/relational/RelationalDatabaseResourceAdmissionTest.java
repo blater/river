@@ -13,6 +13,7 @@ import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.runtime.DatabaseResourcePlan;
 import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
+import io.riverdb.engine.runtime.DatabaseCommitPipelineRetainedLayout;
 import io.riverdb.engine.runtime.RuntimeResourceRoot;
 import io.riverdb.engine.EmbeddedDatabase;
 import io.riverdb.engine.EmbeddedDatabaseOpenResult;
@@ -25,6 +26,7 @@ import io.riverdb.engine.sql.SqlSessionOpenResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -105,10 +107,40 @@ final class RelationalDatabaseResourceAdmissionTest {
             directory, DATABASE, GENERATION, 1, opened));
     assertEquals(
         plan.lockProviderBytes() + plan.indexedPageCache().maximumRetainedBytes()
-            + plan.versionWorkspace().maximumRetainedBytes(),
+            + plan.versionWorkspace().maximumRetainedBytes()
+            + DatabaseCommitPipelineRetainedLayout.retainedBytes(1),
         opened.database().retainedDatabaseAccountedBytes());
     assertEquals(StatusCode.OK, opened.database().close());
     assertEquals(0, root.admittedAccountedBytes());
+  }
+
+  @Test
+  void commitPipelineBudgetAdmitsExactlyAndFailsOneByteBelowBeforeFilesOpen(
+      @TempDir Path directory) throws Exception {
+    DatabaseResourcePlan sizing = boundaryPlan(100_000_000);
+    long mandatory = sizing.lockProviderBytes()
+        + sizing.indexedPageCache().maximumRetainedBytes()
+        + sizing.versionWorkspace().maximumRetainedBytes();
+    long exactBytes = mandatory + DatabaseCommitPipelineRetainedLayout.retainedBytes(8);
+
+    DatabaseResourcePlan exact = boundaryPlan(exactBytes);
+    RuntimeResourceRoot exactRoot = root(exactBytes);
+    EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
+    Path exactDirectory = Files.createDirectory(directory.resolve("exact"));
+    assertEquals(StatusCode.OK,
+        EmbeddedDatabase.create(
+            exactRoot, exact, exactDirectory, DATABASE, GENERATION, 8, opened));
+    assertEquals(exactBytes, opened.database().retainedDatabaseAccountedBytes());
+    assertEquals(StatusCode.OK, opened.database().close());
+
+    DatabaseResourcePlan below = boundaryPlan(exactBytes - 1);
+    RuntimeResourceRoot belowRoot = root(exactBytes - 1);
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED,
+        EmbeddedDatabase.create(
+            belowRoot, below, directory.resolve("below"), DATABASE, GENERATION, 8, opened));
+    assertNull(opened.database());
+    assertFalse(java.nio.file.Files.exists(directory.resolve("below")));
+    assertEquals(0, belowRoot.admittedAccountedBytes());
   }
 
   @Test
@@ -382,5 +414,18 @@ final class RelationalDatabaseResourceAdmissionTest {
         .maximumDelivery(
             Math.min(1_000, writeEntries), 100,
             8_000_000);
+  }
+
+  private static DatabaseResourcePlan boundaryPlan(long maximumBytes) {
+    DatabaseResourcePlanRequest request = new DatabaseResourcePlanRequest()
+        .memory(maximumBytes, 0, 0, 0, 1)
+        .lockProviderBytes(8_000_000)
+        .versionWorkspaceBytes(1_000_000)
+        .indexedPageCache(32_000_000, 8_000_000)
+        .capacity(8, 100, 100, 1_000_000)
+        .maximumDelivery(1, 1, 1);
+    DatabaseResourcePlan.Result result = new DatabaseResourcePlan.Result();
+    assertEquals(StatusCode.OK, DatabaseResourcePlan.compile(request, result));
+    return result.plan();
   }
 }

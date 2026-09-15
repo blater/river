@@ -59,6 +59,11 @@ final class IndexedGroupCommitMetrics {
     if (capturing) capture.recordSuccessfulGroup(count);
   }
 
+  synchronized void recordPhysicalForceOverlap() {
+    values.recordPhysicalForceOverlap();
+    if (capturing) capture.recordPhysicalForceOverlap();
+  }
+
   synchronized void recordDirectCommit(IndexedDirectCommitReason reason) {
     values.recordDirectCommit(reason);
     if (capturing) capture.recordDirectCommit(reason);

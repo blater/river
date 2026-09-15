@@ -12,7 +12,6 @@ final class LocalWalCommitGroup {
   private long firstSequence;
   private long lastSequence;
   private int digest;
-  private int pendingDigest;
 
   ByteBuffer footer() { return footer; }
   CRC32C checksum() { return checksum; }
@@ -20,7 +19,6 @@ final class LocalWalCommitGroup {
   long firstSequence() { return firstSequence; }
   long lastSequence() { return lastSequence; }
   int digest() { return digest; }
-  int pendingDigest() { return pendingDigest; }
 
   void begin(long sequence) {
     checksum.reset();
@@ -46,13 +44,10 @@ final class LocalWalCommitGroup {
 
   int checksumValue() { return (int) checksum.getValue(); }
 
-  void setPendingDigest(int value) { pendingDigest = value; }
   void setDigest(int value) { digest = value; }
-  void commitPendingDigest() { digest = pendingDigest; }
   void resetPending() {
     recordBytes = 0;
     firstSequence = 0;
     lastSequence = 0;
-    pendingDigest = 0;
   }
 }

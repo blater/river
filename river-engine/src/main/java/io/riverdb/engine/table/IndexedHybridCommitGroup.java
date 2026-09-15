@@ -235,7 +235,7 @@ final class IndexedHybridCommitGroup {
 
   StatusCode installPublication() {
     if (!active || !prepared) return StatusCode.INVALID_EXTERNAL_INPUT;
-    store.pendingDurabilitySequence = sequences[0];
+    if (wal.forced()) store.pendingDurabilitySequence = sequences[0];
     StatusCode status = publication.install(wal);
     if (status.isOk()) {
       if (wal.forced()) status = completeDurability();
@@ -243,6 +243,60 @@ final class IndexedHybridCommitGroup {
       fenceInstalledGroup();
     }
     return status;
+  }
+
+  StatusCode sealPublication(
+      long ownerToken, IndexedCountResult frameHead, IndexedCountResult requiredWalEnd) {
+    if (!active || !prepared || ownerToken <= 0 || frameHead == null || requiredWalEnd == null
+        || wal.forced()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    frameHead.reset();
+    requiredWalEnd.reset();
+    StatusCode status = pages.transferPreparedBatch(ownerToken, frameHead);
+    if (!status.isOk()) {
+      cleanupPreparedWork();
+      fenceInstalledGroup();
+      return status;
+    }
+    try {
+      status = wal.seal(requiredWalEnd);
+    } catch (Throwable unexpected) {
+      pages.releaseDurabilityChain(ownerToken, (int) frameHead.value());
+      fenceInstalledGroup();
+      throw unexpected;
+    }
+    if (!status.isOk()) {
+      StatusCode release = pages.releaseDurabilityChain(
+          ownerToken, (int) frameHead.value());
+      if (!release.isOk()) status = release;
+      fenceInstalledGroup();
+      return status;
+    }
+    pages.resetChanges();
+    kernel.clearOperationVersions();
+    publication.reset();
+    finishInstalled();
+    return StatusCode.OK;
+  }
+
+  StatusCode enableForceWorker(Thread completionOwner) {
+    return wal.enableForceWorker(completionOwner);
+  }
+
+  StatusCode submitSealedForce() {
+    return wal.submitSealedForce(LocalWalForceCause.SHARED_GROUP);
+  }
+
+  boolean forceResultReady() { return wal.forceResultReady(); }
+  boolean forceActive() { return wal.forceActive(); }
+  long submittedForceEnd() { return wal.submittedEnd(); }
+  long submittedForceNanos() { return wal.submittedForceNanos(); }
+  StatusCode completeSubmittedForce() { return wal.completeSubmittedForce(); }
+  StatusCode releaseSubmittedForce() { return wal.release(); }
+
+  StatusCode releaseDurabilityChain(long ownerToken, int frameHead) {
+    return pages.releaseDurabilityChain(ownerToken, frameHead);
   }
 
   StatusCode completeDurability() {
@@ -264,7 +318,7 @@ final class IndexedHybridCommitGroup {
       fenceInstalledGroup();
       return StatusCode.FENCED;
     }
-    wal.reset();
+    wal.resetAppend();
     cancelUnforcedGroup();
     return StatusCode.OK;
   }

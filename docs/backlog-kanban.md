@@ -13,7 +13,9 @@ Two of the three bounded performance epics are complete:
   The user selected local delivery with no remote. Pipelining is rejected;
   the separate rollback/retry safety correction is integrated3d70a826.
   [Rian](tickets/tic-rian.md) records reviewed workload and compatibility evidence.
-- [WAL overlap](tickets/tic-rowlie.md) remains open. The user deferred the
+- [WAL overlap](tickets/tic-rowlie.md) remains open after accepting the bounded
+  [force-overlap mechanism](tickets/tic-f1bb.md). The next ordered work is the
+  evidence-only [lock-scope audit](tickets/tic-4d14.md). The user deferred the
   [P0 scaling and accounting work](tickets/tic-1dda.md); it is not a WAL
   prerequisite. Its historical evidence includes the accepted
   [general SQL concurrency reproducer](tickets/tic-b1b7.md), covering controlled
@@ -54,21 +56,22 @@ investigation. Actual crash execution and P0 scaling/accounting remain deferred.
 
 ## Impact-first WAL sequence — 2026-09-14
 
-The immediate performance objective is [tic-f1bb](tickets/tic-f1bb.md): overlap
-successor physical work with an outstanding WAL force. It is the primary runtime
-optimization and is now implementation-ready through its declared dependencies.
+The accepted [tic-f1bb](tickets/tic-f1bb.md) mechanism overlaps successor physical
+work with an outstanding WAL force. The immediate next objective is the bounded
+evidence-only [tic-4d14 lock-scope audit](tickets/tic-4d14.md).
 The user explicitly removed P0 as a WAL prerequisite and deferred its
 scaling/accounting work.
 
 | Scheduling order | Existing tickets | Contribution and boundary |
 | --- | --- | --- |
 | Deferred outside WAL admission | tic-1dda | Scaling revalidation and warmup accounting remain incomplete and are explicitly deferred by the user; neither blocks WAL work. |
-| Critical path to force overlap | tic-f1bb | ca05, 5b3e, 6f81, and 92e3 are closed prerequisites. Deliver the accepted bounded force-overlap mechanism with demonstrated runtime benefit. |
-| Deferred, conditional optimization | tic-4d14 → tic-845d | After the force-overlap decision, consider exactly one proved redundant lock rule. No current cycle proves a lock is redundant. |
+| Accepted force overlap | tic-f1bb | Bounded physical-work/force overlap passed correctness, review, clean-test and matched diagnostic gates. |
+| Immediate evidence frontier | tic-4d14 → tic-845d | Audit lock scope, then consider exactly one proved redundant lock rule. No current cycle proves a lock is redundant. |
 | Final acceptance | tic-7a5a | Evaluate the accepted mechanisms once its existing dependencies are resolved; do not run a promotion campaign ahead of implementation. |
 | Incident priority above WAL | tic-osgiliath / tic-emeldir | Reproduce returned checkpoint failures, verify cleanup, and identify the initiating kernel write. Formal comparison/reporting remains deferred. |
 
-The lock stream is deferred, not removed from epic completion dependencies.
+The lock audit is now the immediate evidence task; any implementation remains
+conditional on one exact redundant rule proved by that audit.
 tic-ca05 is closed: its existing logical contract passed review and 43 focused
 tests. tic-5b3e now admits exact physical pages before mutation, publishes the
 safe cohort prefix, rolls back only the pressure-rejected member, and requeues
@@ -76,7 +79,7 @@ its suffix in order. Its direct/group, terminal failure, recovery and matched
 no-checkpoint evidence passed. tic-6f81 is closed with every chunked-WAL clause
 satisfied by the reviewed current-source contract. tic-92e3 is closed with its
 reviewed NIO force, execution, ownership, and retained-resource contract;
-tic-f1bb is the next implementation-ready delivery. P0 remains unpassed and
+tic-f1bb is accepted and tic-4d14 is the next ordered delivery. P0 remains unpassed and
 deferred; its missing accounting does not require a new ticket on this path.
 Do not reopen completed execution/protocol candidates, add speculative optimizations,
 or manufacture production changes for an already satisfied prerequisite. Required

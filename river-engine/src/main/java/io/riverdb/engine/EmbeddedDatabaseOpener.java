@@ -11,6 +11,7 @@ import io.riverdb.engine.control.DatabaseControlStore;
 import io.riverdb.engine.runtime.DatabaseResourceGovernor;
 import io.riverdb.engine.runtime.DatabaseResourcePlan;
 import io.riverdb.engine.runtime.DatabaseProviderLease;
+import io.riverdb.engine.runtime.DatabaseCommitPipelineRetainedLayout;
 import io.riverdb.engine.runtime.RuntimeResourceRoot;
 import io.riverdb.engine.table.IndexedTable;
 import io.riverdb.engine.table.IndexedTableOpenResult;
@@ -119,8 +120,13 @@ final class EmbeddedDatabaseOpener {
     status = resourceRoot.admit(resourcePlan, admitted);
     if (!status.isOk()) return status;
     DatabaseProviderLease providerLease = new DatabaseProviderLease();
-    status = admitted.governor().claimDatabaseProviders(
-        admittedDiagnostics.retainedPayloadBytes(), providerLease);
+    long pipelineBytes = DatabaseCommitPipelineRetainedLayout.retainedBytes(
+        maximumActiveTransactions);
+    long diagnosticBytes = admittedDiagnostics.retainedPayloadBytes();
+    long providerBytes = pipelineBytes < 0 || diagnosticBytes > Long.MAX_VALUE - pipelineBytes
+        ? -1 : pipelineBytes + diagnosticBytes;
+    status = providerBytes < 0 ? StatusCode.RESOURCE_EXHAUSTED
+        : admitted.governor().claimDatabaseProviders(providerBytes, providerLease);
     if (!status.isOk()) {
       admitted.governor().abandonAfterOpenFailure();
       return status;

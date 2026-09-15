@@ -31,6 +31,10 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
   private long publicationInstallNanos;
   private StatusCode publicationInstallStatus;
   private int completionCount;
+  private int retainedCount;
+  private boolean durabilityBlocked;
+  private final IndexedCountResult frameHead = new IndexedCountResult();
+  private final IndexedCountResult requiredWalEnd = new IndexedCountResult();
 
   IndexedGroupCommitBatch(
       TransactionManager transactionManager,
@@ -58,19 +62,44 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
     outcomes[index] = request.outcome;
   }
 
-  void process(int count) {
+  void addPublished(
+      int index, IndexedGroupCommitRequest request, long commitSequence, long committedRowCount) {
+    requests[index] = request;
+    transactions[index] = request.transaction;
+    outcomes[index] = request.outcome;
+    commitSequences[index] = commitSequence;
+    committedRows[index] = committedRowCount;
+  }
+
+  void process(int count, IndexedDurabilityCohortRing pending) {
     completionCount = count;
+    retainedCount = 0;
+    durabilityBlocked = false;
     if (!requests[0].groupable) {
       for (int index = 0; index < count; index++) {
         commitDirectly(index, IndexedDirectCommitReason.INITIALLY_INELIGIBLE);
       }
       return;
     }
-    int admitted = appendSharedGroup(count);
-    if (admitted > 0 && publishPrepared(admitted)) completeDurability(admitted);
+    StatusCode retention = pending.admissionStatus(count);
+    if (!retention.isOk()) {
+      if (pending.empty()) {
+        completionCount = 1;
+        recordAttemptedGroup(1);
+        metrics.recordGroupFailure(
+            IndexedGroupFailureStage.PREFLIGHT, retention, completionCount);
+        abortPreparedGroup(completionCount, retention);
+      } else {
+        completionCount = 0;
+        durabilityBlocked = true;
+      }
+      return;
+    }
+    int admitted = appendSharedGroup(count, !pending.empty());
+    if (admitted > 0 && publishPrepared(admitted, pending)) retainPublished(admitted, pending);
   }
 
-  int appendSharedGroup(int count) {
+  private int appendSharedGroup(int count, boolean pendingDurability) {
     completionCount = count;
     long started = System.nanoTime();
     StatusCode status = table.preflightHybridCommitGroup(
@@ -87,6 +116,11 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
       completionCount = admitted;
       return appendAcceptedGroup(admitted);
     }
+    if (pressure && admission.capacitySplit() && admitted == 0 && pendingDurability) {
+      completionCount = 0;
+      durabilityBlocked = true;
+      return 0;
+    }
     if (pressure && admission.capacitySplit() && admitted == 0) completionCount = 1;
     if (status.isOk()) status = StatusCode.INVARIANT_BROKEN;
     recordAttemptedGroup(completionCount);
@@ -96,6 +130,9 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
   }
 
   int completionCount() { return completionCount; }
+  int handledCount() { return completionCount + retainedCount; }
+  int retainedCount() { return retainedCount; }
+  boolean durabilityBlocked() { return durabilityBlocked; }
 
   IndexedGroupCommitRequest takeDeferred(int index) {
     IndexedGroupCommitRequest request = requests[index];
@@ -142,7 +179,7 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
     return count;
   }
 
-  boolean publishPrepared(int count) {
+  private boolean publishPrepared(int count, IndexedDurabilityCohortRing pending) {
     long publicationStarted = System.nanoTime();
     long started = publicationStarted;
     StatusCode status = table.prepareGroupPublication();
@@ -166,6 +203,8 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
     publicationInstallAttempted = false;
     publicationInstallNanos = 0;
     publicationInstallStatus = null;
+    boolean installedBarrier = pending.empty();
+    if (installedBarrier) table.pendingDurabilitySequence(commitSequences[0]);
     started = System.nanoTime();
     status = manager.publishCommitGroup(
         transactions, outcomes, commitSequences, count, this, completionTimings);
@@ -226,6 +265,9 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
         IndexedCommitStage.GROUP_PUBLICATION,
         System.nanoTime() - publicationStarted);
     if (!status.isOk()) {
+      if (installedBarrier) {
+        table.pendingDurabilitySequence(pending.firstCommitSequence());
+      }
       table.cancelCommitGroup();
       metrics.recordGroupFailure(IndexedGroupFailureStage.PUBLICATION, status, count);
       setAll(count, status);
@@ -234,30 +276,28 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
     return true;
   }
 
-  void completeDurability(int count) {
-    StatusCode status = force();
-    if (!status.isOk()) {
-      failGroup(count, IndexedGroupFailureStage.FORCE, status);
-      return;
-    }
-    status = table.completeGroupDurability();
-    if (status.isOk()) {
-      long started = System.nanoTime();
-      status = manager.completeCommitGroup(transactions, outcomes, count);
-      metrics.recordStage(IndexedCommitPath.SHARED_GROUP,
-          IndexedCommitStage.GROUP_OUTCOME_PUBLICATION, System.nanoTime() - started);
-    }
-    if (!status.isOk()) {
-      table.fenceCommitWriter();
-      failGroup(count, IndexedGroupFailureStage.PUBLICATION, status);
-      return;
-    }
+  StatusCode completePublished(int count) {
+    long started = System.nanoTime();
+    StatusCode status = manager.completeCommitGroup(transactions, outcomes, count);
+    metrics.recordStage(IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_OUTCOME_PUBLICATION, System.nanoTime() - started);
+    if (!status.isOk()) return status;
     for (int index = 0; index < count; index++) {
       requests[index].session.recordGroupPublication(
           committedRows[index], commitSequences[index]);
     }
     metrics.recordSuccessfulGroup(count);
     setAll(count, StatusCode.OK);
+    completionCount = count;
+    return StatusCode.OK;
+  }
+
+  StatusCode failPublished(int count, StatusCode failure) {
+    StatusCode terminal = manager.failForcedCommitGroup(
+        transactions, outcomes, count, failure);
+    setAll(count, terminal.isOk() ? failure : StatusCode.FENCED);
+    completionCount = count;
+    return terminal;
   }
 
   @Override
@@ -308,15 +348,32 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
     setAll(count, terminal.isOk() ? StatusCode.INVARIANT_BROKEN : StatusCode.FENCED);
   }
 
-  private StatusCode force() {
-    long started = System.nanoTime();
-    StatusCode status = table.forceHybridCommitGroup();
-    long elapsed = System.nanoTime() - started;
-    metrics.recordStage(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_FORCE,
-        elapsed);
-    return status;
+  private void retainPublished(int count, IndexedDurabilityCohortRing pending) {
+    long token = pending.nextToken();
+    StatusCode status = pending.admissionStatus(count);
+    if (status.isOk()) {
+      status = table.sealGroupPublication(token, frameHead, requiredWalEnd);
+    }
+    if (status.isOk()) {
+      status = pending.add(
+          requests, commitSequences, committedRows, count, token,
+          requiredWalEnd.value(), (int) frameHead.value());
+    }
+    if (!status.isOk()) {
+      failGroup(count, IndexedGroupFailureStage.FORCE, status);
+      return;
+    }
+    for (int index = 0; index < count; index++) {
+      requests[index] = null;
+      prepared[index] = null;
+      transactions[index] = null;
+      outcomes[index] = null;
+      statuses[index] = null;
+      commitSequences[index] = 0;
+      committedRows[index] = 0;
+    }
+    completionCount = 0;
+    retainedCount = count;
   }
 
   private void failGroup(

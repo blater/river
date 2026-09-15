@@ -64,8 +64,23 @@ final class IndexedRelationalStoreServices {
     return commits.appendHybridGroup(prepared, commitSequences, committedRows, count);
   }
 
-  StatusCode forceHybridGroup() { return commits.forceHybridGroup(); }
-  StatusCode completeHybridGroupDurability() { return commits.completeHybridGroupDurability(); }
+  StatusCode sealHybridGroup(
+      long ownerToken, IndexedCountResult frameHead, IndexedCountResult requiredWalEnd) {
+    return commits.sealHybridGroup(ownerToken, frameHead, requiredWalEnd);
+  }
+  StatusCode enableHybridForceWorker(Thread completionOwner) {
+    return commits.enableHybridForceWorker(completionOwner);
+  }
+  StatusCode submitSealedHybridForce() { return commits.submitSealedHybridForce(); }
+  boolean hybridForceResultReady() { return commits.hybridForceResultReady(); }
+  boolean hybridForceActive() { return commits.hybridForceActive(); }
+  long submittedHybridForceEnd() { return commits.submittedHybridForceEnd(); }
+  long submittedHybridForceNanos() { return commits.submittedHybridForceNanos(); }
+  StatusCode completeSubmittedHybridForce() { return commits.completeSubmittedHybridForce(); }
+  StatusCode releaseSubmittedHybridForce() { return commits.releaseSubmittedHybridForce(); }
+  StatusCode releaseHybridDurabilityChain(long ownerToken, int frameHead) {
+    return commits.releaseHybridDurabilityChain(ownerToken, frameHead);
+  }
   StatusCode prepareHybridGroupPublication() {
     return commits.prepareHybridGroupPublication();
   }

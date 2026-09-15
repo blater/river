@@ -115,12 +115,33 @@ public final class IndexedTable extends IndexedRelationalTableAccess
     return store.appendHybridGroup(prepared, commitSequences, committedRows, count);
   }
 
-  StatusCode forceHybridCommitGroup() { return store.forceHybridGroup(); }
+  synchronized StatusCode sealGroupPublication(
+      long ownerToken, IndexedCountResult frameHead, IndexedCountResult requiredWalEnd) {
+    return store.sealHybridGroup(ownerToken, frameHead, requiredWalEnd);
+  }
 
-  synchronized StatusCode completeGroupDurability() {
-    StatusCode status = store.completeHybridGroupDurability();
+  synchronized StatusCode enableForceWorker(Thread completionOwner) {
+    return store.enableHybridForceWorker(completionOwner);
+  }
+
+  synchronized StatusCode submitSealedForce() { return store.submitSealedHybridForce(); }
+  synchronized boolean forceResultReady() { return store.hybridForceResultReady(); }
+  synchronized boolean forceActive() { return store.hybridForceActive(); }
+  synchronized long submittedForceEnd() { return store.submittedHybridForceEnd(); }
+  synchronized long submittedForceNanos() { return store.submittedHybridForceNanos(); }
+  synchronized StatusCode completeSubmittedForce() {
+    return store.completeSubmittedHybridForce();
+  }
+  synchronized StatusCode releaseSubmittedForce() {
+    return store.releaseSubmittedHybridForce();
+  }
+  synchronized StatusCode releaseDurabilityChain(long ownerToken, int frameHead) {
+    return store.releaseHybridDurabilityChain(ownerToken, frameHead);
+  }
+
+  synchronized void pendingDurabilitySequence(long commitSequence) {
+    store.pendingDurabilitySequence = commitSequence;
     notifyAll();
-    return status;
   }
 
   /** Waits at a result-delivery boundary, releasing the table monitor while force is pending. */

@@ -21,7 +21,6 @@ import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
-import io.riverdb.tx.TransactionGroupCompletionTimings;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
@@ -36,6 +35,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -2051,7 +2051,8 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
-  void preparedGroupRemainsInvisibleUntilAtomicFrontierInstall(@TempDir Path root) {
+  void coordinatorGroupInstallsOneAtomicMemberFrontier(@TempDir Path root)
+      throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
@@ -2059,7 +2060,9 @@ final class IndexedTransactionSessionTest {
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedVacuum vacuum =
         new IndexedVacuum(manager, table);
-    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedGroupCommitCoordinator coordinator =
+        new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
+    IndexedSessionContext context = context(manager, table, coordinator, vacuum);
     IndexedTransactionSession first = session(context);
     IndexedTransactionSession second = session(context);
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
@@ -2067,53 +2070,26 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.insert(0, 352, row(3_520)));
 
-    IndexedTransactionSession[] sessions = {first, second};
-    assertEquals(StatusCode.OK, first.prepareLogicalCommit());
-    assertEquals(StatusCode.OK, second.prepareLogicalCommit());
-    IndexedPreparedLogicalCommit[] prepared = {
-        first.preparedCommit(), second.preparedCommit()
-    };
-    assertEquals(StatusCode.OK, table.reserveHybridCommitGroupCapacity(prepared.length));
-    io.riverdb.tx.Transaction[] transactions = {
-        first.groupTransaction(), second.groupTransaction()
-    };
     TransactionOutcome[] outcomes = {new TransactionOutcome(), new TransactionOutcome()};
-    long[] sequences = new long[2];
-    long[] committedRows = new long[2];
     long previousFrontier = table.currentCommitSequence();
-    assertEquals(StatusCode.OK,
-        manager.prepareCommit(transactions[0], outcomes[0]));
-    assertEquals(StatusCode.OK,
-        manager.prepareCommit(transactions[1], outcomes[1]));
-    assertEquals(
-        StatusCode.OK,
-        table.preflightHybridCommitGroup(
-            prepared, prepared.length, manager.oldestVisibleCommitSequence(),
-            new IndexedPreparedCommitCohortDemand()));
-    assertEquals(StatusCode.OK, manager.beginCommitGroup(transactions, transactions.length));
-    assertEquals(
-        StatusCode.OK,
-        table.appendHybridCommitGroup(
-            prepared, sequences, committedRows, prepared.length));
-    assertEquals(0, first.committedSequence());
-    assertEquals(0, second.committedSequence());
-    assertEquals(StatusCode.OK, table.forceHybridCommitGroup());
-    assertEquals(StatusCode.OK, table.prepareGroupPublication());
-    assertEquals(previousFrontier, table.currentCommitSequence());
-
     IndexedTransactionSession oldSnapshot = session(context);
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, oldSnapshot.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.CONFLICT, oldSnapshot.fetchByKey(0, 351, new HeapRowResult()));
-    assertEquals(
-        StatusCode.OK,
-        manager.publishCommitGroup(
-            transactions, outcomes, sequences, transactions.length, table,
-            new TransactionGroupCompletionTimings()));
-    assertEquals(StatusCode.OK, manager.completeCommitGroup(
-        transactions, outcomes, transactions.length));
-    assertEquals(StatusCode.OK, first.completeCoordinatedCommit(StatusCode.OK));
-    assertEquals(StatusCode.OK, second.completeCoordinatedCommit(StatusCode.OK));
+
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      Future<StatusCode> firstCommit = executor.submit(() -> first.commit(outcomes[0]));
+      awaitQueueEnqueues(coordinator, 1);
+      Future<StatusCode> secondCommit = executor.submit(() -> second.commit(outcomes[1]));
+      assertEquals(StatusCode.OK, firstCommit.get(5, TimeUnit.SECONDS));
+      assertEquals(StatusCode.OK, secondCommit.get(5, TimeUnit.SECONDS));
+    } finally {
+      executor.shutdownNow();
+    }
+    long[] sequences = {outcomes[0].commitSequence(), outcomes[1].commitSequence()};
+    assertEquals(previousFrontier + 1, sequences[0]);
+    assertEquals(previousFrontier + 2, sequences[1]);
     assertEquals(sequences[1], table.currentCommitSequence());
     assertEquals(StatusCode.OK, table.fetchByKeyAt(sequences[0], 0, 351, fetched));
     assertEquals(3_510, value(fetched));
@@ -2131,6 +2107,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, newSnapshot.fetchByKey(0, 352, fetched));
     assertEquals(3_520, value(fetched));
     assertEquals(StatusCode.OK, newSnapshot.abort(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, coordinator.close());
     close(table, wal, directory);
   }
 
@@ -2450,6 +2427,18 @@ final class IndexedTransactionSessionTest {
       Thread.onSpinWait();
     }
     assertEquals(1, manager.waitingLockCount());
+  }
+
+  private static void awaitQueueEnqueues(
+      IndexedGroupCommitCoordinator coordinator, long expected) throws Exception {
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    do {
+      assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
+      if (telemetry.queue().enqueues() >= expected) return;
+      Thread.sleep(1);
+    } while (System.nanoTime() < deadline);
+    assertTrue(false, "commit request was not enqueued");
   }
 
   private static NioDurableDirectory openDirectory(Path root) {

@@ -92,6 +92,7 @@ final class EmbeddedCatalogDurabilityOverlapTest {
     execute(predecessor, "BEGIN");
     execute(predecessor, "UPDATE account SET balance=balance+1 WHERE id=1");
     long enqueues = enqueues(table);
+    long publishedBefore = table.currentCommitSequence();
     TransactionProgramResult result = new TransactionProgramResult();
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       try {
@@ -102,6 +103,8 @@ final class EmbeddedCatalogDurabilityOverlapTest {
         assertTrue(file.entered.await(5, TimeUnit.SECONDS));
         await(() -> enqueues(table) == enqueues + 2,
             "successor must finish descriptor/FK reads and enqueue while force is held");
+        await(() -> table.currentCommitSequence() == publishedBefore + 2,
+            "successor must publish before the earlier force completes");
         assertFalse(first.isDone());
         assertFalse(next.isDone());
         assertEquals(0, result.commitSequence());
@@ -139,7 +142,7 @@ final class EmbeddedCatalogDurabilityOverlapTest {
         file.release.countDown();
         assertEquals(failForce ? StatusCode.IO_FAILURE : StatusCode.OK,
             first.get(5, TimeUnit.SECONDS));
-        assertEquals(failForce ? StatusCode.FENCED : StatusCode.OK,
+        assertEquals(failForce ? StatusCode.IO_FAILURE : StatusCode.OK,
             next.get(5, TimeUnit.SECONDS));
 
         assertEquals(StatusCode.OK, reader.abort(new TransactionOutcome()));
@@ -155,6 +158,7 @@ final class EmbeddedCatalogDurabilityOverlapTest {
         file.release.countDown();
       }
     } finally {
+      if (reader.isTransactionActive()) reader.abort(new TransactionOutcome());
       reader.close();
       catalog.close();
       predecessor.close();
