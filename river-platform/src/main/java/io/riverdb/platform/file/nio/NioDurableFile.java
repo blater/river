@@ -21,6 +21,7 @@ final class NioDurableFile implements DurableFile {
   private final int slot;
   private final long slotEpoch;
   private final PendingFileWriteDiagnostics.Entry pendingWriteDiagnostics;
+  private final PersistedFileWriteDiagnostics.Entry persistedWriteDiagnostics;
   private final ByteBuffer extensionByte = ByteBuffer.allocate(1);
   private volatile boolean closed;
   private final NioMappedWindow mappedHeader;
@@ -43,6 +44,7 @@ final class NioDurableFile implements DurableFile {
     mappedHeader = mode == FileIoMode.MAPPED ? new NioMappedWindow(channel, 4096) : null;
     mappedData = mode == FileIoMode.MAPPED ? new NioMappedWindow(channel, NioMappedWindow.BYTES) : null;
     pendingWriteDiagnostics = PendingFileWriteDiagnostics.register(path);
+    persistedWriteDiagnostics = PersistedFileWriteDiagnostics.register(path);
   }
 
   @Override
@@ -270,14 +272,40 @@ final class NioDurableFile implements DurableFile {
   private int writeChannel(
       ByteBuffer source, long position,
       PendingFileWriteDiagnostics.OperationKind operationKind) throws IOException {
+    PersistedFileWriteDiagnostics.Entry persistedDiagnostics = persistedWriteDiagnostics;
+    return persistedDiagnostics == null
+        ? writeOnPinnedCarrier(source, position, operationKind, 0)
+        : persistedDiagnostics.write(this, source, position, operationKind);
+  }
+
+  // Invoked by the opt-in JNI trampoline on its pinned carrier.
+  int writeOnPinnedCarrier(
+      ByteBuffer source,
+      long position,
+      PendingFileWriteDiagnostics.OperationKind operationKind,
+      long nativeThreadId) throws IOException {
+    PersistedFileWriteDiagnostics.Entry persistedDiagnostics = persistedWriteDiagnostics;
+    PersistedFileWriteDiagnostics.Invocation persisted = persistedDiagnostics == null
+        ? null : persistedDiagnostics.begin(
+            operationKind, position, source.remaining(), nativeThreadId);
     PendingFileWriteDiagnostics.Entry diagnostics = pendingWriteDiagnostics;
-    if (diagnostics == null) return channel.write(source, position);
-    int tracking = diagnostics.begin(operationKind, position, source.remaining());
+    int tracking = diagnostics == null
+        ? 0 : diagnostics.begin(operationKind, position, source.remaining());
+    int written = 0;
+    IOException targetFailure = null;
     try {
-      return channel.write(source, position);
+      written = channel.write(source, position);
+    } catch (IOException failure) {
+      targetFailure = failure;
     } finally {
-      diagnostics.end(tracking);
+      if (diagnostics != null) diagnostics.end(tracking);
     }
+    if (targetFailure != null) {
+      if (persistedDiagnostics != null) persistedDiagnostics.failed(persisted, targetFailure);
+      throw targetFailure;
+    }
+    if (persistedDiagnostics != null) persistedDiagnostics.returned(persisted, written);
+    return written;
   }
 
   private void retireWriteDiagnosticsAfterChannelClose() {
