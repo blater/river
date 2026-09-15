@@ -45,3 +45,10 @@ Independent correctness review approved the narrower three-production-file revis
 
 Narrowed revision passed clean full checkpoint: ./gradlew --no-daemon clean check, 3m12s, 2,029 tests, zero failures/errors, 19 skips. Log /private/tmp/river-two-hotpaths/tuple-revised-clean-check.log. Installed revised candidate /private/tmp/river-two-hotpaths/tuple-revised/river differs from baseline in only IndexedTransactionTupleScans, IndexedTupleCurrentResolution, and IndexedTupleLockKey classes. Final acceptance samples follow this exact revision.
 
+### 2026-09-15T21:51:10Z
+
+Final narrower revision da1096b2 remains unaccepted for integration: candidate389.22TPS/2.406msCPU, interleaved unchanged control383.48/2.474, then candidate362.39/2.687 (all20s/30s). Both candidate samples passed correctness, but the repeat regression remains unexplained. No production changes beyond the requested three-file mechanism are planned. The branch is retained for review, not presented as a performance win. Routing tic-waymeet is evaluated independently on original stable64329eda.
+
+### 2026-09-15T21:52:44Z
+
+Independent performance review agrees to hold integration. The bad revised sample worsened warmup, median/tail latency, server CPU and client CPU; ~20ms collector boundary offsets cannot explain the shift. Host/JVM variability remains a hypothesis, not exoneration. Do not average good and bad runs into acceptance. A future focused discriminator is an identically profiled baseline/candidate pair separating compilation/GC/background CPU from full request stacks; no broader production optimization is authorized by this ticket.

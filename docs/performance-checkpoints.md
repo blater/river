@@ -3334,3 +3334,61 @@ The implementation ticket retains the validation log path. Raw artifacts:
 `/private/tmp/river-gothmog-current/`, `/private/tmp/river-gothmog-deeper/`, and
 native report IDs under `/Users/blater/src/ingres/river-harness/runs/` listed in
 the accepted comparison. No new measurement run was required for this delivery.
+
+## 2026-09-15 — tuple-key admission candidate held (tic-bert)
+
+Ticket: [tic-bert](tickets/tic-bert.md). Base: pushed, tagged `64329eda`
+(`perf-checkpoint-20260915-read-validation`). Feature branch:
+`ticket/tic-bert-tuple-key-admission`. Initial implementation `929323f6`;
+narrower final candidate `da1096b2`. Neither version is accepted for integration;
+there is no checkpoint tag for this candidate.
+
+The final candidate changes three production files: retain admission in the
+existing protection owner, trust admitted key projections and protected current
+resolution, and explicitly admit serializable scan endpoints. The identified
+current-key path goes from five structural validations to one. Public session
+methods, lock policy, root caches, formats, and protocol remain unchanged.
+Independent correctness review approved both layouts, including malformed-input
+rejection and canonical physical/user lock identities. The final clean full
+`./gradlew --no-daemon clean check` passed in 3m12s: 2,029 tests, zero
+failures/errors, 19 skips. Log: `/private/tmp/river-two-hotpaths/tuple-revised-clean-check.log`.
+
+All samples use the standalone harness: `run river tpcc sample new-order`,
+READ COMMITTED with explicit FOR UPDATE, one worker/warehouse, seed42,
+max-retries3, warmup20s, duration30s except the two marked 60s controls.
+GraalVM25.0.4, `-Xmx1g`, durable local WAL, authenticated TCP/TLS. Baseline is
+`/private/tmp/river-gothmog-current/river`; initial and final candidate executables
+are `/private/tmp/river-two-hotpaths/tuple/river` and `tuple-revised/river` under
+that same artifact root. Commands/version labels and CPU collection offsets are
+retained in each `*-command.json` and `*-capture.json`. Installed class comparison
+confirmed only the intended five (initial) or three (final) engine classes changed.
+CPU is phase-bracket server-process CPU per commit, not engine-only CPU.
+
+| Sample | Measured | TPS | Server CPU ms/commit | p99 ms | Native report |
+| --- | ---: | ---: | ---: | ---: | --- |
+| baseline-a | 30s | 379.33 | 2.436 | 4.215 | `river_harness_20260915_212600_864436f6` |
+| baseline-b | 30s | 374.76 | 2.506 | 4.456 | `river_harness_20260915_212705_25b07ca9` |
+| baseline-adjacent | 30s | 383.48 | 2.474 | 4.379 | `river_harness_20260915_214754_a54c9f26` |
+| tuple-a | 30s | 375.45 | 2.531 | 4.452 | `river_harness_20260915_213233_4dc600ed` |
+| tuple-b | 30s | 372.93 | 2.582 | 4.567 | `river_harness_20260915_213342_c3215c0f` |
+| tuple-revised-a | 30s | 389.22 | 2.406 | 4.071 | `river_harness_20260915_214636_050e633a` |
+| tuple-revised-b | 30s | 362.39 | 2.687 | 5.132 | `river_harness_20260915_214904_9e95cadf` |
+| baseline-long | 60s | 375.71 | 2.381 | 4.342 | `river_harness_20260915_213555_4dae942f` |
+| tuple-long | 60s | 350.89 | 2.649 | 4.948 | `river_harness_20260915_213732_61083a1a` |
+
+All samples passed status, invariants, warmup/measured outcome reconciliation,
+owned lifecycle cleanup, and comparison eligibility; zero retries, failed or
+unknown commits. Deadline cancellations and deliberate rollback outcomes remain
+in the captures. Compare only matching durations/comparison keys. Native reports
+are below `/Users/blater/src/ingres/river-harness/runs/`; audit output is
+`/private/tmp/river-two-hotpaths/verified-results.json`.
+
+Decision: **hold integration**. The initial repeated CPU increase persisted in a
+longer control. The smaller revision had one good sample and one materially worse
+sample around an unchanged-build control. Do not average them into acceptance or
+discard the poor result. Independent performance review confirmed that collector
+boundary offsets cannot explain the slowdown; both server and client costs rose.
+Host/JVM variation is a hypothesis, not an explanation. The next bounded
+discriminator, if this ticket continues, is an identically profiled control and
+candidate separating compilation/GC/background CPU from request-path work. No
+such broader diagnostic or production redesign is included in this delivery.
