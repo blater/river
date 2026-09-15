@@ -92,7 +92,10 @@ WAL admission. No promotion matrix or performance checkpoint is issued.
 
 ### Current promotion disposition, 2026-09-15
 
-The logical admission, physical prefix admission, and chunked-WAL prerequisites
-are closed. Promotion remains deferred until this ticket's declared
-implementation dependencies, `tic-f1bb` and `tic-845d`, have accepted outcomes.
-No promotion matrix or performance checkpoint is issued yet.
+The logical admission, physical prefix admission, chunked-WAL and force-overlap
+mechanisms are closed. `tic-f1bb` is delivered at
+`perf-checkpoint-20260915-force-overlap`
+(`f51342a7b5e0e6030bd2856264c3c379c9a4d96d`). Promotion remains deferred on
+the other declared dependency, `tic-845d`: the initial `tic-4d14` audit cannot
+select a rule until its mandatory step, blocked-time and service-cost
+attribution is available. No promotion matrix or new checkpoint is issued.

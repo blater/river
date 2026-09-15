@@ -90,3 +90,16 @@ f1bb through their remaining dependencies. No runtime optimization is delivered
 or claimed. Deferred: P0 scaling/accounting, the conditional 4d14/845d lock
 stream, and 7a5a promotion pending accepted implementations. Keep osgiliath open
 for actionable new checkpoint evidence. No new tickets or mechanisms were added.
+
+### Force-overlap and lock-audit disposition, 2026-09-15
+
+The force-overlap mechanism is accepted and pushed at
+`perf-checkpoint-20260915-force-overlap`
+(`f51342a7b5e0e6030bd2856264c3c379c9a4d96d`). The adjacent read-only
+[`tic-4d14` audit](../delivery/evidence/2026-09-15-tic-4d14-lock-audit.md)
+reconciles the material holding and block-event classes and exhausts the retained
+family/release evidence, but cannot meet its mandatory step, blocked-time and
+per-rule service-cost attribution gates. It selects no removal rule. Keep
+`tic-4d14`, `tic-845d`, this epic and `tic-7a5a` open; no lock implementation or
+promotion run is ready. P0 scaling/accounting remains separately deferred and
+unpassed.

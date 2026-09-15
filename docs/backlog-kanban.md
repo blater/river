@@ -14,8 +14,11 @@ Two of the three bounded performance epics are complete:
   the separate rollback/retry safety correction is integrated3d70a826.
   [Rian](tickets/tic-rian.md) records reviewed workload and compatibility evidence.
 - [WAL overlap](tickets/tic-rowlie.md) remains open after accepting the bounded
-  [force-overlap mechanism](tickets/tic-f1bb.md). The next ordered work is the
-  evidence-only [lock-scope audit](tickets/tic-4d14.md). The user deferred the
+  [force-overlap mechanism](tickets/tic-f1bb.md) at
+  `perf-checkpoint-20260915-force-overlap`. The initial evidence-only
+  [lock-scope audit](tickets/tic-4d14.md) reconciles the material classes but is
+  blocked on its mandatory logical-step, blocked-time and per-rule service-cost
+  attribution; no removal rule is selected. The user deferred the
   [P0 scaling and accounting work](tickets/tic-1dda.md); it is not a WAL
   prerequisite. Its historical evidence includes the accepted
   [general SQL concurrency reproducer](tickets/tic-b1b7.md), covering controlled
@@ -65,13 +68,14 @@ scaling/accounting work.
 | Scheduling order | Existing tickets | Contribution and boundary |
 | --- | --- | --- |
 | Deferred outside WAL admission | tic-1dda | Scaling revalidation and warmup accounting remain incomplete and are explicitly deferred by the user; neither blocks WAL work. |
-| Accepted force overlap | tic-f1bb | Bounded physical-work/force overlap passed correctness, review, clean-test and matched diagnostic gates. |
-| Immediate evidence frontier | tic-4d14 → tic-845d | Audit lock scope, then consider exactly one proved redundant lock rule. No current cycle proves a lock is redundant. |
+| Accepted force overlap | tic-f1bb | Bounded physical-work/force overlap passed correctness, review, clean-test and matched diagnostic gates at `perf-checkpoint-20260915-force-overlap`. |
+| Immediate evidence frontier | tic-4d14 → tic-845d | The initial audit reconciles material holdings and block events but lacks mandatory step, blocked-time and per-rule service-cost attribution. It selects no rule, so tic-845d is not implementation-ready. |
 | Final acceptance | tic-7a5a | Evaluate the accepted mechanisms once its existing dependencies are resolved; do not run a promotion campaign ahead of implementation. |
 | Incident priority above WAL | tic-osgiliath / tic-emeldir | Reproduce returned checkpoint failures, verify cleanup, and identify the initiating kernel write. Formal comparison/reporting remains deferred. |
 
-The lock audit is now the immediate evidence task; any implementation remains
-conditional on one exact redundant rule proved by that audit.
+The lock audit remains the immediate evidence task. Its initial disposition is
+blocked by three mandatory attribution fields; any implementation remains
+conditional on one exact redundant rule proved by an accepted audit.
 tic-ca05 is closed: its existing logical contract passed review and 43 focused
 tests. tic-5b3e now admits exact physical pages before mutation, publishes the
 safe cohort prefix, rolls back only the pressure-rejected member, and requeues
@@ -79,7 +83,9 @@ its suffix in order. Its direct/group, terminal failure, recovery and matched
 no-checkpoint evidence passed. tic-6f81 is closed with every chunked-WAL clause
 satisfied by the reviewed current-source contract. tic-92e3 is closed with its
 reviewed NIO force, execution, ownership, and retained-resource contract;
-tic-f1bb is accepted and tic-4d14 is the next ordered delivery. P0 remains unpassed and
+tic-f1bb is accepted at `perf-checkpoint-20260915-force-overlap`; tic-4d14 is
+the next ordered delivery but its initial audit is blocked on mandatory
+attribution. P0 remains unpassed and
 deferred; its missing accounting does not require a new ticket on this path.
 Do not reopen completed execution/protocol candidates, add speculative optimizations,
 or manufacture production changes for an already satisfied prerequisite. Required
@@ -230,7 +236,7 @@ connection boundaries; its protocol implementation is outside that ticket.
 | Lane | Now: ready work | Next: unlocked by Now | Later: promotion path |
 | --- | --- | --- | --- |
 | Standalone `riverd` | Portable APFS contract [`tic-485d`](tickets/tic-485d.md) delivered; SQL/security audit is deferred | [`tic-615d`](tickets/tic-615d.md) consumes APFS operations; [`tic-867d`](tickets/tic-867d.md) and [`tic-b75d`](tickets/tic-b75d.md) add Linux/Windows; then [`tic-ec50`](tickets/tic-ec50.md) composes the installed lifecycle | Safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
-| Transaction performance | [`tic-2828`](tickets/tic-2828.md) is closed with warmed page-generation reuse and a passing joint engine/clean-test gate; `tic-288d`, `tic-e2be` and `tic-50e8` are closed against the accepted joint checkpoint; `tic-5cc0` is now closed at `perf-checkpoint-20260907-savepoint-admission`; [`tic-af29`](tickets/tic-af29.md) is closed at `perf-checkpoint-20260907-lock-block-causality` as required observability with inconclusive performance; [`tic-8e74`](tickets/tic-8e74.md) is closed with the independent snapshot-cleanup gauge and no repeated diagnostic regression; [`tic-0636`](tickets/tic-0636.md) remains historically closed, but later commits removed its wired guarantees; [`tic-1fe7`](tickets/tic-1fe7.md) is closed with the current contract reconciliation; [`tic-ed12`](tickets/tic-ed12.md) is closed with verified prebuilt artifact binding; [`tic-d7c2`](tickets/tic-d7c2.md) is closed with qualified invocation host ownership; resume [`tic-1dda`](tickets/tic-1dda.md) | Complete [`tic-1dda`](tickets/tic-1dda.md) with the serializable P0 matrix, including the mixed-isolation reproducer; preserve the first failed criterion | The accepted [`tic-b368`](tickets/tic-b368.md) design and closed [`tic-7352`](tickets/tic-7352.md) serial ownership foundation precede overlap; after P0, complete the [`tic-4d14`](tickets/tic-4d14.md) lock-scope audit; re-baseline existing logical/WAL mechanisms before editing them; then admit cumulative cohorts, remove one proved redundant holding rule, implement only a real pre-force overlap mechanism, run P1 promotion, and proceed to the Payment A/B |
+| Transaction performance | [`tic-f1bb`](tickets/tic-f1bb.md) is accepted at `perf-checkpoint-20260915-force-overlap`; the initial [`tic-4d14`](tickets/tic-4d14.md) audit reconciles material lock classes but is blocked on mandatory step, blocked-time and per-rule service-cost attribution. P0 [`tic-1dda`](tickets/tic-1dda.md) remains explicitly deferred and unpassed. | Complete the evidence-only `tic-4d14` contract; start [`tic-845d`](tickets/tic-845d.md) only if that accepted audit selects one credible rule. | Run [`tic-7a5a`](tickets/tic-7a5a.md) after its lock-stream dependency has an accepted outcome, then proceed to the Payment A/B. |
 | Stress and comparison | No River promotion work until [`tic-45a7`](tickets/tic-45a7.md) closes; `tools/tps-test.sh` remains available for River diagnostics | Standalone River/MariaDB harness runs delivered in `tic-bfca`; establish the independent artifact-comparison sidecar | [`tic-c7bb`](tickets/tic-c7bb.md): 500 committed TPS; then [`tic-9c58`](tickets/tic-9c58.md): MariaDB/PostgreSQL comparison and Alpha3 parity |
 | Workflow safety | [`tic-701f`](tickets/tic-701f.md) and [`tic-dd80`](tickets/tic-dd80.md) may proceed when they do not displace P0 product work | Atomic cross-worktree claims and promotion enforcement | Close [`tic-ef07`](tickets/tic-ef07.md) when both enforcement gaps are proved |
 
