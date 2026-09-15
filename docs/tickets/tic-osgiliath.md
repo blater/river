@@ -364,3 +364,37 @@ not a new causal finding. Load and final checkpoints and post-run invariants
 passed and the server reaped. The three-second measured window had no committed
 transactions under per-write full sync, so the run is diagnostic path evidence,
 not accepted throughput evidence.
+
+One bounded four-terminal incident attempt used the published
+`checkpoint-20260915-persisted-write-boundary` build with the tiny standard mix,
+no-wait stress scheduling, two warmup seconds, 60 measured seconds, seed 42 and
+serializable isolation. Load, preflight, warmup, measurement and drain completed.
+The final checkpoint then exceeded its 30-second client wait with no completed
+request and reported SQL state `08006` / `IO_FAILURE`; the runner subsequently
+killed its owned server PID 22462 and reported
+`cleanup_failed` / `SERVER_FORCED_TERMINATION`. The failure became visible only
+after that kill, so no live native sample was possible.
+
+The 101,857,226-byte durable log contains 14,165 BEGIN and 14,165 matching
+RETURN records, no THROW or unmatched operation, one process ID and nine
+concrete native thread IDs. Time from the BEGIN timestamp, before BEGIN
+persistence, to the RETURN timestamp, after the target call and before RETURN
+persistence, was 3.809 ms at p50, 4.326 ms at p99 and 8.715 ms at maximum.
+Thus every target write represented in this attempt returned; the attempt does
+not identify a hanging target write or establish diagnostic overhead as the
+cause of the checkpoint timeout. Paired records cannot exclude an attempt
+blocked before durable BEGIN. They do not cover force, truncate, checkpoint work
+or other operations outside the instrumented NIO write boundary, and their
+interval does not include RETURN-record full sync. The command, JSONL, copied
+runner evidence and retained owned temporary server logs are private under
+`benchmark-results/checkpoint-persisted-write-20260915/native-incident-01/`.
+
+This current status supersedes the execution and native-identity rows in the
+September 14 table above:
+
+| Outcome | Current disposition |
+| --- | --- |
+| Same-write native identity and full Java request chain | Proven by the controlled virtual-thread write and independently accepted |
+| Single bounded incident workload | Executed once; final checkpoint timed out and the runner killed its owned server after retaining paired records |
+| Hanging write and kernel cause | Unresolved; all instrumented entries in this attempt returned and no live sample was available at timeout |
+| Wider workload or host-security changes | Not performed |
