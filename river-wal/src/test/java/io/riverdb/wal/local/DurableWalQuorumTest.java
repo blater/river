@@ -18,6 +18,8 @@ import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.io.TempDir;
@@ -189,6 +191,44 @@ final class DurableWalQuorumTest {
   }
 
   @Test
+  void asyncLocalSuccessAdvancesExactPrefixBeforeLaterQuorumFailure(@TempDir Path root)
+      throws IOException {
+    Node primary = createNode(root.resolve("primary"));
+    Node followerOne = createNode(root.resolve("follower-one"));
+    Node followerTwo = createNode(root.resolve("follower-two"));
+    assertEquals(StatusCode.OK, primary.wal.enableDurableQuorum(
+        new LocalWal[] {followerOne.wal, followerTwo.wal}, 3));
+    assertEquals(StatusCode.OK, primary.wal.enableForceWorker(Thread.currentThread()));
+
+    appendUnforced(primary.wal, 41, 1, 211);
+    assertEquals(StatusCode.OK, primary.wal.sealPendingBatch());
+    LocalWalForceTarget target = new LocalWalForceTarget();
+    assertEquals(StatusCode.OK,
+        primary.wal.submitSealedForce(target, LocalWalForceCause.SHARED_GROUP));
+    appendUnforced(primary.wal, 43, 2, 223);
+    assertEquals(StatusCode.OK, primary.wal.sealPendingBatch());
+    awaitForce(primary.wal, target);
+    assertEquals(StatusCode.OK, followerOne.wal.close());
+    assertEquals(StatusCode.OK, followerTwo.wal.close());
+
+    assertEquals(StatusCode.FENCED,
+        primary.wal.completeSubmittedForce(target, target.token()));
+    assertTrue(target.locallyForced());
+    assertFalse(target.durabilityComplete());
+    assertEquals(target.endOffset(), primary.wal.durableEnd());
+    assertTrue(primary.wal.tailEnd() > primary.wal.durableEnd());
+    assertEquals(1, primary.wal.currentCommitSequence());
+    assertEquals(0, primary.wal.quorumDurableCommitSequence());
+    assertEquals(StatusCode.FENCED,
+        primary.wal.releaseForcedBatch(target, target.token()));
+    assertEquals(StatusCode.OK, primary.wal.close());
+    assertEquals(StatusCode.OK, primary.directory.close());
+    assertEquals(StatusCode.OK, followerOne.directory.close());
+    assertEquals(StatusCode.OK, followerTwo.directory.close());
+    assertEquals(StatusCode.OK, target.reset());
+  }
+
+  @Test
   void rejectsSameLengthFollowerHistoryWithDifferentContent(@TempDir Path root)
       throws IOException {
     Node primary = createNode(root.resolve("primary"));
@@ -224,12 +264,12 @@ final class DurableWalQuorumTest {
             new LocalWal[] {followerOne.wal, followerTwo.wal}, 2));
     LocalWalReservation reservation = new LocalWalReservation();
     LocalWalAppendResult appended = new LocalWalAppendResult();
-    for (int index = 0; index < 20; index++) {
+    for (int index = 0; index < 60; index++) {
       exerciseQuorum(primary.wal, reservation, appended, index + 1L);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
-    for (int index = 20; index < 60; index++) {
+    for (int index = 60; index < 100; index++) {
       exerciseQuorum(primary.wal, reservation, appended, index + 1L);
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
@@ -237,7 +277,7 @@ final class DurableWalQuorumTest {
     assertTrue(
         allocated <= 1024,
         "warmed durable quorum allocated bytes: " + allocated);
-    assertEquals(60L * Long.BYTES * 2, primary.wal.replicatedPayloadBytes());
+    assertEquals(100L * Long.BYTES * 2, primary.wal.replicatedPayloadBytes());
     close(primary);
     close(followerOne);
     close(followerTwo);
@@ -335,6 +375,14 @@ final class DurableWalQuorumTest {
   private static void close(Node node) {
     assertEquals(StatusCode.OK, node.wal.close());
     assertEquals(StatusCode.OK, node.directory.close());
+  }
+
+  private static void awaitForce(LocalWal wal, LocalWalForceTarget target) {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (!wal.submittedForceComplete(target) && System.nanoTime() < deadline) {
+      LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+    }
+    assertTrue(wal.submittedForceComplete(target));
   }
 
   private record Node(

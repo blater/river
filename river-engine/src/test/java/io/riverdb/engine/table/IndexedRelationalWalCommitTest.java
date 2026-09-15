@@ -507,9 +507,9 @@ final class IndexedRelationalWalCommitTest {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
-    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedSessionContext directContext = context(manager, table, null, vacuum);
     long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
-    IndexedTransactionSession filler = session(context, 128);
+    IndexedTransactionSession filler = session(directContext, 128);
     TransactionOutcome fillerOutcome = new TransactionOutcome();
     int splitKey = 1;
     long splitValue;
@@ -536,6 +536,9 @@ final class IndexedRelationalWalCommitTest {
     long firstValue = splitValue;
     int secondKey = splitKey + 1;
     long secondValue = splitValue + 1;
+    IndexedGroupCommitCoordinator coordinator =
+        new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
+    IndexedSessionContext context = context(manager, table, coordinator, vacuum);
     IndexedTransactionSession first = session(context, 128);
     IndexedTransactionSession second = session(context, 128);
     prepareHybrid(first, descriptor, baseSpace, firstKey, firstValue);
@@ -545,104 +548,34 @@ final class IndexedRelationalWalCommitTest {
     check(firstMask == 0 && secondMask == 0,
         "split cohort was not group eligible");
 
-    IndexedGroupCommitMetrics metrics = table.commitMetrics();
     IndexedGroupCommitTelemetry beforeTelemetry = new IndexedGroupCommitTelemetry();
     requireOk(table.copyCommitTelemetry(beforeTelemetry));
     TransactionOutcome firstOutcome = new TransactionOutcome();
     TransactionOutcome secondOutcome = new TransactionOutcome();
-    IndexedGroupCommitRequest firstRequest = new IndexedGroupCommitRequest(first);
-    IndexedGroupCommitRequest secondRequest = new IndexedGroupCommitRequest(second);
-    requireOk(first.prepareLogicalCommit());
-    requireOk(second.prepareLogicalCommit());
-    long firstTicket = firstRequest.prepare(firstOutcome, firstMask, metrics);
-    long secondTicket = secondRequest.prepare(secondOutcome, secondMask, metrics);
-    check(firstTicket > 0 && secondTicket > 0,
-        "split cohort requests were not prepared");
-    requireOk(manager.prepareCommit(first.groupTransaction(), firstRequest.outcome));
-    requireOk(manager.prepareCommit(second.groupTransaction(), secondRequest.outcome));
-    // Mirror process() admission while retaining force/publication as explicit test phases.
-    metrics.recordWriteSubmission(firstMask, true);
-    metrics.recordWriteSubmission(secondMask, true);
-    metrics.recordQueueEnqueue(1);
-    metrics.recordQueueEnqueue(2);
-    metrics.recordWriterSelection(2, 2, 2, true, false);
-    IndexedGroupCommitBatch batch = new IndexedGroupCommitBatch(manager, table, metrics);
-    requireOk(table.reserveHybridCommitGroupCapacity(batch.capacity()));
-    batch.add(0, firstRequest);
-    batch.add(1, secondRequest);
-
     long forceCalls = counters.forceCalls();
-    check(batch.appendSharedGroup(2) == 2,
-        "split cohort failed before prepared publication");
-    check(counters.forceCalls() == forceCalls,
-        "split cohort forced before handing off locks");
-    check(table.commitGroupDecisionAppended(),
-        "forced split cohort did not retain its WAL decision");
-    IndexedGroupCommitTelemetry forcedTelemetry = new IndexedGroupCommitTelemetry();
-    requireOk(table.copyCommitTelemetry(forcedTelemetry));
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_PREFLIGHT) == 1,
-        "split cohort preflight phase was not recorded");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_RECLAIM) == 1,
-        "split cohort reclaim phase was not recorded");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_VERSION_RESERVATION) == 1,
-        "split cohort version-reservation phase was not recorded");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_COMPILE) == 2,
-        "split cohort did not compile both members");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_WAL_PLAN) == 2,
-        "split cohort did not plan both WAL members");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_LOGICAL_ROW_ADMISSION) == 2,
-        "split cohort did not admit both logical-row updates");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_WAL_ADMISSION) == 2,
-        "split cohort did not admit both WAL members");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_PAGE_FREEZE) == 2,
-        "split cohort did not freeze both member generations");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_OPERATION_ADMISSION) == 1,
-        "split cohort publication was not admitted");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_ADMISSION) == 1,
-        "split cohort transaction admission was not recorded");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_APPEND) == 1,
-        "split cohort append phase was not recorded");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_FORCE) == 0,
-        "split cohort forced before publication");
-    check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_PUBLICATION) == 0,
-        "split cohort published before the explicit publication phase");
-
-    check(batch.publishPrepared(2), "split cohort failed prepared publication");
-    check(first.groupTransaction().state() == TransactionState.COMMITTING
-            && second.groupTransaction().state() == TransactionState.COMMITTING,
-        "published cohort acknowledged before durability");
-    batch.completeDurability(2);
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      Future<StatusCode> firstCommit = executor.submit(
+          () -> coordinatedCommit(first, firstOutcome, ready, start));
+      Future<StatusCode> secondCommit = executor.submit(
+          () -> coordinatedCommit(second, secondOutcome, ready, start));
+      ready.await();
+      start.countDown();
+      requireOk(firstCommit.get());
+      requireOk(secondCommit.get());
+    } finally {
+      executor.shutdownNow();
+    }
     check(counters.forceCalls() == forceCalls + 1,
         "split cohort did not use exactly one shared force");
-    check(firstRequest.outcome.state() == TransactionState.COMMITTED
-            && secondRequest.outcome.state() == TransactionState.COMMITTED,
-        "split cohort publication did not commit both members");
-    check(!table.commitGroupDecisionAppended(),
-        "split cohort retained group state after publication");
-    batch.complete(2);
-    StatusCode firstStatus = firstRequest.await(firstTicket, firstOutcome);
-    StatusCode secondStatus = secondRequest.await(secondTicket, secondOutcome);
-    requireOk(firstStatus);
-    requireOk(secondStatus);
-    requireOk(first.completeCoordinatedCommit(firstStatus));
-    requireOk(second.completeCoordinatedCommit(secondStatus));
     check(firstOutcome.state() == TransactionState.COMMITTED
             && secondOutcome.state() == TransactionState.COMMITTED
-            && secondOutcome.commitSequence() == firstOutcome.commitSequence() + 1,
+            && Math.abs(secondOutcome.commitSequence() - firstOutcome.commitSequence()) == 1,
         "split cohort did not retain two consecutive commit decisions");
+    long splitGroupEnd = Math.max(
+        firstOutcome.commitSequence(), secondOutcome.commitSequence());
 
     IndexedGroupCommitTelemetry publishedTelemetry = new IndexedGroupCommitTelemetry();
     requireOk(table.copyCommitTelemetry(publishedTelemetry));
@@ -741,7 +674,7 @@ final class IndexedRelationalWalCommitTest {
     prepareHybrid(third, descriptor, baseSpace, thirdKey, thirdValue);
     requireOk(third.commit(thirdOutcome));
     check(thirdOutcome.state() == TransactionState.COMMITTED
-            && thirdOutcome.commitSequence() == secondOutcome.commitSequence() + 1,
+            && thirdOutcome.commitSequence() == splitGroupEnd + 1,
         "independent commit failed after split-cohort cleanup");
     requireOk(third.close());
     check(manager.activeTransactionCount() == 0
@@ -761,6 +694,7 @@ final class IndexedRelationalWalCommitTest {
     check(finalRegistry.generation() == afterGroup.generation() + 1,
         "independent commit did not advance tuple generation exactly once");
 
+    requireOk(coordinator.close());
     crashWal(wal);
     requireOk(directory.close());
     directory = openDirectory(root);

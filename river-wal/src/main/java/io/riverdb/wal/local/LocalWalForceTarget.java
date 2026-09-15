@@ -3,6 +3,7 @@ package io.riverdb.wal.local;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.format.wal.WalCommitGroupCodec;
+import io.riverdb.platform.file.DurableFile;
 
 /**
  * Caller-owned carrier whose coverage is frozen from capture through release or fenced close.
@@ -11,19 +12,28 @@ import io.riverdb.format.wal.WalCommitGroupCodec;
  */
 public final class LocalWalForceTarget {
   private LocalWal owner;
+  private DurableFile file;
   private WalGeneration generation;
   private long token;
   private long startOffset;
   private long endOffset;
   private long commitSequence;
   private long recordCount;
+  private int previousDigest;
+  private int finalDigest;
+  private long forceElapsedNanos;
+  private StatusCode forceStatus;
   private boolean locallyForced;
   private boolean durabilityComplete;
 
   public StatusCode reset() {
     if (owner != null) return StatusCode.CONFLICT;
     generation = null;
+    file = null;
     token = startOffset = endOffset = commitSequence = recordCount = 0;
+    previousDigest = finalDigest = 0;
+    forceElapsedNanos = 0;
+    forceStatus = null;
     locallyForced = durabilityComplete = false;
     return StatusCode.OK;
   }
@@ -34,6 +44,8 @@ public final class LocalWalForceTarget {
   public long endOffset() { return endOffset; }
   public long recordCount() { return recordCount; }
   public long commitSequence() { return commitSequence; }
+  public int finalDigest() { return finalDigest; }
+  public long forceElapsedNanos() { return forceElapsedNanos; }
   public boolean locallyForced() { return locallyForced; }
   public boolean durabilityComplete() { return durabilityComplete; }
 
@@ -52,18 +64,35 @@ public final class LocalWalForceTarget {
         && generation.value() == wal.walGeneration().value();
   }
 
-  void capture(LocalWal wal, long identity, long start, long end, long records, long csn) {
+  void capture(
+      LocalWal wal, DurableFile capturedFile, long identity,
+      long start, long end, long records, long csn,
+      int predecessorDigest, int terminalDigest) {
     owner = wal;
+    file = capturedFile;
     generation = wal.walGeneration();
     token = identity;
     startOffset = start;
     endOffset = end;
     recordCount = records;
     commitSequence = csn;
+    previousDigest = predecessorDigest;
+    finalDigest = terminalDigest;
+    forceElapsedNanos = 0;
+    forceStatus = null;
     locallyForced = durabilityComplete = false;
   }
 
   void completeLocalForce() { locallyForced = true; }
   void completeDurability() { durabilityComplete = true; }
-  void release() { owner = null; }
+  void release() { owner = null; file = null; }
+
+  DurableFile file() { return file; }
+  int previousDigest() { return previousDigest; }
+  StatusCode forceStatus() { return forceStatus; }
+
+  void completeForceIo(StatusCode status, long elapsedNanos) {
+    forceStatus = status == null ? StatusCode.INVARIANT_BROKEN : status;
+    forceElapsedNanos = Math.max(0, elapsedNanos);
+  }
 }

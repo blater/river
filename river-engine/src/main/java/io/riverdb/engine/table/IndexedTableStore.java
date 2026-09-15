@@ -156,12 +156,31 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
         prepared, commitSequences, committedRows, count);
   }
 
-  StatusCode forceHybridGroup() {
-    return relationalServices().forceHybridGroup();
+  StatusCode sealHybridGroup(
+      long ownerToken, IndexedCountResult frameHead, IndexedCountResult requiredWalEnd) {
+    return relationalServices().sealHybridGroup(ownerToken, frameHead, requiredWalEnd);
   }
 
-  StatusCode completeHybridGroupDurability() {
-    return relationalServices().completeHybridGroupDurability();
+  StatusCode enableHybridForceWorker(Thread completionOwner) {
+    return relationalServices().enableHybridForceWorker(completionOwner);
+  }
+
+  StatusCode submitSealedHybridForce() {
+    return relationalServices().submitSealedHybridForce();
+  }
+
+  boolean hybridForceResultReady() { return relationalServices().hybridForceResultReady(); }
+  boolean hybridForceActive() { return relationalServices().hybridForceActive(); }
+  long submittedHybridForceEnd() { return relationalServices().submittedHybridForceEnd(); }
+  long submittedHybridForceNanos() { return relationalServices().submittedHybridForceNanos(); }
+  StatusCode completeSubmittedHybridForce() {
+    return relationalServices().completeSubmittedHybridForce();
+  }
+  StatusCode releaseSubmittedHybridForce() {
+    return relationalServices().releaseSubmittedHybridForce();
+  }
+  StatusCode releaseHybridDurabilityChain(long ownerToken, int frameHead) {
+    return relationalServices().releaseHybridDurabilityChain(ownerToken, frameHead);
   }
 
   StatusCode cancelCommitGroup() {

@@ -38,7 +38,14 @@ final class DatabasePageCacheRetainedLayout {
     total = add(total, arrayBytes(metadataMap, Long.BYTES));
     total = add(total, arrayBytes(metadataMap, Long.BYTES));
     total = add(total, arrayBytes(metadataMap, Integer.BYTES));
-    return add(total, arrayBytes(metadataMap, Long.BYTES));
+    total = add(total, arrayBytes(metadataMap, Long.BYTES));
+    return add(total, durabilityLinkBytes(current));
+  }
+
+  static long durabilityLinkBytes(int currentFrames) {
+    return add(
+        arrayBytes(currentFrames, Long.BYTES),
+        arrayBytes(currentFrames, Integer.BYTES));
   }
 
   static long stagingFrameBytes(int staging, int stagingMap) {

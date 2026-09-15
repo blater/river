@@ -125,6 +125,29 @@ final class IndexedPreparedPageBatch {
     return StatusCode.OK;
   }
 
+  StatusCode transfer(
+      IndexedPageFrameCache cache, long ownerToken, IndexedCountResult result) {
+    if (state != INSTALLED || ownerToken <= 0 || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < count; index++) {
+      int slot = frameSlots[index];
+      if (!validFrame(cache, slot, pageIds[index])
+          || !cache.durabilityFrameAvailable(slot)) {
+        return StatusCode.INVARIANT_BROKEN;
+      }
+    }
+    int head = -1;
+    for (int index = count - 1; index >= 0; index--) {
+      int slot = frameSlots[index];
+      cache.claimDurabilityFrame(slot, ownerToken, head);
+      head = slot;
+    }
+    clearTransferred();
+    result.set(head);
+    return StatusCode.OK;
+  }
+
   void cancel(IndexedPageFrameCache cache) {
     if (state == BUILDING) clear(cache, false);
   }
@@ -192,6 +215,18 @@ final class IndexedPreparedPageBatch {
       latest.remove(pageIds[index]);
       releasePredecessor(cache, index);
       releaseFrame(cache, frameSlots[index], published);
+      pageIds[index] = 0;
+      frameSlots[index] = -1;
+      previousFrameSlots[index] = -1;
+      members[index] = 0;
+    }
+    count = 0;
+    state = IDLE;
+  }
+
+  private void clearTransferred() {
+    for (int index = count - 1; index >= 0; index--) {
+      latest.remove(pageIds[index]);
       pageIds[index] = 0;
       frameSlots[index] = -1;
       previousFrameSlots[index] = -1;
@@ -304,6 +339,10 @@ final class IndexedPreparedPageBatch {
     frame.recordStart = 0;
     frame.recordEnd = 0;
     frame.clearGeneration();
+  }
+
+  static void releaseTransferredFrame(IndexedPageFrameCache cache, int slot) {
+    releaseFrame(cache, slot, true);
   }
 
 }

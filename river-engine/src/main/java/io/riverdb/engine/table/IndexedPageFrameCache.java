@@ -19,6 +19,8 @@ final class IndexedPageFrameCache {
   private final IndexedPageFrameIo io;
   IndexedPageFrame[] currentFrames;
   IndexedPageFrame[] stagingFrames;
+  private long[] durabilityOwnerTokens;
+  private int[] durabilityNextSlots;
   IndexedPageFrameMap currentMap;
   IndexedPageFrameMap stagingMap;
   IndexedPreparedPageBatch prepared;
@@ -44,6 +46,9 @@ final class IndexedPageFrameCache {
     state = pageState;
     io = new IndexedPageFrameIo(backingFile, stagingFile, database, generation, state);
     currentFrames = new IndexedPageFrame[config.currentFrames()];
+    durabilityOwnerTokens = new long[config.currentFrames()];
+    durabilityNextSlots = new int[config.currentFrames()];
+    java.util.Arrays.fill(durabilityNextSlots, -1);
     stagingFrames = new IndexedPageFrame[config.stagingFrames()];
     currentMap = new IndexedPageFrameMap(config.currentMapCapacity());
     stagingMap = new IndexedPageFrameMap(config.stagingMapCapacity());
@@ -84,6 +89,8 @@ final class IndexedPageFrameCache {
     currentMap.detach();
     stagingMap.detach();
     currentFrames = stagingFrames = DETACHED_FRAMES;
+    durabilityOwnerTokens = new long[0];
+    durabilityNextSlots = new int[0];
     reclaimedFrameHead = -1;
   }
 
@@ -638,6 +645,44 @@ final class IndexedPageFrameCache {
 
   StatusCode releasePreparedBatch() {
     return setStatus(prepared.release(this));
+  }
+
+  StatusCode transferPreparedBatch(long ownerToken, IndexedCountResult result) {
+    return setStatus(prepared.transfer(this, ownerToken, result));
+  }
+
+  StatusCode releaseDurabilityChain(long ownerToken, int head) {
+    if (ownerToken <= 0 || head < -1 || head >= currentFrames.length) {
+      return setStatus(StatusCode.INVALID_EXTERNAL_INPUT);
+    }
+    int slot = head;
+    int visited = 0;
+    while (slot >= 0) {
+      if (slot >= currentFrames.length || durabilityOwnerTokens[slot] != ownerToken
+          || ++visited > currentFrames.length) {
+        return setStatus(StatusCode.INVARIANT_BROKEN);
+      }
+      slot = durabilityNextSlots[slot];
+    }
+    slot = head;
+    while (slot >= 0) {
+      int next = durabilityNextSlots[slot];
+      durabilityOwnerTokens[slot] = 0;
+      durabilityNextSlots[slot] = -1;
+      IndexedPreparedPageBatch.releaseTransferredFrame(this, slot);
+      slot = next;
+    }
+    return setStatus(StatusCode.OK);
+  }
+
+  boolean durabilityFrameAvailable(int slot) {
+    return slot >= 0 && slot < currentFrames.length
+        && durabilityOwnerTokens[slot] == 0 && durabilityNextSlots[slot] == -1;
+  }
+
+  void claimDurabilityFrame(int slot, long ownerToken, int nextSlot) {
+    durabilityOwnerTokens[slot] = ownerToken;
+    durabilityNextSlots[slot] = nextSlot;
   }
 
   void cancelPreparedBatch() {

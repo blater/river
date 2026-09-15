@@ -12,6 +12,7 @@ public final class IndexedGroupCommitCoordinator {
   private final IndexedTable table;
   private final IndexedGroupCommitMetrics metrics;
   private final IndexedGroupCommitBatch batch;
+  private final IndexedDurabilityCohortRing pending;
   private final StatusCode capacityStatus;
   private final Thread writer;
   private IndexedGroupCommitRequest queueHead;
@@ -53,10 +54,14 @@ public final class IndexedGroupCommitCoordinator {
     batch = writerBatch == null
         ? new IndexedGroupCommitBatch(transactionManager, indexedTable, metrics)
         : writerBatch;
-    capacityStatus = indexedTable.reserveHybridCommitGroupCapacity(batch.capacity());
+    pending = new IndexedDurabilityCohortRing(batch.capacity());
     writer = Thread.ofVirtual()
         .name("river-wal-commit-" + Integer.toHexString(System.identityHashCode(this)))
-        .start(this::run);
+        .unstarted(this::run);
+    StatusCode status = indexedTable.reserveHybridCommitGroupCapacity(batch.capacity());
+    if (status.isOk()) status = indexedTable.enableForceWorker(writer);
+    capacityStatus = status;
+    writer.start();
   }
 
   boolean matches(TransactionManager transactionManager, IndexedTable indexedTable) {
@@ -145,6 +150,8 @@ public final class IndexedGroupCommitCoordinator {
 
   boolean stopped() { return stopped; }
 
+  synchronized boolean writerIdle() { return writerIdle; }
+
   private static boolean validCommit(
       IndexedGroupCommitRequest request, TransactionOutcome result) {
     return request != null && result != null && request.session.hasCommitWork();
@@ -164,6 +171,20 @@ public final class IndexedGroupCommitCoordinator {
     int activeCount = 0;
     try {
       while (true) {
+        if (table.forceResultReady()) {
+          StatusCode forceStatus = completeForce();
+          if (!forceStatus.isOk()) {
+            failWriter(activeCount);
+            return;
+          }
+        }
+        if (!table.forceActive() && !pending.empty()) {
+          StatusCode submit = table.submitSealedForce();
+          if (!submit.isOk()) {
+            failWriter(activeCount);
+            return;
+          }
+        }
         long waitNanos = coalescingWaitNanos();
         if (waitNanos > 0) {
           long started = System.nanoTime();
@@ -171,27 +192,38 @@ public final class IndexedGroupCommitCoordinator {
           metrics.recordCoalescingWait(System.nanoTime() - started);
         }
         synchronized (this) {
-          activeCount = drain();
-          if (activeCount == 0 && closing) {
+          activeCount = drain(selectionCapacity());
+          if (activeCount == 0 && closing && pending.empty() && !table.forceActive()) {
             stopWriter();
             return;
           }
         }
         if (activeCount == 0) {
-          awaitWork();
+          awaitWork(false);
         } else {
           long started = System.nanoTime();
-          batch.process(activeCount);
+          boolean wasEmpty = pending.empty();
+          boolean overlappedForce = table.forceActive();
+          batch.process(activeCount, pending);
           int completed = batch.completionCount();
+          int handled = batch.handledCount();
+          if (overlappedForce && batch.retainedCount() > 0) {
+            metrics.recordPhysicalForceOverlap();
+          }
           batch.complete(completed);
-          recordWriterSelection(activeCount, completed);
-          if (completed < activeCount) {
+          if (handled > 0) recordWriterSelection(activeCount, handled);
+          if (wasEmpty && !pending.empty()) {
+            table.pendingDurabilitySequence(pending.firstCommitSequence());
+          }
+          if (handled < activeCount) {
             synchronized (this) {
-              requeueDeferred(completed, activeCount);
+              requeueDeferred(handled, activeCount);
             }
           }
+          boolean blocked = batch.durabilityBlocked();
           activeCount = 0;
           metrics.recordWriterBusy(System.nanoTime() - started);
+          if (blocked && table.forceActive()) awaitWork(true);
         }
       }
     } catch (Throwable unexpected) {
@@ -209,10 +241,11 @@ public final class IndexedGroupCommitCoordinator {
       batch.complete(activeCount);
       recordWriterSelection(activeCount, activeCount);
     }
+    failPending(StatusCode.INVARIANT_BROKEN);
     while (true) {
       int count;
       synchronized (this) {
-        count = drain();
+        count = drain(batch.capacity());
         if (count == 0) {
           stopWriter();
           return;
@@ -229,14 +262,28 @@ public final class IndexedGroupCommitCoordinator {
     LockSupport.unpark(closingThread);
   }
 
-  private void awaitWork() {
+  private void awaitWork(boolean durabilityOnly) {
+    boolean forceReady = table.forceResultReady();
+    boolean pipelineActive = table.forceActive() || !pending.empty();
+    boolean park;
     synchronized (this) {
-      writerIdle = queued == 0 && !closing;
+      writerIdle = true;
+      boolean selectable = !durabilityOnly && selectableWorkAvailable(pipelineActive);
+      park = !forceReady
+          && !(closing && queued == 0 && !pipelineActive)
+          && (durabilityOnly ? pipelineActive : !selectable);
+      if (!park) writerIdle = false;
     }
-    if (writerIdle) LockSupport.park();
+    if (park) LockSupport.park();
     synchronized (this) {
       writerIdle = false;
     }
+  }
+
+  private boolean selectableWorkAvailable(boolean pipelineActive) {
+    if (queueHead == null) return false;
+    if (!queueHead.groupable) return !pipelineActive;
+    return pending.canRetain(1) || pending.empty();
   }
 
   private long coalescingWaitNanos() {
@@ -275,12 +322,13 @@ public final class IndexedGroupCommitCoordinator {
     }
   }
 
-  private int drain() {
+  private int drain(int allowed) {
+    if (allowed <= 0) return 0;
     int count = 0;
     int depth = queued;
     int groupableDepth = queuedGroupable;
     boolean groupable = queueHead != null && queueHead.groupable;
-    int maximum = groupable ? batch.capacity() : 1;
+    int maximum = Math.min(groupable ? batch.capacity() : 1, allowed);
     while (queueHead != null && count < maximum && queueHead.groupable == groupable) {
       IndexedGroupCommitRequest request = queueHead;
       queueHead = request.next;
@@ -302,6 +350,67 @@ public final class IndexedGroupCommitCoordinator {
       queueBecameNonemptyNanos = 0;
     }
     return count;
+  }
+
+  private int selectionCapacity() {
+    if (queueHead == null) return 0;
+    if (!queueHead.groupable) {
+      return pending.empty() && !table.forceActive() ? 1 : 0;
+    }
+    if (pending.canRetain(1)) return pending.remainingMembers();
+    return pending.empty() ? 1 : 0;
+  }
+
+  private StatusCode completeForce() {
+    long coveredEnd = table.submittedForceEnd();
+    long forceNanos = table.submittedForceNanos();
+    StatusCode status = table.completeSubmittedForce();
+    metrics.recordStage(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_FORCE, forceNanos);
+    if (!status.isOk()) {
+      table.fenceCommitWriter();
+      failPending(status);
+      return status;
+    }
+    status = table.releaseSubmittedForce();
+    if (!status.isOk()) {
+      table.fenceCommitWriter();
+      failPending(status);
+      return status;
+    }
+    while (!pending.empty() && pending.requiredWalEnd() <= coveredEnd) {
+      int count = pending.headMemberCount();
+      status = pending.loadHead(batch);
+      if (status.isOk()) {
+        status = table.releaseDurabilityChain(pending.token(), pending.frameHead());
+      }
+      if (status.isOk()) status = batch.completePublished(count);
+      if (!status.isOk()) {
+        table.fenceCommitWriter();
+        batch.failPublished(count, status);
+      }
+      batch.complete(count);
+      StatusCode removed = pending.removeHead();
+      if (!status.isOk() || !removed.isOk()) {
+        failPending(status.isOk() ? removed : status);
+        return status.isOk() ? removed : status;
+      }
+    }
+    table.pendingDurabilitySequence(pending.firstCommitSequence());
+    return StatusCode.OK;
+  }
+
+  private void failPending(StatusCode failure) {
+    while (!pending.empty()) {
+      int count = pending.headMemberCount();
+      StatusCode status = pending.loadHead(batch);
+      StatusCode release = table.releaseDurabilityChain(pending.token(), pending.frameHead());
+      if (status.isOk()) status = batch.failPublished(count, failure);
+      if (!release.isOk() || !status.isOk()) table.fenceCommitWriter();
+      batch.complete(count);
+      if (!pending.removeHead().isOk()) break;
+    }
+    table.pendingDurabilitySequence(0);
   }
 
   private void recordWriterSelection(int selected, int completed) {

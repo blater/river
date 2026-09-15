@@ -65,7 +65,8 @@ final class LocalWalDecisionBatchAppender {
   private static StatusCode validate(LocalWal wal, LocalWalDecisionBatch batch) {
     StatusCode status = wal.admissionStatus();
     if (!status.isOk()) return status;
-    if (wal.hasOpenLogicalStream() || wal.hasActiveReservation() || wal.hasRetainedForceTarget()) {
+    if (wal.hasOpenLogicalStream() || wal.hasActiveReservation()
+        || wal.hasRetainedForceTarget() && !wal.concurrentAppendPermitted()) {
       return StatusCode.CONFLICT;
     }
     int records = batch.recordCount();

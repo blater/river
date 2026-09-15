@@ -64,7 +64,7 @@ final class IndexedRelationalWalGroupAppender implements LocalWalDecisionBatch {
   }
 
   StatusCode force(LocalWalForceCause cause) {
-    if (!appended || forced || cause == null) return StatusCode.CONFLICT;
+    if (!appended || forced || forceToken != 0 || cause == null) return StatusCode.CONFLICT;
     StatusCode status = wal.forcePending(force, cause);
     if (status.isOk()) {
       if (!force.matchesAppend(append)
@@ -79,21 +79,61 @@ final class IndexedRelationalWalGroupAppender implements LocalWalDecisionBatch {
   }
 
   StatusCode release() {
-    if (!forced) return StatusCode.CONFLICT;
+    if (forceToken == 0 || !force.durabilityComplete()) return StatusCode.CONFLICT;
+    boolean synchronousAppend = forced;
     StatusCode status = wal.releaseForcedBatch(force, forceToken);
-    if (status.isOk()) reset();
+    if (status.isOk()) {
+      if (synchronousAppend) clearAppend();
+      clearForce();
+    }
     return status;
   }
+
+  StatusCode enableForceWorker(Thread completionOwner) {
+    return wal.enableForceWorker(completionOwner);
+  }
+
+  StatusCode seal(IndexedCountResult requiredEnd) {
+    if (!appended || forced || requiredEnd == null) return StatusCode.CONFLICT;
+    StatusCode status = wal.sealPendingBatch();
+    if (!status.isOk()) return status;
+    long end = wal.tailEnd();
+    if (append.endOffset() > Long.MAX_VALUE - io.riverdb.format.wal.WalCommitGroupCodec.FOOTER_BYTES
+        || append.endOffset() + io.riverdb.format.wal.WalCommitGroupCodec.FOOTER_BYTES != end) {
+      wal.fencePendingBatch();
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    requiredEnd.set(end);
+    clearAppend();
+    return StatusCode.OK;
+  }
+
+  StatusCode submitSealedForce(LocalWalForceCause cause) {
+    if (forceToken != 0 || cause == null) return StatusCode.CONFLICT;
+    StatusCode status = wal.submitSealedForce(force, cause);
+    if (status.isOk()) forceToken = force.token();
+    return status;
+  }
+
+  boolean forceResultReady() {
+    return forceToken != 0 && wal.submittedForceComplete(force);
+  }
+
+  StatusCode completeSubmittedForce() {
+    return forceToken == 0
+        ? StatusCode.CONFLICT : wal.completeSubmittedForce(force, forceToken);
+  }
+
+  long submittedEnd() { return forceToken == 0 ? 0 : force.endOffset(); }
+  long submittedForceNanos() { return forceToken == 0 ? 0 : force.forceElapsedNanos(); }
+  boolean forceActive() { return forceToken != 0; }
 
   StatusCode fence() {
     return storageMayHaveChanged() ? wal.fencePendingBatch() : StatusCode.OK;
   }
 
-  void reset() {
-    append.reset();
-    finalCommitSequence = forceToken = 0;
-    appended = false;
-    forced = false;
+  void resetAppend() {
+    clearAppend();
   }
 
   long start() { return appended ? append.startOffset() : 0; }
@@ -181,5 +221,17 @@ final class IndexedRelationalWalGroupAppender implements LocalWalDecisionBatch {
     commitSequences = null;
     transactions = 0;
     records = 0;
+  }
+
+  private void clearAppend() {
+    append.reset();
+    finalCommitSequence = 0;
+    appended = false;
+    forced = false;
+  }
+
+  private void clearForce() {
+    forceToken = 0;
+    forced = false;
   }
 }

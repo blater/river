@@ -15,7 +15,6 @@ import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.Transaction;
-import io.riverdb.tx.TransactionGroupCompletionTimings;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -24,6 +23,10 @@ import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -32,7 +35,8 @@ final class IndexedPreparedGroupPublicationTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
-  void preservesEachMemberCsnWhenBothChangeOneScalarLeaf(@TempDir Path root) {
+  void preservesEachMemberCsnWhenBothChangeOneScalarLeaf(@TempDir Path root)
+      throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
@@ -65,7 +69,8 @@ final class IndexedPreparedGroupPublicationTest {
   }
 
   @Test
-  void splitAllocationsRetainMemberSnapshotsAndRecoverFromWal(@TempDir Path root) {
+  void splitAllocationsRetainMemberSnapshotsAndRecoverFromWal(@TempDir Path root)
+      throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
@@ -162,47 +167,40 @@ final class IndexedPreparedGroupPublicationTest {
       TransactionManager manager,
       IndexedTable table,
       IndexedTransactionSession first,
-      IndexedTransactionSession second) {
-    IndexedTransactionSession[] sessions = {first, second};
-    assertEquals(StatusCode.OK, first.prepareLogicalCommit());
-    assertEquals(StatusCode.OK, second.prepareLogicalCommit());
-    IndexedPreparedLogicalCommit[] prepared = {
-        first.preparedCommit(), second.preparedCommit()
-    };
-    assertEquals(StatusCode.OK, table.reserveHybridCommitGroupCapacity(prepared.length));
-    Transaction[] transactions = {first.groupTransaction(), second.groupTransaction()};
+      IndexedTransactionSession second) throws Exception {
     TransactionOutcome[] outcomes = {new TransactionOutcome(), new TransactionOutcome()};
-    long[] sequences = new long[2];
-    long[] committedRows = new long[2];
-    long frontier = table.currentCommitSequence();
-    assertEquals(StatusCode.OK,
-        manager.prepareCommit(transactions[0], outcomes[0]));
-    assertEquals(StatusCode.OK,
-        manager.prepareCommit(transactions[1], outcomes[1]));
-    assertEquals(StatusCode.OK, table.preflightHybridCommitGroup(
-        prepared, prepared.length, manager.oldestVisibleCommitSequence(),
-        new IndexedPreparedCommitCohortDemand()));
-    assertEquals(StatusCode.OK, manager.beginCommitGroup(transactions, transactions.length));
-    assertEquals(StatusCode.OK,
-        table.appendHybridCommitGroup(
-            prepared, sequences, committedRows, prepared.length));
-    assertEquals(0, first.committedSequence());
-    assertEquals(0, second.committedSequence());
-    assertEquals(StatusCode.OK, table.forceHybridCommitGroup());
-    assertEquals(StatusCode.OK, table.prepareGroupPublication());
-    assertEquals(frontier, table.currentCommitSequence());
-    assertEquals(StatusCode.OK, manager.publishCommitGroup(
-        transactions, outcomes, sequences, transactions.length, table,
-        new TransactionGroupCompletionTimings()));
-    assertEquals(StatusCode.OK, manager.completeCommitGroup(
-        transactions, outcomes, transactions.length));
-    assertEquals(StatusCode.OK, first.completeCoordinatedCommit(StatusCode.OK));
-    assertEquals(StatusCode.OK, second.completeCoordinatedCommit(StatusCode.OK));
-    assertEquals(TransactionState.COMMITTED, outcomes[0].state());
-    assertEquals(TransactionState.COMMITTED, outcomes[1].state());
-    assertEquals(sequences[0], outcomes[0].commitSequence());
-    assertEquals(sequences[1], outcomes[1].commitSequence());
-    return sequences;
+    IndexedGroupCommitCoordinator coordinator = new IndexedGroupCommitCoordinator(
+        manager, table, TimeUnit.SECONDS.toNanos(1));
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      Future<StatusCode> firstCommit = executor.submit(
+          () -> coordinator.commit(new IndexedGroupCommitRequest(first), outcomes[0]));
+      awaitEnqueues(coordinator, 1);
+      Future<StatusCode> secondCommit = executor.submit(
+          () -> coordinator.commit(new IndexedGroupCommitRequest(second), outcomes[1]));
+      assertEquals(StatusCode.OK, firstCommit.get(5, TimeUnit.SECONDS));
+      assertEquals(StatusCode.OK, secondCommit.get(5, TimeUnit.SECONDS));
+      assertEquals(TransactionState.COMMITTED, outcomes[0].state());
+      assertEquals(TransactionState.COMMITTED, outcomes[1].state());
+      assertEquals(outcomes[0].commitSequence() + 1, outcomes[1].commitSequence());
+      return new long[] {outcomes[0].commitSequence(), outcomes[1].commitSequence()};
+    } finally {
+      executor.shutdownNow();
+      StatusCode status = coordinator.close();
+      assertTrue(status.isOk() || status == StatusCode.CLOSED);
+    }
+  }
+
+  private static void awaitEnqueues(IndexedGroupCommitCoordinator coordinator, long expected)
+      throws Exception {
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    do {
+      assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
+      if (telemetry.queue().enqueues() >= expected) return;
+      Thread.sleep(1);
+    } while (System.nanoTime() < deadline);
+    assertTrue(false, "commit request was not enqueued");
   }
 
   private static void assertMemberSnapshots(IndexedTable table, long[] sequences) {

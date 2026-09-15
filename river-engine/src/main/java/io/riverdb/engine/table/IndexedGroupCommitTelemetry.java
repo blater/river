@@ -51,6 +51,7 @@ public final class IndexedGroupCommitTelemetry {
   private long attemptedGroupTransactions;
   private long successfulGroupCohorts;
   private long successfulGroupTransactions;
+  private long physicalCohortsWhileForceActive;
   private long directCommitTransactions;
   private long groupLockHoldingsReleased;
   private int maximumSuccessfulCohort;
@@ -82,6 +83,7 @@ public final class IndexedGroupCommitTelemetry {
     attemptedGroupTransactions = 0;
     successfulGroupCohorts = 0;
     successfulGroupTransactions = 0;
+    physicalCohortsWhileForceActive = 0;
     directCommitTransactions = 0;
     groupLockHoldingsReleased = 0;
     java.util.Arrays.fill(groupLockHoldingsReleasedByScope, 0);
@@ -102,6 +104,7 @@ public final class IndexedGroupCommitTelemetry {
   public long attemptedGroupTransactions() { return attemptedGroupTransactions; }
   public long successfulGroupCohorts() { return successfulGroupCohorts; }
   public long successfulGroupTransactions() { return successfulGroupTransactions; }
+  public long physicalCohortsWhileForceActive() { return physicalCohortsWhileForceActive; }
   public long directCommitTransactions() { return directCommitTransactions; }
   public long groupLockHoldingsReleased() { return groupLockHoldingsReleased; }
   public long groupLockHoldingsReleased(LockScope scope) {
@@ -251,6 +254,7 @@ public final class IndexedGroupCommitTelemetry {
     attemptedGroupTransactions = source.attemptedGroupTransactions;
     successfulGroupCohorts = source.successfulGroupCohorts;
     successfulGroupTransactions = source.successfulGroupTransactions;
+    physicalCohortsWhileForceActive = source.physicalCohortsWhileForceActive;
     directCommitTransactions = source.directCommitTransactions;
     groupLockHoldingsReleased = source.groupLockHoldingsReleased;
     queue.copyFrom(source.queue);
@@ -275,6 +279,9 @@ public final class IndexedGroupCommitTelemetry {
   void recordReadOnlyCommit() {
     readOnlyCommitSubmissions = increment(readOnlyCommitSubmissions);
     totalCommitSubmissions = increment(totalCommitSubmissions);
+  }
+  void recordPhysicalForceOverlap() {
+    physicalCohortsWhileForceActive = increment(physicalCohortsWhileForceActive);
   }
   void recordFailedBefore(StatusCode status) {
     failedBeforeSubmission = increment(failedBeforeSubmission);

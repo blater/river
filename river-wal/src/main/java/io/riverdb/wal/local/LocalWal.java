@@ -54,6 +54,12 @@ public final class LocalWal {
   private long recoveryCommitSequence;
   private long recoveryMaximumTransactionId;
   private long pendingStart;
+  private long sealedStart;
+  private long sealedRecordCount;
+  private long sealedCommitSequence;
+  private int sealedPreviousDigest;
+  private int sealedDigest;
+  private int durableDigest;
   private long maximumTransactionId = 1;
   private long activeReservationToken;
   private long activeLogicalStreamToken;
@@ -61,6 +67,8 @@ public final class LocalWal {
   private long pendingRecordCount;
   private DurableWalQuorum durableQuorum;
   private LocalWalForceTarget activeForceTarget;
+  private LocalWalForceWorker forceWorker;
+  private LocalWalForceCause activeForceCause;
   private long nextForceToken = 1;
   private boolean forceInProgress;
   private boolean logicalStreamAppended;
@@ -311,7 +319,7 @@ public final class LocalWal {
     StatusCode status = admission();
     if (!status.isOk()) return status;
     if (activeLogicalStreamToken != 0 || activeReservationToken != 0
-        || pendingRecordCount != 0 || hasRetainedForceTarget()) {
+        || hasPendingRecords() || hasRetainedForceTarget()) {
       return StatusCode.CONFLICT;
     }
     long token = claimNextReservationToken();
@@ -372,7 +380,7 @@ public final class LocalWal {
   /** Cancels a stream only while no bytes from it have been accepted. */
   public StatusCode cancelLogicalStream(LocalWalLogicalStream stream) {
     if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
-    if (logicalStreamAppended || pendingRecordCount != 0 || hasRetainedForceTarget()) {
+    if (logicalStreamAppended || hasPendingRecords() || hasRetainedForceTarget()) {
       return StatusCode.CONFLICT;
     }
     if (activeReservationToken != 0) return StatusCode.CONFLICT;
@@ -499,6 +507,31 @@ public final class LocalWal {
     return LocalWalForceCoordinator.force(this, target, cause);
   }
 
+  /** Starts the one database-local force worker owned by this primary WAL. */
+  public StatusCode enableForceWorker(Thread completionOwner) {
+    return LocalWalForceCoordinator.enable(this, completionOwner);
+  }
+
+  /** Finishes the current footer and transfers its immutable bytes into the sealed suffix. */
+  public StatusCode sealPendingBatch() {
+    return LocalWalForceCoordinator.seal(this);
+  }
+
+  /** Captures and submits the whole currently sealed suffix without blocking its writer. */
+  public StatusCode submitSealedForce(
+      LocalWalForceTarget target, LocalWalForceCause cause) {
+    return LocalWalForceCoordinator.submit(this, target, cause);
+  }
+
+  public boolean submittedForceComplete(LocalWalForceTarget target) {
+    return LocalWalForceCoordinator.completed(this, target);
+  }
+
+  /** Consumes local force, advances local truth, then performs the configured quorum on this writer. */
+  public StatusCode completeSubmittedForce(LocalWalForceTarget target, long token) {
+    return LocalWalForceCoordinator.complete(this, target, token);
+  }
+
   /** Opens the locally forced captured range; quorum uses it before configured completion. */
   public StatusCode openForcedCursor(
       LocalWalForceTarget target, long token, LocalWalForcedCursor cursor) {
@@ -523,9 +556,6 @@ public final class LocalWal {
     }
     target.release();
     activeForceTarget = null;
-    pendingStart = 0;
-    pendingRecordCount = 0;
-    commitGroup.resetPending();
     return StatusCode.OK;
   }
 
@@ -551,7 +581,7 @@ public final class LocalWal {
 
   /** Fences a partially assembled decision batch whose outcome can no longer be reported safely. */
   public StatusCode fencePendingBatch() {
-    if (pendingRecordCount == 0 || activeReservationToken != 0) {
+    if ((!hasPendingRecords() && !hasRetainedForceTarget()) || activeReservationToken != 0) {
       return StatusCode.CONFLICT;
     }
     failed = true;
@@ -570,7 +600,7 @@ public final class LocalWal {
     StatusCode status = admission();
     if (!status.isOk()) return status;
     if (!recoveryTailOpen || durableQuorum != null || activeReservationToken != 0
-        || pendingRecordCount != 0 || hasRetainedForceTarget() || hasOpenLogicalStream()
+        || hasPendingRecords() || hasRetainedForceTarget() || hasOpenLogicalStream()
         || startOffset < WalFileHeaderCodec.HEADER_BYTES || startOffset >= tailEnd
         || firstJournalSequence <= 0 || firstJournalSequence >= nextJournalSequence) {
       return StatusCode.CONFLICT;
@@ -611,6 +641,7 @@ public final class LocalWal {
     status = truncateTail(startOffset, firstJournalSequence);
     if (status.isOk()) {
       commitGroup.setDigest(predecessorDigest);
+      durableDigest = predecessorDigest;
       maximumTransactionId = retainedMaximumTransactionId;
       recoveryTailOpen = false;
     }
@@ -638,7 +669,7 @@ public final class LocalWal {
   public StatusCode completeRecovery() {
     StatusCode status = admission();
     if (!status.isOk()) return status;
-    if (activeReservationToken != 0 || pendingRecordCount != 0
+    if (activeReservationToken != 0 || hasPendingRecords()
         || hasRetainedForceTarget() || hasOpenLogicalStream()) return StatusCode.CONFLICT;
     recoveryTailOpen = false;
     return StatusCode.OK;
@@ -648,11 +679,18 @@ public final class LocalWal {
     if (closed) {
       return StatusCode.CLOSED;
     }
-    if (!failed && (pendingRecordCount != 0
+    if (!failed && (hasPendingRecords()
         || hasRetainedForceTarget() || hasOpenLogicalStream())) {
       return StatusCode.CONFLICT;
     }
-    if (forceInProgress) return StatusCode.CONFLICT;
+    if (forceWorker != null) {
+      StatusCode workerStatus = forceWorker.close();
+      if (!workerStatus.isOk() && workerStatus != StatusCode.CLOSED) return workerStatus;
+      forceWorker = null;
+      forceInProgress = false;
+    } else if (forceInProgress) {
+      return StatusCode.CONFLICT;
+    }
     closed = true;
     if (activeForceTarget != null) {
       activeForceTarget.release();
@@ -712,6 +750,9 @@ public final class LocalWal {
       durableEnd = validEnd;
       nextJournalSequence = sequence;
       commitGroup.resetPending();
+      sealedStart = sealedRecordCount = sealedCommitSequence = 0;
+      sealedPreviousDigest = sealedDigest = 0;
+      durableDigest = commitGroup.digest();
     }
     return status;
   }
@@ -784,7 +825,7 @@ public final class LocalWal {
   }
 
   boolean hasPendingRecords() {
-    return pendingRecordCount != 0;
+    return pendingRecordCount != 0 || sealedRecordCount != 0;
   }
 
   boolean hasRetainedForceTarget() {
@@ -895,6 +936,7 @@ public final class LocalWal {
     lastCommitSequence = recoveryCommitSequence;
     maximumTransactionId = recoveryMaximumTransactionId;
     commitGroup.setDigest(footerDigest());
+    durableDigest = commitGroup.digest();
   }
 
   StatusCode truncateTailForRecovery(long validEnd, long sequence) {
@@ -920,6 +962,7 @@ public final class LocalWal {
     durableEnd = offset;
     nextJournalSequence = sequence;
     commitGroup.resetPending();
+    durableDigest = commitGroup.digest();
   }
 
   boolean ownsReservation(LocalWalReservation reservation) {
@@ -956,12 +999,13 @@ public final class LocalWal {
     commitGroup.include(record, recordBytes, sequence);
   }
 
-  private StatusCode appendPendingFooter(LocalWalForceTarget target) {
+  StatusCode appendPendingFooter() {
     if (pendingRecordCount <= 0 || commitGroup.recordBytes() <= 0
         || tailEnd > Long.MAX_VALUE - WalCommitGroupCodec.FOOTER_BYTES
-        || target.endOffset() != tailEnd + WalCommitGroupCodec.FOOTER_BYTES) {
+        || sealedRecordCount > Long.MAX_VALUE - pendingRecordCount) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+    int predecessorDigest = commitGroup.digest();
     StatusCode status = WalCommitGroupCodec.encodeReserved(
         pendingStart,
         commitGroup.recordBytes(),
@@ -973,10 +1017,29 @@ public final class LocalWal {
         commitGroup.footer(),
         checksum);
     if (!status.isOk()) return status;
-    status = writeAppendFooter(tailEnd);
-    if (!status.isOk()) return status;
-    commitGroup.setPendingDigest(WalCommitGroupCodec.chainDigest(commitGroup.footer()));
-    tailEnd = target.endOffset();
+    try {
+      status = writeAppendFooter(tailEnd);
+    } catch (Throwable unexpected) {
+      failed = true;
+      throw unexpected;
+    }
+    if (!status.isOk()) {
+      failed = true;
+      return status;
+    }
+    int terminalDigest = WalCommitGroupCodec.chainDigest(commitGroup.footer());
+    if (sealedRecordCount == 0) {
+      sealedStart = pendingStart;
+      sealedPreviousDigest = predecessorDigest;
+    }
+    sealedRecordCount += pendingRecordCount;
+    sealedCommitSequence = lastAppendedCommitSequence;
+    sealedDigest = terminalDigest;
+    commitGroup.setDigest(terminalDigest);
+    tailEnd += WalCommitGroupCodec.FOOTER_BYTES;
+    pendingStart = 0;
+    pendingRecordCount = 0;
+    commitGroup.resetPending();
     return StatusCode.OK;
   }
 
@@ -1006,9 +1069,12 @@ public final class LocalWal {
   }
 
   StatusCode forceAppendFile(LocalWalForceTarget target, LocalWalForceCause cause) {
-    StatusCode status = appendPendingFooter(target);
-    if (!status.isOk()) return status;
-    return forceRangeFile(cause, target.startOffset(), target.endOffset());
+    long started = System.nanoTime();
+    StatusCode status = target.file().force(
+        target.startOffset(), target.endOffset(), ForceMode.CONTENT_AND_METADATA);
+    forceMetrics.record(
+        cause, target.endOffset() - target.startOffset(), System.nanoTime() - started, status);
+    return status;
   }
 
   private StatusCode forceFile(LocalWalForceCause cause, long coveredBytes) {
@@ -1030,29 +1096,96 @@ public final class LocalWal {
   }
 
   StatusCode captureForceTarget(LocalWalForceTarget target) {
-    if (target.retained()) return StatusCode.CONFLICT;
-    if (nextForceToken == 0) return StatusCode.RESOURCE_EXHAUSTED;
-    if (tailEnd > Long.MAX_VALUE - WalCommitGroupCodec.FOOTER_BYTES) {
-      return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode status = pendingRecordCount == 0 ? StatusCode.OK : sealPendingBatch();
+    return status.isOk() ? captureSealedForceTarget(target) : status;
+  }
+
+  StatusCode captureSealedForceTarget(LocalWalForceTarget target) {
+    if (target.retained() || activeForceTarget != null || sealedRecordCount <= 0) {
+      return StatusCode.CONFLICT;
     }
+    if (nextForceToken == 0) return StatusCode.RESOURCE_EXHAUSTED;
     long token = nextForceToken;
     nextForceToken = token == Long.MAX_VALUE ? 0 : token + 1;
-    target.capture(this, token, pendingStart, tailEnd + WalCommitGroupCodec.FOOTER_BYTES,
-        pendingRecordCount,
-        lastAppendedCommitSequence);
+    target.capture(
+        this, file, token, sealedStart, tailEnd, sealedRecordCount,
+        sealedCommitSequence, sealedPreviousDigest, sealedDigest);
     activeForceTarget = target;
     forceInProgress = true;
+    sealedStart = sealedRecordCount = sealedCommitSequence = 0;
+    sealedPreviousDigest = sealedDigest = 0;
     return StatusCode.OK;
+  }
+
+  void restoreCapturedSuffix(LocalWalForceTarget target) {
+    sealedStart = target.startOffset();
+    sealedRecordCount = target.recordCount();
+    sealedCommitSequence = target.commitSequence();
+    sealedPreviousDigest = target.previousDigest();
+    sealedDigest = target.finalDigest();
+    target.release();
+    activeForceTarget = null;
+    forceInProgress = false;
+  }
+
+  StatusCode validateCapturedTarget(LocalWalForceTarget target) {
+    return target.file() == file
+            && target.startOffset() == durableEnd
+            && target.endOffset() > target.startOffset()
+            && target.endOffset() <= tailEnd
+            && target.previousDigest() == durableDigest
+        ? StatusCode.OK : StatusCode.INVARIANT_BROKEN;
   }
 
   void markForced(LocalWalForceTarget target) {
     durableEnd = target.endOffset();
     lastCommitSequence = target.commitSequence();
-    commitGroup.commitPendingDigest();
+    durableDigest = target.finalDigest();
     target.completeLocalForce();
   }
 
   void finishForce() { forceInProgress = false; }
+
+  boolean hasSealedRecords() { return sealedRecordCount != 0; }
+
+  boolean forceWorkerEnabled() { return forceWorker != null; }
+
+  boolean concurrentAppendPermitted() { return forceWorker != null && forceInProgress; }
+
+  StatusCode installForceWorker(Thread completionOwner) {
+    if (completionOwner == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (forceWorker != null) return StatusCode.CONFLICT;
+    forceWorker = new LocalWalForceWorker(completionOwner);
+    return StatusCode.OK;
+  }
+
+  StatusCode submitForceCommand(LocalWalForceTarget target, LocalWalForceCause cause) {
+    return forceWorker == null ? StatusCode.CONFLICT : forceWorker.submit(target, cause);
+  }
+
+  boolean forceResultReady(LocalWalForceTarget target) {
+    return forceWorker != null && forceWorker.resultReady(target);
+  }
+
+  StatusCode consumeForceResult(LocalWalForceTarget target) {
+    return forceWorker == null ? StatusCode.CONFLICT : forceWorker.consume(target);
+  }
+
+  void beginAsyncForce(LocalWalForceCause cause) { activeForceCause = cause; }
+
+  LocalWalForceCause takeAsyncForceCause() {
+    LocalWalForceCause cause = activeForceCause;
+    activeForceCause = null;
+    return cause;
+  }
+
+  void recordAsyncForce(LocalWalForceTarget target, LocalWalForceCause cause) {
+    forceMetrics.record(
+        cause, target.endOffset() - target.startOffset(),
+        target.forceElapsedNanos(), target.forceStatus());
+  }
+
+  void completeForceDurability(LocalWalForceTarget target) { target.completeDurability(); }
 
   StatusCode replicateForcedBatch(LocalWalForceTarget target, LocalWalForceCause cause) {
     return hasOpenLogicalStream()
@@ -1080,6 +1213,7 @@ public final class LocalWal {
     lastCommitSequence = replacement.lastCommitSequence;
     lastAppendedCommitSequence = replacement.lastAppendedCommitSequence;
     commitGroup.setDigest(replacement.commitGroup.digest());
+    durableDigest = replacement.durableDigest;
     maximumTransactionId = replacement.maximumTransactionId;
     copiedPayloadBytes += replacement.copiedPayloadBytes;
     return previousFile.close();

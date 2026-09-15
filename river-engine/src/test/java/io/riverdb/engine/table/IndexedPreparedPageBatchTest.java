@@ -17,6 +17,50 @@ import org.junit.jupiter.api.Test;
 
 final class IndexedPreparedPageBatchTest {
   @Test
+  void transferPrevalidatesEveryFrameBeforeClaimingAnyOwnership() {
+    DatabasePageCachePlan plan = DatabasePageCacheTestPlan.geometry(5, 4, 4);
+    IndexedPageFrameCache cache = new IndexedPageFrameCache(
+        null, null, DatabaseIncarnation.of(1, 2), WalGeneration.of(1),
+        new IndexedPageState(plan), plan);
+    publish(cache, 1, 11, 1);
+    publish(cache, 2, 22, 2);
+
+    ByteBuffer firstStaging = cache.stageExisting(1, 2);
+    ByteBuffer secondStaging = cache.stageExisting(2, 2);
+    assertNotNull(firstStaging);
+    assertNotNull(secondStaging);
+    firstStaging.putInt(0, 111);
+    secondStaging.putInt(0, 222);
+    assertEquals(StatusCode.OK, cache.beginPreparedBatch());
+    assertEquals(StatusCode.OK, cache.freezeChangedPages(0, Long.MAX_VALUE));
+    assertEquals(StatusCode.OK,
+        cache.installPreparedPages(new long[] {3, 4}, 2, 3, 5));
+
+    IndexedPageFrame first = cache.prepared.frame(1, cache.currentFrames);
+    IndexedPageFrame second = cache.prepared.frame(2, cache.currentFrames);
+    int firstSlot = slotOf(cache, first);
+    int secondSlot = slotOf(cache, second);
+    assertTrue(firstSlot >= 0);
+    assertTrue(secondSlot >= 0);
+    cache.claimDurabilityFrame(secondSlot, 77, -1);
+
+    IndexedCountResult head = new IndexedCountResult();
+    head.set(-1);
+    assertEquals(StatusCode.INVARIANT_BROKEN,
+        cache.transferPreparedBatch(88, head));
+    assertEquals(-1, head.value());
+    assertTrue(cache.durabilityFrameAvailable(firstSlot));
+    assertEquals(1, first.pinCount);
+    assertEquals(1, second.pinCount);
+
+    assertEquals(StatusCode.OK, cache.releasePreparedBatch());
+    assertEquals(StatusCode.OK, cache.releaseDurabilityChain(77, secondSlot));
+    assertEquals(0, first.pinCount);
+    assertEquals(0, second.pinCount);
+    assertEquals(StatusCode.OK, cache.detach());
+  }
+
+  @Test
   void failedLaterMemberFreezePreservesPrefixAndCanRetryAfterReleasingPressure() {
     DatabasePageCachePlan plan = DatabasePageCacheTestPlan.geometry(5, 2, 2);
     IndexedPageFrameCache cache = new IndexedPageFrameCache(
@@ -123,5 +167,12 @@ final class IndexedPreparedPageBatchTest {
       if (frame != null) count++;
     }
     return count;
+  }
+
+  private static int slotOf(IndexedPageFrameCache cache, IndexedPageFrame expected) {
+    for (int slot = 0; slot < cache.currentFrames.length; slot++) {
+      if (cache.currentFrames[slot] == expected) return slot;
+    }
+    return -1;
   }
 }

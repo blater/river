@@ -4,6 +4,74 @@ This ledger records stable feature points for performance-sensitive work. It
 does not turn short local samples into performance claims. Its purpose is to
 make regressions visible, attribution reviewable, and rollback exact.
 
+## 2026-09-15 — WAL force/physical-work overlap (`tic-f1bb`)
+
+Base `b28f33db95c74464cd0311d7fbd668aa49b23adf`, tagged
+`perf-checkpoint-20260915-force-contract`; feature branch
+`ticket/tic-f1bb-force-overlap`. One bounded database-local force worker now
+forces a captured sealed WAL prefix while the existing sole commit writer
+prepares, appends and publishes eligible successor cohorts. FIFO cohort and
+page-generation ownership, local-versus-quorum durability, direct/maintenance
+drain, fencing and cleanup remain in the existing owners. Detailed design,
+test matrix and evidence: [tic-f1bb](tickets/tic-f1bb.md) and
+[delivery evidence](delivery/evidence/2026-09-15-tic-f1bb-force-overlap.md).
+
+All samples pinned GraalVM 25.0.4, used tiny/standard serializable no-wait
+stress, seed 42, batch rows 32, maximum 32 attempts, a 2-second warmup, disabled
+retained deadlock diagnostics and persisted-write tracing, and the no-CHECKPOINT
+`load-run` path. Pre-edit 10-second controls were 847.0/846.3 TPS; candidates
+787.7/831.1 triggered the longer fixed-order sequence.
+
+| 30-second sample | TPS | Submission-through-preflight mean | Blocked-lock mean | Queue nonempty total | Forces / cohorts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| control-1 | 915.100 | 175.802 us | 2,177.416 us | 149.789 ms | 25,157 / 25,157 |
+| candidate-1 | 898.267 | 178.107 us | 2,199.336 us | 98.712 ms | 24,670 / 24,684 |
+| candidate-2 | 902.400 | 177.049 us | 2,189.352 us | 98.464 ms | 24,789 / 24,801 |
+| control-2 | 812.367 | 196.835 us | 2,430.423 us | 161.116 ms | 22,297 / 22,297 |
+| control-3 | 840.333 | 194.062 us | 2,356.957 us | 154.137 ms | 23,059 / 23,059 |
+| candidate-3 | 893.033 | 177.831 us | 2,211.846 us | 100.289 ms | 24,516 / 24,526 |
+
+Every sample passed invariants, exact deadlock/retry reconciliation, performance
+capture and terminal cleanup with zero failed or unknown outcomes. Candidate TPS
+moved -1.84%, +11.08% and +6.27% in matched order pairs. The broad control
+variation prevents a general percentage claim. Aggregate queue occupancy fell
+in all three pairs; submission-through-preflight and lock-blocked means improved
+in the latter two and were slightly worse in the first. `QUEUE_RESIDENCE` is
+recorded after group preflight and is not pure enqueue-to-selection latency;
+queue nonempty time is aggregate occupancy rather than a per-request wait.
+Held-force regression tests provide the direct physical-overlap proof. Only
+10-14 forces were saved across roughly 24,000-25,000 candidate cohorts, so this
+checkpoint does not claim a batching explanation.
+
+Required balanced 10-second C,K,K,C regression controls passed. Single-worker T1/W1 TPS
+was 788.1/760.9/754.1/727.8; low-contention T4/W4 was
+882.8/798.0/775.5/768.9. In both families reverse-order control drift spans the
+two candidate values, with no repeated candidate loss. All eight samples passed invariants/capture/cleanup; one
+candidate low-contention deadlock was exactly reconciled and no sample had an
+error.
+
+The clean full test gate command was `GRADLE_USER_HOME=/private/tmp/river-gradle-tic-f1bb
+./gradlew --no-daemon --project-cache-dir
+/private/tmp/river-project-cache-tic-f1bb --no-build-cache clean test --continue`.
+It passed in 2m57s across 116 tasks: 430 suites, 2,019 cases, 2,000 executed,
+19 skipped, zero failures/errors. Provider testing passed
+13 focused mapped-file cases and 39 executed platform cases with 17
+platform-dependent skips. Independent concurrency/recovery and provider reviews
+accepted the bounded ownership. Slopmark increases in `LocalWal` (159.675 ->
+176.082) and `IndexedGroupCommitCoordinator` (83.9806 -> 131.935) were accepted
+as their existing force-target and ordered-cohort responsibilities; no second
+writer, executor, force path or outcome policy was added.
+Provider slopmark scores were `NioDurableFile` 42.98 -> 77.691 and
+`NioMappedWindow` 21.0395 -> 10.3519; review accepted the bounded mapped-file
+generation lifetime in its existing owner.
+
+Decision: accept this local performance/correctness checkpoint without a
+general or statistically significant speedup claim. Artifacts:
+`/private/tmp/river-tic-f1bb-evidence`; independent review:
+`/private/tmp/river-tic-f1bb-review.md`. The existing user-directed P0 scaling
+and warmup-accounting deferral remains unchanged and is not certified by this
+checkpoint.
+
 ## 2026-09-15 — cumulative physical cohort admission (`tic-5b3e`)
 
 Base: `bbbd3803d328819bf48b1f8a40bf70910bdf1879`, tagged

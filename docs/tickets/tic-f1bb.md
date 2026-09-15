@@ -1,6 +1,6 @@
 ---
 id: tic-f1bb
-status: open
+status: in_progress
 priority: 1
 type: story
 assignee: blater
@@ -117,3 +117,43 @@ makes this ticket implementation-ready through its declared dependencies. Begin
 with the smallest atomic NIO-provider, force-worker, cohort-ownership, and
 resource-accounting slice specified there. No duplicate WAL mechanism or
 additional chunking prerequisite is required.
+
+### Implementation start, 2026-09-15
+
+Implementation began from accepted checkpoint
+`perf-checkpoint-20260915-force-contract` (`b28f33db`). The declared mechanism is
+one database-local WAL force worker: after the existing publication and lock
+handoff, the sole commit writer seals each cohort and reuses its physical scratch
+while the captured prefix force is outstanding. Expected movement is lower
+enqueue-to-selection delay and measurable physical-work/force overlap, followed
+by shorter lock residence; force/cohort counts may aggregate independently.
+Fresh controls precede production edits. The TPS path uses its explicit
+`load-run` phase (no SQL checkpoint), zero retained deadlock-diagnostic budget,
+and no persisted-file-write diagnostic JVM property.
+
+### Provider approval history, 2026-09-15
+
+The two pre-edit controls passed at 847.0 and 846.3 TPS, with invariants and
+cleanup passing and CHECKPOINT skipped. Evidence is retained under
+`/private/tmp/river-tic-f1bb-evidence/control-{1,2}-live`.
+
+Automatic approval review rejected the NIO provider edit before any provider
+change landed. The rejected action would snapshot dirty ranges, pin mapped
+regions, permit disjoint suffix writes during force, and join force completion
+before remap/close/truncate. The review cited durability/data-corruption risk
+and required explicit user approval for that implementation and its tests. The
+user subsequently granted that exact approval. The reviewed mapped-provider
+component was committed as `663b4793` and integrated into the feature branch as
+`eb4784e6`; its focused and platform suites passed without widening scope.
+
+### Delivery evidence, 2026-09-15
+
+The implementation, ownership/failure matrix, allocation evidence, clean full
+gate, independent review and interleaved performance decision are recorded in
+[the force-overlap delivery evidence](../delivery/evidence/2026-09-15-tic-f1bb-force-overlap.md).
+The bounded mechanism is accepted: deterministic held-force tests prove actual
+same-page successor publication, aggregate queue occupancy fell in all three
+long matched pairs, and candidate TPS improved in two of three pairs amid large
+control variation. Single-worker and low-contention controls found no repeated
+regression. The result is a local diagnostic acceptance, not a general or
+statistically significant speedup claim.

@@ -64,8 +64,23 @@ final class IndexedExtendedCommitCoordinator {
     return hybridGroup.append(prepared, commitSequences, committedRows, count);
   }
 
-  StatusCode forceHybridGroup() { return hybridGroup.force(); }
-  StatusCode completeHybridGroupDurability() { return hybridGroup.completeDurability(); }
+  StatusCode sealHybridGroup(
+      long ownerToken, IndexedCountResult frameHead, IndexedCountResult requiredWalEnd) {
+    return hybridGroup.sealPublication(ownerToken, frameHead, requiredWalEnd);
+  }
+  StatusCode enableHybridForceWorker(Thread completionOwner) {
+    return hybridGroup.enableForceWorker(completionOwner);
+  }
+  StatusCode submitSealedHybridForce() { return hybridGroup.submitSealedForce(); }
+  boolean hybridForceResultReady() { return hybridGroup.forceResultReady(); }
+  boolean hybridForceActive() { return hybridGroup.forceActive(); }
+  long submittedHybridForceEnd() { return hybridGroup.submittedForceEnd(); }
+  long submittedHybridForceNanos() { return hybridGroup.submittedForceNanos(); }
+  StatusCode completeSubmittedHybridForce() { return hybridGroup.completeSubmittedForce(); }
+  StatusCode releaseSubmittedHybridForce() { return hybridGroup.releaseSubmittedForce(); }
+  StatusCode releaseHybridDurabilityChain(long ownerToken, int frameHead) {
+    return hybridGroup.releaseDurabilityChain(ownerToken, frameHead);
+  }
   StatusCode prepareHybridGroupPublication() { return hybridGroup.preparePublication(); }
   StatusCode installHybridGroupPublication() { return hybridGroup.installPublication(); }
   StatusCode cancelHybridGroup() { return hybridGroup.cancel(); }
