@@ -228,4 +228,3 @@ PIDs running. This closes the comparison investigation with evidence paths;
 implementation delivery is tracked in
 [tic-fine-barad-dur](../../tickets/tic-fine-barad-dur.md). The binary-routing and
 stock-order recommendations remain future work.
-

@@ -1,12 +1,14 @@
 ---
 id: tic-fine-barad-dur
-status: in_progress
+status: closed
 type: feature
 priority: 2
 assignee: blater
 delivery: code
+checkpoint-tag: perf-checkpoint-20260915-read-validation
 base-commit: eede02521803a148abf09a8df8155c33e8d9affe
 branch: ticket/tic-fine-barad-dur-read-validation
+delivered-commit: b12bdc34f22221530026840a3eb4a6e21be27f2b
 tags:
     - performance
     - format
@@ -32,3 +34,6 @@ Independent descriptor review and strategy_adversary durable/recovery review acc
 
 This delivery includes descriptor admission cleanup, page-header-only CRC, removal of repeated tuple-root CRC, bulk heap CRC, required live/replay registry allocation ordering, controlled lock-order coverage, and the reviewed comparison evidence. It excludes unrelated backlog/checkpoint investigation edits. Integration checkpoint: perf-checkpoint-20260915-read-validation.
 
+### 2026-09-15T20:37:57Z
+
+Implementation delivered in b12bdc34 on ticket/tic-fine-barad-dur-read-validation after clean full validation. The stable integration merge is identified by annotated tag perf-checkpoint-20260915-read-validation. The user authorized commit, merge and push; this ticket records the code delivery, while tic-gothmog remains the accepted diagnostic investigation. Proposed binary routing and stock-order changes are not included.
