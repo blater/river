@@ -46,9 +46,10 @@ final class IndexedExtendedCommitCoordinator {
 
   StatusCode preflightHybridGroup(
       IndexedPreparedLogicalCommit[] prepared, int count,
-      long oldestVisibleCommitSequence) {
+      long oldestVisibleCommitSequence,
+      IndexedPreparedCommitCohortDemand demand) {
     return hybridGroup.preflight(
-        prepared, count, oldestVisibleCommitSequence);
+        prepared, count, oldestVisibleCommitSequence, demand);
   }
 
   StatusCode reserveHybridGroupCapacity(int required) {

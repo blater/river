@@ -17,6 +17,8 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
   private final Transaction[] transactions;
   private final TransactionOutcome[] outcomes;
   private final StatusCode[] statuses;
+  private final IndexedPreparedCommitCohortDemand admission =
+      new IndexedPreparedCommitCohortDemand();
   private final long[] commitSequences;
   private final long[] committedRows;
   private final TransactionManager manager;
@@ -28,6 +30,7 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
   private boolean publicationInstallAttempted;
   private long publicationInstallNanos;
   private StatusCode publicationInstallStatus;
+  private int completionCount;
 
   IndexedGroupCommitBatch(
       TransactionManager transactionManager,
@@ -56,35 +59,64 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
   }
 
   void process(int count) {
-    if (requests[0].groupable) {
-      metrics.recordAttemptedGroup(count);
-      attemptedGroupRecorded = true;
-    }
+    completionCount = count;
     if (!requests[0].groupable) {
       for (int index = 0; index < count; index++) {
         commitDirectly(index, IndexedDirectCommitReason.INITIALLY_INELIGIBLE);
       }
       return;
     }
-    if (appendSharedGroup(count) && publishPrepared(count)) completeDurability(count);
+    int admitted = appendSharedGroup(count);
+    if (admitted > 0 && publishPrepared(admitted)) completeDurability(admitted);
   }
 
-  boolean appendSharedGroup(int count) {
+  int appendSharedGroup(int count) {
+    completionCount = count;
     long started = System.nanoTime();
     StatusCode status = table.preflightHybridCommitGroup(
-        prepared, count, manager.oldestVisibleCommitSequence());
+        prepared, count, manager.oldestVisibleCommitSequence(), admission);
     metrics.recordStage(
         IndexedCommitPath.SHARED_GROUP,
         IndexedCommitStage.GROUP_PREFLIGHT,
         System.nanoTime() - started);
-    if (!status.isOk()) {
-      metrics.recordGroupFailure(IndexedGroupFailureStage.PREFLIGHT, status, count);
-      abortPreparedGroup(count, status);
-      return false;
+    int admitted = admission.acceptedCount();
+    boolean pressure = status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED;
+    if (admitted > 0 && (status.isOk() || pressure && admission.memberRollbackSplit())) {
+      recordAttemptedGroup(admitted);
+      attributePaths(admitted, IndexedCommitPath.SHARED_GROUP);
+      completionCount = admitted;
+      return appendAcceptedGroup(admitted);
     }
-    attributePaths(count, IndexedCommitPath.SHARED_GROUP);
-    started = System.nanoTime();
-    status = manager.beginCommitGroup(transactions, count);
+    if (pressure && admission.capacitySplit() && admitted == 0) completionCount = 1;
+    if (status.isOk()) status = StatusCode.INVARIANT_BROKEN;
+    recordAttemptedGroup(completionCount);
+    metrics.recordGroupFailure(IndexedGroupFailureStage.PREFLIGHT, status, completionCount);
+    abortPreparedGroup(completionCount, status);
+    return 0;
+  }
+
+  int completionCount() { return completionCount; }
+
+  IndexedGroupCommitRequest takeDeferred(int index) {
+    IndexedGroupCommitRequest request = requests[index];
+    requests[index] = null;
+    prepared[index] = null;
+    transactions[index] = null;
+    outcomes[index] = null;
+    statuses[index] = null;
+    commitSequences[index] = 0;
+    committedRows[index] = 0;
+    return request;
+  }
+
+  private void recordAttemptedGroup(int count) {
+    metrics.recordAttemptedGroup(count);
+    attemptedGroupRecorded = true;
+  }
+
+  private int appendAcceptedGroup(int count) {
+    long started = System.nanoTime();
+    StatusCode status = manager.beginCommitGroup(transactions, count);
     metrics.recordStage(
         IndexedCommitPath.SHARED_GROUP,
         IndexedCommitStage.GROUP_ADMISSION,
@@ -94,7 +126,7 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
       metrics.recordGroupFailure(IndexedGroupFailureStage.ADMISSION, status, count);
       abortPreparedGroup(
           count, cancellation.isOk() ? status : StatusCode.FENCED);
-      return false;
+      return 0;
     }
     started = System.nanoTime();
     status = table.appendHybridCommitGroup(
@@ -105,9 +137,9 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
         System.nanoTime() - started);
     if (!status.isOk()) {
       failGroup(count, IndexedGroupFailureStage.APPEND, status);
-      return false;
+      return 0;
     }
-    return true;
+    return count;
   }
 
   boolean publishPrepared(int count) {

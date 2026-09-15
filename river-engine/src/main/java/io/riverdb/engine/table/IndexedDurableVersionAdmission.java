@@ -27,6 +27,18 @@ final class IndexedDurableVersionAdmission {
     return StatusCode.RETRY;
   }
 
+  StatusCode availableOperations(
+      long publishedRows, long obsoleteRows, IndexedCountResult result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    result.reset();
+    StatusCode valid = validate(publishedRows, obsoleteRows);
+    if (!valid.isOk()) return valid;
+    if (maintenanceRequired) return StatusCode.RETRY;
+    result.set(Math.min(
+        Integer.MAX_VALUE, IndexedTableLimits.MAX_ROWS - publishedRows));
+    return StatusCode.OK;
+  }
+
   StatusCode maintenanceCompleted(long publishedRows, long obsoleteRows) {
     StatusCode valid = validate(publishedRows, obsoleteRows);
     if (!valid.isOk()) return valid;

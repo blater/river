@@ -30,6 +30,8 @@ final class IndexedPageFrameCache {
   // Only reclaimHistorical offers them; selection consumes them before probing.
   private int reclaimedFrameHead = -1;
   private StatusCode lastStatus = StatusCode.OK;
+  private IndexedPreparedLogicalCommit memberAdmission;
+  private boolean memberCapacityPressure;
   private final IoResult cacheIo = new IoResult();
 
   IndexedPageFrameCache(
@@ -361,12 +363,14 @@ final class IndexedPageFrameCache {
     if (!admitExistingStaging(pageId, maximumChangedPages, alreadyStaged)) return null;
     IndexedPageFrame staging = acquireStagingFrame(pageId);
     if (staging == null) {
+      markCapacityPressure(lastStatus);
       rollbackAdmission(pageId, alreadyStaged);
       return null;
     }
     StatusCode status = populateExistingStaging(pageId, staging, alreadyStaged);
     if (!status.isOk()) {
       releaseStagingFrame(pageId);
+      markCapacityPressure(status);
       rollbackAdmission(pageId, alreadyStaged);
       return null;
     }
@@ -417,6 +421,7 @@ final class IndexedPageFrameCache {
     if (!admitNewStaging(pageId, maximumChangedPages, alreadyStaged)) return null;
     IndexedPageFrame staging = acquireStagingFrame(pageId);
     if (staging == null) {
+      markCapacityPressure(lastStatus);
       rollbackAdmission(pageId, alreadyStaged);
       return null;
     }
@@ -458,8 +463,19 @@ final class IndexedPageFrameCache {
   private boolean admitNewStaging(
       int pageId, int maximumChangedPages, boolean alreadyStaged) {
     if (alreadyStaged) return true;
+    if (memberAdmission != null) {
+      int memberChangedPages = state.changedPageCount() + 1;
+      StatusCode status = prepared.admitMemberPage(memberChangedPages);
+      if (status.isOk()) status = memberAdmission.admitStagedPages(memberChangedPages);
+      if (!status.isOk()) {
+        setStatus(status);
+        markCapacityPressure(status);
+        return false;
+      }
+    }
     StatusCode status = state.addChangedPage(pageId, maximumChangedPages);
     lastStatus = status;
+    markCapacityPressure(status);
     return status.isOk();
   }
 
@@ -486,6 +502,7 @@ final class IndexedPageFrameCache {
     if (state.present(pageId) && current == null) {
       releaseStagingFrame(pageId);
       rollbackAdmission(pageId, false);
+      markCapacityPressure(lastStatus);
       return null;
     }
     staging.rememberIdentity(
@@ -502,6 +519,7 @@ final class IndexedPageFrameCache {
       releaseStagingFrame(pageId);
       rollbackAdmission(pageId, false);
       lastStatus = identity;
+      markCapacityPressure(identity);
       return null;
     }
     lastStatus = StatusCode.OK;
@@ -582,8 +600,35 @@ final class IndexedPageFrameCache {
     return setStatus(prepared.begin());
   }
 
+  StatusCode beginMemberStagingAdmission(IndexedPreparedLogicalCommit member) {
+    if (member == null || memberAdmission != null || state.changedPageCount() != 0) {
+      return setStatus(StatusCode.INVARIANT_BROKEN);
+    }
+    memberAdmission = member;
+    memberCapacityPressure = false;
+    return setStatus(StatusCode.OK);
+  }
+
+  boolean memberCapacityPressure() { return memberCapacityPressure; }
+
+  void endMemberStagingAdmission() { memberAdmission = null; }
+
+  void rollbackStagedMember() {
+    clearStagedFlags();
+    state.resetChanges();
+  }
+
+  void markCapacityPressure(StatusCode status) {
+    if (memberAdmission != null
+        && (status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED)) {
+      memberCapacityPressure = true;
+    }
+  }
+
   StatusCode freezeChangedPages(int member, long oldestVisibleCommitSequence) {
-    return setStatus(prepared.freeze(this, state, member, oldestVisibleCommitSequence));
+    StatusCode status = prepared.freeze(this, state, member, oldestVisibleCommitSequence);
+    markCapacityPressure(status);
+    return setStatus(status);
   }
 
   StatusCode installPreparedPages(

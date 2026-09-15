@@ -131,7 +131,8 @@ final class IndexedPreparedGroupPublicationTest {
     };
     assertEquals(StatusCode.OK, table.reserveHybridCommitGroupCapacity(prepared.length));
     assertEquals(StatusCode.OK, table.preflightHybridCommitGroup(
-        prepared, prepared.length, manager.oldestVisibleCommitSequence()));
+        prepared, prepared.length, manager.oldestVisibleCommitSequence(),
+        new IndexedPreparedCommitCohortDemand()));
     assertEquals(frontier, table.currentCommitSequence());
     assertMissing(table, frontier, 900);
     assertMissing(table, frontier, 901);
@@ -179,7 +180,8 @@ final class IndexedPreparedGroupPublicationTest {
     assertEquals(StatusCode.OK,
         manager.prepareCommit(transactions[1], outcomes[1]));
     assertEquals(StatusCode.OK, table.preflightHybridCommitGroup(
-        prepared, prepared.length, manager.oldestVisibleCommitSequence()));
+        prepared, prepared.length, manager.oldestVisibleCommitSequence(),
+        new IndexedPreparedCommitCohortDemand()));
     assertEquals(StatusCode.OK, manager.beginCommitGroup(transactions, transactions.length));
     assertEquals(StatusCode.OK,
         table.appendHybridCommitGroup(

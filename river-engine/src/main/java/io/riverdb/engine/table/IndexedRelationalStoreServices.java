@@ -46,9 +46,10 @@ final class IndexedRelationalStoreServices {
 
   StatusCode preflightHybridGroup(
       IndexedPreparedLogicalCommit[] prepared, int count,
-      long oldestVisibleCommitSequence) {
+      long oldestVisibleCommitSequence,
+      IndexedPreparedCommitCohortDemand demand) {
     return commits.preflightHybridGroup(
-        prepared, count, oldestVisibleCommitSequence);
+        prepared, count, oldestVisibleCommitSequence, demand);
   }
 
   StatusCode reserveHybridGroupCapacity(int required) {

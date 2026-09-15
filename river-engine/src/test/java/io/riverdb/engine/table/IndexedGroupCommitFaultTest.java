@@ -29,6 +29,8 @@ import io.riverdb.tx.api.TransactionState;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -53,7 +55,7 @@ final class IndexedGroupCommitFaultTest {
       throws Exception {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
     long durableEnd = fixture.wal.durableEnd();
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertTrue(fixture.batch.publishPrepared(2));
     assertEquals(durableEnd, fixture.wal.durableEnd());
     assertEquals(0, fixture.manager.activeLockCount());
@@ -113,7 +115,7 @@ final class IndexedGroupCommitFaultTest {
   void failedForceWakesDependentReaderWithoutAcknowledgingRowsOrAbsence(long key)
       throws Exception {
     ForcedGroupFixture fixture = new ForcedGroupFixture(true);
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertTrue(fixture.batch.publishPrepared(2));
     IndexedTransactionSession reader = fixture.newSession();
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
@@ -145,7 +147,7 @@ final class IndexedGroupCommitFaultTest {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
     IndexedTransactionSession reader = fixture.newSession();
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertTrue(fixture.batch.publishPrepared(2));
     ExecutorService executor = Executors.newSingleThreadExecutor();
     try {
@@ -175,7 +177,7 @@ final class IndexedGroupCommitFaultTest {
   @Test
   void unrelatedRowsAbsenceAndReadOnlyCommitCompleteWhileForceIsPending() throws Exception {
     ForcedGroupFixture fixture = new ForcedGroupFixture(true);
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertTrue(fixture.batch.publishPrepared(2));
     IndexedTransactionSession reader = fixture.newSession();
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
@@ -212,7 +214,7 @@ final class IndexedGroupCommitFaultTest {
   void negativeAndRolledBackObservationsRemainDependentOnFailedForce(String observation)
       throws Exception {
     ForcedGroupFixture fixture = new ForcedGroupFixture(true);
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertTrue(fixture.batch.publishPrepared(2));
     IndexedTransactionSession reader = fixture.newSession();
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
@@ -264,7 +266,7 @@ final class IndexedGroupCommitFaultTest {
   @Test
   void cancelledReadOnlyCommitRetainsItsDependencyAndCanRetryAfterForce() {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertTrue(fixture.batch.publishPrepared(2));
     IndexedTransactionSession reader = fixture.newSession();
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
@@ -324,7 +326,7 @@ final class IndexedGroupCommitFaultTest {
   void crashAfterVisiblePublicationBeforeForceDiscardsTheUnacknowledgedGroup() {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
     long durableTail = fixture.wal.durableEnd();
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertTrue(fixture.batch.publishPrepared(2));
     assertEquals(fixture.secondSequence, fixture.table.currentCommitSequence());
     assertFalse(fixture.firstRequest.outcome.isAvailable());
@@ -350,68 +352,217 @@ final class IndexedGroupCommitFaultTest {
   }
 
   @Test
-  void preflightFailureAbortsPreparedMembersWithoutWalOrFallbackAndAllowsNextCommit() {
+  void physicalPressurePublishesPrefixThenTerminalizesDeferredHeadsBeforeFreshCommit()
+      throws Exception {
     DatabasePageCachePlan constrained = DatabasePageCacheTestPlan.geometry(5, 8, 16);
-    ForcedGroupFixture fixture = new ForcedGroupFixture(constrained);
-    long tail = fixture.wal.tailEnd();
-    long journalSequence = fixture.wal.nextJournalSequence();
-    long commitSequence = fixture.table.currentCommitSequence();
-    long rows = fixture.table.rowCount();
-
-    assertEquals(
-        StatusCode.OK,
-        fixture.table.preflightHybridCommitGroup(
-            new IndexedPreparedLogicalCommit[] {fixture.first.preparedCommit()},
-            1,
-            fixture.manager.oldestVisibleCommitSequence()));
-    assertEquals(StatusCode.OK, fixture.table.cancelCommitGroup());
-
-    fixture.batch.process(2);
-    fixture.complete(StatusCode.RESOURCE_EXHAUSTED);
-
-    assertEquals(TransactionState.ABORTED, fixture.first.transaction().state());
-    assertEquals(TransactionState.ABORTED, fixture.second.transaction().state());
-    assertEquals(TransactionState.ABORTED, fixture.firstOutcome.state());
-    assertEquals(TransactionState.ABORTED, fixture.secondOutcome.state());
-    assertEquals(0, fixture.manager.activeTransactionCount());
-    assertEquals(0, fixture.manager.activeLockCount());
-    assertEquals(0, fixture.manager.waitingLockCount());
-    assertEquals(StatusCode.OK, fixture.store.admission());
-    assertEquals(tail, fixture.wal.tailEnd());
-    assertEquals(journalSequence, fixture.wal.nextJournalSequence());
-    assertEquals(commitSequence, fixture.table.currentCommitSequence());
-    assertEquals(rows, fixture.table.rowCount());
-    assertEquals(StatusCode.CONFLICT,
-        fixture.table.fetchByKey(0, 41, new HeapRowResult()));
-    assertEquals(StatusCode.CONFLICT,
-        fixture.table.fetchByKey(0, 42, new HeapRowResult()));
-
-    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
-    assertEquals(StatusCode.OK, fixture.table.copyCommitTelemetry(telemetry));
-    assertEquals(1, telemetry.groupFailureCohortCount(
-        IndexedGroupFailureStage.PREFLIGHT));
-    assertEquals(2, telemetry.groupFailureTransactionCount(
-        IndexedGroupFailureStage.PREFLIGHT));
-    assertEquals(0, telemetry.directCommitTransactions());
-
-    TransactionOutcome next = new TransactionOutcome();
-    assertEquals(StatusCode.OK, fixture.first.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, fixture.first.insert(0, 41, row(411)));
-    assertEquals(StatusCode.OK, fixture.first.commit(next));
-    assertEquals(TransactionState.COMMITTED, next.state());
-    assertEquals(rows + 1, fixture.table.rowCount());
-    assertEquals(StatusCode.OK,
-        fixture.table.fetchByKey(0, 41, new HeapRowResult()));
-
-    assertEquals(StatusCode.OK, fixture.first.close());
-    assertEquals(StatusCode.OK, fixture.second.close());
-    assertEquals(StatusCode.OK, fixture.table.flush());
-    assertEquals(StatusCode.OK, fixture.table.close());
-    assertEquals(StatusCode.OK, fixture.wal.close());
+    FaultFixture faults = new FaultFixture();
+    LocalWalOpenResult walResult = new LocalWalOpenResult();
+    assertEquals(StatusCode.OK, LocalWal.open(faults.directory, DATABASE, GENERATION, walResult));
+    LocalWal wal = walResult.wal();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
+    assertEquals(StatusCode.OK, IndexedTableStore.create(
+        faults.directory, wal, DATABASE, GENERATION,
+        DatabasePageCacheTestPlan.providerLease(constrained, 4), storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
+    IndexedTable table = tableResult.table();
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedGroupCommitCoordinator coordinator =
+        new IndexedGroupCommitCoordinator(manager, table, TimeUnit.MILLISECONDS.toNanos(500));
+    IndexedSessionContext context = context(manager, table, coordinator, vacuum);
+    IndexedTransactionSession[] sessions = {
+        session(context, Long.BYTES), session(context, Long.BYTES), session(context, Long.BYTES)
+    };
+    TransactionOutcome[] outcomes = {
+        new TransactionOutcome(), new TransactionOutcome(), new TransactionOutcome()
+    };
+    List<Future<StatusCode>> commits = new ArrayList<>(3);
+    ExecutorService executor = Executors.newFixedThreadPool(3);
+    try {
+      for (int index = 0; index < sessions.length; index++) {
+        assertEquals(StatusCode.OK, sessions[index].begin(IsolationLevel.REPEATABLE_READ));
+        assertEquals(StatusCode.OK, sessions[index].insert(0, 41 + index, row(410 + index)));
+      }
+      long firstSequence = table.currentCommitSequence() + 1;
+      for (int index = 0; index < sessions.length; index++) {
+        int member = index;
+        commits.add(executor.submit(() -> sessions[member].commit(outcomes[member])));
+        awaitQueueEnqueues(coordinator, index + 1);
+      }
+      for (int index = 0; index < commits.size(); index++) {
+        StatusCode expected = index == 0 ? StatusCode.OK : StatusCode.RETRY;
+        assertEquals(expected, commits.get(index).get(5, TimeUnit.SECONDS),
+            "commit member " + index);
+        assertEquals(index == 0 ? TransactionState.COMMITTED : TransactionState.ABORTED,
+            outcomes[index].state());
+        if (index == 0) {
+          assertEquals(firstSequence, outcomes[index].commitSequence());
+          HeapRowResult fetched = new HeapRowResult();
+          assertEquals(StatusCode.OK, table.fetchByKey(0, 41, fetched));
+          assertEquals(410, value(fetched));
+        } else {
+          assertEquals(StatusCode.CONFLICT,
+              table.fetchByKey(0, 41 + index, new HeapRowResult()));
+        }
+      }
+      assertEquals(1, table.rowCount());
+      assertEquals(0, manager.activeTransactionCount());
+      assertEquals(0, manager.activeLockCount());
+      assertEquals(0, manager.waitingLockCount());
+      for (int index = 1; index < sessions.length; index++) {
+        assertEquals(TransactionState.ABORTED, sessions[index].transaction().state());
+      }
+      IndexedTransactionSession fresh = session(context, Long.BYTES);
+      assertEquals(StatusCode.OK, fresh.begin(IsolationLevel.REPEATABLE_READ));
+      assertEquals(StatusCode.OK, fresh.insert(0, 44, row(440)));
+      TransactionOutcome freshOutcome = new TransactionOutcome();
+      assertEquals(StatusCode.OK, fresh.commit(freshOutcome));
+      assertEquals(TransactionState.COMMITTED, freshOutcome.state());
+      assertEquals(firstSequence + 1, freshOutcome.commitSequence());
+      assertEquals(StatusCode.OK, table.fetchByKey(0, 44, new HeapRowResult()));
+      assertEquals(2, table.rowCount());
+      assertEquals(0, manager.activeTransactionCount());
+      assertEquals(StatusCode.OK, fresh.close());
+      IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+      assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
+      assertTrue(telemetry.attemptedGroupCohorts() >= 3);
+      assertEquals(4, telemetry.attemptedGroupTransactions());
+      assertEquals(2, telemetry.successfulGroupTransactions());
+      assertEquals(4, telemetry.queue().enqueues());
+      assertEquals(4, telemetry.queue().selectedTransactions());
+      assertTrue(telemetry.queue().capacityConstrainedSelections() > 0);
+      assertTrue(telemetry.reconciles());
+    } finally {
+      executor.shutdownNow();
+      assertEquals(StatusCode.OK, coordinator.close());
+      for (IndexedTransactionSession session : sessions) {
+        assertEquals(StatusCode.OK, session.close());
+      }
+      assertEquals(StatusCode.OK, table.flush());
+      assertEquals(StatusCode.OK, table.close());
+      assertEquals(StatusCode.OK, wal.close());
+    }
   }
 
-  void unexpectedWriterFailureTerminalizesAcceptedWorkAndStopsCoordinator()
+  @Test
+  void constrainedPhysicalAdmissionMatchesDirectAndSingleMemberGroup() throws Exception {
+    SingleCommitResult direct = commitSingleUnderPressure(false, false);
+    SingleCommitResult grouped = commitSingleUnderPressure(true, false);
+
+    assertEquals(direct, grouped);
+    assertEquals(StatusCode.OK, direct.status());
+    assertEquals(TransactionState.COMMITTED, direct.state());
+    assertEquals(StatusCode.OK, direct.visibility());
+    assertEquals(710, direct.value());
+    assertEquals(1, direct.rows());
+    assertEquals(0, direct.activeTransactions());
+    assertEquals(0, direct.activeLocks());
+    assertEquals(0, direct.waitingLocks());
+
+    SingleCommitResult rejectedDirect = commitSingleUnderPressure(false, true);
+    SingleCommitResult rejectedGroup = commitSingleUnderPressure(true, true);
+
+    assertEquals(rejectedDirect, rejectedGroup);
+    assertEquals(StatusCode.RETRY, rejectedDirect.status());
+    assertEquals(TransactionState.ABORTED, rejectedDirect.state());
+    assertEquals(StatusCode.CONFLICT, rejectedDirect.visibility());
+    assertEquals(0, rejectedDirect.rows());
+    assertEquals(0, rejectedDirect.activeTransactions());
+    assertEquals(0, rejectedDirect.activeLocks());
+    assertEquals(0, rejectedDirect.waitingLocks());
+  }
+
+  private static void awaitQueueEnqueues(
+      IndexedGroupCommitCoordinator coordinator, long expected) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    while (System.nanoTime() < deadline) {
+      assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
+      if (telemetry.queue().enqueues() >= expected) return;
+      Thread.sleep(1);
+    }
+    assertEquals(expected, telemetry.queue().enqueues());
+  }
+
+  private static SingleCommitResult commitSingleUnderPressure(
+      boolean grouped, boolean reject) throws Exception {
+    DatabasePageCachePlan constrained = DatabasePageCacheTestPlan.geometry(
+        reject ? 4 : 5, 8, 16);
+    FaultFixture faults = new FaultFixture();
+    LocalWalOpenResult walResult = new LocalWalOpenResult();
+    assertEquals(StatusCode.OK, LocalWal.open(faults.directory, DATABASE, GENERATION, walResult));
+    LocalWal wal = walResult.wal();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
+    assertEquals(StatusCode.OK, IndexedTableStore.create(
+        faults.directory, wal, DATABASE, GENERATION,
+        DatabasePageCacheTestPlan.providerLease(constrained, 4), storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
+    IndexedTable table = tableResult.table();
+    IndexedPageSet pages = IndexedRelationalWalStorageFixtures.pageSet(storeResult.store());
+    IndexedPageGenerationPin[] pins = new IndexedPageGenerationPin[3];
+    if (reject) {
+      int[] pageIds = {
+          IndexedTableKernel.HEAP_PAGE_ID,
+          IndexedTableKernel.ROOT_META_PAGE_ID,
+          IndexedTableKernel.INITIAL_LEAF_PAGE_ID
+      };
+      for (int index = 0; index < pins.length; index++) {
+        pins[index] = new IndexedPageGenerationPin();
+        assertEquals(StatusCode.OK,
+            pages.pinPageAt(pageIds[index], table.currentCommitSequence(), pins[index]));
+      }
+    }
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedGroupCommitCoordinator coordinator = grouped
+        ? new IndexedGroupCommitCoordinator(manager, table) : null;
+    IndexedTransactionSession session = session(context(manager, table, coordinator, vacuum), 8);
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.insert(0, 71, row(710)));
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.commit(outcome);
+    HeapRowResult fetched = new HeapRowResult();
+    StatusCode visibility = table.fetchByKey(0, 71, fetched);
+    SingleCommitResult result = new SingleCommitResult(
+        status,
+        outcome.state(),
+        visibility,
+        visibility.isOk() ? value(fetched) : 0,
+        table.rowCount(),
+        manager.activeTransactionCount(),
+        manager.activeLockCount(),
+        manager.waitingLockCount());
+    assertEquals(StatusCode.OK, session.close());
+    if (coordinator != null) assertEquals(StatusCode.OK, coordinator.close());
+    if (reject) {
+      for (int index = pins.length - 1; index >= 0; index--) {
+        assertEquals(StatusCode.OK, pages.unpinPage(pins[index]));
+      }
+    }
+    assertEquals(StatusCode.OK, table.flush());
+    assertEquals(StatusCode.OK, table.close());
+    assertEquals(StatusCode.OK, wal.close());
+    return result;
+  }
+
+  private record SingleCommitResult(
+      StatusCode status,
+      TransactionState state,
+      StatusCode visibility,
+      long value,
+      long rows,
+      long activeTransactions,
+      long activeLocks,
+      long waitingLocks) {}
+
+  @Test
+  void forceFailureAfterPressureSplitTerminalizesAcceptedPrefixAndDeferredSuffix()
       throws Exception {
+    DatabasePageCachePlan constrained = DatabasePageCacheTestPlan.geometry(5, 8, 16);
     FaultFixture faults = new FaultFixture();
     LocalWalOpenResult walResult = new LocalWalOpenResult();
     assertEquals(StatusCode.OK, LocalWal.open(faults.directory, DATABASE, GENERATION, walResult));
@@ -420,65 +571,95 @@ final class IndexedGroupCommitFaultTest {
     assertEquals(StatusCode.OK,
         IndexedTableStore.create(
             faults.directory, wal, DATABASE, GENERATION,
-            databaseProviderLease(4), storeResult));
+            DatabasePageCacheTestPlan.providerLease(constrained, 4), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     IndexedTable table = tableResult.table();
+    long durableTail = wal.durableEnd();
+    long publishedBefore = table.currentCommitSequence();
+    long rowsBefore = table.rowCount();
+    assertEquals(StatusCode.OK, faults.arm(
+        DirectoryOperation.FILE_FORCE,
+        FaultOperation.DIRECTORY_FILE_FORCE,
+        FaultAction.FORCE_FAILURE));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
-    IndexedGroupCommitMetrics metrics = table.commitMetrics();
-    ThrowingGroupCommitBatch batch = new ThrowingGroupCommitBatch(manager, table, metrics);
     IndexedGroupCommitCoordinator coordinator = new IndexedGroupCommitCoordinator(
-        manager, table, TimeUnit.SECONDS.toNanos(1), batch);
+        manager, table, TimeUnit.MILLISECONDS.toNanos(500));
     IndexedSessionContext context = context(manager, table, coordinator, vacuum);
-    IndexedTransactionSession first = session(context, Long.BYTES);
-    IndexedTransactionSession second = session(context, Long.BYTES);
-    assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, first.insert(0, 61, row(610)));
-    assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, second.insert(0, 62, row(620)));
-    TransactionOutcome firstOutcome = new TransactionOutcome();
-    TransactionOutcome secondOutcome = new TransactionOutcome();
-    CountDownLatch ready = new CountDownLatch(2);
-    CountDownLatch start = new CountDownLatch(1);
-    ExecutorService executor = Executors.newFixedThreadPool(2);
+    IndexedTransactionSession[] sessions = {
+        session(context, Long.BYTES), session(context, Long.BYTES), session(context, Long.BYTES)
+    };
+    TransactionOutcome[] outcomes = {
+        new TransactionOutcome(), new TransactionOutcome(), new TransactionOutcome()
+    };
+    List<Future<StatusCode>> commits = new ArrayList<>(3);
+    ExecutorService executor = Executors.newFixedThreadPool(3);
     try {
-      Future<StatusCode> firstCommit = executor.submit(
-          () -> coordinatedCommit(first, firstOutcome, ready, start));
-      Future<StatusCode> secondCommit = executor.submit(
-          () -> coordinatedCommit(second, secondOutcome, ready, start));
-      assertTrue(ready.await(5, TimeUnit.SECONDS));
-      start.countDown();
-      assertEquals(StatusCode.INVARIANT_BROKEN,
-          firstCommit.get(5, TimeUnit.SECONDS));
-      assertEquals(StatusCode.INVARIANT_BROKEN,
-          secondCommit.get(5, TimeUnit.SECONDS));
+      for (int index = 0; index < sessions.length; index++) {
+        assertEquals(StatusCode.OK, sessions[index].begin(IsolationLevel.REPEATABLE_READ));
+        assertEquals(StatusCode.OK, sessions[index].insert(0, 61 + index, row(610 + index)));
+      }
+      for (int index = 0; index < sessions.length; index++) {
+        int member = index;
+        commits.add(executor.submit(() -> sessions[member].commit(outcomes[member])));
+        awaitQueueEnqueues(coordinator, index + 1);
+      }
+      for (Future<StatusCode> commit : commits) {
+        assertFalse(commit.get(5, TimeUnit.SECONDS).isOk());
+      }
     } finally {
-      start.countDown();
       executor.shutdownNow();
     }
 
-    assertEquals(TransactionState.INDETERMINATE, firstOutcome.state());
-    assertEquals(TransactionState.INDETERMINATE, secondOutcome.state());
+    for (TransactionOutcome outcome : outcomes) {
+      assertFalse(outcome.state() == TransactionState.COMMITTED);
+    }
     assertEquals(0, manager.activeTransactionCount());
     assertEquals(0, manager.activeLockCount());
     assertEquals(0, manager.waitingLockCount());
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
+    assertTrue(telemetry.queue().capacityConstrainedSelections() > 0);
+    assertEquals(publishedBefore + 1, table.currentCommitSequence());
+    assertEquals(rowsBefore + 1, table.rowCount());
     assertEquals(StatusCode.FENCED, storeResult.store().admission());
     IndexedTransactionSession rejected = session(context, Long.BYTES);
     assertEquals(StatusCode.FENCED, rejected.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, rejected.close());
-    assertTrue(coordinator.stopped());
-    assertEquals(StatusCode.CLOSED, coordinator.close());
-    assertEquals(StatusCode.OK, first.close());
-    assertEquals(StatusCode.OK, second.close());
-    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, coordinator.close());
+    for (IndexedTransactionSession session : sessions) {
+      assertEquals(StatusCode.OK, session.close());
+    }
+    assertEquals(StatusCode.OK, faults.directory.crash());
+    assertEquals(StatusCode.OK, faults.directory.restart());
+    LocalWalOpenResult recoveredWalResult = new LocalWalOpenResult();
+    assertEquals(StatusCode.OK, LocalWal.openExisting(
+        faults.directory, DATABASE, GENERATION, recoveredWalResult));
+    assertEquals(durableTail, recoveredWalResult.wal().tailEnd());
+    IndexedTableStoreOpenResult recoveredStoreResult = new IndexedTableStoreOpenResult();
+    assertEquals(StatusCode.OK, IndexedTableStore.openExisting(
+        faults.directory, recoveredWalResult.wal(), DATABASE, GENERATION,
+        databaseProviderLease(4), recoveredStoreResult));
+    IndexedTableOpenResult recoveredTableResult = new IndexedTableOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedTable.open(recoveredStoreResult.store(), recoveredTableResult));
+    assertEquals(publishedBefore, recoveredTableResult.table().currentCommitSequence());
+    assertEquals(rowsBefore, recoveredTableResult.table().rowCount());
+    for (int index = 0; index < sessions.length; index++) {
+      assertEquals(StatusCode.CONFLICT,
+          recoveredTableResult.table().fetchByKey(0, 61 + index, new HeapRowResult()));
+    }
+    assertEquals(StatusCode.OK, recoveredTableResult.table().close());
+    assertEquals(StatusCode.OK, recoveredWalResult.wal().close());
   }
 
   @Test
   void mismatchedForceRangeCannotAcknowledgeTheRetainedCohort() {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertTrue(fixture.batch.publishPrepared(2));
     // Inject a broken writer-ownership boundary between cohort append and force.
     var reservation = new io.riverdb.wal.local.LocalWalReservation();
@@ -495,7 +676,7 @@ final class IndexedGroupCommitFaultTest {
   @Test
   void forcedGroupPreparationFailureTerminalizesFencesAndRecoversExactlyOnce() {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertEquals(StatusCode.OK, fixture.table.forceHybridCommitGroup());
     assertEquals(StatusCode.OK, fixture.table.prepareGroupPublication());
     long tail = fixture.wal.tailEnd();
@@ -510,7 +691,7 @@ final class IndexedGroupCommitFaultTest {
   @Test
   void forcedGroupInstallationFailureTerminalizesFencesAndRecoversExactlyOnce() {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
-    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(2, fixture.batch.appendSharedGroup(2));
     assertEquals(StatusCode.OK, fixture.table.forceHybridCommitGroup());
     fixture.store.lastCommitSequence = Long.MAX_VALUE;
 
@@ -865,20 +1046,6 @@ final class IndexedGroupCommitFaultTest {
           1,
           action,
           1);
-    }
-  }
-
-  private static final class ThrowingGroupCommitBatch extends IndexedGroupCommitBatch {
-    ThrowingGroupCommitBatch(
-        TransactionManager manager,
-        IndexedTable table,
-        IndexedGroupCommitMetrics metrics) {
-      super(manager, table, metrics);
-    }
-
-    @Override
-    void process(int count) {
-      throw new IllegalStateException("injected writer failure");
     }
   }
 

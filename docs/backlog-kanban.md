@@ -1,6 +1,6 @@
 # River delivery Kanban and priority queue
 
-## Current performance frontier — 2026-09-14
+## Current performance frontier — 2026-09-15
 
 Two of the three bounded performance epics are complete:
 
@@ -13,8 +13,9 @@ Two of the three bounded performance epics are complete:
   The user selected local delivery with no remote. Pipelining is rejected;
   the separate rollback/retry safety correction is integrated3d70a826.
   [Rian](tickets/tic-rian.md) records reviewed workload and compatibility evidence.
-- [WAL overlap](tickets/tic-rowlie.md) remains open: the mandatory
-  [P0 gate](tickets/tic-1dda.md) now has the accepted
+- [WAL overlap](tickets/tic-rowlie.md) remains open. The user deferred the
+  [P0 scaling and accounting work](tickets/tic-1dda.md); it is not a WAL
+  prerequisite. Its historical evidence includes the accepted
   [general SQL concurrency reproducer](tickets/tic-b1b7.md), covering controlled
   lock paths, deadlocks and isolation, with Payment/New Order integration.
   P0 revalidation stopped after two of 40 planned cells: warmup client attempt
@@ -67,13 +68,13 @@ P0 as a WAL prerequisite and deferred its scaling/accounting work.
 | Incident priority above WAL | tic-osgiliath / tic-emeldir | Reproduce returned checkpoint failures, verify cleanup, and identify the initiating kernel write. Formal comparison/reporting remains deferred. |
 
 The lock stream is deferred, not removed from epic completion dependencies.
-tic-ca05 is now closed: its existing logical contract passed review and 43
-focused tests. tic-5b3e is the current implementation blocker: it has no admitted
-pre-staging demand for cumulative frozen-page generations, and a physical
-planning or staging/rollback change exceeds its present non-goals. The exact
-source and existing failure test are recorded on that ticket. Do not start
-dependent overlap code or add a follow-up without a bounded scope decision. P0 remains
-unpassed; its missing accounting does not require a new ticket on this path.
+tic-ca05 is closed: its existing logical contract passed review and 43 focused
+tests. tic-5b3e now admits exact physical pages before mutation, publishes the
+safe cohort prefix, rolls back only the pressure-rejected member, and requeues
+its suffix in order. Its direct/group, terminal failure, recovery and matched
+no-checkpoint evidence passed. tic-6f81 is the next dependency and has not
+started. P0 remains unpassed and deferred; its missing accounting does not
+require a new ticket on this path.
 Do not reopen completed execution/protocol candidates, add speculative optimizations,
 or manufacture production changes for an already satisfied prerequisite. Required
 reviews and correctness checks remain part of delivery. A newly discovered gap

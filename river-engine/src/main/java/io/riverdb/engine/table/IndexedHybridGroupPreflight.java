@@ -30,20 +30,39 @@ final class IndexedHybridGroupPreflight {
       int count,
       int admittedVersionOperations,
       long oldestVisibleCommitSequence,
-      IndexedCommitPath path) {
+      IndexedCommitPath path,
+      IndexedPreparedCommitCohortDemand demand) {
     long started = System.nanoTime();
     StatusCode status = pages.reclaimHistorical(oldestVisibleCommitSequence);
     record(path, IndexedCommitStage.PREFLIGHT_RECLAIM, started, status);
+    if (!status.isOk()) {
+      demand.rejectAll();
+      return status;
+    }
     if (status.isOk()) {
       started = System.nanoTime();
       status = kernel.reserveOperationVersions(admittedVersionOperations);
       record(path, IndexedCommitStage.PREFLIGHT_VERSION_RESERVATION, started, status);
     }
+    if (!status.isOk()) {
+      demand.rejectAll();
+      return status;
+    }
     int records = 0;
     for (int index = 0; status.isOk() && index < count; index++) {
       IndexedPreparedLogicalCommit prepared = preparedCommits[index];
-      if (prepared == null || !prepared.valid()) return StatusCode.INVALID_EXTERNAL_INPUT;
-      int changedBefore = pages.changedPageCount();
+      if (prepared == null || !prepared.valid()) {
+        demand.rejectAll();
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      long rowStart = kernel.operationRowCount();
+      int heapPageStart = kernel.operationLastHeapPageId();
+      int versionStart = kernel.operationVersionCount();
+      status = pages.beginMemberStagingAdmission(prepared);
+      if (!status.isOk()) {
+        demand.rejectAll();
+        return status;
+      }
       started = System.nanoTime();
       status = compiler.compileCumulative(
           prepared.pendingMutations(), prepared.tupleIntents(), prepared.tupleLifecycle(),
@@ -82,11 +101,8 @@ final class IndexedHybridGroupPreflight {
       }
       if (status.isOk()) {
         started = System.nanoTime();
-        int changedAfter = pages.changedPageCount();
-        status = changedAfter < changedBefore
-            ? StatusCode.INVARIANT_BROKEN
-            : prepared.admitStagedPages(changedAfter - changedBefore);
-        record(path, IndexedCommitStage.PREFLIGHT_RESOURCE_ADMISSION, started, status);
+        status = pages.freezeChangedPages(index, oldestVisibleCommitSequence);
+        record(path, IndexedCommitStage.PREFLIGHT_PAGE_FREEZE, started, status);
       }
       if (status.isOk()) {
         records += plan.batchChunkCount();
@@ -94,15 +110,31 @@ final class IndexedHybridGroupPreflight {
         mutations[index] = compiler.mutation().buffer();
         rowEnds[index] = kernel.operationRowCount();
         heapPageEnds[index] = kernel.operationLastHeapPageId();
-        started = System.nanoTime();
-        status = pages.freezeChangedPages(index, oldestVisibleCommitSequence);
-        record(path, IndexedCommitStage.PREFLIGHT_PAGE_FREEZE, started, status);
+        demand.acceptMember();
+        pages.endMemberStagingAdmission();
+      } else if (pages.memberCapacityPressure()
+          && (status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED)) {
+        StatusCode pressure = status;
+        pages.rollbackStagedMember();
+        pages.endMemberStagingAdmission();
+        kernel.rollbackOperationState(rowStart, heapPageStart, versionStart);
+        plan.reset();
+        demand.split(pressure);
+        return pressure;
+      } else {
+        pages.endMemberStagingAdmission();
+        demand.rejectAll();
+        return status;
       }
     }
-    if (!status.isOk()) return status;
+    if (!status.isOk()) {
+      demand.rejectAll();
+      return status;
+    }
     started = System.nanoTime();
     status = kernel.admitOperationPublication();
     record(path, IndexedCommitStage.PREFLIGHT_OPERATION_ADMISSION, started, status);
+    if (!status.isOk()) demand.rejectAll();
     return status;
   }
 

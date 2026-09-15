@@ -19,7 +19,11 @@ public final class IndexedGroupCommitCoordinator {
   private Thread closingThread;
   private int queued;
   private int queuedGroupable;
+  private int selectedDepth;
+  private int selectedGroupableDepth;
   private long queueBecameNonemptyNanos;
+  private boolean selectedGroupable;
+  private boolean selectedCapacityConstrained;
   private boolean closing;
   private boolean writerIdle;
   private volatile boolean stopped;
@@ -178,7 +182,14 @@ public final class IndexedGroupCommitCoordinator {
         } else {
           long started = System.nanoTime();
           batch.process(activeCount);
-          batch.complete(activeCount);
+          int completed = batch.completionCount();
+          batch.complete(completed);
+          recordWriterSelection(activeCount, completed);
+          if (completed < activeCount) {
+            synchronized (this) {
+              requeueDeferred(completed, activeCount);
+            }
+          }
           activeCount = 0;
           metrics.recordWriterBusy(System.nanoTime() - started);
         }
@@ -196,6 +207,7 @@ public final class IndexedGroupCommitCoordinator {
     if (activeCount > 0) {
       batch.failUnexpected(activeCount);
       batch.complete(activeCount);
+      recordWriterSelection(activeCount, activeCount);
     }
     while (true) {
       int count;
@@ -208,6 +220,7 @@ public final class IndexedGroupCommitCoordinator {
       }
       batch.failUnexpected(count);
       batch.complete(count);
+      recordWriterSelection(count, count);
     }
   }
 
@@ -247,6 +260,21 @@ public final class IndexedGroupCommitCoordinator {
     metrics.recordQueueEnqueue(queued);
   }
 
+  private void requeueDeferred(int first, int end) {
+    int initialDepth = queued;
+    for (int index = end - 1; index >= first; index--) {
+      IndexedGroupCommitRequest request = batch.takeDeferred(index);
+      request.next = queueHead;
+      queueHead = request;
+      if (queueTail == null) queueTail = request;
+      queued++;
+      if (request.groupable) queuedGroupable++;
+    }
+    if (initialDepth == 0 && queued > 0) {
+      queueBecameNonemptyNanos = System.nanoTime();
+    }
+  }
+
   private int drain() {
     int count = 0;
     int depth = queued;
@@ -264,13 +292,24 @@ public final class IndexedGroupCommitCoordinator {
     if (queueHead == null) queueTail = null;
     boolean capacityConstrained = groupable && queueHead != null && queueHead.groupable;
     if (count > 0) {
-      metrics.recordWriterSelection(
-          count, depth, groupableDepth, groupable, capacityConstrained);
+      selectedDepth = depth;
+      selectedGroupableDepth = groupableDepth;
+      selectedGroupable = groupable;
+      selectedCapacityConstrained = capacityConstrained;
     }
     if (queued == 0 && queueBecameNonemptyNanos != 0) {
       metrics.recordQueueNonempty(System.nanoTime() - queueBecameNonemptyNanos);
       queueBecameNonemptyNanos = 0;
     }
     return count;
+  }
+
+  private void recordWriterSelection(int selected, int completed) {
+    metrics.recordWriterSelection(
+        completed,
+        selectedDepth,
+        selectedGroupableDepth,
+        selectedGroupable,
+        selectedCapacityConstrained || completed < selected);
   }
 }
