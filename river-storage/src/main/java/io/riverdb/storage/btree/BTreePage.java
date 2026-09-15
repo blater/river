@@ -122,17 +122,20 @@ public final class BTreePage {
   }
 
   public static int childForKey(ByteBuffer page, long space, long key) {
-    int child = getInt(page, 20);
-    int count = getInt(page, 16);
-    for (int index = 0; index < count; index++) {
-      int offset = entryOffset(index);
+    int low = 0;
+    int high = getInt(page, 16);
+    // Upper bound: an equal separator belongs to its right child.
+    while (low < high) {
+      int middle = (low + high) >>> 1;
+      int offset = entryOffset(middle);
       if (OrderedKey.lessThan(
           space, key, getLong(page, offset + 16), getLong(page, offset))) {
-        return child;
+        high = middle;
+      } else {
+        low = middle + 1;
       }
-      child = getInt(page, offset + 8);
     }
-    return child;
+    return low == 0 ? getInt(page, 20) : getInt(page, entryOffset(low - 1) + 8);
   }
 
   public static StatusCode insertLeaf(
