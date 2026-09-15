@@ -29,3 +29,19 @@ Prepared and implemented the first bounded task from tic-gothmog full-stack foll
 
 Clean full checkpoint passed: ./gradlew --no-daemon clean check, 3m12s, 2,029 tests reported, zero failures/errors, 19 platform/opt-in skips. Focused and existing foreign-key, isolation, recovery, and lock lifecycle tests included. Log: /private/tmp/river-two-hotpaths/tuple-clean-check.log. Slopmark: session 38.24→38.30; scan admission 6.89→12.58 because endpoint validation moved to its owning boundary; trusted helpers remain 0. Reviewed added branch logic as existing admission responsibility, not new policy.
 
+### 2026-09-15T21:36:14Z
+
+Implementation commit: 929323f6. First matched sample New-Order controls (READ COMMITTED, 1 worker/warehouse, seed42, retries3, warmup20s/duration30s, durable WAL, GraalVM25 -Xmx1g, same TCP/TLS harness): baseline 379.327/374.757 TPS, server CPU2.436/2.506ms per commit; candidate375.450/372.925 TPS, CPU2.531/2.582ms. All passed, no retries/failures/unknowns, invariants and cleanup passed. This repeated CPU increase is a regression signal: integration is pending a longer same-workload control/candidate check. Captures and commands: /private/tmp/river-two-hotpaths/. Installed candidate differs from baseline in exactly the five intended engine classes.
+
+### 2026-09-15T21:40:35Z
+
+Longer confirmation (same configuration except duration60s): baseline375.709TPS/serverCPU2.381ms versus initial candidate350.893TPS/2.649ms; both correctness-passed. The repeated regression is retained, not discarded, and initial implementation929323f6 is NOT accepted for integration. A narrower revision restores IndexedTransactionSession and IndexedTupleKeyProtection to baseline, retains admission in existing protection owner, and removes the initial/downstream duplicate scans plus trusted projection scans. Net three production files; current unique path still reduces five full validations to one. No claim about the cause of the initial runtime regression.
+
+### 2026-09-15T21:45:31Z
+
+Independent correctness review approved the narrower three-production-file revision. Public protection APIs retain their baseline admission; current.unique admits through protectShared and only successful protection reaches trusted downstream resolution. Malformed current-key calls now clear the result carrier before returning INVALID_EXTERNAL_INPUT; production callers consume it only on OK. Existing synchronous buffer ownership and retained lock copies are unchanged. Read-only buffer-state test checks the actual passed view.
+
+### 2026-09-15T21:46:59Z
+
+Narrowed revision passed clean full checkpoint: ./gradlew --no-daemon clean check, 3m12s, 2,029 tests, zero failures/errors, 19 skips. Log /private/tmp/river-two-hotpaths/tuple-revised-clean-check.log. Installed revised candidate /private/tmp/river-two-hotpaths/tuple-revised/river differs from baseline in only IndexedTransactionTupleScans, IndexedTupleCurrentResolution, and IndexedTupleLockKey classes. Final acceptance samples follow this exact revision.
+

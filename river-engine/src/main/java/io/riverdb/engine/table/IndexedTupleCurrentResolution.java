@@ -22,8 +22,7 @@ final class IndexedTupleCurrentResolution {
       long ownerId, long keyId, long schemaId, TupleShape shape,
       ByteBuffer key, int offset, int length,
       IndexedTupleProbeResult result) {
-    if (result == null || !session.activeTransaction()
-        || !IndexedTupleLockKey.valid(key, offset, length)) {
+    if (result == null || !session.activeTransaction()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();

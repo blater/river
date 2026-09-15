@@ -5,7 +5,7 @@ import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.tx.api.lock.LockMode;
 import java.nio.ByteBuffer;
 
-/** Lifecycle-safe protection of admitted tuple keys, borrowed until acquisition returns. */
+/** Ordered tuple-key identities and lifecycle-safe lock acquisition. */
 final class IndexedTupleKeyProtection {
   private IndexedTupleKeyProtection() {}
 
@@ -27,7 +27,8 @@ final class IndexedTupleKeyProtection {
       IndexedTransactionSession session, long keyId,
       ByteBuffer key, int offset, int length,
       io.riverdb.tx.api.lock.LockMode mode) {
-    if (!CatalogKeyspace.validKeyId(keyId)) {
+    if (!CatalogKeyspace.validKeyId(keyId)
+        || !IndexedTupleLockKey.valid(key, offset, length)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = session.protectKey(
