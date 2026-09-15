@@ -100,7 +100,7 @@ may proceed through its remaining dependencies and existing WAL-specific safety,
 resource, review and performance checks. P0 remains unpassed; its campaign is not
 part of this delivery. No additional mechanism or ticket is added.
 
-### Current WAL readiness, 2026-09-14
+### Historical WAL readiness, 2026-09-14 (superseded)
 
 The user deferred P0 scaling/accounting and removed it from WAL admission.
 ca05 is accepted and closed. The remaining chain is blocked by the existing
@@ -108,3 +108,10 @@ ca05 is accepted and closed. The remaining chain is blocked by the existing
 is discovered after staging, with no accepted pre-stage prefix contract within
 its current scope. Keep this ticket open and its remaining dependencies intact;
 no implementation, acceptance claim or new follow-up ticket is added here.
+
+### Current WAL readiness, 2026-09-15
+
+`tic-5b3e` and `tic-6f81` are closed. This implementation remains blocked only
+on its still-open declared dependencies, including acceptance of the `tic-92e3`
+execution/provider/resource contract. No duplicate WAL mechanism or additional
+chunking prerequisite is required.

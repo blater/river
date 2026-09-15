@@ -1,10 +1,11 @@
 ---
 id: tic-6f81
-status: in_progress
+status: closed
 type: investigation
 assignee: blater
 parent: tic-rowlie
 delivery: evidence
+delivered-commit: d6b6f02c7c6a34f6ddd4e9cae90b30b68d8ed8e0
 tags:
     - performance
     - tpcc

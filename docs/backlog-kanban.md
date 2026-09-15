@@ -62,7 +62,7 @@ P0 as a WAL prerequisite and deferred its scaling/accounting work.
 | Scheduling order | Existing tickets | Contribution and boundary |
 | --- | --- | --- |
 | Deferred outside WAL admission | tic-1dda | Scaling revalidation and warmup accounting remain incomplete and are explicitly deferred by the user; neither blocks WAL work. |
-| Critical path to force overlap | tic-ca05 → tic-5b3e → tic-6f81 → tic-92e3 → tic-f1bb | Keep audits to their existing contract decisions. Deliver cumulative admission as a necessary resource-safety enabler, then force overlap with demonstrated runtime benefit. |
+| Critical path to force overlap | tic-92e3 → tic-f1bb | ca05, 5b3e, and 6f81 are closed prerequisites. Specify the bounded force-I/O contract next, then deliver overlap with demonstrated runtime benefit. |
 | Deferred, conditional optimization | tic-4d14 → tic-845d | After the force-overlap decision, consider exactly one proved redundant lock rule. No current cycle proves a lock is redundant. |
 | Final acceptance | tic-7a5a | Evaluate the accepted mechanisms once its existing dependencies are resolved; do not run a promotion campaign ahead of implementation. |
 | Incident priority above WAL | tic-osgiliath / tic-emeldir | Reproduce returned checkpoint failures, verify cleanup, and identify the initiating kernel write. Formal comparison/reporting remains deferred. |
@@ -72,8 +72,9 @@ tic-ca05 is closed: its existing logical contract passed review and 43 focused
 tests. tic-5b3e now admits exact physical pages before mutation, publishes the
 safe cohort prefix, rolls back only the pressure-rejected member, and requeues
 its suffix in order. Its direct/group, terminal failure, recovery and matched
-no-checkpoint evidence passed. tic-6f81 is the next dependency and has not
-started. P0 remains unpassed and deferred; its missing accounting does not
+no-checkpoint evidence passed. tic-6f81 is closed with every chunked-WAL clause
+satisfied by the reviewed current-source contract. tic-92e3 is the next
+dependency. P0 remains unpassed and deferred; its missing accounting does not
 require a new ticket on this path.
 Do not reopen completed execution/protocol candidates, add speculative optimizations,
 or manufacture production changes for an already satisfied prerequisite. Required

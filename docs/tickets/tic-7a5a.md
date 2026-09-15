@@ -83,9 +83,16 @@ Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled cor
 
 Current f1bb acceptance is actual successor preparation while force is held, plus declared queue/lock-residence or cohort/force movement and repeatable workload benefit. A lower force-per-write ratio is not mandatory if the accepted overlap mechanism moves the declared queue denominator. Do not reinterpret the historical note as a requirement to invent batching.
 
-### Current promotion disposition, 2026-09-14
+### Historical promotion disposition, 2026-09-14 (superseded)
 
 Deferred until the existing implementation dependencies have an accepted
 outcome. ca05 is closed; 5b3e records the current physical admission blocker.
 P0 scaling/accounting is separately deferred by the user and no longer gates
 WAL admission. No promotion matrix or performance checkpoint is issued.
+
+### Current promotion disposition, 2026-09-15
+
+The logical admission, physical prefix admission, and chunked-WAL prerequisites
+are closed. Promotion remains deferred until this ticket's declared
+implementation dependencies, `tic-f1bb` and `tic-845d`, have accepted outcomes.
+No promotion matrix or performance checkpoint is issued yet.
