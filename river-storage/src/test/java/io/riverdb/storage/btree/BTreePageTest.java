@@ -11,6 +11,52 @@ final class BTreePageTest {
   private static final int PAGE_BYTES = 16 * 1024 - 128;
 
   @Test
+  void routesEverySeparatorAndGapAtEveryNodeOccupancy() {
+    ByteBuffer page = ByteBuffer.allocateDirect(PAGE_BYTES);
+    assertEquals(StatusCode.OK, BTreePage.initializeInternal(page, 1000));
+    ByteBuffer readOnly = page.asReadOnlyBuffer();
+    readOnly.position(7);
+    readOnly.mark();
+    for (int count = 0; count <= BTreePage.MAX_ENTRIES; count++) {
+      assertEquals(1000, BTreePage.childForKey(readOnly, 0, Long.MIN_VALUE));
+      assertEquals(1000 + count, BTreePage.childForKey(readOnly, Long.MAX_VALUE, Long.MAX_VALUE));
+      for (int index = 0; index < count; index++) {
+        long space = 2 + index / 64;
+        long key = (index % 64) * 4L - 128;
+        assertEquals(1000 + index, BTreePage.childForKey(readOnly, space, key - 1));
+        assertEquals(1001 + index, BTreePage.childForKey(readOnly, space, key));
+        assertEquals(1001 + index, BTreePage.childForKey(readOnly, space, key + 1));
+      }
+      if (count < BTreePage.MAX_ENTRIES) {
+        assertEquals(StatusCode.OK, BTreePage.insertInternal(
+            page, 2 + count / 64, (count % 64) * 4L - 128, 1001 + count));
+      }
+    }
+    assertEquals(7, readOnly.position());
+    assertEquals(PAGE_BYTES, readOnly.limit());
+    assertEquals(7, readOnly.reset().position());
+    assertEquals(StatusCode.OK, BTreePage.validate(page));
+  }
+
+  @Test
+  void routesSignedExtremesAndNamespaceTransitions() {
+    ByteBuffer page = ByteBuffer.allocate(PAGE_BYTES);
+    assertEquals(StatusCode.OK, BTreePage.initializeInternal(page, 1));
+    assertEquals(StatusCode.OK, BTreePage.insertInternal(page, 2, Long.MIN_VALUE, 2));
+    assertEquals(StatusCode.OK, BTreePage.insertInternal(page, 2, Long.MAX_VALUE, 3));
+    assertEquals(StatusCode.OK, BTreePage.insertInternal(page, 3, Long.MIN_VALUE, 4));
+    assertEquals(StatusCode.OK, BTreePage.insertInternal(page, Long.MAX_VALUE, 0, 5));
+    assertEquals(1, BTreePage.childForKey(page, 1, Long.MAX_VALUE));
+    assertEquals(2, BTreePage.childForKey(page, 2, Long.MIN_VALUE));
+    assertEquals(2, BTreePage.childForKey(page, 2, 0));
+    assertEquals(3, BTreePage.childForKey(page, 2, Long.MAX_VALUE));
+    assertEquals(4, BTreePage.childForKey(page, 3, Long.MIN_VALUE));
+    assertEquals(4, BTreePage.childForKey(page, Long.MAX_VALUE, -1));
+    assertEquals(5, BTreePage.childForKey(page, Long.MAX_VALUE, 0));
+    assertEquals(5, BTreePage.childForKey(page, Long.MAX_VALUE, Long.MAX_VALUE));
+  }
+
+  @Test
   void insertsAndFindsOrderedLeafKeys() {
     ByteBuffer leaf = ByteBuffer.allocate(PAGE_BYTES);
     assertEquals(StatusCode.OK, BTreePage.initializeLeaf(leaf, 0));
