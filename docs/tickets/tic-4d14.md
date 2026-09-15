@@ -81,3 +81,21 @@ explicitly removed tic-1dda as a prerequisite for WAL improvement. This ticket
 may proceed through its remaining dependencies and existing WAL-specific safety,
 resource, review and performance checks. P0 remains unpassed; its campaign is not
 part of this delivery. No additional mechanism or ticket is added.
+
+### Initial audit disposition, 2026-09-15
+
+The read-only audit at
+[the accepted-force checkpoint](../delivery/evidence/2026-09-15-tic-4d14-lock-audit.md)
+reconciles 7,051,291 material holdings across 74,063 successful write
+transactions and 74,011 successful group cohorts. Existing standard, New Order,
+Payment and release-split evidence also confirms that New Order owns the larger
+footprint and that aggregate holding removal is material. The canonical
+sufficient-holding path already coalesces repeated identical transaction/resource
+requests, so repeated index-root protection is not a duplicate holding rule.
+
+Keep this ticket open. Existing evidence does not join holdings to logical step,
+split successful blocked nanoseconds by lock class, or attribute acquisition and
+release service cost to a scope or rule. Those are mandatory outcome and stop
+condition fields, so the audit cannot select a credible removal rule or claim an
+accepted no-candidate closure. No new instrumentation or production work is
+authorized by this disposition; the deferred P0 work remains separate.

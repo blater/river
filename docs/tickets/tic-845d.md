@@ -79,3 +79,13 @@ predicted service or blocking effect is ineffective and must not be promoted.
 ### 2026-09-13 performance realignment
 
 Moved from `tic-e5ff` to `tic-rowlie`. Existing dependencies and unfulfilled correctness gates remain authoritative. Follow [the current handover](../plans/performance-three-epics-handover.md); this move certifies no implementation or performance outcome.
+
+### Current readiness, 2026-09-15
+
+This ticket remains open and not implementation-ready. The initial
+[`tic-4d14` audit](../delivery/evidence/2026-09-15-tic-4d14-lock-audit.md)
+selects no lock rule: repeated identical root requests already reuse one
+canonical retained holding, and the retained evidence lacks the mandatory
+step, blocked-time and per-rule service-cost attribution needed to name a
+credible alternative and predict its denominator. Do not edit lock policy or
+start mechanism measurement until `tic-4d14` has an accepted disposition.
