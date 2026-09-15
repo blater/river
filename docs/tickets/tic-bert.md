@@ -1,6 +1,6 @@
 ---
 id: tic-bert
-status: in_progress
+status: open
 type: task
 priority: 1
 assignee: blater
