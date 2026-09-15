@@ -18,6 +18,7 @@ links:
     - tic-45a7
     - tic-1dda
     - tic-fine-barad-dur
+    - tic-bert
 created: 2026-09-15T16:39:59.394367Z
 ---
 # Locate River versus MariaDB TPC-C-derived transaction costs
@@ -206,3 +207,4 @@ Independent reviewer strategy_adversary accepted after checking all eight native
 ### 2026-09-15T20:37:57Z
 
 The user-directed descriptor/CRC and live/replay cleanup changes are delivered by tic-fine-barad-dur, implementation commit b12bdc34, with clean full validation (2,027 tests reported; zero failures/errors; 19 skips). Integration is identified by annotated tag perf-checkpoint-20260915-read-validation. This supersedes the earlier uncommitted status; binary internal routing and a versioned stock-order harness fix remain recommendations.
+

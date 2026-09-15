@@ -495,6 +495,96 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void tupleOperationsRejectMalformedKeysBeforeProjection(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
+    IndexedTransactionSession session = session(context(
+        manager, table, null, new IndexedVacuum(manager, table)));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    TupleShape.Result shape = new TupleShape.Result();
+    assertEquals(StatusCode.OK,
+        TupleShape.create(new int[] {SqlTypeDescriptor.BIGINT}, shape));
+    ByteBuffer valid = genericFixedTuple(101);
+    assertMalformedTuple(session, shape.value(), null, 0, 0);
+    assertMalformedTuple(session, shape.value(), valid, -1, valid.remaining());
+    assertMalformedTuple(session, shape.value(), valid, Integer.MAX_VALUE, 1);
+    assertMalformedTuple(session, shape.value(), valid, 0, Integer.MAX_VALUE);
+    assertMalformedTuple(session, shape.value(), valid, 0, valid.remaining() - 1);
+    ByteBuffer malformed = genericFixedTuple(101);
+    malformed.put(0, (byte) 0);
+    assertMalformedTuple(session, shape.value(), malformed, 0, malformed.remaining());
+    assertEquals(0, manager.activeLockCount());
+    for (boolean lower : new boolean[] {true, false}) {
+      io.riverdb.storage.btree.TupleBTreeScanBounds bounds =
+          new io.riverdb.storage.btree.TupleBTreeScanBounds();
+      assertEquals(StatusCode.OK, bounds.setRange(
+          lower ? malformed : valid, 0, valid.remaining(), shape.value(), true,
+          lower ? valid : malformed, 0, valid.remaining(), shape.value(), true,
+          io.riverdb.storage.btree.TupleBTreeScanBounds.FORWARD));
+      assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.beginTupleScan(
+          1, 19, 19, shape.value(), bounds, LockMode.SHARED, new IndexedTupleScanCursor()));
+    }
+    assertEquals(StatusCode.OK, session.protectTupleKeyForWrite(
+        19, valid, 0, valid.remaining()));
+    assertEquals(StatusCode.OK, session.abort(new TransactionOutcome()));
+    assertEquals(0, manager.activeLockCount());
+    assertEquals(StatusCode.OK, session.close());
+    close(table, wal, directory);
+  }
+
+  @Test
+  void physicalAndUserKeysShareProtectionAtNonzeroOffsets(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
+    IndexedTransactionSession session = session(context(
+        manager, table, null, new IndexedVacuum(manager, table)));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.READ_COMMITTED));
+    ByteBuffer physical = ByteBuffer.allocateDirect(64);
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    assertEquals(StatusCode.OK, builder.beginIndex(physical, 7, 1));
+    assertEquals(StatusCode.OK, builder.addFixed(SqlTypeDescriptor.BIGINT, 101));
+    assertEquals(StatusCode.OK, builder.finishPhysical(33));
+    ByteBuffer key = physical.asReadOnlyBuffer();
+    key.position(3);
+    key.mark();
+    int limit = key.limit();
+    assertEquals(StatusCode.OK, session.protectTupleKeyForWrite(
+        19, key, 7, builder.keyBytes()));
+    ByteBuffer user = genericFixedTuple(101);
+    assertEquals(StatusCode.OK, session.tupleWriteProtectionStatus(
+        19, user, 0, user.remaining()));
+    assertEquals(StatusCode.OK, session.protectTupleKey(19, user, 0, user.remaining()));
+    assertEquals(3, key.position());
+    assertEquals(limit, key.limit());
+    assertEquals(3, key.reset().position());
+    assertEquals(StatusCode.OK, session.abort(new TransactionOutcome()));
+    assertEquals(0, manager.activeLockCount());
+    assertEquals(StatusCode.OK, session.close());
+    close(table, wal, directory);
+  }
+
+  private static void assertMalformedTuple(
+      IndexedTransactionSession session, TupleShape shape,
+      ByteBuffer key, int offset, int length) {
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        session.protectTupleKey(19, key, offset, length));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        session.protectTupleKeyForWrite(19, key, offset, length));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        session.tupleWriteProtectionStatus(19, key, offset, length));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.resolveTupleUniqueCurrent(
+        1, 19, 19, shape, key, offset, length, new IndexedTupleProbeResult()));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.resolveTupleUniqueSource(
+        1, 19, 19, shape, key, offset, length, LockMode.SHARED, new IndexedTupleProbeResult()));
+  }
+
+  @Test
   void tupleKeyLockCancellationDoesNotSerializeUnrelatedKeys(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

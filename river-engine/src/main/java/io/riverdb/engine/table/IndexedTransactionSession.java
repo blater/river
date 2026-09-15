@@ -374,12 +374,18 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   /** Holds shared lifecycle and ordered tuple-key protection through transaction completion. */
   public StatusCode protectTupleKey(
       long keyId, ByteBuffer key, int offset, int length) {
+    if (!IndexedTupleLockKey.valid(key, offset, length)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     return IndexedTupleKeyProtection.protectShared(this, keyId, key, offset, length);
   }
 
   /** Holds shared lifecycle and exclusive exact-key protection through transaction completion. */
   public StatusCode protectTupleKeyForWrite(
       long keyId, ByteBuffer key, int offset, int length) {
+    if (!IndexedTupleLockKey.valid(key, offset, length)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     return IndexedTupleKeyProtection.protectExclusive(this, keyId, key, offset, length);
   }
 
