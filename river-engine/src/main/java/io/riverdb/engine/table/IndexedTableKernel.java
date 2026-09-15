@@ -94,6 +94,12 @@ final class IndexedTableKernel extends IndexedKernelVersions {
     operationLastHeapPageId = lastHeapPageId;
   }
 
+  void rollbackOperationState(long rowEnd, int heapPageEnd, int versionCount) {
+    operationRowCount = rowEnd;
+    operationLastHeapPageId = heapPageEnd;
+    versions.operation().truncate(versionCount);
+  }
+
   StatusCode reserveOperationVersions(int required) {
     return versions.operation().reserve(required);
   }

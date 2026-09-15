@@ -116,6 +116,11 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
         kernel.rowCount(), kernel.obsoleteVersionCount(), required);
   }
 
+  StatusCode availableDurableVersionOperations(IndexedCountResult result) {
+    return durableVersions.availableOperations(
+        kernel.rowCount(), kernel.obsoleteVersionCount(), result);
+  }
+
   StatusCode completeVersionMaintenance() {
     return durableVersions.maintenanceCompleted(
         kernel.rowCount(), kernel.obsoleteVersionCount());
@@ -132,9 +137,10 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
 
   StatusCode preflightHybridGroup(
       IndexedPreparedLogicalCommit[] prepared, int count,
-      long oldestVisibleCommitSequence) {
+      long oldestVisibleCommitSequence,
+      IndexedPreparedCommitCohortDemand demand) {
     return relationalServices().preflightHybridGroup(
-        prepared, count, oldestVisibleCommitSequence);
+        prepared, count, oldestVisibleCommitSequence, demand);
   }
 
   StatusCode reserveHybridGroupCapacity(int required) {

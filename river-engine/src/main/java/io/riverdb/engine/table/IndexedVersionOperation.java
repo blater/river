@@ -111,13 +111,17 @@ final class IndexedVersionOperation {
   }
 
   void clear() {
-    for (int index = 0; index < count; index++) {
+    truncate(0);
+  }
+
+  void truncate(int retainedCount) {
+    for (int index = count - 1; index >= retainedCount; index--) {
       previousRows.set(index, 0);
       deleted.set(index, 0);
       pageIds.set(index, 0);
       slots.set(index, 0);
     }
-    count = 0;
+    count = retainedCount;
   }
 
   long accountedBytes() {

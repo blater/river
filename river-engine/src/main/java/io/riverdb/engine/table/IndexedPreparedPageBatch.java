@@ -35,12 +35,29 @@ final class IndexedPreparedPageBatch {
     return StatusCode.OK;
   }
 
+  StatusCode admitMemberPage(int memberChangedPages) {
+    if (state != BUILDING || memberChangedPages <= 0) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    if (memberChangedPages > pageIds.length) return StatusCode.RESOURCE_EXHAUSTED;
+    return count > pageIds.length - memberChangedPages
+        ? count == 0 ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.RETRY
+        : StatusCode.OK;
+  }
+
   StatusCode freeze(
       IndexedPageFrameCache cache, IndexedPageState pageState,
       int member, long oldestVisibleCommitSequence) {
     int changed = pageState.changedPageCount();
-    if (state != BUILDING || member < 0 || oldestVisibleCommitSequence < 0
-        || changed > pageIds.length - count) return StatusCode.RESOURCE_EXHAUSTED;
+    if (state != BUILDING || member < 0 || oldestVisibleCommitSequence < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (changed > pageIds.length - count) {
+      StatusCode pressure = count == 0
+          ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.RETRY;
+      cache.setStatus(pressure);
+      return pressure;
+    }
     for (int index = 0; index < changed; index++) {
       IndexedPageFrame staging = cache.stagingFrame(pageState.changedPageId(index));
       if (staging == null || staging.pinCount != 0) return StatusCode.INVARIANT_BROKEN;
@@ -52,13 +69,13 @@ final class IndexedPreparedPageBatch {
       if (staging == null) return StatusCode.INVARIANT_BROKEN;
       int slot = reserve(cache, pageId, oldestVisibleCommitSequence);
       if (slot < 0) {
-        clear(cache, false);
+        rollbackTo(cache, first);
         return cache.lastStatus();
       }
       StatusCode frozen = freeze(cache, slot, pageId, staging);
       if (!frozen.isOk()) {
         releaseFrame(cache, slot, false);
-        clear(cache, false);
+        rollbackTo(cache, first);
         return frozen;
       }
       pageIds[count] = pageId;
@@ -184,6 +201,19 @@ final class IndexedPreparedPageBatch {
     state = IDLE;
   }
 
+  private void rollbackTo(IndexedPageFrameCache cache, int first) {
+    for (int index = count - 1; index >= first; index--) {
+      releasePredecessor(cache, index);
+      releaseFrame(cache, frameSlots[index], false);
+      pageIds[index] = 0;
+      frameSlots[index] = -1;
+      previousFrameSlots[index] = -1;
+      members[index] = 0;
+    }
+    count = first;
+    state = BUILDING;
+  }
+
   private void releasePredecessor(IndexedPageFrameCache cache, int index) {
     int slot = previousFrameSlots[index];
     if (slot >= 0) {
@@ -196,7 +226,8 @@ final class IndexedPreparedPageBatch {
       IndexedPageFrameCache cache, int pageId, long oldestVisibleCommitSequence) {
     int slot = cache.reusableCurrentSlot(true, oldestVisibleCommitSequence);
     IndexedPageFrame frame = slot < 0 ? null : cache.frameAt(cache.currentFrames, slot);
-    StatusCode status = frame == null ? StatusCode.RESOURCE_EXHAUSTED
+    StatusCode status = slot < 0 ? StatusCode.RETRY
+        : frame == null ? cache.lastStatus()
         : frame.pageId == 0 ? StatusCode.OK : cache.prepareCurrentSlotForReuse(slot);
     if (!status.isOk() || frame == null || frame.publicationReserved || frame.pinCount != 0) {
       cache.setStatus(status.isOk() ? StatusCode.INVARIANT_BROKEN : status);

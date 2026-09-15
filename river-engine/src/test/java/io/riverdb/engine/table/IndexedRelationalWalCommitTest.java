@@ -389,7 +389,8 @@ final class IndexedRelationalWalCommitTest {
     };
     requireOk(table.reserveHybridCommitGroupCapacity(cohort.length));
     StatusCode preflight = table.preflightHybridCommitGroup(
-        cohort, cohort.length, Long.MAX_VALUE);
+        cohort, cohort.length, Long.MAX_VALUE,
+        new IndexedPreparedCommitCohortDemand());
     check(preflight.isOk(), "hybrid cohort preflight failed: " + preflight);
     requireOk(table.cancelCommitGroup());
     check(manager.abortPreparedCommitGroup(
@@ -565,14 +566,13 @@ final class IndexedRelationalWalCommitTest {
     metrics.recordQueueEnqueue(1);
     metrics.recordQueueEnqueue(2);
     metrics.recordWriterSelection(2, 2, 2, true, false);
-    metrics.recordAttemptedGroup(2);
     IndexedGroupCommitBatch batch = new IndexedGroupCommitBatch(manager, table, metrics);
     requireOk(table.reserveHybridCommitGroupCapacity(batch.capacity()));
     batch.add(0, firstRequest);
     batch.add(1, secondRequest);
 
     long forceCalls = counters.forceCalls();
-    check(batch.appendSharedGroup(2),
+    check(batch.appendSharedGroup(2) == 2,
         "split cohort failed before prepared publication");
     check(counters.forceCalls() == forceCalls,
         "split cohort forced before handing off locks");

@@ -109,8 +109,9 @@ final class IndexedPageGenerationReuseTest {
     assertEquals(StatusCode.OK, cache.reclaimHistorical(1));
     assertNotNull(cache.stageExisting(1, 1));
     assertEquals(StatusCode.OK, cache.beginPreparedBatch());
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, cache.freezeChangedPages(0, 1));
+    assertEquals(StatusCode.RETRY, cache.freezeChangedPages(0, 1));
     assertEquals(2, cache.currentPayload(1).getInt(0));
+    cache.cancelPreparedBatch();
     publish(cache, 1, 3, 2);
     assertEquals(3, cache.currentPayload(1).getInt(0));
     assertEquals(2, allocatedFrames(cache));
