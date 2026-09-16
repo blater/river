@@ -185,12 +185,6 @@ public final class IndexedGroupCommitTelemetry {
     long admissions = sum(groupableAdmissions, initiallyIneligibleAdmissions);
     long failedGroups = 0;
     long failedGroupCohorts = 0;
-    long predicateMasks = 0;
-    long primaryReasons = 0;
-    long directCommits = 0;
-    long successfulCohortSizes = 0;
-    long failedBeforeStatuses = 0;
-    long releasedHoldings = 0;
     for (IndexedGroupFailureStage stage : IndexedGroupFailureStage.values()) {
       long stageCohorts = 0;
       long stageTransactions = 0;
@@ -207,18 +201,12 @@ public final class IndexedGroupCommitTelemetry {
       failedGroups = sum(failedGroups, stageTransactions);
       failedGroupCohorts = sum(failedGroupCohorts, stageCohorts);
     }
-    for (long count : predicateMaskCounts) predicateMasks = sum(predicateMasks, count);
-    for (long count : primaryReasonCounts) primaryReasons = sum(primaryReasons, count);
-    for (long count : directReasonCounts) directCommits = sum(directCommits, count);
-    for (long count : successfulCohortSizeCounts) {
-      successfulCohortSizes = sum(successfulCohortSizes, count);
-    }
-    for (long count : failedBeforeStatusCounts) {
-      failedBeforeStatuses = sum(failedBeforeStatuses, count);
-    }
-    for (long count : groupLockHoldingsReleasedByScope) {
-      releasedHoldings = sum(releasedHoldings, count);
-    }
+    long predicateMasks = sum(predicateMaskCounts);
+    long primaryReasons = sum(primaryReasonCounts);
+    long directCommits = sum(directReasonCounts);
+    long successfulCohortSizes = sum(successfulCohortSizeCounts);
+    long failedBeforeStatuses = sum(failedBeforeStatusCounts);
+    long releasedHoldings = sum(groupLockHoldingsReleasedByScope);
     long initiallyIneligibleDirect =
         directReasonCounts[IndexedDirectCommitReason.INITIALLY_INELIGIBLE.ordinal()];
     return !overflowed
@@ -277,48 +265,48 @@ public final class IndexedGroupCommitTelemetry {
   }
 
   void recordReadOnlyCommit() {
-    readOnlyCommitSubmissions = increment(readOnlyCommitSubmissions);
-    totalCommitSubmissions = increment(totalCommitSubmissions);
+    readOnlyCommitSubmissions = add(readOnlyCommitSubmissions, 1);
+    totalCommitSubmissions = add(totalCommitSubmissions, 1);
   }
   void recordPhysicalForceOverlap() {
-    physicalCohortsWhileForceActive = increment(physicalCohortsWhileForceActive);
+    physicalCohortsWhileForceActive = add(physicalCohortsWhileForceActive, 1);
   }
   void recordFailedBefore(StatusCode status) {
-    failedBeforeSubmission = increment(failedBeforeSubmission);
-    totalCommitSubmissions = increment(totalCommitSubmissions);
-    failedBeforeStatusCounts[status.ordinal()] = increment(
-        failedBeforeStatusCounts[status.ordinal()]);
+    failedBeforeSubmission = add(failedBeforeSubmission, 1);
+    totalCommitSubmissions = add(totalCommitSubmissions, 1);
+    failedBeforeStatusCounts[status.ordinal()] = add(
+        failedBeforeStatusCounts[status.ordinal()], 1);
   }
   void recordWriteSubmission(int mask, boolean coordinatorAdmission) {
-    writeCommitSubmissions = increment(writeCommitSubmissions);
-    totalCommitSubmissions = increment(totalCommitSubmissions);
+    writeCommitSubmissions = add(writeCommitSubmissions, 1);
+    totalCommitSubmissions = add(totalCommitSubmissions, 1);
     if (mask == 0) {
-      groupableTransactions = increment(groupableTransactions);
-      if (coordinatorAdmission) groupableAdmissions = increment(groupableAdmissions);
+      groupableTransactions = add(groupableTransactions, 1);
+      if (coordinatorAdmission) groupableAdmissions = add(groupableAdmissions, 1);
     } else {
-      initiallyIneligibleTransactions = increment(initiallyIneligibleTransactions);
-      predicateMaskCounts[mask] = increment(predicateMaskCounts[mask]);
+      initiallyIneligibleTransactions = add(initiallyIneligibleTransactions, 1);
+      predicateMaskCounts[mask] = add(predicateMaskCounts[mask], 1);
       int primary = Integer.numberOfTrailingZeros(mask);
-      primaryReasonCounts[primary] = increment(primaryReasonCounts[primary]);
+      primaryReasonCounts[primary] = add(primaryReasonCounts[primary], 1);
       if (coordinatorAdmission) {
-        initiallyIneligibleAdmissions = increment(initiallyIneligibleAdmissions);
+        initiallyIneligibleAdmissions = add(initiallyIneligibleAdmissions, 1);
       }
     }
   }
   void recordAttemptedGroup(int count) {
-    attemptedGroupCohorts = increment(attemptedGroupCohorts);
+    attemptedGroupCohorts = add(attemptedGroupCohorts, 1);
     attemptedGroupTransactions = add(attemptedGroupTransactions, count);
   }
   void recordSuccessfulGroup(int count) {
-    successfulGroupCohorts = increment(successfulGroupCohorts);
+    successfulGroupCohorts = add(successfulGroupCohorts, 1);
     successfulGroupTransactions = add(successfulGroupTransactions, count);
     int bucket = 31 - Integer.numberOfLeadingZeros(count);
-    successfulCohortSizeCounts[bucket] = increment(successfulCohortSizeCounts[bucket]);
+    successfulCohortSizeCounts[bucket] = add(successfulCohortSizeCounts[bucket], 1);
     if (count > maximumSuccessfulCohort) maximumSuccessfulCohort = count;
   }
   void recordDirectCommit(IndexedDirectCommitReason reason) {
-    directCommitTransactions = increment(directCommitTransactions);
-    directReasonCounts[reason.ordinal()] = increment(directReasonCounts[reason.ordinal()]);
+    directCommitTransactions = add(directCommitTransactions, 1);
+    directReasonCounts[reason.ordinal()] = add(directReasonCounts[reason.ordinal()], 1);
   }
   void recordGroupLockHoldingsReleased(LockScope scope, long count) {
     groupLockHoldingsReleased = add(groupLockHoldingsReleased, count);
@@ -329,10 +317,10 @@ public final class IndexedGroupCommitTelemetry {
       IndexedGroupFailureStage stage, StatusCode status, int transactionCount) {
     int stageIndex = stage.ordinal();
     int statusIndex = statusIndex(stage, status);
-    groupFailureCohortCounts[stageIndex] = increment(groupFailureCohortCounts[stageIndex]);
+    groupFailureCohortCounts[stageIndex] = add(groupFailureCohortCounts[stageIndex], 1);
     groupFailureTransactionCounts[stageIndex] = add(
         groupFailureTransactionCounts[stageIndex], transactionCount);
-    groupFailureCounts[statusIndex] = increment(groupFailureCounts[statusIndex]);
+    groupFailureCounts[statusIndex] = add(groupFailureCounts[statusIndex], 1);
     groupFailureTransactionStatusCounts[statusIndex] = add(
         groupFailureTransactionStatusCounts[statusIndex], transactionCount);
   }
@@ -340,18 +328,18 @@ public final class IndexedGroupCommitTelemetry {
     long elapsed = Math.max(0, elapsedNanos);
     int pathIndex = path.ordinal();
     int stageIndex = stage.ordinal();
-    stageCounts[pathIndex][stageIndex] = increment(stageCounts[pathIndex][stageIndex]);
+    stageCounts[pathIndex][stageIndex] = add(stageCounts[pathIndex][stageIndex], 1);
     stageNanos[pathIndex][stageIndex] = add(stageNanos[pathIndex][stageIndex], elapsed);
     int bucket = latencyBucket(elapsed);
     int latencyIndex = stageIndex * LATENCY_BUCKETS + bucket;
-    stageLatencyCounts[pathIndex][latencyIndex] = increment(
-        stageLatencyCounts[pathIndex][latencyIndex]);
+    stageLatencyCounts[pathIndex][latencyIndex] = add(
+        stageLatencyCounts[pathIndex][latencyIndex], 1);
   }
 
   void recordStageFailure(
       IndexedCommitPath path, IndexedCommitStage stage, StatusCode status) {
     int index = stageFailureIndex(path, stage, status);
-    stageFailureCounts[index] = increment(stageFailureCounts[index]);
+    stageFailureCounts[index] = add(stageFailureCounts[index], 1);
   }
 
   private static int statusIndex(IndexedGroupFailureStage stage, StatusCode status) {
@@ -368,20 +356,18 @@ public final class IndexedGroupCommitTelemetry {
     return Math.min(LATENCY_BUCKETS - 1, 63 - Long.numberOfLeadingZeros(elapsedNanos));
   }
 
-  private long increment(long value) {
-    if (value == Long.MAX_VALUE) {
-      overflowed = true;
-      return value;
-    }
-    return value + 1;
-  }
-
   private long add(long current, long value) {
     if (value < 0 || Long.MAX_VALUE - current < value) {
       overflowed = true;
       return Long.MAX_VALUE;
     }
     return current + value;
+  }
+
+  private static long sum(long[] counts) {
+    long total = 0;
+    for (long count : counts) total = sum(total, count);
+    return total;
   }
 
   private static long sum(long left, long right) {
