@@ -40,22 +40,28 @@ final class CatalogStatisticsWriter {
       if (status == StatusCode.CONFLICT) status = StatusCode.OK;
     }
     if (status.isOk()) status = owner.reserveCatalogRecords(chunks + 1, range);
+    return stage(status, owner.indexedSession(), table, statistics, chunks, replacing);
+  }
+
+  private StatusCode stage(
+      StatusCode status, IndexedTransactionSession session, TableDefinition table,
+      TableStatistics statistics, int chunks, boolean replacing) {
     childSetChecksum.reset();
     int written = 0;
     boolean published = false;
     while (status.isOk() && written < chunks) {
-      status = writeChild(owner.indexedSession(), table, statistics, written);
+      status = writeChild(session, table, statistics, written);
       if (status.isOk()) written++;
     }
     if (status.isOk()) {
-      status = writeHeader(owner.indexedSession(), table, replacing);
+      status = writeHeader(session, table, replacing);
       published = status.isOk();
     }
     if (status.isOk() && replacing) {
-      status = deleteChildren(owner.indexedSession(), oldHeader.manifest());
+      status = deleteChildren(session, oldHeader.manifest());
     }
     return status.isOk() || published
-        ? status : discard(owner.indexedSession(), written, status);
+        ? status : discard(session, written, status);
   }
 
   private StatusCode writeChild(

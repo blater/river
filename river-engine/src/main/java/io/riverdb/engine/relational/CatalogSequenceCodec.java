@@ -74,11 +74,11 @@ final class CatalogSequenceCodec {
     if (scratch.getLong(0) != USER_MAGIC) {
       return StatusCode.CONFLICT;
     }
-    int nameBytes = source.length() >= 16 ? scratch.getInt(12) : -1;
-    long increment = source.length() >= 32 ? scratch.getLong(24) : 0;
-    int exhausted = source.length() >= 36 ? scratch.getInt(32) : -1;
-    if (source.length() < 37
-        || scratch.getInt(8) != VERSION
+    if (source.length() < 37) return StatusCode.CORRUPTION;
+    int nameBytes = scratch.getInt(12);
+    long increment = scratch.getLong(24);
+    int exhausted = scratch.getInt(32);
+    if (scratch.getInt(8) != VERSION
         || nameBytes <= 0
         || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
         || source.length() != 36 + nameBytes

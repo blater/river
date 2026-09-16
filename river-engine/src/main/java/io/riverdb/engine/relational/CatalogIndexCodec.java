@@ -77,13 +77,12 @@ final class CatalogIndexCodec {
       Result result) {
     scratch.clear();
     StatusCode status = source.copyTo(scratch);
-    int version = source.length() >= 12 ? scratch.getInt(8) : -1;
-    int state = source.length() >= 24 ? scratch.getInt(20) : -1;
-    int flags = source.length() >= 28 ? scratch.getInt(24) : -1;
-    int nameBytes = source.length() >= HEADER_BYTES ? scratch.getInt(28) : -1;
-    if (!status.isOk()
-        || version != VERSION
-        || source.length() < HEADER_BYTES + 1
+    if (!status.isOk() || source.length() < HEADER_BYTES + 1) return StatusCode.CORRUPTION;
+    int version = scratch.getInt(8);
+    int state = scratch.getInt(20);
+    int flags = scratch.getInt(24);
+    int nameBytes = scratch.getInt(28);
+    if (version != VERSION
         || source.length() != HEADER_BYTES + nameBytes
         || scratch.getLong(0) != MAGIC
         || !validTableId(scratch.getInt(12))

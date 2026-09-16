@@ -31,6 +31,19 @@ final class CatalogStatisticsReader {
       status = StatusCode.CONFLICT;
     }
     if (status.isOk()) status = assembly.begin(manifest, childSetChecksum);
+    if (status.isOk()) status = readChildren(session, manifest, table, result);
+    if (status.isOk() && (!assembly.complete() || !result.canonicalFor(table))) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (!status.isOk()) result.reset();
+    assembly.reset();
+    return status;
+  }
+
+  private StatusCode readChildren(
+      IndexedTransactionSession session, CatalogDefinitionManifest manifest,
+      TableDefinition table, TableStatistics result) {
+    StatusCode status = StatusCode.OK;
     for (int ordinal = 0; status.isOk() && ordinal < manifest.childCount(); ordinal++) {
       status = readChild(session, manifest.firstChildRecordId() + ordinal);
       if (status.isOk()) status = assembly.accept(child);
@@ -38,11 +51,6 @@ final class CatalogStatisticsReader {
           record, CatalogDefinitionRecordCodec.HEADER_BYTES, child.payloadBytes(),
           table, child.logicalStart(), child.logicalCount(), result);
     }
-    if (status.isOk() && (!assembly.complete() || !result.canonicalFor(table))) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (!status.isOk()) result.reset();
-    assembly.reset();
     return status;
   }
 
