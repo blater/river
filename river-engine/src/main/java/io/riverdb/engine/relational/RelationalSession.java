@@ -13,9 +13,6 @@ import java.nio.ByteBuffer;
 
 /** Transaction session over catalog-resolved logical tables in one physical keyspace. */
 public final class RelationalSession {
-  private static final int PENDING_DROP_NONE = 0;
-  private static final int PENDING_DROP_INDEX = 1;
-  private static final int PENDING_DROP_TABLE = 2;
 
   private final RelationalSchemaLifecycle schemaLifecycle;
   private final RelationalSchemaGate schemaGate;
@@ -30,17 +27,11 @@ public final class RelationalSession {
   private final RelationalDatabaseServices services;
   private final CatalogStatisticsCleanup statisticsCleanup = new CatalogStatisticsCleanup();
   private final SchemaPin descriptorNamespace = new SchemaPin();
-  private final TableSchema.ColumnName pendingDropIndexName =
-      new TableSchema.ColumnName();
-  private final TableSchema.ColumnName pendingDropTableName =
-      new TableSchema.ColumnName();
-  private final TransactionOutcome schemaCleanupOutcome = new TransactionOutcome();
+  private final RelationalPendingDrop pendingDrop = new RelationalPendingDrop();
   private boolean registeredTransaction;
   private boolean schemaChangeActive;
   private boolean nonDescriptorSchemaPublication;
   private int schemaChangeMutationStart;
-  private int pendingDropMutationStart;
-  private int pendingDropType;
   private boolean closed;
 
   RelationalSession(
@@ -295,7 +286,7 @@ public final class RelationalSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -323,7 +314,7 @@ public final class RelationalSession {
     if (!registeredTransaction) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -398,7 +389,7 @@ public final class RelationalSession {
         || increment == 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -424,7 +415,7 @@ public final class RelationalSession {
         || !RelationalViewLineage.valid(tableIds, tableCount)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -450,7 +441,7 @@ public final class RelationalSession {
     if (!registeredTransaction || !RelationalKey.validName(name)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -466,7 +457,7 @@ public final class RelationalSession {
     if (!registeredTransaction || !RelationalKey.validName(name)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -531,7 +522,7 @@ public final class RelationalSession {
         || !RelationalKey.validName(columnName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -552,7 +543,7 @@ public final class RelationalSession {
         || !RelationalKey.validName(tableName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -562,10 +553,7 @@ public final class RelationalSession {
       status = schemaLifecycle.markDroppingValueIndex(this, indexName, tableName);
     }
     if (status.isOk()) {
-      pendingDropIndexName.set(indexName);
-      pendingDropTableName.set(tableName);
-      pendingDropMutationStart = mutationStart;
-      pendingDropType = PENDING_DROP_INDEX;
+      pendingDrop.index(indexName, tableName, mutationStart);
     }
     finishFailedSchemaChange(status, acquired);
     return status;
@@ -575,7 +563,7 @@ public final class RelationalSession {
     if (!registeredTransaction || !RelationalKey.validName(tableName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -585,9 +573,7 @@ public final class RelationalSession {
       status = schemaLifecycle.markDroppingTable(this, tableName);
     }
     if (status.isOk()) {
-      pendingDropTableName.set(tableName);
-      pendingDropMutationStart = mutationStart;
-      pendingDropType = PENDING_DROP_TABLE;
+      pendingDrop.table(tableName, mutationStart);
     }
     finishFailedSchemaChange(status, acquired);
     return status;
@@ -602,7 +588,7 @@ public final class RelationalSession {
         || sameName(currentName, renamedName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -624,7 +610,7 @@ public final class RelationalSession {
         || !RelationalKey.validName(renamedName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -646,7 +632,7 @@ public final class RelationalSession {
         || sameName(currentName, renamedName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (pendingDropType != PENDING_DROP_NONE) {
+    if (pendingDrop.active()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = !schemaChangeActive;
@@ -901,11 +887,7 @@ public final class RelationalSession {
     StatusCode status = session.rollbackToSavepoint(savepoint);
     if (status.isOk()) descriptors.rollbackTo(session.pendingMutationCount());
     if (status.isOk()) status = descriptors.clearRetainedBindings();
-    if (status.isOk()
-        && pendingDropType != PENDING_DROP_NONE
-        && session.pendingMutationCount() <= pendingDropMutationStart) {
-      clearPendingDrop();
-    }
+    if (status.isOk()) pendingDrop.rollbackTo(session.pendingMutationCount());
     if (status.isOk()
         && schemaChangeActive
         && session.pendingMutationCount() <= schemaChangeMutationStart
@@ -933,22 +915,8 @@ public final class RelationalSession {
     status = descriptors.finish(session, result, status);
     boolean committed = descriptors.committed();
     releaseTerminalTransaction();
-    int cleanupType = pendingDropType;
-    if (committed && cleanupType != PENDING_DROP_NONE) {
-      pendingDropType = PENDING_DROP_NONE;
-      schemaCleanupOutcome.reset();
-      status = cleanupType == PENDING_DROP_INDEX
-          ? schemaLifecycle.finishDroppingValueIndex(
-              this,
-              pendingDropIndexName,
-              pendingDropTableName,
-              schemaCleanupOutcome)
-          : schemaLifecycle.finishDroppingTable(
-              this,
-              pendingDropTableName,
-              schemaCleanupOutcome);
-    }
-    clearPendingDrop();
+    if (committed && pendingDrop.active()) status = pendingDrop.finish(this, schemaLifecycle);
+    pendingDrop.clear();
     if (descriptors.determinate()) {
       completeTerminalSchemaChange(
           descriptors.publishSchemaChange() || nonDescriptorSchemaPublication);
@@ -961,7 +929,7 @@ public final class RelationalSession {
     if (!status.isOk()) return status;
     status = session.abort(result);
     status = descriptors.finish(session, result, status);
-    clearPendingDrop();
+    pendingDrop.clear();
     if (descriptors.determinate()) {
       completeTerminalSchemaChange(false);
     }
@@ -1041,13 +1009,6 @@ public final class RelationalSession {
       }
     }
     return true;
-  }
-
-  private void clearPendingDrop() {
-    pendingDropIndexName.reset();
-    pendingDropTableName.reset();
-    pendingDropMutationStart = 0;
-    pendingDropType = PENDING_DROP_NONE;
   }
 
   StatusCode insertIndexedValue(

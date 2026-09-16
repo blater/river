@@ -1,9 +1,6 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.LocalTemporal;
-import io.riverdb.base.type.LocalTemporalCast;
-import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.relational.TableDefinition;
@@ -13,18 +10,16 @@ import io.riverdb.storage.heap.HeapRowResult;
 
 /** Evaluates one bound temporal row-expression program into caller-owned storage. */
 final class SqlRowExpressionEvaluator {
-  private final long[] values = new long[SqlScalarExpression.MAXIMUM_NODES];
-  private final long[] highs = new long[SqlScalarExpression.MAXIMUM_NODES];
-  private final int[] descriptors = new int[SqlScalarExpression.MAXIMUM_NODES];
-  private final boolean[] nulls = new boolean[SqlScalarExpression.MAXIMUM_NODES];
-  private final SqlRowTextScratch text = new SqlRowTextScratch();
-  private final LocalTemporal.Value temporalValue = new LocalTemporal.Value();
-  private final LocalTemporalCast.TextResult textResult = new LocalTemporalCast.TextResult();
-  private final SqlTemporalContext.LongResult longResult = new SqlTemporalContext.LongResult();
-  private final SqlNumericExpressionEvaluator exact = new SqlNumericExpressionEvaluator();
+  final long[] values = new long[SqlScalarExpression.MAXIMUM_NODES];
+  final long[] highs = new long[SqlScalarExpression.MAXIMUM_NODES];
+  final int[] descriptors = new int[SqlScalarExpression.MAXIMUM_NODES];
+  final boolean[] nulls = new boolean[SqlScalarExpression.MAXIMUM_NODES];
+  final SqlRowTextScratch text = new SqlRowTextScratch();
+  final SqlTemporalContext.LongResult longResult = new SqlTemporalContext.LongResult();
   private final SqlExpressionEvaluator columns;
   private final SqlTemporalContext temporal;
-  private int size;
+  private final SqlRowExpressionArithmetic arithmetic;
+  int size;
   private long aggregateValue;
   private boolean aggregateNull;
   private long[] aggregateValues;
@@ -36,6 +31,7 @@ final class SqlRowExpressionEvaluator {
       SqlExpressionEvaluator columnReader, SqlTemporalContext temporalContext) {
     columns = columnReader;
     temporal = temporalContext;
+    arithmetic = new SqlRowExpressionArithmetic(this, temporalContext);
   }
 
   StatusCode evaluate(
@@ -127,8 +123,8 @@ final class SqlRowExpressionEvaluator {
     return leaf(operator)
         ? leaf(command, operator, operandHigh, operand, descriptor,
             primaryKey, source, definition)
-        : binaryOperator(operator) ? binary(operator, descriptor)
-        : unary(operator, operand, descriptor, zone);
+        : binaryOperator(operator) ? arithmetic.binary(operator, descriptor)
+        : arithmetic.unary(operator, operand, descriptor, zone);
   }
 
   StatusCode predicateNullColumnNode(int descriptor) {
@@ -184,8 +180,8 @@ final class SqlRowExpressionEvaluator {
               source,
               definition)
           : binaryOperator(operator)
-              ? binary(operator, descriptor)
-              : unary(operator, operand, descriptor, zone);
+              ? arithmetic.binary(operator, descriptor)
+              : arithmetic.unary(operator, operand, descriptor, zone);
     }
     return !status.isOk() || size == 1
         ? status : StatusCode.INVALID_EXTERNAL_INPUT;
@@ -212,8 +208,8 @@ final class SqlRowExpressionEvaluator {
                   command, operator, programs.mutationOperandHigh(expression, node),
                   operand, descriptor, 0, null, null)
               : binaryOperator(operator)
-                  ? binary(operator, descriptor)
-                  : unary(operator, operand, descriptor, zone);
+                  ? arithmetic.binary(operator, descriptor)
+                  : arithmetic.unary(operator, operand, descriptor, zone);
     }
     return !status.isOk() || size == 1
         ? status : StatusCode.INVALID_EXTERNAL_INPUT;
@@ -246,8 +242,8 @@ final class SqlRowExpressionEvaluator {
                   null,
                   null)
               : binaryOperator(operator)
-                  ? binary(operator, programs.descriptor(projection, node))
-                  : unary(
+                  ? arithmetic.binary(operator, programs.descriptor(projection, node))
+                  : arithmetic.unary(
                       operator,
                       programs.operand(projection, node),
                       programs.descriptor(projection, node),
@@ -288,8 +284,8 @@ final class SqlRowExpressionEvaluator {
                   programs.operand(projection, node),
                   programs.descriptor(projection, node), 0, null, null)
               : binaryOperator(operator)
-                  ? binary(operator, programs.descriptor(projection, node))
-                  : unary(operator, programs.operand(projection, node),
+                  ? arithmetic.binary(operator, programs.descriptor(projection, node))
+                  : arithmetic.unary(operator, programs.operand(projection, node),
                       programs.descriptor(projection, node), zone);
     }
     return !status.isOk() || size == 1
@@ -362,8 +358,8 @@ final class SqlRowExpressionEvaluator {
       SqlTemporalZonePlan zone) {
     return leaf(operator)
         ? havingLeaf(command, operator, operandHigh, operand, descriptor)
-        : binaryOperator(operator) ? binary(operator, descriptor)
-        : unary(operator, operand, descriptor, zone);
+        : binaryOperator(operator) ? arithmetic.binary(operator, descriptor)
+        : arithmetic.unary(operator, operand, descriptor, zone);
   }
 
   private StatusCode havingLeaf(
@@ -424,8 +420,8 @@ final class SqlRowExpressionEvaluator {
       status = leaf(operator)
           ? leaf(command, programs, projection, node, primaryKey, source, definition)
           : binaryOperator(operator)
-              ? binary(operator, programs.descriptor(projection, node))
-              : unary(
+              ? arithmetic.binary(operator, programs.descriptor(projection, node))
+              : arithmetic.unary(
                   operator,
                   programs.operand(projection, node),
                   programs.descriptor(projection, node),
@@ -518,112 +514,6 @@ final class SqlRowExpressionEvaluator {
           : text.loadRow(source, definition, values[size]);
     }
     size++;
-    return status;
-  }
-
-  private StatusCode unary(
-      int operator, long operand, int target, SqlTemporalZonePlan zone) {
-    if (size < 1) return StatusCode.INVALID_EXTERNAL_INPUT;
-    int slot = size - 1;
-    if (nulls[slot]) {
-      descriptors[slot] = target;
-      return StatusCode.OK;
-    }
-    int source = descriptors[slot];
-    StatusCode status = switch (operator) {
-      case SqlScalarExpression.NEGATE,
-          SqlScalarExpression.ABSOLUTE,
-          SqlScalarExpression.CEILING,
-          SqlScalarExpression.FLOOR,
-          SqlScalarExpression.ROUND,
-          SqlScalarExpression.TRUNCATE ->
-          exact.unary(operator, highs[slot], values[slot], source, target, operand);
-      case SqlScalarExpression.CAST -> cast(highs[slot], values[slot], source, target);
-      case SqlScalarExpression.AT_TIME_ZONE -> temporal.atTimeZone(
-          values[slot], source, zone, longResult);
-      case SqlScalarExpression.EXTRACT -> extract(values[slot], source, operand);
-      default -> StatusCode.FEATURE_NOT_SUPPORTED;
-    };
-    if (status.isOk()) {
-      values[slot] = operator == SqlScalarExpression.EXTRACT
-          ? temporalValue.value : SqlNumericExpressionEvaluator.unaryOperator(operator)
-              ? exact.value() : longResult.value;
-      boolean numeric = SqlNumericExpressionEvaluator.unaryOperator(operator)
-          || operator == SqlScalarExpression.CAST
-              && SqlNumericTypeRules.isNumeric(source)
-              && SqlNumericTypeRules.isNumeric(target);
-      highs[slot] = numeric
-          ? exact.highValue() : values[slot] >> 63;
-      descriptors[slot] = target;
-    }
-    return status;
-  }
-
-  private StatusCode cast(long high, long value, int source, int target) {
-    int sourceType = SqlTypeDescriptor.typeId(source);
-    int targetType = SqlTypeDescriptor.typeId(target);
-    if (SqlNumericTypeRules.isNumeric(source)
-        && SqlNumericTypeRules.isNumeric(target)) {
-      StatusCode status = exact.cast(high, value, source, target);
-      longResult.value = exact.value();
-      return status;
-    }
-    if (targetType == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      StatusCode status = temporal.formatTemporal(
-          value, source, target, text.writableCharacters(), textResult);
-      if (status.isOk()) text.publish(textResult.length); else text.clear();
-      longResult.value = 0;
-      return status;
-    }
-    if (sourceType == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      StatusCode status = LocalTemporalCast.parseText(
-          text, 0, text.length(), target, temporalValue);
-      longResult.value = temporalValue.value;
-      return status;
-    }
-    return temporal.castTemporal(value, source, target, longResult);
-  }
-
-  private StatusCode extract(long value, int source, long field) {
-    return field < Integer.MIN_VALUE || field > Integer.MAX_VALUE
-        ? StatusCode.INVALID_EXTERNAL_INPUT
-        : LocalTemporal.extract(value, source, (int) field, temporalValue);
-  }
-
-  private StatusCode binary(int operator, int target) {
-    if (size < 2) return StatusCode.INVALID_EXTERNAL_INPUT;
-    int right = --size;
-    int left = size - 1;
-    if (nulls[left] || nulls[right]) {
-      nulls[left] = true;
-      descriptors[left] = target;
-      return StatusCode.OK;
-    }
-    int leftDescriptor = descriptors[left];
-    int rightDescriptor = descriptors[right];
-    int rightType = SqlTypeDescriptor.typeId(rightDescriptor);
-    boolean date = SqlTypeDescriptor.typeId(leftDescriptor)
-        == SqlTypeDescriptor.TYPE_ID_DATE;
-    StatusCode status = date
-        ? operator == SqlScalarExpression.ADD
-            ? LocalTemporal.addDateDays(values[left], values[right], temporalValue)
-            : rightType == SqlTypeDescriptor.TYPE_ID_DATE
-                ? LocalTemporal.subtractDates(
-                    values[left], values[right], temporalValue)
-                : LocalTemporal.subtractDateDays(
-                    values[left], values[right], temporalValue)
-        : exact.binary(
-            operator,
-            highs[left], values[left],
-            leftDescriptor,
-            highs[right], values[right],
-            rightDescriptor,
-            target);
-    if (status.isOk()) {
-      values[left] = date ? temporalValue.value : exact.value();
-      highs[left] = date ? values[left] >> 63 : exact.highValue();
-      descriptors[left] = target;
-    }
     return status;
   }
 

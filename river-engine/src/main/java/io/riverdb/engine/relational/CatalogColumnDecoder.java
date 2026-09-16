@@ -58,15 +58,9 @@ final class CatalogColumnDecoder {
       if ((columnFlags & ~(CatalogTableEncoder.NULLABLE | CatalogTableEncoder.HAS_DEFAULT
               | CatalogTableEncoder.HAS_CHECK | CatalogTableEncoder.HAS_REFERENCE)) != 0
           || defaultTextBytes < 0 || offset > bytes - defaultTextBytes
-          || !defaultPresent && (defaultKind != SqlDefaultKind.NONE || defaultValue != 0
-              || defaultTextBytes != 0)
-          || defaultPresent && (text ? defaultValue != 0 : defaultTextBytes != 0)
-          || !checkPresent && (comparison != 0 || checkValue != 0 || checkDescriptor != 0
-              || nodes != 0)
-          || checkPresent && (nodes <= 0 || nodes > SqlShapeLimits.MAX_EXPRESSION_NODES - totalNodes)
-          || !referencePresent && referenceTableId != 0
-          || referencePresent && (referenceTableId <= 0
-              || referenceTableId > RelationalKey.MAXIMUM_TABLE_ID || referenceTableId == tableId)) {
+          || !CatalogColumnValidation.defaultValue(defaultPresent, text, defaultKind, defaultValue, defaultTextBytes)
+          || !CatalogColumnValidation.check(checkPresent, comparison, checkValue, checkDescriptor, nodes, totalNodes)
+          || !CatalogColumnValidation.reference(referencePresent, referenceTableId, tableId)) {
         return StatusCode.CORRUPTION;
       }
       status = schema.addColumn(
@@ -87,6 +81,12 @@ final class CatalogColumnDecoder {
       nodeCounts[column] = nodes;
       totalNodes += nodes;
     }
+    return finishSchema(source, bytes, offset, columns, flags);
+  }
+
+  private StatusCode finishSchema(
+      ByteBuffer source, int bytes, int offset, int columns, int flags) {
+    StatusCode status;
     if ((flags & CatalogTableEncoder.IDENTITY) != 0) {
       status = schema.setPrimaryKeyIdentity();
       if (!status.isOk()) return StatusCode.CORRUPTION;

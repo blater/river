@@ -24,50 +24,13 @@ final class SqlProjectionBinder {
         && command.columnCount() > 0
         && (command.projectionExpression(0) == null
             || !command.projectionExpression(0).isAvailable())) {
-      return bindLegacy(command, bound);
+      return SqlLegacyProjectionBinder.bind(command, bound);
     }
     if (SqlRowProjectionBinder.hasComputed(command)
         && bound.executableQuery.sourceBlockCount() > 1) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     return rows.bind(command, bound);
-  }
-
-  private static StatusCode bindLegacy(
-      SqlCommand command, BoundSqlStatement bound) {
-    int count = command.columnCount();
-    StatusCode reserved = bound.reserveProjectionColumns(count);
-    if (count <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (!reserved.isOk()) return reserved;
-    bound.projectionPrograms.begin(count);
-    for (int index = 0; index < count; index++) {
-      if (!hasValidQualifier(command, index)) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      int column = command.isNullProjection(index)
-          ? BoundSqlStatement.NULL_PROJECTION
-          : bound.table.findColumn(command.columnName(index));
-      if (column < 0 && column != BoundSqlStatement.NULL_PROJECTION) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (bound.projectedColumns[previous] == column) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-      bound.projectedColumns[index] = column;
-      bound.projectedTypeDescriptors[index] = column < 0
-          ? SqlTypeDescriptor.BIGINT : bound.table.typeDescriptor(column);
-      bound.projectionPrograms.append(
-          index,
-          column < 0 ? SqlScalarExpression.NULL : SqlScalarExpression.COLUMN,
-          column < 0 ? 0 : column,
-          bound.projectedTypeDescriptors[index]);
-      bound.projectionPrograms.finish(
-          index, bound.projectedTypeDescriptors[index], column < 0 ? -1 : column);
-    }
-    bound.projectedColumnCount = count;
-    return bound.projectionPrograms.status();
   }
 
   StatusCode bindOrder(SqlCommand command, BoundSqlStatement bound) {
@@ -129,12 +92,6 @@ final class SqlProjectionBinder {
     }
     bound.distinctColumn = column;
     return predicates.bind(command, query, bound);
-  }
-
-  private static boolean hasValidQualifier(SqlCommand command, int index) {
-    CharSequence qualifier = command.columnTableName(index);
-    return qualifier.length() == 0
-        || SqlBindingNames.matchesTable(command, qualifier);
   }
 
   private static int resolveOrderAlias(SqlCommand command) {
