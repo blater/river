@@ -1,6 +1,6 @@
 ---
 id: tic-thuringwethil
-status: in_progress
+status: closed
 type: story
 priority: 2
 assignee: blater
@@ -357,7 +357,42 @@ maximum score 85.2311 and NPATH 96. Logs:
 `/private/tmp/river-server-app-check-final.log`, and
 `/private/tmp/river-server-app-final-slopmark.json`.
 Final independent lifecycle review approved identity, stage ownership, cleanup,
-and failure precedence against the original source. A complete integration check
-and an isolated daemon performance comparison are pending before promotion.
+and failure precedence against the original source. The complete integration check and isolated daemon comparisons are recorded
+in the completion section below.
 The cumulative adverse samples and component probes remain retained in
 `docs/performance-checkpoints.md`; they have not been dismissed or attributed.
+
+### Completion — 2026-09-16
+
+All requested source limits are met across the whole repository, including tests:
+2693 code files, maximum Slopmark 99.7913, maximum routine NPATH 100, zero
+score or NPATH offenders. LocalWal: 176.0825 to 96.2091. No suppressions,
+threshold changes, inheritance ladders, or source exclusions were introduced.
+Independent Luna/high authors/reviewers and integrator review covered each slice.
+
+Final clean full check passed: 2036 reported tests, zero failures/errors, 19 skips;
+2017 tests passed. Some Gradle task results came from cache. Daemon version smoke
+passed (`riverd-v1`, `river-v5`). Evidence:
+`/private/tmp/river-complexity-final-all.json`,
+`/private/tmp/river-complexity-final-clean-check.log`, and
+`/private/tmp/river-complexity-final-test-counts.json`.
+
+Delivered through successive merge commits and annotated, pushed checkpoints,
+starting with the LocalWal ownership work and finishing with daemon lifecycle.
+The 65 pre-existing unrelated local files remain byte-for-byte unchanged.
+
+Periodic performance checks retained adverse results and triggered component,
+profile, and identical-binary controls. Final daemon-only short samples showed
++5.8% average CPU/commit; an identical candidate binary later varied +6.05%
+without source changes. The longer plain pair was also adverse; the JFR pair was
+much closer. No causal performance conclusion or neutrality claim is justified.
+All ten final runs passed correctness, accounting, eligibility, and cleanup;
+independent audit confirmed no owned servers/data directories remain.
+
+The code is accepted as behavior-preserving maintainability work, not an
+optimization. [tic-voronwe](tic-voronwe.md) stays open for both the earlier
+cumulative signal and final daemon-only observations. Full individual samples,
+configuration, profile limits, and analysis caveats are in
+[performance-checkpoints.md](../performance-checkpoints.md), section
+"Complexity completion and periodic performance checkpoint 3". Closing this
+complexity ticket does not close or dismiss that investigation.

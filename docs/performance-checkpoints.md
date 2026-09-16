@@ -3817,3 +3817,117 @@ speedup or dismiss the repeated adverse measurements. Daemon lifecycle may be
 assessed separately against immediate master with only its jar changed; such a
 result would establish only that slice's behavior. The next cumulative diagnostic
 should inspect mechanism telemetry rather than extend this timing-only matrix.
+
+## Complexity completion and periodic performance checkpoint 3 — 2026-09-16
+
+Source runtime: `deb8da4c`, after reviewed engine/table/SQL/transaction slices,
+with the reviewed daemon lifecycle feature `fa6f069a`. This is maintainability
+work, not an optimization. Whole-repository scan including tests: 2693 code files,
+maximum Slopmark 99.7913, maximum routine NPATH 100, zero offenders.
+LocalWal moved from 176.0825 to 96.2091. Clean full integration check passed:
+2036 reported tests, zero failures/errors, 19 skips (2017 passed); Gradle reported
+122 executed tasks, 21 from cache, 13 up-to-date. Evidence:
+`/private/tmp/river-complexity-final-all.json`,
+`/private/tmp/river-complexity-final-clean-check.log`, and
+`/private/tmp/river-complexity-final-test-counts.json`.
+
+### Configuration and controls
+
+All runs used the installed-server external harness at build `7d91f4f`, sample
+new-order, READ COMMITTED, one worker, one warehouse, seed 42, retry limit 3,
+20-second warmup, durable WAL, TCP/TLS, GraalVM 25.0.4, and `-Xmx1g`.
+Measured windows are named below. No workloads overlapped builds, scans, other
+workloads, or profile analysis. JFR pairs are compared only with each other.
+Commands, version labels, phase-bracket process CPU snapshots, and artifacts are
+retained beside each `capture.py` below. CPU/commit is an estimate bracketed by
+measured-workload start and post-run-validation start, not attributed transaction CPU.
+
+The daemon control and candidate have identical 19-jar runtimes except the
+server-app jar: `/private/tmp/river-complexity-perf-3/control/river` and
+`/private/tmp/river-complexity-perf-3/candidate/river`. The old app jar is from
+`ff6ed6f9`; its app sources match immediate pre-feature master `0cb55c89`.
+Every other jar is from the current integrated build. Exact SHA-256 inventory:
+`/private/tmp/river-complexity-perf-3/runtime-hashes.json`.
+The identical-binary pair uses the candidate executable and jars for BOTH labels.
+
+### Isolated daemon, 30 seconds
+
+Evidence: `/private/tmp/river-complexity-perf-3`. Rows follow execution order.
+
+| Label | Commits/s | Server CPU ms/commit | Client CPU ms/commit | p99 ms | Artifact |
+|---|---:|---:|---:|---:|---|
+| baseline-a | 382.594 | 2.24516 | 1.17181 | 4.198399 | `river_harness_20260916_130630_e6d8ab2c` |
+| candidate-a | 356.758 | 2.40774 | 1.24638 | 5.431295 | `river_harness_20260916_130810_b2d7dcea` |
+| candidate-b | 381.927 | 2.36429 | 1.17560 | 4.179967 | `river_harness_20260916_130923_eab5018c` |
+| baseline-b | 381.794 | 2.26646 | 1.17252 | 4.231167 | `river_harness_20260916_131108_120b486b` |
+
+### Isolated daemon, 60 seconds with JFR
+
+Evidence: `/private/tmp/river-complexity-final-profile`. Rows follow execution order.
+
+| Label | Commits/s | Server CPU ms/commit | Client CPU ms/commit | p99 ms | Artifact |
+|---|---:|---:|---:|---:|---|
+| baseline-a | 374.611 | 2.41847 | 1.20523 | 4.288511 | `river_harness_20260916_131301_b4e51a26` |
+| candidate-a | 373.478 | 2.44009 | 1.20086 | 4.362239 | `river_harness_20260916_131527_478145d2` |
+
+### Isolated daemon, 60 seconds, reverse order
+
+Evidence: `/private/tmp/river-complexity-daemon-long`. Rows follow execution order.
+
+| Label | Commits/s | Server CPU ms/commit | Client CPU ms/commit | p99 ms | Artifact |
+|---|---:|---:|---:|---:|---|
+| candidate-a | 248.882 | 3.69701 | 1.92285 | 8.601599 | `river_harness_20260916_132156_e09b7235` |
+| baseline-a | 351.864 | 2.46637 | 1.28031 | 4.796415 | `river_harness_20260916_132408_e286d9aa` |
+
+### Identical candidate binary, 30 seconds
+
+Evidence: `/private/tmp/river-complexity-identical-control`. Rows follow execution order.
+
+| Label | Commits/s | Server CPU ms/commit | Client CPU ms/commit | p99 ms | Artifact |
+|---|---:|---:|---:|---:|---|
+| baseline-a | 383.830 | 2.31003 | 1.16804 | 4.042751 | `river_harness_20260916_132856_85380559` |
+| candidate-a | 374.025 | 2.44987 | 1.20043 | 4.390911 | `river_harness_20260916_133040_34258f1d` |
+
+### Findings, limits, and decision
+
+All ten runs passed validation, eligibility, outcome accounting, and owned
+lifecycle cleanup. Warmup cancellation, retries, failed outcomes, and unknown
+commits are zero. Comparison keys match within each declared comparison.
+The first four plain samples show candidate server CPU averaging 2.386 versus
+2.256 ms/commit (+5.8%). This adverse signal is retained. The reversed longer
+pair also favored the control, with a large simultaneous rise in client and
+server CPU in the candidate run. A host snapshot reported about 5.7 GiB swap in
+use and no recorded thermal/performance warning; there is no baseline swap
+snapshot and no demonstrated cause. That pair followed a bulky JFR JSON export
+and analysis attempt, which was stopped and its generated JSON deleted; original
+JFR recordings remain intact. There was no workload overlap, but the preceding
+analysis is a possible host-state confound, not grounds for discarding the run.
+
+The identical candidate binary subsequently varied from 2.31003 to 2.44987
+server CPU ms/commit (+6.05%), while throughput changed 383.830 to 374.025.
+Thus variation at least as large as the short daemon comparison exists without
+any source or jar change. This does not prove performance neutrality or identify
+the variation's cause. Timing alone does not establish daemon causality.
+
+The 60-second JFR pair was much closer (CPU +0.9%, TPS -0.3%). Exact measured-window
+execution samples per commit were 0.0830627 control and 0.0830470 candidate.
+Recording-bracket socket writes were about 48.16 per commit in both, with mean
+write durations 2.59/2.60 microseconds. No monitor contention at the configured
+10 ms threshold was captured. FileForce has only 19 captured events per recording;
+file-write views are empty, so these profiles do not quantify total WAL I/O.
+Allocation events are sampled, and class percentages are not exact allocation
+bytes. JFR thread-CPU decomposition leaves substantial CPU unattributed and its
+load integrals are unsuitable for exact process-CPU accounting here.
+
+Independent source review confirms changed daemon methods belong to startup,
+identity/control handling, and shutdown; none run per statement/transaction on
+the reused SQL connection. The candidate's execution samples contain no daemon
+frames. No extra transaction-path allocation or causal CPU mechanism was found.
+
+Decision: accept the reviewed behavior-preserving complexity refactor as
+maintainability work, with no optimization or performance-neutrality claim.
+Keep BOTH the earlier cumulative `ff6ed6f9`/`fa6f069a` signal and these isolated
+observations open in [tic-voronwe](tickets/tic-voronwe.md). This checkpoint does
+not clear the cumulative investigation. Next work should isolate one runtime or
+host mechanism using bounded, aggregate/streaming profile analysis, not another
+broad matrix or a fixed percentage rule for dismissing adverse samples.
