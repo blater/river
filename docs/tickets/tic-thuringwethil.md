@@ -111,3 +111,14 @@ the two controls' ranges. Independent review agrees; no speedup is claimed.
 Configuration and individual results are in `docs/performance-checkpoints.md`;
 captures are under `/private/tmp/river-complexity-perf/`.
 Promote with `perf-checkpoint-20260916-localwal-complexity`; ticket remains open.
+
+### Tuple B-tree structure slice — 2026-09-16
+
+Split admission/output and leaf mutation preparation now have coherent local
+owners; cursor admission retains its pin/release and retry ordering. Independent
+Luna/high review approved page boundaries, status propagation, proofs, and
+allocation behavior. Existing child routing is unchanged.
+`:river-storage:check` passed; full module scan including tests covers 76 files,
+maximum score 41.4655 and NPATH 100. Evidence:
+`/private/tmp/river-btree-check.log` and
+`/private/tmp/river-btree-final-slopmark.json`. No performance claim.

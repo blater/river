@@ -3,7 +3,6 @@ package io.riverdb.storage.btree;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.format.btree.TupleBTreePageCodec;
-import io.riverdb.format.btree.TupleBTreePageValidationProof;
 import io.riverdb.format.btree.TupleKeyCodec;
 import java.nio.ByteBuffer;
 
@@ -25,7 +24,7 @@ final class TupleBTreeLeafMutation {
       ByteBuffer key, int keyOffset, int keyLength,
       TupleBTreeWorkspace workspace,
       TupleBTreePageProvider provider, TupleBTreePageReference reference) {
-    StatusCode status = prepare(
+    StatusCode status = TupleBTreeLeafMutationPreparation.prepare(
         page, start, schemaId, shape, key, keyOffset, keyLength,
         workspace, provider, reference);
     if (!status.isOk()) return status;
@@ -64,7 +63,7 @@ final class TupleBTreeLeafMutation {
       ByteBuffer key, int keyOffset, int keyLength,
       TupleBTreeWorkspace workspace,
       TupleBTreePageProvider provider, TupleBTreePageReference reference) {
-    StatusCode status = prepare(
+    StatusCode status = TupleBTreeLeafMutationPreparation.prepare(
         page, start, schemaId, shape, key, keyOffset, keyLength,
         workspace, provider, reference);
     if (!status.isOk()) return status;
@@ -86,43 +85,6 @@ final class TupleBTreeLeafMutation {
     }
     return TupleBTreePageCodec.deletePreparedLeaf(
         page, start, schemaId, shape, deletion, workspace.mutation);
-  }
-
-  private static StatusCode prepare(
-      ByteBuffer page, int start, long schemaId, TupleShape shape,
-      ByteBuffer key, int keyOffset, int keyLength,
-      TupleBTreeWorkspace workspace,
-      TupleBTreePageProvider provider, TupleBTreePageReference reference) {
-    if (workspace == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    workspace.mutation.reset();
-    if (!TupleBTreePageSupport.validPayload(page, start, true)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    boolean local = provider == null && reference == null;
-    boolean validReference = provider != null && reference != null
-        && reference.isWritable() && reference.page() == page
-        && reference.start() == start;
-    if (!local && !validReference) return StatusCode.INVALID_EXTERNAL_INPUT;
-    TupleBTreePageValidationProof proof = local
-        ? workspace.validation : reference.validation();
-    StatusCode restored = validReference
-        ? provider.consumeCanonicalMutationValidation(
-            reference, schemaId, shape == null ? 0 : shape.descriptorHash(),
-            TupleBTreePageCodec.TYPE_LEAF, proof)
-        : StatusCode.CONFLICT;
-    if (!restored.isOk() && restored != StatusCode.CONFLICT) return restored;
-    boolean authenticated = restored.isOk();
-    StatusCode status = authenticated
-        ? TupleBTreePageCodec.prepareAuthenticatedLeafMutation(
-            page, start, schemaId, shape, workspace.header, proof, workspace.mutation)
-        : TupleBTreePageCodec.prepareLeafMutation(
-            page, start, schemaId, shape, workspace.header, proof, workspace.mutation);
-    if (!status.isOk()) return status;
-    if (TupleKeyCodec.matchesPhysicalIndexKey(key, keyOffset, keyLength, shape)) {
-      return StatusCode.OK;
-    }
-    workspace.mutation.reset();
-    return StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
   private static int equalAt(
