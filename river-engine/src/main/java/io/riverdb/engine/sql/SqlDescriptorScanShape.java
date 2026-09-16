@@ -21,19 +21,28 @@ final class SqlDescriptorScanShape {
       SqlCommand command, SqlQuery query, TableDescriptor table, SqlPhysicalPlan plan) {
     plan.setFilterCount(command.wherePredicates().leafCount());
     StatusCode status = bindings.prepare(command, query, table, plan);
-    if (status.isOk()) status = context.index.prepare(
-        command, table, context.predicate.bindings(),
-        context.scalarAggregate || context.sets.active()
-            ? 0 : context.projection.orderCount(),
-        context.scalarAggregate || context.sets.active()
-            ? null : context.projection.orderColumns(),
-        context.scalarAggregate || context.sets.active()
-            ? null : context.projection.orderDescending());
-    if (status.isOk() && context.index.active()) {
-      plan.setAccessColumn(context.index.accessColumn());
-    }
+    if (status.isOk()) status = prepareIndex(command, table);
+    if (status.isOk()) setAccessColumn(plan);
     if (status.isOk()) status = materialization.prepare(command, table, plan);
-    return status.isOk() && !context.sets.active() && !context.scalarAggregate
-        ? context.projection.configurePlan(command, table, plan) : status;
+    return configurePlan(status, command, table, plan);
+  }
+
+  private StatusCode prepareIndex(SqlCommand command, TableDescriptor table) {
+    boolean suppressOrder = context.scalarAggregate || context.sets.active();
+    return context.index.prepare(
+        command, table, context.predicate.bindings(),
+        suppressOrder ? 0 : context.projection.orderCount(),
+        suppressOrder ? null : context.projection.orderColumns(),
+        suppressOrder ? null : context.projection.orderDescending());
+  }
+
+  private void setAccessColumn(SqlPhysicalPlan plan) {
+    if (context.index.active()) plan.setAccessColumn(context.index.accessColumn());
+  }
+
+  private StatusCode configurePlan(
+      StatusCode status, SqlCommand command, TableDescriptor table, SqlPhysicalPlan plan) {
+    if (!status.isOk() || context.sets.active() || context.scalarAggregate) return status;
+    return context.projection.configurePlan(command, table, plan);
   }
 }

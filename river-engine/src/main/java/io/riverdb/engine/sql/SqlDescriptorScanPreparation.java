@@ -28,6 +28,20 @@ final class SqlDescriptorScanPreparation {
     if (status == StatusCode.CONFLICT) return StatusCode.OK;
     if (!status.isOk()) return status;
     context.matched = true;
+    status = validateRouting(command, query);
+    if (!status.isOk()) return status;
+    TableDescriptor table = context.pin.descriptor();
+    if (SqlDescriptorExpressionRouting.predicateRequired(command)) {
+      status = prepareBoundPredicate(command, query, table);
+      if (!status.isOk()) return status;
+    }
+    context.forUpdate = command.isSelectForUpdate();
+    context.scalarAggregate = SqlDescriptorQueryTypes.scalar(command.type())
+        || command.grouping().count() == 0 && command.aggregates().invocationCount() > 0;
+    return shape.prepare(command, query, table, plan);
+  }
+
+  private static StatusCode validateRouting(SqlCommand command, SqlQuery query) {
     if (query != null && (nested(query)
         || SqlDescriptorExpressionRouting.predicateRequired(command)
             && query.hasNestedTopology())) {
@@ -38,15 +52,7 @@ final class SqlDescriptorScanPreparation {
             && !boundPredicateSupported(command.type())) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    TableDescriptor table = context.pin.descriptor();
-    if (SqlDescriptorExpressionRouting.predicateRequired(command)) {
-      status = prepareBoundPredicate(command, query, table);
-      if (!status.isOk()) return status;
-    }
-    context.forUpdate = command.isSelectForUpdate();
-    context.scalarAggregate = SqlDescriptorQueryTypes.scalar(command.type())
-        || command.grouping().count() == 0 && command.aggregates().invocationCount() > 0;
-    return shape.prepare(command, query, table, plan);
+    return StatusCode.OK;
   }
 
   private StatusCode prepareBoundPredicate(

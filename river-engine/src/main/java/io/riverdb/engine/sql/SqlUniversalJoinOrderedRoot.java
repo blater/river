@@ -26,9 +26,8 @@ final class SqlUniversalJoinOrderedRoot {
       SqlBoundBooleanPredicateProgram where, SqlUniversalJoinRows rows,
       int projectedInnerColumn) {
     StatusCode status = close();
-    if (!status.isOk() || !admits(command, context, rows, projectedInnerColumn)) {
-      return status;
-    }
+    if (!status.isOk()) return status;
+    if (!admits(command, context, rows, projectedInnerColumn)) return status;
     int keyCount = rows.exactUniqueOuterColumns(
         1, 0, projectedInnerColumn, keySourceColumns);
     if (keyCount <= 0) return StatusCode.OK;
@@ -41,7 +40,15 @@ final class SqlUniversalJoinOrderedRoot {
         shape.schema(), shape.sortColumns(), shape.descending(), shape.keyCount());
     if (!status.isOk()) return fail(status);
 
-    status = rows.open(0);
+    status = collect(rows);
+    if (status.isOk()) status = store.finish();
+    if (!status.isOk()) return fail(status);
+    active = true;
+    return StatusCode.OK;
+  }
+
+  private StatusCode collect(SqlUniversalJoinRows rows) {
+    StatusCode status = rows.open(0);
     boolean opened = status.isOk();
     while (status.isOk()) {
       status = rows.next(0);
@@ -55,10 +62,7 @@ final class SqlUniversalJoinOrderedRoot {
       StatusCode closed = rows.closeScan(0);
       if (!closed.isOk()) status = closed;
     }
-    if (status.isOk()) status = store.finish();
-    if (!status.isOk()) return fail(status);
-    active = true;
-    return StatusCode.OK;
+    return status;
   }
 
   StatusCode next(SqlUniversalJoinRows rows) {

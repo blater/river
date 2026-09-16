@@ -19,12 +19,31 @@ final class SqlAtomicPointExecution {
     StatusCode status = atomic.begin(IsolationLevel.READ_COMMITTED);
     boolean began = status.isOk();
     boolean implicit = began && atomic.implicit();
-    if (status.isOk()) status = temporal.beginStatement();
-    if (status.isOk()) status = commands.execute(result);
+    status = executeCommand(status, temporal, commands, result);
     boolean select = commands.isPointQuery();
     if (began) status = atomic.finish(status);
     finishTemporal(atomic, streaming, temporal);
     if (!status.isOk()) return status;
+    return publishResult(
+        commands, transactions, session, result, implicit, select);
+  }
+
+  private static StatusCode executeCommand(
+      StatusCode status, SqlTemporalContext temporal,
+      SqlPointCommandExecutor commands, SqlExecutionResult result) {
+    if (!status.isOk()) return status;
+    status = temporal.beginStatement();
+    if (!status.isOk()) return status;
+    return commands.execute(result);
+  }
+
+  private static StatusCode publishResult(
+      SqlPointCommandExecutor commands,
+      SqlTransactionState transactions,
+      RelationalSession session,
+      SqlExecutionResult result,
+      boolean implicit,
+      boolean select) {
     long commitSequence = implicit
         ? transactions.commitSequence() : session.visibleCommitSequence();
     if (select) result.setCommitSequence(commitSequence);

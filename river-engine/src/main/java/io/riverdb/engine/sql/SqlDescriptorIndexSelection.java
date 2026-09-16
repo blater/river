@@ -33,9 +33,7 @@ final class SqlDescriptorIndexSelection {
       int orderCount, int[] orderColumns, boolean[] descending,
       SqlDescriptorIndexChoice result) {
     if (key == null || key.keyId() <= 0) return;
-    int equal = 0;
-    while (equal < key.partCount()
-        && candidates.find(key.columnOrdinalAt(equal), SqlComparison.EQUAL) >= 0) equal++;
+    int equal = equalParts(key, candidates);
     int lower = -1;
     int upper = -1;
     if (equal < key.partCount()) {
@@ -43,12 +41,37 @@ final class SqlDescriptorIndexSelection {
       lower = findLower(candidates, column);
       upper = findUpper(candidates, column);
     }
+    evaluate(key, equal, lower, upper, orderCount, orderColumns, descending, result);
+  }
+
+  private static int equalParts(
+      KeyDescriptor key, SqlDescriptorIndexCandidateSource candidates) {
+    int equal = 0;
+    while (equal < key.partCount()
+        && candidates.find(key.columnOrdinalAt(equal), SqlComparison.EQUAL) >= 0) equal++;
+    return equal;
+  }
+
+  private static void evaluate(
+      KeyDescriptor key, int equal, int lower, int upper,
+      int orderCount, int[] orderColumns, boolean[] descending,
+      SqlDescriptorIndexChoice result) {
     boolean ordered = covers(key, equal, orderCount, orderColumns, descending);
-    if (equal == 0 && lower < 0 && upper < 0 && !ordered) return;
-    int score = (ordered ? 10_000 : 0) + equal * 10 + (lower >= 0 || upper >= 0 ? 1 : 0);
-    if (score > result.score) result.set(
+    if (!usable(equal, lower, upper, ordered)) return;
+    int score = candidateScore(equal, lower, upper, ordered);
+    if (score <= result.score) return;
+    result.set(
         key, equal, lower, upper,
         ordered && orderCount > 0 && descending[0] ? -1 : 1, ordered, score);
+  }
+
+  private static boolean usable(int equal, int lower, int upper, boolean ordered) {
+    return equal != 0 || lower >= 0 || upper >= 0 || ordered;
+  }
+
+  private static int candidateScore(int equal, int lower, int upper, boolean ordered) {
+    return (ordered ? 10_000 : 0) + equal * 10
+        + (lower >= 0 || upper >= 0 ? 1 : 0);
   }
 
   private static boolean covers(

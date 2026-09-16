@@ -29,19 +29,29 @@ final class SqlDescriptorScalarAggregate {
       SqlCommand command, TableDescriptor table, SqlPhysicalPlan plan) {
     StatusCode status = reset();
     if (!status.isOk()) return status;
-    status = materialization.prepare(command, table, 0);
-    if (status.isOk()) status = shape.prepare(command, table, materialization);
-    if (status.isOk()) status = SqlAggregateAccumulatorCapacity.reserve(
-        accumulators, shape.bound());
-    if (status.isOk()) status = input.prepare(table);
-    if (status.isOk()) status = prepareProjected();
-    if (status.isOk()) status = having.prepare(
-        command, shape.bound(), materialization, 0);
-    if (status.isOk()) status = output.prepare(command, shape.bound(), plan);
-    if (status.isOk()) configurePlan(command, plan);
-    if (status.isOk()) status = output.prepareText(accumulators);
-    if (status.isOk()) status = accumulators.reset(shape.bound());
-    return status;
+    return prepareStages(command, table, plan);
+  }
+
+  private StatusCode prepareStages(
+      SqlCommand command, TableDescriptor table, SqlPhysicalPlan plan) {
+    StatusCode status = materialization.prepare(command, table, 0);
+    if (!status.isOk()) return status;
+    status = shape.prepare(command, table, materialization);
+    if (!status.isOk()) return status;
+    status = SqlAggregateAccumulatorCapacity.reserve(accumulators, shape.bound());
+    if (!status.isOk()) return status;
+    status = input.prepare(table);
+    if (!status.isOk()) return status;
+    status = prepareProjected();
+    if (!status.isOk()) return status;
+    status = having.prepare(command, shape.bound(), materialization, 0);
+    if (!status.isOk()) return status;
+    status = output.prepare(command, shape.bound(), plan);
+    if (!status.isOk()) return status;
+    configurePlan(command, plan);
+    status = output.prepareText(accumulators);
+    if (!status.isOk()) return status;
+    return accumulators.reset(shape.bound());
   }
 
   StatusCode accumulate(io.riverdb.base.type.SqlValueBuffer values) {

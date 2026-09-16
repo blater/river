@@ -102,20 +102,34 @@ final class SqlDescriptorPointExecution {
     TableDescriptor table = pin.descriptor();
     StatusCode status = primary.bind(command, table);
     if (status == StatusCode.CONFLICT) {
-      status = scanExecution.update(command, pin);
-      affectedRows = scanExecution.affectedRows();
-      return status;
+      return updateScan(command);
     }
-    if (status.isOk()) status = values.reserve(table);
-    if (status.isOk()) status = session.descriptorRows().fetchLockedCandidate(
+    if (!status.isOk()) return status;
+    return updatePrimary(command, table);
+  }
+
+  private StatusCode updateScan(SqlCommand command) {
+    StatusCode status = scanExecution.update(command, pin);
+    affectedRows = scanExecution.affectedRows();
+    return status;
+  }
+
+  private StatusCode updatePrimary(SqlCommand command, TableDescriptor table) {
+    StatusCode status = values.reserve(table);
+    if (!status.isOk()) return status;
+    status = session.descriptorRows().fetchLockedCandidate(
         pin, primary.values(), values.fetched(), identity);
     if (status == StatusCode.CONFLICT) return StatusCode.OK;
-    if (status.isOk()) status = columns.mapUpdate(command, table);
-    if (status.isOk()) status = values.buildUpdate(
-        command, table, columns, expressions);
+    if (!status.isOk()) return status;
+    status = columns.mapUpdate(command, table);
+    if (status.isOk()) status = values.buildUpdate(command, table, columns, expressions);
     if (status.isOk()) status = session.descriptorRows().updateLocked(
         pin, values.mutation());
     if (status.isOk()) affectedRows = 1;
+    return finishPrimaryUpdate(status);
+  }
+
+  private StatusCode finishPrimaryUpdate(StatusCode status) {
     if (session.descriptorRows().currentBorrowed()) {
       StatusCode released = session.descriptorRows().releaseCurrent();
       if (status.isOk()) status = released;

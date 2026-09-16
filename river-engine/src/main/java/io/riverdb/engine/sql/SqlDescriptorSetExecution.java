@@ -40,16 +40,28 @@ final class SqlDescriptorSetExecution {
       SqlCommand command, TableDescriptor table, SqlPhysicalPlan plan) {
     active = false;
     StatusCode status = shape.prepare(command, table, plan);
-    if (status.isOk() && shape.grouped()) {
-      status = SqlAggregateAccumulatorCapacity.reserve(accumulators, shape.aggregates());
-    }
+    if (status.isOk()) status = prepareAccumulators();
     if (status.isOk()) status = key.prepare(shape.materialization());
-    if (status.isOk() && shape.grouped()) status = key.prepareAggregateText(accumulators);
-    if (status.isOk() && shape.grouped()) status = having.prepare(command, shape);
+    if (status.isOk()) status = prepareGroupedText();
+    if (status.isOk()) status = prepareHaving(command);
     if (status.isOk()) {
       active = true;
     }
     return status;
+  }
+
+  private StatusCode prepareAccumulators() {
+    return shape.grouped()
+        ? SqlAggregateAccumulatorCapacity.reserve(accumulators, shape.aggregates())
+        : StatusCode.OK;
+  }
+
+  private StatusCode prepareGroupedText() {
+    return shape.grouped() ? key.prepareAggregateText(accumulators) : StatusCode.OK;
+  }
+
+  private StatusCode prepareHaving(SqlCommand command) {
+    return shape.grouped() ? having.prepare(command, shape) : StatusCode.OK;
   }
 
   int sourceColumn() { return shape.firstSourceColumn(); }
@@ -62,18 +74,10 @@ final class SqlDescriptorSetExecution {
   StatusCode next(
       SqlScanCursor cursor, SqlScanRowResult result, SqlDescriptorOrderedRows rows) {
     while (!cursor.limitReached()) {
-      StatusCode status = rows.read();
-      if (!status.isOk()) return status;
-      status = key.capture(rows.row());
-      if (!status.isOk()) return status;
-      if (shape.grouped()) status = accumulators.reset(shape.aggregates());
-      if (!status.isOk()) return status;
-      status = run.measure(rows, shape, key, accumulators);
+      StatusCode status = measure(rows);
       if (!status.isOk()) return status;
       long count = run.count();
-      if (shape.grouped()) status = accumulators.finish(shape.aggregates());
-      if (status.isOk() && shape.grouped()) status = having.matches(
-          accumulators, key, shape);
+      status = finishGroup();
       if (status == StatusCode.CONFLICT) {
         status = rows.advance(count);
         if (!status.isOk()) return status;
@@ -89,6 +93,22 @@ final class SqlDescriptorSetExecution {
       return status;
     }
     return StatusCode.CONFLICT;
+  }
+
+  private StatusCode measure(SqlDescriptorOrderedRows rows) {
+    StatusCode status = rows.read();
+    if (!status.isOk()) return status;
+    status = key.capture(rows.row());
+    if (!status.isOk()) return status;
+    if (shape.grouped()) status = accumulators.reset(shape.aggregates());
+    if (!status.isOk()) return status;
+    return run.measure(rows, shape, key, accumulators);
+  }
+
+  private StatusCode finishGroup() {
+    if (!shape.grouped()) return StatusCode.OK;
+    StatusCode status = accumulators.finish(shape.aggregates());
+    return status.isOk() ? having.matches(accumulators, key, shape) : status;
   }
 
 }
