@@ -192,33 +192,7 @@ final class EmbeddedDatabaseOpener {
   }
 
   private StatusCode open(EmbeddedDatabaseOpenResult result) {
-    StatusCode status = openDirectory();
-    if (status.isOk()) {
-      status = validateAuthority();
-    }
-    if (status.isOk()) {
-      status = openWal();
-    }
-    if (status.isOk()) {
-      status = openFollowers();
-    }
-    if (status.isOk()) {
-      status = openStore();
-    }
-    if (status.isOk()
-        && storeResult.store().activeStagedPageCapacity()
-            != resourceGovernor.plan().stagedPageCapacity()) {
-      status = StatusCode.INVARIANT_BROKEN;
-    }
-    if (status.isOk()) {
-      status = enableFollowers();
-    }
-    if (status.isOk()) {
-      status = openTable();
-    }
-    if (status.isOk()) {
-      status = createControlFile();
-    }
+    StatusCode status = openResources();
     if (!status.isOk()) {
       closeAcquiredResources();
       if (resourceGovernor != null) resourceGovernor.abandonAfterOpenFailure();
@@ -240,6 +214,26 @@ final class EmbeddedDatabaseOpener {
         providerLease,
         result);
     return status;
+  }
+
+  private StatusCode openResources() {
+    StatusCode status = openDirectory();
+    if (!status.isOk()) return status;
+    status = validateAuthority();
+    if (!status.isOk()) return status;
+    status = openWal();
+    if (!status.isOk()) return status;
+    status = openFollowers();
+    if (!status.isOk()) return status;
+    status = openStore();
+    if (!status.isOk()) return status;
+    if (storeResult.store().activeStagedPageCapacity()
+        != resourceGovernor.plan().stagedPageCapacity()) return StatusCode.INVARIANT_BROKEN;
+    status = enableFollowers();
+    if (!status.isOk()) return status;
+    status = openTable();
+    if (!status.isOk()) return status;
+    return createControlFile();
   }
 
   private StatusCode openDirectory() {

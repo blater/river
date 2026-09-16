@@ -67,12 +67,9 @@ final class RelationalDescriptorTupleDeltaPreparation {
       int index, int operation, SqlValueBuffer before,
       SqlValueBuffer after, long logicalRowId) {
     KeyDescriptor key = storage.keyAt(index);
-    StatusCode status = operation == RelationalDescriptorTupleDeltaPlan.INSERT
-        ? StatusCode.OK : encoder.encodePhysical(key, before, logicalRowId);
-    if (status.isOk() && operation != RelationalDescriptorTupleDeltaPlan.INSERT) {
-      storage.copyBefore(index, encoder.bytes(), encoder.length());
-    }
-    if (status.isOk() && operation != RelationalDescriptorTupleDeltaPlan.DELETE) {
+    StatusCode status = encodeBefore(index, key, operation, before, logicalRowId);
+    if (!status.isOk()) return status;
+    if (operation != RelationalDescriptorTupleDeltaPlan.DELETE) {
       status = encoder.encodePhysical(key, after, logicalRowId);
     }
     if (!status.isOk()) return status;
@@ -83,6 +80,18 @@ final class RelationalDescriptorTupleDeltaPreparation {
     if (operation != RelationalDescriptorTupleDeltaPlan.DELETE) {
       storage.copyAfter(index, encoder.bytes(), encoder.length());
     }
+    return recordMutation(index, operation);
+  }
+
+  private StatusCode encodeBefore(
+      int index, KeyDescriptor key, int operation, SqlValueBuffer before, long logicalRowId) {
+    if (operation == RelationalDescriptorTupleDeltaPlan.INSERT) return StatusCode.OK;
+    StatusCode status = encoder.encodePhysical(key, before, logicalRowId);
+    if (status.isOk()) storage.copyBefore(index, encoder.bytes(), encoder.length());
+    return status;
+  }
+
+  private StatusCode recordMutation(int index, int operation) {
     int added = operation == RelationalDescriptorTupleDeltaPlan.UPDATE ? 2 : 1;
     long nextPayload = (long) payload + (operation == RelationalDescriptorTupleDeltaPlan.DELETE
         ? storage.beforeLengthAt(index) : operation == RelationalDescriptorTupleDeltaPlan.INSERT
@@ -112,10 +121,23 @@ final class RelationalDescriptorTupleDeltaPreparation {
       int operation, TableDescriptor table,
       SqlValueBuffer before, SqlValueBuffer after, long rowId) {
     if (table == null || rowId <= 0) return false;
-    if (before != null && before.count() != table.columnCount()) return false;
-    if (after != null && after.count() != table.columnCount()) return false;
-    return operation == RelationalDescriptorTupleDeltaPlan.INSERT && before == null && after != null
-        || operation == RelationalDescriptorTupleDeltaPlan.DELETE && before != null && after == null
-        || operation == RelationalDescriptorTupleDeltaPlan.UPDATE && before != null && after != null;
+    return validBuffer(before, table) && validBuffer(after, table)
+        && validOperation(operation, before, after);
+  }
+
+  private static boolean validBuffer(SqlValueBuffer values, TableDescriptor table) {
+    return values == null || values.count() == table.columnCount();
+  }
+
+  private static boolean validOperation(
+      int operation, SqlValueBuffer before, SqlValueBuffer after) {
+    if (operation == RelationalDescriptorTupleDeltaPlan.INSERT) {
+      return before == null && after != null;
+    }
+    if (operation == RelationalDescriptorTupleDeltaPlan.DELETE) {
+      return before != null && after == null;
+    }
+    return operation == RelationalDescriptorTupleDeltaPlan.UPDATE
+        && before != null && after != null;
   }
 }

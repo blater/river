@@ -32,18 +32,22 @@ final class TableDescriptorFactory {
         || foreignCount > TableDescriptor.MAXIMUM_FOREIGN_KEYS) {
       return fail(detail, StatusCode.RESOURCE_EXHAUSTED, "table key count exceeds allowed count");
     }
+    return construct(tableId, schemaId, rowLayoutId, catalogGeneration, columns, primary,
+        secondary, foreign, secondaryCount, foreignCount, result, detail, requireBoundKeys);
+  }
+
+  private static StatusCode construct(
+      long tableId, long schemaId, long rowLayoutId, long catalogGeneration,
+      ColumnDescriptorSet columns, KeyDescriptor primary,
+      KeyDescriptor[] secondary, KeyDescriptor[] foreign,
+      int secondaryCount, int foreignCount, TableDescriptor.Result result,
+      StatusDetail detail, boolean requireBoundKeys) {
     KeyDescriptor[] copiedSecondary;
     KeyDescriptor[] copiedForeign;
     TableLayout.Result layout;
     try {
-      copiedSecondary = new KeyDescriptor[secondaryCount];
-      copiedForeign = new KeyDescriptor[foreignCount];
-      if (secondaryCount != 0) {
-        System.arraycopy(secondary, 0, copiedSecondary, 0, secondaryCount);
-      }
-      if (foreignCount != 0) {
-        System.arraycopy(foreign, 0, copiedForeign, 0, foreignCount);
-      }
+      copiedSecondary = copyKeys(secondary, secondaryCount);
+      copiedForeign = copyKeys(foreign, foreignCount);
       layout = new TableLayout.Result();
     } catch (OutOfMemoryError error) {
       return fail(detail, StatusCode.RESOURCE_EXHAUSTED, "table descriptor capacity unavailable");
@@ -79,6 +83,12 @@ final class TableDescriptorFactory {
     }
     if (detail != null) detail.set(StatusCode.OK);
     return StatusCode.OK;
+  }
+
+  private static KeyDescriptor[] copyKeys(KeyDescriptor[] source, int count) {
+    KeyDescriptor[] copy = new KeyDescriptor[count];
+    if (count != 0) System.arraycopy(source, 0, copy, 0, count);
+    return copy;
   }
 
   private static StatusCode fail(StatusDetail detail, StatusCode status, CharSequence message) {

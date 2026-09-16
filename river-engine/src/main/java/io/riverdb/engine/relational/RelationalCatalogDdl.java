@@ -44,42 +44,28 @@ final class RelationalCatalogDdl {
       TableSchema schema,
       TableDefinition result) {
     StatusCode status = availableName(session, name);
-    if (status.isOk()) {
-      status = readNextTableId(session);
-    }
+    if (!status.isOk()) return status;
+    status = readNextTableId(session);
+    if (!status.isOk()) return status;
     int tableId = nextTableId.value();
-    if (status.isOk() && tableId > RelationalKey.MAXIMUM_TABLE_ID) {
-      status = StatusCode.RESOURCE_EXHAUSTED;
-    }
-    if (status.isOk()) {
-      CatalogSequenceCodec.encodeAllocation(output, tableId + 1);
-      status = session.indexedSession().update(
-          RelationalKey.CATALOG_SEQUENCE_SPACE, 0, output);
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeTable(
-          output,
-          tableId,
-          0,
-          TableDefinition.INDEX_NONE,
-          -1,
-          name,
-          schema);
-      status = session.indexedSession().insert(key.space(), key.key(), output);
-    }
-    if (status.isOk() && schema.hasIdentity()) {
+    if (tableId > RelationalKey.MAXIMUM_TABLE_ID) return StatusCode.RESOURCE_EXHAUSTED;
+    CatalogSequenceCodec.encodeAllocation(output, tableId + 1);
+    status = session.indexedSession().update(
+        RelationalKey.CATALOG_SEQUENCE_SPACE, 0, output);
+    if (!status.isOk()) return status;
+    CatalogRecord.encodeTable(
+        output, tableId, 0, TableDefinition.INDEX_NONE, -1, name, schema);
+    status = session.indexedSession().insert(key.space(), key.key(), output);
+    if (!status.isOk()) return status;
+    if (schema.hasIdentity()) {
       CatalogSequenceCodec.encodeIdentity(output, tableId, 1, false);
       status = session.indexedSession().insert(
           RelationalKey.CATALOG_SEQUENCE_SPACE,
-          RelationalKey.identitySequenceKey(tableId),
-          output);
+          RelationalKey.identitySequenceKey(tableId), output);
+      if (!status.isOk()) return status;
     }
-    if (status.isOk()) {
-      result.set(
-          schemaGate, tableId, 0, TableDefinition.INDEX_NONE, -1, schema);
-      status = schemaGate.bindOwnedDefinition(session, result);
-    }
-    return status;
+    result.set(schemaGate, tableId, 0, TableDefinition.INDEX_NONE, -1, schema);
+    return schemaGate.bindOwnedDefinition(session, result);
   }
 
   StatusCode createSequence(

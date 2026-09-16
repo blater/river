@@ -106,12 +106,8 @@ final class TransactionProgramSteps {
       reader.pointTo(execution);
       captureSingleton(program, step, result);
     }
-    if (status.isOk() && !available && action == TransactionProgramAction.EXACT_ONE) {
-      status = StatusCode.CARDINALITY_VIOLATION;
-    }
-    if (!status.isOk()) return Integer.MIN_VALUE;
-    return !available && program.emptyTarget(step) >= 0
-        ? program.emptyTarget(step) : step + 1;
+    validateSingletonCardinality(available, action);
+    return nextSingletonStep(program, step, available);
   }
 
   private int executeSingleRow(
@@ -125,11 +121,19 @@ final class TransactionProgramSteps {
       captureSingleton(program, step, result);
     }
     if (status.isOk() && available && nextRow()) status = StatusCode.CARDINALITY_VIOLATION;
+    validateSingletonCardinality(available, action);
+    StatusCode closed = session.closeScan(scan, execution);
+    if (status.isOk()) status = closed;
+    return nextSingletonStep(program, step, available);
+  }
+
+  private void validateSingletonCardinality(boolean available, int action) {
     if (status.isOk() && !available && action == TransactionProgramAction.EXACT_ONE) {
       status = StatusCode.CARDINALITY_VIOLATION;
     }
-    StatusCode closed = session.closeScan(scan, execution);
-    if (status.isOk()) status = closed;
+  }
+
+  private int nextSingletonStep(TransactionProgram program, int step, boolean available) {
     if (!status.isOk()) return Integer.MIN_VALUE;
     return !available && program.emptyTarget(step) >= 0
         ? program.emptyTarget(step) : step + 1;

@@ -63,25 +63,16 @@ final class RelationalSequenceService {
     if (status.isOk() && sequence.isExhausted()) {
       status = StatusCode.RESOURCE_EXHAUSTED;
     }
-    long value = status.isOk() ? sequence.nextValue() : 0;
-    long increment = status.isOk() ? sequence.increment() : 0;
-    int reservation = status.isOk()
-        ? reservation(value, increment, minimum, maximum) : 0;
+    if (!status.isOk()) return sessions.finish(session, outcome, status);
+    long value = sequence.nextValue();
+    long increment = sequence.increment();
+    int reservation = reservation(value, increment, minimum, maximum);
     int reserved = Math.abs(reservation);
     boolean exhausted = reservation < 0;
-    long next = status.isOk()
-        ? reservationEnd(value, increment, reserved, exhausted) : value;
-    if (status.isOk()) {
-      status = update(
-          session,
-          sequenceSpace,
-          sequenceKey,
-          name,
-          identityTableId,
-          next,
-          increment,
-          exhausted);
-    }
+    long next = reservationEnd(value, increment, reserved, exhausted);
+    status = update(
+        session, sequenceSpace, sequenceKey, name, identityTableId,
+        next, increment, exhausted);
     status = sessions.finish(session, outcome, status);
     if (status.isOk()) {
       result.set(value, outcome.commitSequence());

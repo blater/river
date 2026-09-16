@@ -262,3 +262,19 @@ TPC-C load/checkpoint/reopen recovery validation. Full module scan including
 tests: 152 files, maximum score 78.7607 and NPATH 96. Evidence:
 `/private/tmp/river-bench-complexity-check.log` and
 `/private/tmp/river-tx-bench-final-slopmark.json`. No performance claim.
+
+### Engine lifecycle, catalog, and descriptor checkpoint — 2026-09-16
+
+Twenty-seven files simplify existing admission, construction, terminal cleanup,
+catalog publication, scan, tuple preparation, and test fault-mapping phases.
+Early returns replace redundant success guards where no cleanup is skipped.
+Correlated tuple array growth uses one branch while retaining atomic publication;
+cleanup counts stay local. Manifest authority/version/logical-ID validation has
+separate predicates without changing format or checksum policy.
+
+Independent Luna/high reviews approved all three constituent slices. Integrator
+removed unnecessary forwarding helpers and avoided repeating tuple key lookup.
+Complete engine module check passed 1044 tests with no failures/errors/skips.
+Touched files all meet both limits. Evidence:
+`/private/tmp/river-engine-boundaries-check.log` and
+`/private/tmp/river-engine-boundaries-integrated-after.json`. No performance claim.

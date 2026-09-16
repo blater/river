@@ -27,21 +27,17 @@ final class CatalogTableDrop {
     long generation = current.descriptor().catalogGeneration();
     if (generation == Long.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
     StatusCode status = definitions.readAnyHead(session, current.tableId());
-    if (status.isOk()
-        && (definitions.headState()
-                != io.riverdb.format.catalog.CatalogObjectHeadCodec.STATE_READY
-            || definitions.headSchemaId() != current.schemaId()
-            || definitions.headGeneration() != generation)) {
-      status = StatusCode.CONFLICT;
-    }
-    if (status.isOk() && current.isPublished()) {
+    if (!status.isOk()) return status;
+    if (definitions.headState() != io.riverdb.format.catalog.CatalogObjectHeadCodec.STATE_READY
+        || definitions.headSchemaId() != current.schemaId()
+        || definitions.headGeneration() != generation) return StatusCode.CONFLICT;
+    if (current.isPublished()) {
       status = definitions.readCurrentManifest(session, current.tableId());
+      if (!status.isOk()) return status;
+      if (definitions.currentRowLayoutId() != current.rowLayoutId()) {
+        return StatusCode.CORRUPTION;
+      }
     }
-    if (status.isOk() && current.isPublished()
-        && definitions.currentRowLayoutId() != current.rowLayoutId()) {
-      status = StatusCode.CORRUPTION;
-    }
-    return status.isOk()
-        ? heads.updateTombstone(session, current.tableId(), generation + 1) : status;
+    return heads.updateTombstone(session, current.tableId(), generation + 1);
   }
 }

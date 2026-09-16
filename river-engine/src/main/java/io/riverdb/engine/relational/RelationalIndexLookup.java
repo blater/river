@@ -53,24 +53,18 @@ final class RelationalIndexLookup {
     if (status.isOk()) {
       status = RelationalSecondaryIndexStore.decodeLong(indexRow, valueScratch);
     }
-    long primaryKey = status.isOk() ? valueScratch.getLong(0) : 0;
-    if (status.isOk()) {
-      status = fetchRow(table, primaryKey, result.row());
-      if (status == StatusCode.CONFLICT) {
-        return StatusCode.CORRUPTION;
-      }
-    }
-    if (status.isOk()) {
-      status = copyRow(table, result.row());
-    }
-    if (status.isOk()
-        && RelationalSecondaryIndexStore.indexedValue(table, rowScratch, slot) != value) {
+    if (!status.isOk()) return status;
+    long primaryKey = valueScratch.getLong(0);
+    status = fetchRow(table, primaryKey, result.row());
+    if (status == StatusCode.CONFLICT) return StatusCode.CORRUPTION;
+    if (!status.isOk()) return status;
+    status = copyRow(table, result.row());
+    if (!status.isOk()) return status;
+    if (RelationalSecondaryIndexStore.indexedValue(table, rowScratch, slot) != value) {
       return StatusCode.CORRUPTION;
     }
-    if (status.isOk()) {
-      result.setKey(primaryKey);
-    }
-    return status;
+    result.setKey(primaryKey);
+    return StatusCode.OK;
   }
 
   StatusCode beginScan(

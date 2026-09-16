@@ -105,9 +105,13 @@ public final class DatabaseControlStore {
       return status;
     }
 
+    return decode(bytes, result);
+  }
+
+  private static StatusCode decode(ByteBuffer bytes, DatabaseControlResult result) {
     bytes.flip();
     ControlFileDecodeResult decoded = new ControlFileDecodeResult();
-    status = ControlFileCodec.decode(bytes, decoded);
+    StatusCode status = ControlFileCodec.decode(bytes, decoded);
     if (status.isOk()) {
       result.set(decoded.controlFile());
     }

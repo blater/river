@@ -48,11 +48,16 @@ final class CatalogRetainedKeyDefinition {
       if (found) break;
       result.reset();
     }
+    status = closeScan(session, status);
+    return status.isOk() && !found ? StatusCode.CONFLICT : status;
+  }
+
+  private StatusCode closeScan(IndexedTransactionSession session, StatusCode status) {
     if (cursor.isActive()) {
       StatusCode closed = session.closeScan(cursor);
       if (status.isOk()) status = closed;
     }
-    return status.isOk() && !found ? StatusCode.CONFLICT : status;
+    return status;
   }
 
   private static boolean valid(

@@ -38,39 +38,29 @@ final class RelationalIndexRemoval {
       CharSequence currentName,
       CharSequence renamedName) {
     StatusCode status = RelationalKey.catalogTableKey(currentName, catalogKey);
-    if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(
-          catalogKey.space(), catalogKey.key(), catalogRow);
-    }
-    if (status.isOk()) {
-      status = CatalogIndexCodec.decode(catalogRow, scratch, currentName, indexRecord);
-    }
-    if (status.isOk() && indexRecord.state() != TableDefinition.INDEX_READY) {
-      status = StatusCode.RETRY;
-    }
-    if (status.isOk() && indexRecord.isConstraint()) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(renamedName, catalogKey);
-    }
-    if (status.isOk()) {
-      status = requireAbsent(session);
-    }
-    if (status.isOk()) {
-      CatalogIndexCodec.encode(
-          output,
-          indexRecord.tableId(),
-          indexRecord.indexTableId(),
-          indexRecord.state(),
-          renamedName,
-          indexRecord.isUnique(),
-          indexRecord.isConstraint());
-      status = session.indexedSession().insert(catalogKey.space(), catalogKey.key(), output);
-    }
-    if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(currentName, catalogKey);
-    }
+    if (!status.isOk()) return status;
+    status = session.indexedSession().fetchByKey(
+        catalogKey.space(), catalogKey.key(), catalogRow);
+    if (!status.isOk()) return status;
+    status = CatalogIndexCodec.decode(catalogRow, scratch, currentName, indexRecord);
+    if (!status.isOk()) return status;
+    if (indexRecord.state() != TableDefinition.INDEX_READY) return StatusCode.RETRY;
+    if (indexRecord.isConstraint()) return StatusCode.INVALID_EXTERNAL_INPUT;
+    status = RelationalKey.catalogTableKey(renamedName, catalogKey);
+    if (!status.isOk()) return status;
+    status = requireAbsent(session);
+    if (!status.isOk()) return status;
+    CatalogIndexCodec.encode(
+        output,
+        indexRecord.tableId(),
+        indexRecord.indexTableId(),
+        indexRecord.state(),
+        renamedName,
+        indexRecord.isUnique(),
+        indexRecord.isConstraint());
+    status = session.indexedSession().insert(catalogKey.space(), catalogKey.key(), output);
+    if (!status.isOk()) return status;
+    status = RelationalKey.catalogTableKey(currentName, catalogKey);
     return status.isOk()
         ? session.indexedSession().delete(catalogKey.space(), catalogKey.key()) : status;
   }
@@ -86,20 +76,7 @@ final class RelationalIndexRemoval {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     TransactionOutcome outcome = new TransactionOutcome();
-    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
-    if (status.isOk()) {
-      status = session.beginPersistentSchemaChange();
-    }
-    if (status.isOk()) {
-      status = mark(session, indexName, tableName);
-    }
-    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      StatusCode terminal = status.isOk() && !alreadyMarked
-          ? session.commitBuildPhase(outcome) : session.abortBuildPhase(outcome);
-      if (status.isOk()) {
-        status = terminal;
-      }
-    }
+    StatusCode status = markAndCommit(session, indexName, tableName, outcome);
     if (status.isOk() && !alreadyMarked) {
       status = publishDropping(session);
     }
@@ -108,6 +85,20 @@ final class RelationalIndexRemoval {
       return status;
     }
     return cleanup(session, indexName, tableName, outcome, maximumBatches);
+  }
+
+  private StatusCode markAndCommit(
+      RelationalSession session, CharSequence indexName,
+      CharSequence tableName, TransactionOutcome outcome) {
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) status = session.beginPersistentSchemaChange();
+    if (status.isOk()) status = mark(session, indexName, tableName);
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode terminal = status.isOk() && !alreadyMarked
+          ? session.commitBuildPhase(outcome) : session.abortBuildPhase(outcome);
+      if (status.isOk()) status = terminal;
+    }
+    return status;
   }
 
   StatusCode mark(
@@ -295,11 +286,21 @@ final class RelationalIndexRemoval {
       }
     }
     scanCursor.reset();
+    status = deleteBatch(session, count, status);
+    return finishBatch(session, outcome, status);
+  }
+
+  private StatusCode deleteBatch(RelationalSession session, int count, StatusCode status) {
     for (int index = 0; status.isOk() && index < count; index++) {
       status = session.indexedSession().delete(rowSpaces[index], rowKeys[index]);
       rowSpaces[index] = 0;
       rowKeys[index] = 0;
     }
+    return status;
+  }
+
+  private StatusCode finishBatch(
+      RelationalSession session, TransactionOutcome outcome, StatusCode status) {
     if (status.isOk()) {
       return session.commitBuildPhase(outcome);
     }

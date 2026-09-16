@@ -118,13 +118,7 @@ final class RelationalTableLifecycle {
     if (status.isOk()) {
       status = markDropping(session, name);
     }
-    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      StatusCode terminal = status.isOk() && !alreadyMarked
-          ? session.commitBuildPhase(outcome) : session.abortBuildPhase(outcome);
-      if (status.isOk()) {
-        status = terminal;
-      }
-    }
+    status = finishDropMarker(session, outcome, status);
     if (status.isOk() && !alreadyMarked) {
       status = schemaGate.publishOwnedSchema(session);
     }
@@ -134,6 +128,18 @@ final class RelationalTableLifecycle {
     }
     return physicalCleanup.cleanupDroppingTable(
         session, table, name, outcome, maximumCleanupBatches);
+  }
+
+  private StatusCode finishDropMarker(
+      RelationalSession session, TransactionOutcome outcome, StatusCode status) {
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode terminal = status.isOk() && !alreadyMarked
+          ? session.commitBuildPhase(outcome) : session.abortBuildPhase(outcome);
+      if (status.isOk()) {
+        status = terminal;
+      }
+    }
+    return status;
   }
 
   synchronized StatusCode markDropping(
