@@ -27,18 +27,36 @@ final class SqlSetTailParser {
     StatusCode status = input.requireKeyword(source, "BY");
     int expression = 0;
     do {
-      SqlIdentifier name = status.isOk() ? query.appendSetOrder() : null;
-      status = name == null ? StatusCode.RESOURCE_EXHAUSTED : input.identifier(source, name);
-      if (status.isOk() && input.consumeCharacter(source, '.')) {
-        status = StatusCode.FEATURE_NOT_SUPPORTED;
-      }
-      if (status.isOk() && !SqlSetExpressionValidation.selected(first, name)) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      boolean descending = status.isOk() && input.consumeKeyword(source, "DESC");
-      if (status.isOk() && !descending) input.consumeKeyword(source, "ASC");
-      if (status.isOk()) query.setSetOrderDescending(expression++, descending);
+      status = parseExpression(source, query, first, expression, status);
+      if (status.isOk()) expression++;
     } while (status.isOk() && input.consumeCharacter(source, ','));
     return status;
+  }
+
+  private StatusCode parseExpression(
+      CharSequence sql, SqlQuery query, SqlCommand first, int expression, StatusCode prior) {
+    SqlIdentifier name = prior.isOk() ? query.appendSetOrder() : null;
+    if (name == null) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode status = input.identifier(sql, name);
+    if (status.isOk()) status = rejectQualifier(sql);
+    if (status.isOk()) status = selected(first, name);
+    if (status.isOk()) setDirection(sql, query, expression);
+    return status;
+  }
+
+  private StatusCode rejectQualifier(CharSequence sql) {
+    return input.consumeCharacter(sql, '.')
+        ? StatusCode.FEATURE_NOT_SUPPORTED : StatusCode.OK;
+  }
+
+  private static StatusCode selected(SqlCommand first, SqlIdentifier name) {
+    return SqlSetExpressionValidation.selected(first, name)
+        ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private void setDirection(CharSequence sql, SqlQuery query, int expression) {
+    boolean descending = input.consumeKeyword(sql, "DESC");
+    if (!descending) input.consumeKeyword(sql, "ASC");
+    query.setSetOrderDescending(expression, descending);
   }
 }

@@ -156,3 +156,13 @@ Evidence: `/private/tmp/river-logical-sizing-test.log`,
 `/private/tmp/river-sizing-allocation-candidate.log`,
 `/private/tmp/river-logical-sizing-check-final.log`, and
 `/private/tmp/river-logical-sizing-after.json`. No performance claim.
+
+### SQL parser and query-state slice — 2026-09-16
+
+Thirteen files separate parsing, command-copy, and materialization phases.
+Integrator review restored missing-BY error precedence, keyword consumption
+order, and unconditional whitespace handling. Subquery comparison remains local
+across right-expression parsing. All 89 SQL module tests passed; full scan
+including tests: 159 files, maximum score 96.9714 and NPATH 96. Evidence:
+`/private/tmp/river-sql-check-final.log` and
+`/private/tmp/river-sql-final-slopmark.json`. No performance claim.

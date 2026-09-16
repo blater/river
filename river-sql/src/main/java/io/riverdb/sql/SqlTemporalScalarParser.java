@@ -25,7 +25,10 @@ final class SqlTemporalScalarParser {
     if (status.isOk()) status = input.requireKeyword(sql, "FROM");
     if (status.isOk()) status = expressions.parseNestedAdditive(sql);
     if (status.isOk()) status = input.requireCharacter(sql, ')');
-    if (!status.isOk()) return status;
+    return status.isOk() ? appendExtract(target, field) : status;
+  }
+
+  private StatusCode appendExtract(SqlScalarExpression target, int field) {
     int descriptor = SqlTemporalExpressionTypes.extractDescriptor(
         expressions.topDescriptor(), field);
     if (descriptor == 0

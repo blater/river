@@ -24,11 +24,16 @@ final class SqlTypeParameters {
       second = integer(status, result.value);
     }
     if (status.isOk()) status = input.requireCharacter(sql, ')');
+    return finish(status, result, varchar, first, second);
+  }
+
+  private static StatusCode finish(
+      StatusCode status, SqlParser.LongResult result, boolean varchar, int first, int second) {
+    if (!status.isOk()) return status;
     int descriptor = varchar
         ? SqlTypeDescriptor.varchar(first)
         : SqlTypeDescriptor.decimal(first, second);
-    if (status.isOk() && descriptor == 0) status = StatusCode.INVALID_EXTERNAL_INPUT;
-    return status.isOk() ? set(result, descriptor) : status;
+    return descriptor == 0 ? StatusCode.INVALID_EXTERNAL_INPUT : set(result, descriptor);
   }
 
   StatusCode floating(CharSequence sql, SqlParser.LongResult result) {

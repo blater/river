@@ -56,19 +56,32 @@ final class SqlCreateTableConstraints {
       command.tableConstraints.name().copyFrom(constraintName);
     }
     if (kind == SqlTableConstraintSet.CHECK) return checks.parse(sql, command);
+    return kind == SqlTableConstraintSet.FOREIGN
+        ? parseForeign(sql, command) : parseKey(sql, command, status, kind);
+  }
+
+  private StatusCode parseKey(
+      CharSequence sql, SqlCommand command, StatusCode status, int kind) {
     if (kind != SqlTableConstraintSet.UNIQUE) status = input.requireKeyword(sql, "KEY");
     int count = status.isOk() ? keyParts.parse(sql) : -1;
-    if (count < 0) return status.isOk()
-        ? count == -2 ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.INVALID_EXTERNAL_INPUT
-        : status;
-    if (kind != SqlTableConstraintSet.FOREIGN) return keyParts.append(command, count);
+    if (count < 0) return keyPartStatus(status, count);
+    return keyParts.append(command, count);
+  }
+
+  private StatusCode parseForeign(CharSequence sql, SqlCommand command) {
+    StatusCode status = input.requireKeyword(sql, "KEY");
+    int count = status.isOk() ? keyParts.parse(sql) : -1;
+    if (count < 0) return keyPartStatus(status, count);
     status = input.requireKeyword(sql, "REFERENCES");
-    if (status.isOk()) {
-      status = input.identifier(sql, command.tableConstraints.table());
-    }
+    if (status.isOk()) status = input.identifier(sql, command.tableConstraints.table());
     int targets = status.isOk() ? keyParts.parseTargets(sql, command, count) : -1;
     return targets == count ? StatusCode.OK
         : status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+  }
+
+  private static StatusCode keyPartStatus(StatusCode status, int count) {
+    if (!status.isOk()) return status;
+    return count == -2 ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
   private int kind(CharSequence sql) {

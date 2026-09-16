@@ -17,16 +17,24 @@ final class SqlTableCheckConstraintParser {
 
   StatusCode parse(CharSequence sql, SqlCommand command) {
     StatusCode status = input.requireCharacter(sql, '(');
-    if (status.isOk()) status = expressions.parseProjectionScratch(sql, command, left);
+    if (!status.isOk()) return status;
+    return parseBody(sql, command);
+  }
+
+  private StatusCode parseBody(CharSequence sql, SqlCommand command) {
+    StatusCode status = expressions.parseProjectionScratch(sql, command, left);
     SqlComparison comparison = status.isOk() ? parser.comparisonOperator(sql) : null;
-    if (status.isOk() && (comparison == null || comparison == SqlComparison.HALF_OPEN_RANGE
-        || comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN)) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
+    if (status.isOk()) status = validComparison(comparison);
     if (status.isOk()) status = expressions.parseProjectionScratch(sql, command, right);
     if (status.isOk()) status = input.requireCharacter(sql, ')');
     if (status.isOk()) status = addReferences(command, left);
     return status.isOk() ? addReferences(command, right) : status;
+  }
+
+  private static StatusCode validComparison(SqlComparison comparison) {
+    return comparison == null || comparison == SqlComparison.HALF_OPEN_RANGE
+        || comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN
+        ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.OK;
   }
 
   private static StatusCode addReferences(SqlCommand command, SqlScalarExpression expression) {
