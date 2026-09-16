@@ -13,18 +13,31 @@ final class ProtocolQueryOpenResponseDecoder {
     boolean row = (flags & ProtocolFrameCodec.FLAG_ROW_AVAILABLE) != 0;
     boolean active = (flags & ProtocolFrameCodec.FLAG_QUERY_ACTIVE) != 0;
     boolean endOfStream = (flags & ProtocolFrameCodec.FLAG_END_OF_STREAM) != 0;
+    if (!validHeaderPrefix(frame, status, columns, preparedQuery)) return false;
+    if (active == endOfStream || active && !row) return false;
+    if (active && (flags & ProtocolFrameCodec.FLAG_TRANSACTION_ACTIVE) != 0) return false;
+    if (!validRowHeader(row, returned, key, nullBytes, columns)) return false;
     int minimumMetadata = ProtocolResponseNullBitmap.bytes(columns)
         + columns * (Integer.BYTES + 1);
     int variableBytes = frame.payloadBytes() - ProtocolResponseFrameWriter.FIXED_BYTES;
-    return (frame.type() == ProtocolMessageType.BEGIN_QUERY
-            || frame.type() == ProtocolMessageType.BEGIN_PREPARED_QUERY)
-        && status.isOk()
-        && !preparedQuery && columns > 0 && active != endOfStream
-        && (!active || row)
-        && (!active || (flags & ProtocolFrameCodec.FLAG_TRANSACTION_ACTIVE) == 0)
-        && returned == (row ? 1 : 0) && (row || key == 0)
-        && nullBytes == (row ? ProtocolResponseNullBitmap.bytes(columns) : 0)
-        && reserved >= minimumMetadata && reserved <= variableBytes - nullBytes;
+    return reserved >= minimumMetadata && reserved <= variableBytes - nullBytes;
+  }
+
+  private static boolean validHeaderPrefix(
+      ProtocolFrame frame, StatusCode status, int columns, boolean preparedQuery) {
+    if (!status.isOk()) return false;
+    if (preparedQuery || columns <= 0) return false;
+    ProtocolMessageType type = frame.type();
+    return type == ProtocolMessageType.BEGIN_QUERY
+        || type == ProtocolMessageType.BEGIN_PREPARED_QUERY;
+  }
+
+  private static boolean validRowHeader(
+      boolean row, long returned, long key, int nullBytes, int columns) {
+    if (row) {
+      return returned == 1 && nullBytes == ProtocolResponseNullBitmap.bytes(columns);
+    }
+    return returned == 0 && key == 0 && nullBytes == 0;
   }
 
   static StatusCode decode(

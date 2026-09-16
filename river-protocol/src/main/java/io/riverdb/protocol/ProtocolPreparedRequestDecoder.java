@@ -26,32 +26,53 @@ public final class ProtocolPreparedRequestDecoder {
 
   public StatusCode decode(ProtocolFrame frame) {
     reset();
-    if (frame == null || frame.isResponse()) return fail(frame);
+    if (!validFrame(frame)) return fail(frame);
     boolean close = frame.type() == ProtocolMessageType.CLOSE_PREPARED;
-    boolean execution = frame.type() == ProtocolMessageType.EXECUTE_PREPARED
-        || frame.type() == ProtocolMessageType.BEGIN_PREPARED_QUERY;
-    if (!close && !execution || frame.payloadBytes() < (close ? Long.BYTES : HEADER_BYTES)) {
-      return fail(frame);
-    }
+    if (!validPayload(frame.payloadBytes(), close)) return fail(frame);
     ByteBuffer source = frame.source();
     int input = frame.payloadOffset();
     int end = input + frame.payloadBytes();
     handle = source.getLong(input);
     input += Long.BYTES;
-    if (handle <= 0 || close && input != end) return fail(frame);
-    if (!close) {
-      int count = Short.toUnsignedInt(source.getShort(input));
-      int reserved = Short.toUnsignedInt(source.getShort(input + Short.BYTES));
-      diagnosticTag = source.getLong(input + Short.BYTES * 2);
-      diagnosticStepTag = source.getLong(input + Short.BYTES * 2 + Long.BYTES);
-      metricsEpoch = source.getLong(input + Short.BYTES * 2 + Long.BYTES * 2);
-      input += Short.BYTES * 2 + ProtocolTransactionDiagnosticContext.BYTES;
-      if (reserved != 0 || count > ParameterSet.MAXIMUM_PARAMETERS
-          || !ProtocolTransactionDiagnosticContext.valid(
-              diagnosticTag, diagnosticStepTag, metricsEpoch)) return fail(frame);
-      StatusCode status = parameterDecoder.decode(source, input, end, count);
-      if (!status.isOk()) return failure(frame, status);
-    }
+    if (!validHandle(handle, close, input, end)) return fail(frame);
+    if (close) return erase(frame);
+    int count = Short.toUnsignedInt(source.getShort(input));
+    int reserved = Short.toUnsignedInt(source.getShort(input + Short.BYTES));
+    diagnosticTag = source.getLong(input + Short.BYTES * 2);
+    diagnosticStepTag = source.getLong(input + Short.BYTES * 2 + Long.BYTES);
+    metricsEpoch = source.getLong(input + Short.BYTES * 2 + Long.BYTES * 2);
+    input += Short.BYTES * 2 + ProtocolTransactionDiagnosticContext.BYTES;
+    if (!validParameters(reserved, count)) return fail(frame);
+    StatusCode status = parameterDecoder.decode(source, input, end, count);
+    if (!status.isOk()) return failure(frame, status);
+    return erase(frame);
+  }
+
+  private static boolean validFrame(ProtocolFrame frame) {
+    if (frame == null || frame.isResponse()) return false;
+    ProtocolMessageType type = frame.type();
+    return type == ProtocolMessageType.CLOSE_PREPARED
+        || type == ProtocolMessageType.EXECUTE_PREPARED
+        || type == ProtocolMessageType.BEGIN_PREPARED_QUERY;
+  }
+
+  private static boolean validPayload(int payloadBytes, boolean close) {
+    int minimum = close ? Long.BYTES : HEADER_BYTES;
+    return payloadBytes >= minimum;
+  }
+
+  private static boolean validHandle(long handle, boolean close, int input, int end) {
+    if (handle <= 0) return false;
+    return !close || input == end;
+  }
+
+  private boolean validParameters(int reserved, int count) {
+    if (reserved != 0 || count > ParameterSet.MAXIMUM_PARAMETERS) return false;
+    return ProtocolTransactionDiagnosticContext.valid(
+        diagnosticTag, diagnosticStepTag, metricsEpoch);
+  }
+
+  private StatusCode erase(ProtocolFrame frame) {
     StatusCode erased = frame.erasePayload();
     if (!erased.isOk()) reset();
     return erased;
