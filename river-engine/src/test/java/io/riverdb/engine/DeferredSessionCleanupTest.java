@@ -80,8 +80,9 @@ final class DeferredSessionCleanupTest {
 
     @Override
     public StatusCode retryTerminalClose() {
+      StatusCode attemptedStatus = status;
       attempts.incrementAndGet();
-      return status;
+      return attemptedStatus;
     }
 
     @Override
