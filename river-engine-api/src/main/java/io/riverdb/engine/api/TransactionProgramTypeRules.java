@@ -16,7 +16,7 @@ final class TransactionProgramTypeRules {
       case TransactionScalarOperator.EQUAL, TransactionScalarOperator.NOT_EQUAL,
           TransactionScalarOperator.LESS, TransactionScalarOperator.LESS_OR_EQUAL,
           TransactionScalarOperator.GREATER, TransactionScalarOperator.GREATER_OR_EQUAL ->
-          SqlTypeDescriptor.canCompare(first, second) && target == SqlTypeDescriptor.BOOLEAN;
+          comparison(first, second, target);
       case TransactionScalarOperator.AND, TransactionScalarOperator.OR ->
           first == SqlTypeDescriptor.BOOLEAN && second == SqlTypeDescriptor.BOOLEAN
               && target == SqlTypeDescriptor.BOOLEAN;
@@ -32,6 +32,10 @@ final class TransactionProgramTypeRules {
           && targetType == SqlTypeDescriptor.TYPE_ID_VARCHAR;
       default -> false;
     };
+  }
+
+  private static boolean comparison(int first, int second, int target) {
+    return SqlTypeDescriptor.canCompare(first, second) && target == SqlTypeDescriptor.BOOLEAN;
   }
 
   private static boolean numeric(int first, int second, int target) {

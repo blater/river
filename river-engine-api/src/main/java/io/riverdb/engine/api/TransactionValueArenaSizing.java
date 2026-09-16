@@ -2,6 +2,8 @@ package io.riverdb.engine.api;
 
 /** Authoritative chunk and directory sizing for transaction values and text. */
 final class TransactionValueArenaSizing {
+  private static final long DIRECTORY_HEADER_BYTES = 24L;
+
   private TransactionValueArenaSizing() { }
 
   static long maximumRetainedBytes(int slots, int textCharacters) {
@@ -13,6 +15,16 @@ final class TransactionValueArenaSizing {
     bytes = add(bytes, directoryBytes(capacity((int) valueChunks)));
     bytes = add(bytes, multiply(textChunks, TransactionTextChunk.RETAINED_BYTES));
     return add(bytes, directoryBytes(capacity((int) textChunks)));
+  }
+
+  static int growDirectory(int current, int required) {
+    if (required <= current) return current;
+    int next = current == 0 ? 4 : current << 1;
+    return next > current && next >= required ? next : required;
+  }
+
+  static long directoryDelta(int current, int next) {
+    return directoryBytes(next) - directoryBytes(current);
   }
 
   private static int capacity(int needed) {
@@ -32,7 +44,7 @@ final class TransactionValueArenaSizing {
 
   private static long directoryBytes(int capacity) {
     return capacity == 0 ? 0
-        : TransactionValueArena.DIRECTORY_HEADER_BYTES + (long) capacity * Long.BYTES;
+        : DIRECTORY_HEADER_BYTES + (long) capacity * Long.BYTES;
   }
 
   private static long multiply(long left, long right) {
