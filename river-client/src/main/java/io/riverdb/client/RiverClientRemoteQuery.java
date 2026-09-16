@@ -85,18 +85,21 @@ final class RiverClientRemoteQuery implements RiverQuery {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (!connection.sessionActive() || !active) return StatusCode.CLOSED;
-    StatusCode status = StatusCode.OK;
-    if (serverActive) {
-      status = connection.exchange(ProtocolMessageType.CLOSE_QUERY, null);
-      if (status.isOk()) status = connection.response.status();
-      if (status.isOk()
-          && (connection.response.queryActive() || connection.response.rowAvailable())) {
-        status = connection.fail(StatusCode.CORRUPTION);
-      }
-      if (status.isOk()) captureCompletion();
-    }
+    StatusCode status = closeServerQuery();
     status = serverActive || !status.isOk() ? status : completeLocally(result);
     if (status.isOk()) clear();
+    return status;
+  }
+
+  private StatusCode closeServerQuery() {
+    if (!serverActive) return StatusCode.OK;
+    StatusCode status = connection.exchange(ProtocolMessageType.CLOSE_QUERY, null);
+    if (status.isOk()) status = connection.response.status();
+    if (status.isOk()
+        && (connection.response.queryActive() || connection.response.rowAvailable())) {
+      status = connection.fail(StatusCode.CORRUPTION);
+    }
+    if (status.isOk()) captureCompletion();
     return status;
   }
 

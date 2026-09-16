@@ -297,8 +297,7 @@ public final class SessionEndpoint {
 
   private StatusCode openSession(ByteBuffer response) {
     openedSession.reset();
-    StatusCode status = state == READY
-        ? StatusCode.OK : state == CLOSED ? StatusCode.CLOSED : StatusCode.CONFLICT;
+    StatusCode status = sessionAdmission();
     ProtocolSqlRequestDecoder decoder = null;
     if (status.isOk()) {
       try {
@@ -322,6 +321,11 @@ public final class SessionEndpoint {
       state = SESSION;
     }
     return codec.encodeStatusResponse(response, frame.type(), frame.requestId(), status, false);
+  }
+
+  private StatusCode sessionAdmission() {
+    if (state == READY) return StatusCode.OK;
+    return state == CLOSED ? StatusCode.CLOSED : StatusCode.CONFLICT;
   }
 
   private StatusCode execute(ByteBuffer response) {
