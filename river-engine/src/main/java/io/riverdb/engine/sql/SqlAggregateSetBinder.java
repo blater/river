@@ -19,46 +19,65 @@ final class SqlAggregateSetBinder {
     int groups = grouped ? command.grouping().count() : 0;
     StatusCode status = bound.reserveProjectionColumns(
         Math.max(groups + 1, command.columnCount()));
-    if (status.isOk()) {
-      status = bound.aggregates.reserve(command.aggregates().invocationCount());
-    }
-    if (status.isOk()) status = rows.bindAggregateOperands(command, bound, grouped);
-    for (int invocation = 0;
-        status.isOk() && invocation < command.aggregates().invocationCount(); invocation++) {
-      status = bindInvocation(command, bound, invocation);
-    }
     if (!status.isOk()) return status;
+    status = bound.aggregates.reserve(command.aggregates().invocationCount());
+    if (!status.isOk()) return status;
+    status = rows.bindAggregateOperands(command, bound, grouped);
+    if (!status.isOk()) return status;
+    for (int invocation = 0;
+        invocation < command.aggregates().invocationCount(); invocation++) {
+      status = bindInvocation(command, bound, invocation);
+      if (!status.isOk()) return status;
+    }
+    return bindOutputs(command, bound, grouped, groups);
+  }
+
+  private static StatusCode bindOutputs(
+      SqlCommand command, BoundSqlStatement bound, boolean grouped, int groups) {
     int groupOutputs = grouped
         ? command.columnCount() - command.aggregates().outputCount() : 0;
     for (int output = 0; output < groupOutputs; output++) {
       int key = SqlGroupExpressions.groupKey(command, output);
       if (key < 0 || key >= groups) return StatusCode.INVALID_EXTERNAL_INPUT;
-      bound.projectedTypeDescriptors[output] =
-          bound.projectionPrograms.resultDescriptor(key);
-      bound.projectedColumns[output] = bound.projectionPrograms.rawColumn(key);
+      bindGroupOutput(bound, output, key);
     }
     for (int output = 0; output < command.aggregates().outputCount(); output++) {
       int invocation = command.aggregates().outputInvocation(output);
       if (invocation < 0 || invocation >= bound.aggregates.count()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      int result = groupOutputs + output;
-      bound.projectedTypeDescriptors[result] =
-          bound.aggregates.resultDescriptor(invocation);
-      int operand = bound.aggregates.operandLane(invocation);
-      int column = operand < 0 ? -1 : bound.projectionPrograms.rawColumn(operand);
-      bound.projectedColumns[result] = operand < 0
-          ? BoundSqlStatement.NULL_PROJECTION
-          : column >= 0 ? column : SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
+      bindAggregateOutput(bound, groupOutputs, output, invocation);
     }
     bound.projectedColumnCount = command.columnCount();
     int selected = command.aggregates().outputInvocation(0);
     if (selected < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     int lane = bound.aggregates.operandLane(selected);
-    int column = lane < 0 ? -1 : bound.projectionPrograms.rawColumn(lane);
-    if (grouped) bound.groupAggregateColumn = lane < 0 ? -1
-        : column >= 0 ? column : SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
+    if (grouped) {
+      bound.groupAggregateColumn = lane < 0 ? -1 : projectionColumn(bound, lane);
+    }
     return StatusCode.OK;
+  }
+
+  private static void bindGroupOutput(
+      BoundSqlStatement bound, int output, int key) {
+    bound.projectedTypeDescriptors[output] =
+        bound.projectionPrograms.resultDescriptor(key);
+    bound.projectedColumns[output] = bound.projectionPrograms.rawColumn(key);
+  }
+
+  private static void bindAggregateOutput(
+      BoundSqlStatement bound, int groupOutputs, int output, int invocation) {
+    int result = groupOutputs + output;
+    bound.projectedTypeDescriptors[result] =
+        bound.aggregates.resultDescriptor(invocation);
+    bound.projectedColumns[result] = projectionColumn(
+        bound, bound.aggregates.operandLane(invocation));
+  }
+
+  private static int projectionColumn(BoundSqlStatement bound, int lane) {
+    if (lane < 0) return BoundSqlStatement.NULL_PROJECTION;
+    int column = bound.projectionPrograms.rawColumn(lane);
+    return column >= 0 ? column : SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
   }
 
   private static StatusCode bindInvocation(

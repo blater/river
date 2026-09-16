@@ -22,37 +22,68 @@ final class SqlBoundJoinSnapshot {
       SqlCommand command,
       SqlBoundJoinContext context) {
     joinBlock = block;
-    joinRootAccessColumn = context.strategy(0) == SqlJoinStrategy.MERGE
-        ? context.strategyOuterColumn(0)
-        : context.accessPredicate >= 0
-            && (context.predicateColumn == 0
-                || context.table(0).hasIndexOn(context.predicateColumn))
-            ? context.predicateColumn : -1;
+    joinRootAccessColumn = rootAccessColumn(context);
     joinStageCount = command.joinChain().stageCount();
     estimatesAvailable = context.estimatesAvailable();
-    if (estimatesAvailable) {
-      for (int role = 0; role <= joinStageCount; role++) {
-        statisticsEpochs[role] = context.statistics(role).epoch();
-        statisticsRows[role] = context.statistics(role).rowCount();
-        statisticsSampled[role] = context.statistics(role).sampled();
-      }
+    captureStatistics(context);
+    captureStages(context);
+  }
+
+  private static int rootAccessColumn(SqlBoundJoinContext context) {
+    if (context.strategy(0) == SqlJoinStrategy.MERGE) {
+      return context.strategyOuterColumn(0);
     }
+    if (context.accessPredicate < 0) return -1;
+    return context.predicateColumn == 0
+        || context.table(0).hasIndexOn(context.predicateColumn)
+        ? context.predicateColumn : -1;
+  }
+
+  private void captureStatistics(SqlBoundJoinContext context) {
+    if (!estimatesAvailable) return;
+    for (int role = 0; role <= joinStageCount; role++) {
+      statisticsEpochs[role] = context.statistics(role).epoch();
+      statisticsRows[role] = context.statistics(role).rowCount();
+      statisticsSampled[role] = context.statistics(role).sampled();
+    }
+  }
+
+  private void captureStages(SqlBoundJoinContext context) {
     for (int stage = 0; stage < joinStageCount; stage++) {
       int strategy = context.strategy(stage);
-      int right = strategy != SqlJoinStrategy.NESTED_LOOP
-          ? context.strategyInnerColumn(stage) : context.accessInnerColumn(stage);
+      int right = rightColumn(context, stage, strategy);
       joinRightColumns[stage] = right;
-      boolean indexed = strategy != SqlJoinStrategy.HASH && right >= 0
-          && (right == 0 || context.table(stage + 1).hasIndexOn(right));
-      boolean unique = strategy != SqlJoinStrategy.MERGE && indexed
-          && (right == 0 || context.table(stage + 1).hasUniqueIndexOn(right));
-      int access = strategy == SqlJoinStrategy.MERGE && !indexed ? 3
-          : unique ? 2 : (indexed
-              && !(strategy == SqlJoinStrategy.MERGE && right == 0) ? 1 : 0);
-      joinAccessKinds[stage] = (byte) access;
+      boolean indexed = indexed(context, stage, strategy, right);
+      boolean unique = unique(context, stage, strategy, right, indexed);
+      joinAccessKinds[stage] = (byte) accessKind(strategy, right, indexed, unique);
       joinStrategies[stage] = (byte) strategy;
       estimatedRows[stage] = context.estimatedRows(stage);
     }
+  }
+
+  private static int rightColumn(
+      SqlBoundJoinContext context, int stage, int strategy) {
+    return strategy != SqlJoinStrategy.NESTED_LOOP
+        ? context.strategyInnerColumn(stage) : context.accessInnerColumn(stage);
+  }
+
+  private static boolean indexed(
+      SqlBoundJoinContext context, int stage, int strategy, int right) {
+    return strategy != SqlJoinStrategy.HASH && right >= 0
+        && (right == 0 || context.table(stage + 1).hasIndexOn(right));
+  }
+
+  private static boolean unique(
+      SqlBoundJoinContext context, int stage, int strategy, int right, boolean indexed) {
+    return strategy != SqlJoinStrategy.MERGE && indexed
+        && (right == 0 || context.table(stage + 1).hasUniqueIndexOn(right));
+  }
+
+  private static int accessKind(
+      int strategy, int right, boolean indexed, boolean unique) {
+    if (strategy == SqlJoinStrategy.MERGE && !indexed) return 3;
+    if (unique) return 2;
+    return indexed && !(strategy == SqlJoinStrategy.MERGE && right == 0) ? 1 : 0;
   }
 
   void reset() {

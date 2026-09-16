@@ -58,14 +58,9 @@ final class SqlBlockJoinStage {
       int block, SqlBlockRowStore output, SqlBlockRow sourceRow) {
     SqlCommand command = bound.blockPlans().command(block);
     long resultLimit = command.rowLimit();
-    boolean aggregates = command.aggregates().invocationCount() > 0;
-    long outputLimit = aggregates ? Long.MAX_VALUE : resultLimit;
-    long inputLimit = resultLimit == 0 ? 0
-        : aggregates || (command.orderBy().count() > 0) ? Long.MAX_VALUE : resultLimit;
-    SqlBlockSchema schema = bound.blockPlans().operandSchema(block);
-    if (command.aggregates().invocationCount() == 0) {
-      schema = bound.blockPlans().schema(block);
-    }
+    long outputLimit = outputLimit(command, resultLimit);
+    long inputLimit = inputLimit(command, resultLimit);
+    SqlBlockSchema schema = operandSchema(block, command);
     StatusCode status = outputOrder.beginOperands(command, schema, output);
     boolean began = false;
     if (status.isOk() && inputLimit > 0) {
@@ -74,20 +69,40 @@ final class SqlBlockJoinStage {
     } else if (status.isOk()) {
       status = rows.skip();
     }
-    long accepted = 0;
-    while (status.isOk() && accepted < inputLimit) {
-      status = rows.next(sourceRow);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      if (status.isOk()) status = output.append(sourceRow);
-      if (status.isOk()) accepted++;
-    }
+    if (status.isOk()) status = appendRows(output, sourceRow, inputLimit);
     if (began) status = rows.finish(status);
     sourceRow.reset(0);
     if (status.isOk()) status = output.finish();
     return status.isOk() ? output.limit(outputLimit) : status;
+  }
+
+  private static long outputLimit(SqlCommand command, long resultLimit) {
+    return command.aggregates().invocationCount() > 0 ? Long.MAX_VALUE : resultLimit;
+  }
+
+  private static long inputLimit(SqlCommand command, long resultLimit) {
+    if (resultLimit == 0) return 0;
+    return command.aggregates().invocationCount() > 0 || command.orderBy().count() > 0
+        ? Long.MAX_VALUE : resultLimit;
+  }
+
+  private SqlBlockSchema operandSchema(int block, SqlCommand command) {
+    return command.aggregates().invocationCount() > 0
+        ? bound.blockPlans().operandSchema(block) : bound.blockPlans().schema(block);
+  }
+
+  private StatusCode appendRows(
+      SqlBlockRowStore output, SqlBlockRow sourceRow, long inputLimit) {
+    long accepted = 0;
+    while (accepted < inputLimit) {
+      StatusCode status = rows.next(sourceRow);
+      if (status == StatusCode.CONFLICT) return StatusCode.OK;
+      if (!status.isOk()) return status;
+      status = output.append(sourceRow);
+      if (!status.isOk()) return status;
+      accepted++;
+    }
+    return StatusCode.OK;
   }
 
   StatusCode accumulateScalar(

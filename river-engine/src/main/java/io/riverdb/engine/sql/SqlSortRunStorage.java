@@ -35,38 +35,53 @@ final class SqlSortRunStorage implements SqlNullWords, SqlRetainedReclaimer {
   StatusCode prepare(
       int projectionCount, boolean containsText, boolean containsGeneratedText,
       long runPayloadBytes) {
-    if (!registered && budget != null) {
-      StatusCode registration = budget.registerReclaimer(this);
-      if (!registration.isOk()) return registration;
-      registered = true;
-    }
+    StatusCode status = registerReclaimer();
+    if (!status.isOk()) return status;
     active = true;
     runRows = SqlSortRunCapacity.rows(
         projectionCount, containsText, containsGeneratedText, runPayloadBytes);
     projections = projectionCount;
     textRows = containsText;
     generatedTextRows = containsGeneratedText;
-    StatusCode status = reserveCharge();
-    if (status == StatusCode.RESOURCE_EXHAUSTED && budget != null) {
-      long reclaimed = retainedBytes;
-      StatusCode release = reclaimed > 0 ? budget.release(reclaimed) : StatusCode.OK;
-      if (release.isOk()) {
-        releaseAllStorage();
-        status = reserveCharge();
-      } else {
-        status = release;
-      }
-    }
-    if (status.isOk()) status = nulls.reserve(
-        projections, SqlShapeLimits.MAX_RESULT_COLUMNS, runRows);
-    if (status.isOk()) status = arrays.reserve(runRows, projections);
-    if (status.isOk()) status = ensureRows();
-    if (status.isOk()) status = generatedText.reserve(
-        runRows, projections, generatedTextRows);
+    status = reserveWithReclaim();
+    if (status.isOk()) status = reserveStorage();
     if (!status.isOk()) {
-      adjustCharge(actualBytes());
-      active = false;
+      return failPrepare(status);
     }
+    return status;
+  }
+
+  private StatusCode registerReclaimer() {
+    if (registered || budget == null) return StatusCode.OK;
+    StatusCode status = budget.registerReclaimer(this);
+    if (status.isOk()) registered = true;
+    return status;
+  }
+
+  private StatusCode reserveWithReclaim() {
+    StatusCode status = reserveCharge();
+    if (status != StatusCode.RESOURCE_EXHAUSTED || budget == null) return status;
+    long reclaimed = retainedBytes;
+    StatusCode release = reclaimed > 0 ? budget.release(reclaimed) : StatusCode.OK;
+    if (!release.isOk()) return release;
+    releaseAllStorage();
+    return reserveCharge();
+  }
+
+  private StatusCode reserveStorage() {
+    StatusCode status = nulls.reserve(
+        projections, SqlShapeLimits.MAX_RESULT_COLUMNS, runRows);
+    if (!status.isOk()) return status;
+    status = arrays.reserve(runRows, projections);
+    if (!status.isOk()) return status;
+    status = ensureRows();
+    if (!status.isOk()) return status;
+    return generatedText.reserve(runRows, projections, generatedTextRows);
+  }
+
+  private StatusCode failPrepare(StatusCode status) {
+    adjustCharge(actualBytes());
+    active = false;
     return status;
   }
 
