@@ -87,7 +87,7 @@ scan including tests: 108 files, maximum score 45.1567 and NPATH 92.
 Evidence: `/private/tmp/river-format-check.log` and
 `/private/tmp/river-format-final-slopmark.json`. No performance claim.
 
-### WAL ownership slice — reviewed candidate, 2026-09-16
+### WAL ownership slice — accepted checkpoint, 2026-09-16
 
 LocalWal delegates to cohesive append, recovery, force, lifecycle, reservation,
 stream, and quorum owners. Removed superseded forwarding methods, duplicate
@@ -105,4 +105,9 @@ Final removal of unused methods/state passed another WAL module check (4s).
 Logs: `/private/tmp/river-wal-clean-check-final.log`,
 `/private/tmp/river-wal-dead-code-check.log`, and
 `/private/tmp/river-wal-final-slopmark.json`.
-Periodic performance comparison is pending before this slice is promoted.
+Four interleaved control/candidate performance samples passed with no regression
+signal: candidate throughput, server CPU per commit, and p99 all fall within
+the two controls' ranges. Independent review agrees; no speedup is claimed.
+Configuration and individual results are in `docs/performance-checkpoints.md`;
+captures are under `/private/tmp/river-complexity-perf/`.
+Promote with `perf-checkpoint-20260916-localwal-complexity`; ticket remains open.
