@@ -38,10 +38,7 @@ public final class ExactDecimalQuantize {
     boolean round = remainder != 0 && halfEven
         && ExactDecimal.shouldRound(magnitude, divisor, converted);
     if (round) {
-      if (value < 0 && converted == Long.MIN_VALUE
-          || value >= 0 && converted == Long.MAX_VALUE) {
-        return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
-      }
+      // Scale reduction divides by at least ten, leaving room for a one-unit adjustment.
       converted += value < 0 ? -1 : 1;
     }
     if (!ExactDecimalDescriptors.valueFitsDescriptor(converted, targetDescriptor)) {
@@ -68,10 +65,6 @@ public final class ExactDecimalQuantize {
     long magnitude = Math.abs(remainder);
     if (remainder == 0 || magnitude < divisor - magnitude) return StatusCode.OK;
     long rounded = result.value;
-    if (value < 0 && rounded == Long.MIN_VALUE
-        || value >= 0 && rounded == Long.MAX_VALUE) {
-      return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
-    }
     rounded += value < 0 ? -1 : 1;
     if (!ExactDecimalDescriptors.valueFitsDescriptor(rounded, targetDescriptor)) {
       return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;

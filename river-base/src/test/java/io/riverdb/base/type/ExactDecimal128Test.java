@@ -349,6 +349,30 @@ final class ExactDecimal128Test {
     }
   }
 
+  @Test
+  void unsignedWideProductPreservesCarriesAcrossAllLimbs() {
+    long[] limbs = {0, 1, Long.MAX_VALUE, Long.MIN_VALUE, -1};
+    for (long leftHigh : limbs) {
+      for (long leftLow : limbs) {
+        for (long rightHigh : limbs) {
+          for (long rightLow : limbs) {
+            ExactDecimal128WideProduct.multiply(
+                leftHigh, leftLow, rightHigh, rightLow, scratch);
+            BigInteger expected = unsignedPair(leftHigh, leftLow)
+                .multiply(unsignedPair(rightHigh, rightLow));
+            BigInteger actual = unsignedPair(scratch.w3, scratch.w2).shiftLeft(128)
+                .add(unsignedPair(scratch.w1, scratch.w0));
+            assertEquals(expected, actual);
+          }
+        }
+      }
+    }
+  }
+
+  private static BigInteger unsignedPair(long high, long low) {
+    return bigInteger(high, low).and(BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE));
+  }
+
   private void assertOperation(
       BigDecimal exact,
       StatusCode status,

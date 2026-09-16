@@ -22,3 +22,20 @@ Complete Slopmark scan satisfies requested limits; affected tests pass; durable 
 ### 2026-09-16T09:57:29Z
 
 Owner: Codex integrator with Luna/high implementation and review. Base: 3636c7b3. Worktree: /private/tmp/river-localwal-complexity. Baseline: /private/tmp/river-slopmark-baseline.json (2180 production sources, 16 scores >=100, 195 NPATH routines >100 in 177 files). First slice: LocalWal.
+
+### Decimal arithmetic slice — 2026-09-16
+
+Independent Luna/high review approved the unsigned carry/high-product equivalence,
+scale-reduction rounding bounds, and unchanged scratch publication behavior.
+`ExactDecimal128WidePower.multiply` selects all limbs once (NPATH 274 → 36);
+`ExactDecimalQuantize.apply` removes unreachable quotient-overflow branches
+(132 → 42); `ExactDecimal128WideProduct.multiply` shares unsigned carry calculation
+(128 → 1) and uses the JDK unsigned high-product primitive.
+
+Validation: `:river-base:check` passed 111 tests with no failures, errors, or skips.
+The 625-case limb-boundary test compares the full product with BigInteger.
+Module scan including tests: 114 files, maximum score 87.7803, maximum NPATH 75.
+Artifacts: `/private/tmp/river-decimal-check.log` and
+`/private/tmp/river-decimal-final-slopmark.json`.
+This is a structural refactor; no throughput improvement is claimed. The overall
+ticket remains open. Subsequent WAL/query slices receive occasional workload checks.
