@@ -460,6 +460,31 @@ final class LocalWalForceTargetTest {
   }
 
   @Test
+  void rejectedSealDoesNotFenceBeforeAnyWrite(@TempDir Path root) throws Exception {
+    Fixture fixture = new Fixture(root);
+    append(fixture.wal, 1);
+    long tail = fixture.wal.tailEnd();
+    setLong(fixture.wal.appendState(), "tailEnd", Long.MAX_VALUE);
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, fixture.wal.sealPendingBatch());
+    assertEquals(StatusCode.OK, fixture.wal.admissionStatus());
+    setLong(fixture.wal.appendState(), "tailEnd", tail);
+    LocalWalForceTarget target = new LocalWalForceTarget();
+    assertEquals(StatusCode.OK, fixture.wal.forcePending(target));
+    assertEquals(StatusCode.OK, fixture.wal.releaseForcedBatch(target, target.token()));
+    fixture.close();
+  }
+
+  @Test
+  void unexpectedFooterWriteFailureFencesExplicitSeal(@TempDir Path root) {
+    Fixture fixture = new Fixture(root);
+    append(fixture.wal, 1);
+    fixture.file.throwNextWrite = true;
+    assertThrows(IllegalStateException.class, fixture.wal::sealPendingBatch);
+    assertEquals(StatusCode.FENCED, fixture.wal.admissionStatus());
+    fixture.close();
+  }
+
+  @Test
   void capturedTargetRequiresExactDurableStartButAcceptsZeroTerminalDigest(
       @TempDir Path root) throws Exception {
     Fixture gap = new Fixture(Files.createDirectory(root.resolve("gap")));
@@ -571,12 +596,17 @@ final class LocalWalForceTargetTest {
     long lastForceStart;
     long lastForceEnd;
     boolean partialNextWrite;
+    boolean throwNextWrite;
 
     ObservedFile(DurableFile file) { delegate = file; }
     public StatusCode read(long position, ByteBuffer target, IoResult result) {
       return delegate.read(position, target, result);
     }
     public StatusCode write(long position, ByteBuffer source, IoResult result) {
+      if (throwNextWrite) {
+        throwNextWrite = false;
+        throw new IllegalStateException("injected footer write failure");
+      }
       if (partialNextWrite) {
         partialNextWrite = false;
         ByteBuffer firstByte = source.slice();

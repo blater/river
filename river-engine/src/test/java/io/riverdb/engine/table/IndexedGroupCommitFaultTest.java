@@ -1088,9 +1088,12 @@ final class IndexedGroupCommitFaultTest {
 
     private static DurableFile walFile(LocalWal wal) {
       try {
-        Field field = LocalWal.class.getDeclaredField("file");
+        Field state = LocalWal.class.getDeclaredField("appendState");
+        state.setAccessible(true);
+        Object append = state.get(wal);
+        Field field = append.getClass().getDeclaredField("file");
         field.setAccessible(true);
-        return (DurableFile) field.get(wal);
+        return (DurableFile) field.get(append);
       } catch (ReflectiveOperationException reflection) {
         throw new AssertionError(reflection);
       }
@@ -1098,9 +1101,12 @@ final class IndexedGroupCommitFaultTest {
 
     private static void replaceWalFile(LocalWal wal, DurableFile file) {
       try {
-        Field field = LocalWal.class.getDeclaredField("file");
+        Field state = LocalWal.class.getDeclaredField("appendState");
+        state.setAccessible(true);
+        Object append = state.get(wal);
+        Field field = append.getClass().getDeclaredField("file");
         field.setAccessible(true);
-        field.set(wal, file);
+        field.set(append, file);
       } catch (ReflectiveOperationException reflection) {
         throw new AssertionError(reflection);
       }

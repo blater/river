@@ -13,6 +13,7 @@ final class LocalWalRecoverySuffix {
   private LocalWalRecoverySuffix() {}
 
   static StatusCode check(LocalWal wal, long damagedStart, long firstSequence, long fileBytes) {
+    LocalWalRecoveryState recovery = wal.recoveryState();
     // Recovery-only scratch. The overlap retains footers crossing a scan-buffer boundary.
     ByteBuffer scan = ByteBuffer.allocate(64 * 1024);
     WalCommitGroupHeader footer = new WalCommitGroupHeader();
@@ -23,7 +24,7 @@ final class LocalWalRecoverySuffix {
       int bytes = (int) Math.min(scan.capacity(), fileBytes - offset);
       scan.clear();
       scan.limit(bytes);
-      StatusCode status = wal.readExactForRecovery(offset, scan);
+      StatusCode status = recovery.readExact(offset, scan);
       if (!status.isOk()) return status;
       scan.flip();
       for (int index = 0; index <= bytes - WalCommitGroupCodec.FOOTER_BYTES; index++) {
@@ -33,7 +34,7 @@ final class LocalWalRecoverySuffix {
         if (!status.isOk() || footer.groupStart() <= damagedStart
             || footer.firstJournalSequence() <= firstSequence
             || footer.groupStart() + footer.recordBytes() != offset + index) continue;
-        status = validateRecords(wal, footer, checksum, recordsChecksum);
+        status = validateRecords(recovery, footer, checksum, recordsChecksum);
         if (status.isOk()) return StatusCode.CORRUPTION;
         if (status != StatusCode.CORRUPTION) return status;
       }
@@ -43,9 +44,10 @@ final class LocalWalRecoverySuffix {
   }
 
   private static StatusCode validateRecords(
-      LocalWal wal, WalCommitGroupHeader footer, CRC32C checksum, CRC32C recordsChecksum) {
-    ByteBuffer record = wal.recoveryRecord();
-    WalRecordHeader header = wal.recoveryHeader();
+      LocalWalRecoveryState recovery, WalCommitGroupHeader footer,
+      CRC32C checksum, CRC32C recordsChecksum) {
+    ByteBuffer record = recovery.recordBuffer();
+    WalRecordHeader header = recovery.header();
     long offset = footer.groupStart();
     long end = offset + footer.recordBytes();
     long sequence = footer.firstJournalSequence();
@@ -55,7 +57,7 @@ final class LocalWalRecoverySuffix {
       if (end - offset < WalRecordCodec.HEADER_BYTES) return StatusCode.CORRUPTION;
       record.clear();
       record.limit(WalRecordCodec.HEADER_BYTES);
-      StatusCode status = wal.readExactForRecovery(offset, record);
+      StatusCode status = recovery.readExact(offset, record);
       if (!status.isOk()) return status;
       record.flip();
       status = WalRecordCodec.decodeHeader(record, header);
@@ -63,7 +65,7 @@ final class LocalWalRecoverySuffix {
       int bytes = header.totalBytes();
       record.clear();
       record.limit(bytes);
-      status = wal.readExactForRecovery(offset, record);
+      status = recovery.readExact(offset, record);
       if (!status.isOk()) return status;
       record.flip();
       status = WalRecordCodec.validate(record, header, checksum);

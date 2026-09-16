@@ -86,3 +86,23 @@ review and integrator review approved the predicates.
 scan including tests: 108 files, maximum score 45.1567 and NPATH 92.
 Evidence: `/private/tmp/river-format-check.log` and
 `/private/tmp/river-format-final-slopmark.json`. No performance claim.
+
+### WAL ownership slice — reviewed candidate, 2026-09-16
+
+LocalWal delegates to cohesive append, recovery, force, lifecycle, reservation,
+stream, and quorum owners. Removed superseded forwarding methods, duplicate
+recovery state, and unused extraction remnants. LocalWal score 176.0825 → 96.2091;
+quorum admission 117.4298 → 22.9301; record-batch append NPATH 335 → 67.
+The entire WAL module including tests has maximum score 96.2091 and NPATH 89.
+
+Two independent Luna/high reviews covered append/recovery and force/lifecycle/
+streams. Review caught and corrected failure fencing, startup recovery-window
+lifetime, and a repeated payload-size query. Four focused regression tests now
+cover these boundaries. Engine fault-injection fixtures target the new file owner.
+
+Clean full check passed 2034 tests, zero failures/errors, 19 skips (3m4s).
+Final removal of unused methods/state passed another WAL module check (4s).
+Logs: `/private/tmp/river-wal-clean-check-final.log`,
+`/private/tmp/river-wal-dead-code-check.log`, and
+`/private/tmp/river-wal-final-slopmark.json`.
+Periodic performance comparison is pending before this slice is promoted.

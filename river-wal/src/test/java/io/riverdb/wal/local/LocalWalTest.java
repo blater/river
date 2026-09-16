@@ -24,6 +24,8 @@ import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -638,6 +640,58 @@ final class LocalWalTest {
     }
     assertEquals(
         appended.endOffset() + WalCommitGroupCodec.FOOTER_BYTES, offset);
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void damagedSuffixRepairKeepsDecisionlessRecoveryWindowOpen(@TempDir Path root)
+      throws Exception {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    appendAndForce(wal, 7, 1, new byte[] {1});
+    LocalWalGroupAppendResult continuation = new LocalWalGroupAppendResult();
+    assertEquals(StatusCode.OK, wal.appendContinuationGroupUnforced(
+        new BytesBatch(new byte[] {2}), 211, 5, 4, continuation));
+    LocalWalForceTarget target = new LocalWalForceTarget();
+    assertEquals(StatusCode.OK, wal.forcePending(target));
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(target, target.token()));
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+    Files.write(root.resolve(LocalWal.FILE_NAME), new byte[] {99}, StandardOpenOption.APPEND);
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    assertEquals(StatusCode.OK, wal.truncateDecisionlessRecoveredSuffix(
+        continuation.startOffset(), continuation.firstJournalSequence()));
+    assertEquals(continuation.startOffset(), wal.tailEnd());
+    assertEquals(continuation.firstJournalSequence(), wal.nextJournalSequence());
+    assertEquals(1, wal.currentCommitSequence());
+    assertEquals(8, wal.nextTransactionId());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void recordBatchDoesNotRequeryPayloadSizeAfterEncoding(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalRecordBatch batch = new BytesBatch(new byte[] {1, 2}) {
+      private boolean encoded;
+      @Override public int payloadBytes(int record) {
+        assertTrue(!encoded, "payload size queried after encoding");
+        return super.payloadBytes(record);
+      }
+      @Override public StatusCode encodePayload(int record, ByteBuffer target) {
+        encoded = true;
+        return super.encodePayload(record, target);
+      }
+    };
+    assertEquals(StatusCode.OK, wal.appendGroupUnforced(
+        batch, 1, 1, 7, 1, new LocalWalGroupAppendResult()));
+    LocalWalForceTarget target = new LocalWalForceTarget();
+    assertEquals(StatusCode.OK, wal.forcePending(target));
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch(target, target.token()));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }

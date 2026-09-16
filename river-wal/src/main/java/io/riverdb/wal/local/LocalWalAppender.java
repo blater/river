@@ -38,9 +38,9 @@ final class LocalWalAppender {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int recordBytes = WalRecordCodec.encodedBytes(reservation.payloadBytes());
-    ByteBuffer appendRecord = wal.appendRecordBuffer();
-    long journalSequence = wal.nextJournalSequenceValue();
-    wal.beginPendingGroup(journalSequence);
+    ByteBuffer appendRecord = wal.appendState().appendRecord();
+    long journalSequence = wal.appendState().nextJournalSequence();
+    wal.appendState().beginPendingGroup(journalSequence);
     status = WalRecordCodec.encodeReserved(
         journalSequence,
         transactionId,
@@ -50,16 +50,17 @@ final class LocalWalAppender {
         formatVersion,
         reservation.payloadBytes(),
         appendRecord,
-        wal.appendChecksum());
+        wal.appendState().checksum());
     if (status.isOk()) {
-      wal.includePendingRecord(appendRecord, recordBytes, journalSequence);
-      status = wal.writeAppendRecord(wal.tailEnd(), appendRecord, recordBytes);
+      wal.appendState().includePendingRecord(appendRecord, recordBytes, journalSequence);
+      status = wal.appendState().writeAppendRecord(
+          wal.appendState().tailEnd(), appendRecord, recordBytes);
     }
     if (!status.isOk()) {
       wal.abortAppend(reservation);
       return status;
     }
-    wal.acceptAppend(
+    wal.appendState().acceptAppend(
         reservation,
         result,
         transactionId,

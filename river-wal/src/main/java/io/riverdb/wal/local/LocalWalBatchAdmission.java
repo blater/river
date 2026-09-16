@@ -15,14 +15,14 @@ final class LocalWalBatchAdmission {
     result.reset();
     int records = batch.recordCount();
     if (records <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (wal.pendingRecordCountValue() > Long.MAX_VALUE - records) {
+    if (wal.appendState().pendingRecordCount() > Long.MAX_VALUE - records) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    long sequence = wal.nextJournalSequenceValue();
+    long sequence = wal.appendState().nextJournalSequence();
     if (sequence <= 0 || sequence > Long.MAX_VALUE - records + 1) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    long end = wal.tailEnd();
+    long end = wal.appendState().tailEnd();
     for (int record = 0; record < records; record++) {
       int bytes = WalRecordCodec.encodedBytes(batch.payloadBytes(record));
       if (bytes < 0) return StatusCode.INVALID_EXTERNAL_INPUT;

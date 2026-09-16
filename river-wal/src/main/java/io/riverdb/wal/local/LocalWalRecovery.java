@@ -14,12 +14,13 @@ final class LocalWalRecovery {
   private LocalWalRecovery() {}
 
   static StatusCode recover(LocalWal wal) {
-    StatusCode status = wal.readFileSize();
+    LocalWalRecoveryState recovery = wal.recoveryState();
+    StatusCode status = recovery.readFileSize();
     if (!status.isOk()) return status;
-    long fileBytes = wal.fileSizeBytes();
+    long fileBytes = recovery.fileSizeBytes();
     if (fileBytes < WalFileHeaderCodec.HEADER_BYTES) return StatusCode.CORRUPTION;
     ByteBuffer identity = ByteBuffer.allocate(WalFileHeaderCodec.HEADER_BYTES);
-    status = wal.readExactForRecovery(0, identity);
+    status = recovery.readExact(0, identity);
     if (!status.isOk()) return status;
     identity.flip();
     WalFileHeaderDecodeResult decoded = new WalFileHeaderDecodeResult();
@@ -39,16 +40,16 @@ final class LocalWalRecovery {
       long lastSequence = 0;
       boolean invalid = false;
       boolean complete = false;
-      wal.beginRecoveryGroup();
+      recovery.beginGroup();
       while (offset < fileBytes) {
-        StatusCode footer = wal.readFooterAt(offset, fileBytes);
+        StatusCode footer = recovery.readFooterAt(offset, fileBytes);
         if (footer.isOk()) {
           if (invalid || recordCount == 0
-              || !wal.validRecoveryFooter(
+              || !recovery.validFooter(
                   groupStart, recordBytes, recordCount, firstSequence, lastSequence)) {
             return repairSuffix(wal, groupStart, firstSequence, fileBytes);
           }
-          wal.commitRecoveredGroup();
+          recovery.commitGroup();
           offset += WalCommitGroupCodec.FOOTER_BYTES;
           complete = true;
           break;
@@ -60,11 +61,11 @@ final class LocalWalRecovery {
             || fileBytes - offset < WalRecordCodec.HEADER_BYTES) {
           return repairSuffix(wal, groupStart, firstSequence, fileBytes);
         }
-        ByteBuffer record = wal.recoveryRecord();
-        WalRecordHeader recordHeader = wal.recoveryHeader();
+        ByteBuffer record = recovery.recordBuffer();
+        WalRecordHeader recordHeader = recovery.header();
         record.clear();
         record.limit(WalRecordCodec.HEADER_BYTES);
-        status = wal.readExactForRecovery(offset, record);
+        status = recovery.readExact(offset, record);
         if (!status.isOk()) return status;
         record.flip();
         status = WalRecordCodec.decodeHeader(record, recordHeader);
@@ -74,18 +75,18 @@ final class LocalWalRecovery {
         int bytes = recordHeader.totalBytes();
         record.clear();
         record.limit(bytes);
-        status = wal.readExactForRecovery(offset, record);
+        status = recovery.readExact(offset, record);
         if (!status.isOk()) return status;
         record.flip();
-        status = WalRecordCodec.validate(record, recordHeader, wal.recoveryChecksum());
+        status = WalRecordCodec.validate(record, recordHeader, recovery.checksum());
         if (!status.isOk() || expectedSequence == 0
             || recordHeader.journalSequence() != expectedSequence
-            || !wal.validDecisionForRecovery(recordHeader)) {
+            || !recovery.validDecision(recordHeader)) {
           invalid = true;
         } else {
-          wal.acceptRecoveredRecord(recordHeader);
+          recovery.acceptRecord(recordHeader);
         }
-        wal.includeRecoveryRecord(record, bytes);
+        recovery.includeRecord(record, bytes);
         recordBytes += bytes;
         recordCount++;
         lastSequence = expectedSequence;
@@ -94,7 +95,7 @@ final class LocalWalRecovery {
       }
       if (!complete) return repairSuffix(wal, groupStart, firstSequence, fileBytes);
     }
-    wal.finishRecovery(offset, expectedSequence);
+    recovery.finish(offset, expectedSequence);
     return StatusCode.OK;
   }
 
@@ -102,6 +103,6 @@ final class LocalWalRecovery {
       LocalWal wal, long groupStart, long firstSequence, long fileBytes) {
     StatusCode status = LocalWalRecoverySuffix.check(wal, groupStart, firstSequence, fileBytes);
     if (!status.isOk()) return status;
-    return wal.truncateTailForRecovery(groupStart, firstSequence);
+    return wal.recoveryState().truncateTail(groupStart, firstSequence);
   }
 }

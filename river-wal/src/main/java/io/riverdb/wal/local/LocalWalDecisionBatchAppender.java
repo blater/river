@@ -21,23 +21,24 @@ final class LocalWalDecisionBatchAppender {
     result.reset();
     StatusCode status = validate(wal, batch);
     if (!status.isOk()) return status;
-    LocalWalBatchAdmissionResult admission = wal.batchAdmissionResult();
+    LocalWalBatchAdmissionResult admission = wal.appendState().batchAdmissionResult();
     status = LocalWalBatchAdmission.admit(wal, batch, admission);
     if (!status.isOk()) return status;
     long end = admission.endOffset();
 
-    long offset = wal.tailEnd();
-    long firstSequence = wal.nextJournalSequenceValue();
+    long offset = wal.appendState().tailEnd();
+    long firstSequence = wal.appendState().nextJournalSequence();
     int transaction = 0;
-    wal.beginPendingGroup(firstSequence);
+    wal.appendState().beginPendingGroup(firstSequence);
     for (int record = 0; record < batch.recordCount(); record++) {
       int payloadBytes = batch.payloadBytes(record);
-      ByteBuffer payload = wal.prepareAppendPayload(payloadBytes);
+      wal.appendState().prepareAppendPayload(payloadBytes);
+      ByteBuffer payload = wal.appendState().appendPayload();
       status = batch.encodePayload(record, payload);
       if (status.isOk() && payload.position() != payloadBytes) {
         status = StatusCode.INVARIANT_BROKEN;
       }
-      if (!status.isOk()) return fail(wal, offset != wal.tailEnd(), status);
+      if (!status.isOk()) return fail(wal, offset != wal.appendState().tailEnd(), status);
       boolean decision = record + 1 == batch.transactionEndRecord(transaction);
       status = WalRecordCodec.encodeReserved(
           firstSequence + record,
@@ -47,18 +48,20 @@ final class LocalWalDecisionBatchAppender {
           formatId,
           formatVersion,
           payloadBytes,
-          wal.appendRecordBuffer(),
-          wal.appendChecksum());
-      if (!status.isOk()) return fail(wal, offset != wal.tailEnd(), status);
+          wal.appendState().appendRecord(),
+          wal.appendState().checksum());
+      if (!status.isOk()) return fail(wal, offset != wal.appendState().tailEnd(), status);
       int recordBytes = WalRecordCodec.encodedBytes(payloadBytes);
       result.markStorageMayHaveChanged();
-      wal.includePendingRecord(wal.appendRecordBuffer(), recordBytes, firstSequence + record);
-      status = wal.writeAppendRecord(offset, wal.appendRecordBuffer(), recordBytes);
+      wal.appendState().includePendingRecord(
+          wal.appendState().appendRecord(), recordBytes, firstSequence + record);
+      status = wal.appendState().writeAppendRecord(
+          offset, wal.appendState().appendRecord(), recordBytes);
       if (!status.isOk()) return fail(wal, true, status);
       offset += recordBytes;
       if (decision) transaction++;
     }
-    wal.acceptDecisionBatchAppend(result, batch, end);
+    wal.appendState().acceptDecisionBatchAppend(result, batch, end);
     return StatusCode.OK;
   }
 
@@ -66,7 +69,7 @@ final class LocalWalDecisionBatchAppender {
     StatusCode status = wal.admissionStatus();
     if (!status.isOk()) return status;
     if (wal.hasOpenLogicalStream() || wal.hasActiveReservation()
-        || wal.hasRetainedForceTarget() && !wal.concurrentAppendPermitted()) {
+        || wal.hasRetainedForceTarget() && !wal.forceState().concurrentAppendPermitted()) {
       return StatusCode.CONFLICT;
     }
     int records = batch.recordCount();

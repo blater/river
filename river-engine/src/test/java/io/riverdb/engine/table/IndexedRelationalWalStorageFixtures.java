@@ -90,9 +90,12 @@ final class IndexedRelationalWalStorageFixtures {
   }
 
   static void crashWal(LocalWal wal) throws Exception {
-    Field file = LocalWal.class.getDeclaredField("file");
+    Field state = LocalWal.class.getDeclaredField("appendState");
+    state.setAccessible(true);
+    Object append = state.get(wal);
+    Field file = append.getClass().getDeclaredField("file");
     file.setAccessible(true);
-    requireOk(((io.riverdb.platform.file.DurableFile) file.get(wal)).close());
+    requireOk(((io.riverdb.platform.file.DurableFile) file.get(append)).close());
   }
 
   static IndexedPageSet pageSet(IndexedTableStore store) throws Exception {
