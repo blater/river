@@ -56,10 +56,8 @@ final class IndexedVersionState {
     int delta = 0;
     int merged = 0;
     while (base < baseCount || delta < deltaCount) {
-      long baseId = base < baseCount
-          ? checkpointBase.versionPageId(base) : Long.MAX_VALUE;
-      long deltaId = delta < deltaCount
-          ? directory.checkpointPageId(delta) : Long.MAX_VALUE;
+      long baseId = checkpointBasePageId(base, baseCount);
+      long deltaId = checkpointDeltaPageId(delta, deltaCount);
       long next = Math.min(baseId, deltaId);
       if (baseId == next) base++;
       if (deltaId == next) delta++;
@@ -67,6 +65,14 @@ final class IndexedVersionState {
       merged++;
     }
     return merged;
+  }
+
+  private long checkpointBasePageId(int cursor, int count) {
+    return cursor < count ? checkpointBase.versionPageId(cursor) : Long.MAX_VALUE;
+  }
+
+  private long checkpointDeltaPageId(int cursor, int count) {
+    return cursor < count ? directory.checkpointPageId(cursor) : Long.MAX_VALUE;
   }
 
   void resetCheckpointVersionPages() {

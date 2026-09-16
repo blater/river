@@ -507,162 +507,25 @@ final class IndexedRelationalWalCommitTest {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
-    IndexedSessionContext directContext = context(manager, table, null, vacuum);
     long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
-    IndexedTransactionSession filler = session(directContext, 128);
-    TransactionOutcome fillerOutcome = new TransactionOutcome();
-    int splitKey = 1;
-    long splitValue;
-    int splitNewPages;
-    while (true) {
-      splitValue = splitKey;
-      ByteBuffer candidate = physicalFixedTuple(splitKey, splitValue);
-      splitNewPages = tupleInsertNewPageCount(created.store(), descriptor, candidate);
-      if (splitNewPages > 0) break;
-      prepareHybrid(filler, descriptor, baseSpace, splitKey, splitValue);
-      requireOk(filler.commit(fillerOutcome));
-      check(fillerOutcome.state() == TransactionState.COMMITTED,
-          "tuple leaf filler did not commit");
-      splitKey++;
-    }
-    check(splitKey > 1, "empty tuple leaf unexpectedly required a split");
-    requireOk(filler.close());
-
+    SplitPoint split = fillToSplit(created.store(), table, manager, vacuum, descriptor, baseSpace);
     TupleIndexRootRecord beforeGroup = registryRecord(created.store(), 1_000);
     check(beforeGroup.rootPageId() == 4,
         "tuple root changed before allocating preflight boundary");
     int tuplePagesBefore = tuplePageCount(created.store(), 1_000);
+    SplitGroup group = publishSplitGroup(
+        created.store(), counters, table, manager, vacuum, descriptor, baseSpace,
+        split, beforeGroup, tuplePagesBefore);
+    int splitKey = split.key();
+    long splitValue = split.value();
     int firstKey = splitKey;
     long firstValue = splitValue;
-    int secondKey = splitKey + 1;
-    long secondValue = splitValue + 1;
-    IndexedGroupCommitCoordinator coordinator =
-        new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
-    IndexedSessionContext context = context(manager, table, coordinator, vacuum);
-    IndexedTransactionSession first = session(context, 128);
-    IndexedTransactionSession second = session(context, 128);
-    prepareHybrid(first, descriptor, baseSpace, firstKey, firstValue);
-    prepareHybrid(second, descriptor, baseSpace, secondKey, secondValue);
-    int firstMask = first.commitGroupEligibilityMask();
-    int secondMask = second.commitGroupEligibilityMask();
-    check(firstMask == 0 && secondMask == 0,
-        "split cohort was not group eligible");
-
-    IndexedGroupCommitTelemetry beforeTelemetry = new IndexedGroupCommitTelemetry();
-    requireOk(table.copyCommitTelemetry(beforeTelemetry));
-    TransactionOutcome firstOutcome = new TransactionOutcome();
-    TransactionOutcome secondOutcome = new TransactionOutcome();
-    long forceCalls = counters.forceCalls();
-    CountDownLatch ready = new CountDownLatch(2);
-    CountDownLatch start = new CountDownLatch(1);
-    ExecutorService executor = Executors.newFixedThreadPool(2);
-    try {
-      Future<StatusCode> firstCommit = executor.submit(
-          () -> coordinatedCommit(first, firstOutcome, ready, start));
-      Future<StatusCode> secondCommit = executor.submit(
-          () -> coordinatedCommit(second, secondOutcome, ready, start));
-      ready.await();
-      start.countDown();
-      requireOk(firstCommit.get());
-      requireOk(secondCommit.get());
-    } finally {
-      executor.shutdownNow();
-    }
-    check(counters.forceCalls() == forceCalls + 1,
-        "split cohort did not use exactly one shared force");
-    check(firstOutcome.state() == TransactionState.COMMITTED
-            && secondOutcome.state() == TransactionState.COMMITTED
-            && Math.abs(secondOutcome.commitSequence() - firstOutcome.commitSequence()) == 1,
-        "split cohort did not retain two consecutive commit decisions");
-    long splitGroupEnd = Math.max(
-        firstOutcome.commitSequence(), secondOutcome.commitSequence());
-
-    IndexedGroupCommitTelemetry publishedTelemetry = new IndexedGroupCommitTelemetry();
-    requireOk(table.copyCommitTelemetry(publishedTelemetry));
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_PUBLICATION) == 1,
-        "split cohort publication phase was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_PUBLICATION_PREPARE) == 1,
-        "split cohort publication preparation was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_PUBLICATION_INSTALL) == 1,
-        "split cohort page/frontier installation was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_TRANSACTION_COMPLETION) == 1,
-        "split cohort transaction completion was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_LOCK_RELEASE) == 1,
-        "split cohort lock release was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_LOCK_OUTCOME) == 1,
-        "split cohort lock outcome was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_LOCK_REQUEST_CANCELLATION) == 1,
-        "split cohort lock-request cancellation was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_LOCK_HOLDING_RELEASE) == 1,
-        "split cohort holding release was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_LOCK_RECORD_RECYCLE) == 1,
-        "split cohort lock-record recycle was not recorded");
-    check(publishedTelemetry.groupLockHoldingsReleased() > 0,
-        "split cohort released no measured lock holdings");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_ACTIVE_REMOVAL) == 1,
-        "split cohort active-set removal was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP,
-        IndexedCommitStage.GROUP_OUTCOME_PUBLICATION) == 1,
-        "split cohort outcome publication was not recorded");
-    check(publishedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.NOTIFICATION) == 2,
-        "split cohort did not notify both members");
-    check(publishedTelemetry.successfulCohortSizeBucket(1) == 1
-            && publishedTelemetry.maximumSuccessfulCohort() == 2,
-        "split cohort was not reported as one successful size-two group");
-    check(publishedTelemetry.directCommitTransactions()
-            == beforeTelemetry.directCommitTransactions(),
-        "split cohort used a direct fallback");
-    for (IndexedGroupFailureStage stage : IndexedGroupFailureStage.values()) {
-      check(publishedTelemetry.groupFailureCohortCount(stage) == 0,
-          "split cohort recorded group failure at " + stage);
-    }
-    for (IndexedCommitStage stage : IndexedCommitStage.values()) {
-      check(publishedTelemetry.stageFailureCount(
-          IndexedCommitPath.SHARED_GROUP, stage, StatusCode.INVARIANT_BROKEN) == 0,
-          "split cohort recorded invariant failure at " + stage);
-    }
-    check(publishedTelemetry.reconciles(),
-        "split cohort telemetry did not reconcile");
-
-    TupleIndexRootRecord afterGroup = registryRecord(created.store(), 1_000);
-    check(afterGroup.rootPageId() != beforeGroup.rootPageId()
-            && afterGroup.generation() == beforeGroup.generation() + 2,
-        "allocating tuple insert did not replace the leaf root");
-    int tuplePagesAfterGroup = tuplePageCount(created.store(), 1_000);
-    check(tuplePagesAfterGroup == tuplePagesBefore + splitNewPages,
-        "split cohort allocated a different tuple-page count than preflight");
-    assertBaseRow(created.store(), baseSpace, firstKey, firstValue);
-    assertBaseRow(created.store(), baseSpace, secondKey, secondValue);
-    assertTuple(created.store(), descriptor, firstValue, firstKey);
-    assertTuple(created.store(), descriptor, secondValue, secondKey);
-    requireOk(first.close());
-    requireOk(second.close());
-    check(manager.activeTransactionCount() == 0
-            && manager.activeLockCount() == 0
-            && manager.waitingLockCount() == 0,
-        "split cohort did not clean up transaction or lock state");
-    requireOk(created.store().admission());
+    int secondKey = firstKey + 1;
+    long secondValue = firstValue + 1;
+    long splitGroupEnd = group.end();
+    int tuplePagesAfterGroup = group.pagesAfter();
+    TupleIndexRootRecord afterGroup = group.registry();
+    IndexedSessionContext context = group.context();
 
     int thirdKey = splitKey + 2;
     long thirdValue = splitValue + 2;
@@ -694,7 +557,7 @@ final class IndexedRelationalWalCommitTest {
     check(finalRegistry.generation() == afterGroup.generation() + 1,
         "independent commit did not advance tuple generation exactly once");
 
-    requireOk(coordinator.close());
+    requireOk(group.coordinator().close());
     crashWal(wal);
     requireOk(directory.close());
     directory = openDirectory(root);
@@ -720,6 +583,151 @@ final class IndexedRelationalWalCommitTest {
     requireOk(wal.close());
     requireOk(directory.close());
   }
+
+  private static SplitPoint fillToSplit(
+      IndexedTableStore store, IndexedTable table, TransactionManager manager, IndexedVacuum vacuum,
+      int[] descriptor, long baseSpace) throws Exception {
+    IndexedSessionContext directContext = context(manager, table, null, vacuum);
+    IndexedTransactionSession filler = session(directContext, 128);
+    TransactionOutcome outcome = new TransactionOutcome();
+    int key = 1;
+    while (true) {
+      int newPages = tupleInsertNewPageCount(store, descriptor, physicalFixedTuple(key, key));
+      if (newPages > 0) {
+        check(key > 1, "empty tuple leaf unexpectedly required a split");
+        requireOk(filler.close());
+        return new SplitPoint(key, key, newPages);
+      }
+      prepareHybrid(filler, descriptor, baseSpace, key, key);
+      requireOk(filler.commit(outcome));
+      check(outcome.state() == TransactionState.COMMITTED,
+          "tuple leaf filler did not commit");
+      key++;
+    }
+  }
+
+  private static SplitGroup publishSplitGroup(
+      IndexedTableStore store, NioIoCounters counters, IndexedTable table,
+      TransactionManager manager, IndexedVacuum vacuum, int[] descriptor, long baseSpace,
+      SplitPoint split, TupleIndexRootRecord beforeGroup, int tuplePagesBefore)
+      throws Exception {
+    int firstKey = split.key();
+    long firstValue = split.value();
+    int secondKey = firstKey + 1;
+    long secondValue = firstValue + 1;
+    IndexedGroupCommitCoordinator coordinator =
+        new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
+    IndexedSessionContext context = context(manager, table, coordinator, vacuum);
+    IndexedTransactionSession first = session(context, 128);
+    IndexedTransactionSession second = session(context, 128);
+    prepareHybrid(first, descriptor, baseSpace, firstKey, firstValue);
+    prepareHybrid(second, descriptor, baseSpace, secondKey, secondValue);
+    check(first.commitGroupEligibilityMask() == 0
+            && second.commitGroupEligibilityMask() == 0,
+        "split cohort was not group eligible");
+
+    IndexedGroupCommitTelemetry beforeTelemetry = new IndexedGroupCommitTelemetry();
+    requireOk(table.copyCommitTelemetry(beforeTelemetry));
+    TransactionOutcome firstOutcome = new TransactionOutcome();
+    TransactionOutcome secondOutcome = new TransactionOutcome();
+    long forceCalls = counters.forceCalls();
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      Future<StatusCode> firstCommit = executor.submit(
+          () -> coordinatedCommit(first, firstOutcome, ready, start));
+      Future<StatusCode> secondCommit = executor.submit(
+          () -> coordinatedCommit(second, secondOutcome, ready, start));
+      ready.await();
+      start.countDown();
+      requireOk(firstCommit.get());
+      requireOk(secondCommit.get());
+    } finally {
+      executor.shutdownNow();
+    }
+    check(counters.forceCalls() == forceCalls + 1,
+        "split cohort did not use exactly one shared force");
+    check(firstOutcome.state() == TransactionState.COMMITTED
+            && secondOutcome.state() == TransactionState.COMMITTED
+            && Math.abs(secondOutcome.commitSequence() - firstOutcome.commitSequence()) == 1,
+        "split cohort did not retain two consecutive commit decisions");
+    long end = Math.max(firstOutcome.commitSequence(), secondOutcome.commitSequence());
+    assertSplitTelemetry(table, beforeTelemetry);
+
+    TupleIndexRootRecord afterGroup = registryRecord(store, 1_000);
+    check(afterGroup.rootPageId() != beforeGroup.rootPageId()
+            && afterGroup.generation() == beforeGroup.generation() + 2,
+        "allocating tuple insert did not replace the leaf root");
+    int pagesAfter = tuplePageCount(store, 1_000);
+    check(pagesAfter == tuplePagesBefore + split.newPages(),
+        "split cohort allocated a different tuple-page count than preflight");
+    assertBaseRow(store, baseSpace, firstKey, firstValue);
+    assertBaseRow(store, baseSpace, secondKey, secondValue);
+    assertTuple(store, descriptor, firstValue, firstKey);
+    assertTuple(store, descriptor, secondValue, secondKey);
+    requireOk(first.close());
+    requireOk(second.close());
+    check(manager.activeTransactionCount() == 0
+            && manager.activeLockCount() == 0
+            && manager.waitingLockCount() == 0,
+        "split cohort did not clean up transaction or lock state");
+    requireOk(store.admission());
+    return new SplitGroup(end, pagesAfter, afterGroup, coordinator, context);
+  }
+
+  private static void assertSplitTelemetry(
+      IndexedTable table, IndexedGroupCommitTelemetry beforeTelemetry) {
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    requireOk(table.copyCommitTelemetry(telemetry));
+    IndexedCommitPath path = IndexedCommitPath.SHARED_GROUP;
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_PUBLICATION) == 1,
+        "split cohort publication phase was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_PUBLICATION_PREPARE) == 1,
+        "split cohort publication preparation was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_PUBLICATION_INSTALL) == 1,
+        "split cohort page/frontier installation was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_TRANSACTION_COMPLETION) == 1,
+        "split cohort transaction completion was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_LOCK_RELEASE) == 1,
+        "split cohort lock release was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_LOCK_OUTCOME) == 1,
+        "split cohort lock outcome was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_LOCK_REQUEST_CANCELLATION) == 1,
+        "split cohort lock-request cancellation was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_LOCK_HOLDING_RELEASE) == 1,
+        "split cohort holding release was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_LOCK_RECORD_RECYCLE) == 1,
+        "split cohort lock-record recycle was not recorded");
+    check(telemetry.groupLockHoldingsReleased() > 0,
+        "split cohort released no measured lock holdings");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_ACTIVE_REMOVAL) == 1,
+        "split cohort active-set removal was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.GROUP_OUTCOME_PUBLICATION) == 1,
+        "split cohort outcome publication was not recorded");
+    check(telemetry.stageCount(path, IndexedCommitStage.NOTIFICATION) == 2,
+        "split cohort did not notify both members");
+    check(telemetry.successfulCohortSizeBucket(1) == 1
+            && telemetry.maximumSuccessfulCohort() == 2,
+        "split cohort was not reported as one successful size-two group");
+    check(telemetry.directCommitTransactions() == beforeTelemetry.directCommitTransactions(),
+        "split cohort used a direct fallback");
+    for (IndexedGroupFailureStage stage : IndexedGroupFailureStage.values()) {
+      check(telemetry.groupFailureCohortCount(stage) == 0,
+          "split cohort recorded group failure at " + stage);
+    }
+    for (IndexedCommitStage stage : IndexedCommitStage.values()) {
+      check(telemetry.stageFailureCount(path, stage, StatusCode.INVARIANT_BROKEN) == 0,
+          "split cohort recorded invariant failure at " + stage);
+    }
+    check(telemetry.reconciles(), "split cohort telemetry did not reconcile");
+  }
+
+  private record SplitPoint(int key, long value, int newPages) { }
+
+  private record SplitGroup(
+      long end, int pagesAfter, TupleIndexRootRecord registry,
+      IndexedGroupCommitCoordinator coordinator, IndexedSessionContext context) { }
 
   @Test
   void tupleDeleteAfterSavepointRollbackRetainsEarlierInsert(@TempDir Path root) {

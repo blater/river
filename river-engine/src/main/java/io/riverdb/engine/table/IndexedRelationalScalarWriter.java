@@ -24,6 +24,13 @@ final class IndexedRelationalScalarWriter {
     StatusCode found = lookup.find(space, key);
     if (previousRowId == 0 ? found != StatusCode.CONFLICT
         : !found.isOk() || lookup.rowId() != previousRowId) return StatusCode.CORRUPTION;
+    StatusCode status = stagePage(space, key, previousRowId, row, deleted);
+    StatusCode released = leaf.attached() ? pages.releaseOperationPage(leaf) : StatusCode.OK;
+    return status.isOk() ? released : status;
+  }
+
+  private StatusCode stagePage(
+      long space, long key, long previousRowId, ByteBuffer row, boolean deleted) {
     StatusCode status = pages.pinScalarOperationPage(lookup.leafPageId(), true, leaf);
     if (status.isOk()) status = kernel.stageRelationalVersionRow(
         row, row.position(), row.remaining(), previousRowId, deleted, inserted);
@@ -34,8 +41,7 @@ final class IndexedRelationalScalarWriter {
       status = kernel.splitRelationalIndexLeaf(
           lookup.leafPageId(), leaf.payload(), space, key, inserted.rowId());
     }
-    StatusCode released = leaf.attached() ? pages.releaseOperationPage(leaf) : StatusCode.OK;
-    return status.isOk() ? released : status;
+    return status;
   }
 
   long rowId() { return inserted.rowId(); }

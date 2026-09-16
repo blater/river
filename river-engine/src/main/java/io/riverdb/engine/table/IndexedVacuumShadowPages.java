@@ -22,21 +22,35 @@ final class IndexedVacuumShadowPages {
     leafPageId = 0;
     lastStatus = StatusCode.OK;
     for (int pageId = 1; lastStatus.isOk() && pageId <= pages.highestPageId(); pageId++) {
-      ByteBuffer current = pages.isPresent(pageId)
-          ? pages.currentPayloadUnchecked(pageId) : null;
-      if (current == null) return lastStatus = StatusCode.CORRUPTION;
-      boolean heap = HeapPage.isHeap(current);
-      boolean leaf = !heap
-          && pageId != IndexedTableKernel.ROOT_META_PAGE_ID
-          && pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_SCALAR_BTREE
-          && BTreePage.type(current) == BTreePage.TYPE_LEAF;
-      if (!heap && !leaf) continue;
-      ByteBuffer shadow = pages.beginVacuumPage(pageId);
-      lastStatus = shadow == null ? pages.lastStatus() : StatusCode.OK;
-      if (lastStatus.isOk() && heap) lastStatus = HeapPage.initialize(shadow);
-      if (lastStatus.isOk()) lastStatus = pages.sealVacuumPage(pageId);
+      lastStatus = beginPage(pageId);
     }
     return lastStatus;
+  }
+
+  private StatusCode beginPage(int pageId) {
+    ByteBuffer current = currentPayload(pageId);
+    if (current == null) return StatusCode.CORRUPTION;
+    boolean heap = HeapPage.isHeap(current);
+    boolean leaf = !heap && isLeaf(pageId, current);
+    if (!heap && !leaf) return StatusCode.OK;
+    ByteBuffer shadow = pages.beginVacuumPage(pageId);
+    StatusCode status = shadowStatus(shadow);
+    if (status.isOk() && heap) status = HeapPage.initialize(shadow);
+    return status.isOk() ? pages.sealVacuumPage(pageId) : status;
+  }
+
+  private ByteBuffer currentPayload(int pageId) {
+    return pages.isPresent(pageId) ? pages.currentPayloadUnchecked(pageId) : null;
+  }
+
+  private StatusCode shadowStatus(ByteBuffer shadow) {
+    return shadow == null ? pages.lastStatus() : StatusCode.OK;
+  }
+
+  private boolean isLeaf(int pageId, ByteBuffer payload) {
+    return pageId != IndexedTableKernel.ROOT_META_PAGE_ID
+        && pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_SCALAR_BTREE
+        && BTreePage.type(payload) == BTreePage.TYPE_LEAF;
   }
 
   ByteBuffer heap(int rowBytes) {

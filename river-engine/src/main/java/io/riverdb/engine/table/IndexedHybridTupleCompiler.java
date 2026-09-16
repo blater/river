@@ -27,18 +27,29 @@ final class IndexedHybridTupleCompiler {
     StatusCode status = registry.load(intents, descriptor);
     ByteBuffer expected = status.isOk() ? metadata() : null;
     if (status.isOk() && expected == null) status = StatusCode.CORRUPTION;
-    if (!status.isOk()) return status;
+    return status.isOk()
+        ? compileLoaded(
+            intents, descriptor, mutation, outputDescriptor,
+            suboperation, firstMutation, expected)
+        : status;
+  }
+
+  private StatusCode compileLoaded(
+      IndexedTupleIntentJournal intents, int descriptor,
+      IndexedRelationalMutation mutation, int outputDescriptor,
+      int suboperation, int firstMutation, ByteBuffer expected) {
     int scalarRoot = BTreeRootPage.rootPageId(expected);
     int nextPage = BTreeRootPage.nextPageId(expected);
     long heap = kernel.operationRowCount();
     int tupleRoot = registry.rootPageId();
     long generation = registry.generation();
-    status = deltas.apply(intents, descriptor, tupleRoot);
-    int resultingRoot = deltas.rootPageId();
-    if (status.isOk()) status = registry.stage(resultingRoot, false, 0);
-    ByteBuffer resulting = status.isOk() ? metadata() : null;
-    if (status.isOk() && resulting == null) status = StatusCode.CORRUPTION;
+    StatusCode status = deltas.apply(intents, descriptor, tupleRoot);
     if (!status.isOk()) return status;
+    int resultingRoot = deltas.rootPageId();
+    status = registry.stage(resultingRoot, false, 0);
+    if (!status.isOk()) return status;
+    ByteBuffer resulting = metadata();
+    if (resulting == null) return StatusCode.CORRUPTION;
     status = mutation.appendSuboperation(
         intents.ownerAt(descriptor), outputDescriptor,
         firstMutation, deltas.count(intents, descriptor),

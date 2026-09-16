@@ -38,17 +38,29 @@ final class IndexedRelationalMutationEntries {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     int required = count + additional;
-    StatusCode status = operations.reserve(required);
-    if (status.isOk()) status = descriptorOrdinals.reserve(required);
-    if (status.isOk()) status = suboperationOrdinals.reserve(required);
-    if (status.isOk()) status = payloadOffsets.reserve(required);
-    if (status.isOk()) status = payloadLengths.reserve(required);
-    if (status.isOk()) status = logicalRowIds.reserve(required);
-    if (status.isOk()) status = previousRowIds.reserve(required);
-    if (status.isOk()) status = ownerObjectIds.reserve(required);
-    if (status.isOk()) status = spaces.reserve(required);
+    StatusCode status = reserveMetadata(required);
     if (!status.isOk()) return status;
     return payload.reserve(payloadBytes + additionalPayloadBytes);
+  }
+
+  private StatusCode reserveMetadata(int required) {
+    StatusCode status = operations.reserve(required);
+    if (!status.isOk()) return status;
+    status = descriptorOrdinals.reserve(required);
+    if (!status.isOk()) return status;
+    status = suboperationOrdinals.reserve(required);
+    if (!status.isOk()) return status;
+    status = payloadOffsets.reserve(required);
+    if (!status.isOk()) return status;
+    status = payloadLengths.reserve(required);
+    if (!status.isOk()) return status;
+    status = logicalRowIds.reserve(required);
+    if (!status.isOk()) return status;
+    status = previousRowIds.reserve(required);
+    if (!status.isOk()) return status;
+    status = ownerObjectIds.reserve(required);
+    if (!status.isOk()) return status;
+    return spaces.reserve(required);
   }
 
   void append(

@@ -20,7 +20,6 @@ import io.riverdb.engine.testsupport.fault.FaultBoundary;
 import io.riverdb.engine.testsupport.fault.FaultOperation;
 import io.riverdb.engine.testsupport.fault.FaultPointRegistry;
 import io.riverdb.engine.testsupport.fault.FaultPointSlot;
-import io.riverdb.engine.testsupport.fault.FaultingDurableDirectory;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
@@ -53,42 +52,29 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 final class IndexedGroupCommitFaultTest {
-  private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(919, 929);
-  private static final WalGeneration GENERATION = WalGeneration.of(1);
+  static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(919, 929);
+  static final WalGeneration GENERATION = WalGeneration.of(1);
 
-  private ForcedGroupFixture openForcedFixture;
-  private FaultingDurableDirectory openDirectory;
-  private LocalWal openWal;
-  private IndexedTable openTable;
-  private IndexedGroupCommitCoordinator openCoordinator;
+  private final GroupCommitFaultCleanup cleanup = new GroupCommitFaultCleanup();
 
   @AfterEach
   void closeForcedFixture() {
-    if (openForcedFixture != null) openForcedFixture.close();
-    if (openCoordinator != null) openCoordinator.close();
-    StatusCode flush = openTable == null ? StatusCode.CLOSED : openTable.flush();
-    if (flush.isOk()) openTable.close();
-    StatusCode walClose = openWal == null ? StatusCode.CLOSED : openWal.close();
-    if (openDirectory != null
-        && (!flush.isOk() && flush != StatusCode.CLOSED
-            || !walClose.isOk() && walClose != StatusCode.CLOSED)) {
-      openDirectory.crash();
-    }
+    cleanup.close();
   }
 
   private ForcedGroupFixture forcedFixture() {
-    openForcedFixture = new ForcedGroupFixture();
-    return openForcedFixture;
+    cleanup.forcedFixture = new ForcedGroupFixture();
+    return cleanup.forcedFixture;
   }
 
   private ForcedGroupFixture forcedFixture(boolean delete) {
-    openForcedFixture = new ForcedGroupFixture(delete);
-    return openForcedFixture;
+    cleanup.forcedFixture = new ForcedGroupFixture(delete);
+    return cleanup.forcedFixture;
   }
 
   private ForcedGroupFixture forcedFixture(DatabasePageCachePlan cachePlan) {
-    openForcedFixture = new ForcedGroupFixture(cachePlan);
-    return openForcedFixture;
+    cleanup.forcedFixture = new ForcedGroupFixture(cachePlan);
+    return cleanup.forcedFixture;
   }
 
   @Test
@@ -242,58 +228,6 @@ final class IndexedGroupCommitFaultTest {
     assertEquals(StatusCode.OK, fixture.second.close());
   }
 
-  @ParameterizedTest
-  @ValueSource(strings = {"scan", "current", "insert", "duplicate", "update", "savepoint"})
-  void negativeAndRolledBackObservationsRemainDependentOnFailedForce(String observation)
-      throws Exception {
-    ForcedGroupFixture fixture = forcedFixture(true);
-    fixture.publish();
-    IndexedTransactionSession reader = fixture.newSession();
-    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
-    IndexedSavepoint savepoint = new IndexedSavepoint();
-    assertEquals(StatusCode.OK, reader.createSavepoint(savepoint));
-    assertEquals(StatusCode.OK, reader.beginStatement());
-    switch (observation) {
-      case "scan" -> {
-        IndexedScanCursor cursor = new IndexedScanCursor();
-        assertEquals(StatusCode.OK, reader.beginScan(0, 999, 0, 1000, cursor));
-        assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, new IndexedScanResult()));
-        assertEquals(StatusCode.OK, reader.closeScan(cursor));
-      }
-      case "current" -> assertEquals(StatusCode.CONFLICT,
-          reader.lockCurrentKeyCurrent(0, 999, new HeapRowResult()));
-      case "insert" -> assertEquals(StatusCode.OK, reader.insert(0, 999, row(1)));
-      case "duplicate" -> assertEquals(StatusCode.CONFLICT, reader.insert(0, 41, row(1)));
-      case "update" -> assertEquals(StatusCode.CONFLICT, reader.update(0, 999, row(1)));
-      case "savepoint" -> assertEquals(StatusCode.OK,
-          reader.fetchByKey(0, 41, new HeapRowResult()));
-      default -> throw new AssertionError(observation);
-    }
-    assertEquals(StatusCode.OK, reader.completeStatement(false));
-    assertEquals(StatusCode.OK, reader.rollbackToSavepoint(savepoint));
-    assertEquals(StatusCode.OK, reader.releaseSavepoint(savepoint));
-    TransactionOutcome outcome = new TransactionOutcome();
-    CountDownLatch started = new CountDownLatch(1);
-    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      var delivered = executor.submit(() -> {
-        started.countDown();
-        return reader.commit(outcome);
-      });
-      assertTrue(started.await(5, TimeUnit.SECONDS));
-      assertThrows(TimeoutException.class, () -> delivered.get(100, TimeUnit.MILLISECONDS));
-      assertEquals(StatusCode.OK, fixture.faults.arm(
-          DirectoryOperation.FILE_FORCE, FaultOperation.DIRECTORY_FILE_FORCE,
-          FaultAction.FORCE_FAILURE));
-      fixture.complete(StatusCode.IO_FAILURE);
-      assertEquals(StatusCode.FENCED, delivered.get(5, TimeUnit.SECONDS));
-    }
-    assertEquals(TransactionState.ABORTED, reader.transaction().state());
-    assertEquals(TransactionState.ABORTED, outcome.state());
-    assertFalse(reader.transactionLifecycleActive());
-    fixture.assertTerminalFailure();
-    assertEquals(StatusCode.OK, reader.close());
-  }
-
   @Test
   void cancelledReadOnlyCommitRetainsItsDependencyAndCanRetryAfterForce() throws Exception {
     ForcedGroupFixture fixture = forcedFixture();
@@ -391,8 +325,8 @@ final class IndexedGroupCommitFaultTest {
     LocalWalOpenResult walResult = new LocalWalOpenResult();
     assertEquals(StatusCode.OK, LocalWal.open(faults.directory, DATABASE, GENERATION, walResult));
     LocalWal wal = walResult.wal();
-    openDirectory = faults.directory;
-    openWal = wal;
+    cleanup.directory = faults.directory;
+    cleanup.wal = wal;
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK, IndexedTableStore.create(
         faults.directory, wal, DATABASE, GENERATION,
@@ -400,7 +334,7 @@ final class IndexedGroupCommitFaultTest {
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     IndexedTable table = tableResult.table();
-    openTable = table;
+    cleanup.table = table;
     ForcedGroupFixture.HeldForce heldForce =
         new ForcedGroupFixture.HeldForce(ForcedGroupFixture.walFile(wal));
     ForcedGroupFixture.replaceWalFile(wal, heldForce);
@@ -409,7 +343,7 @@ final class IndexedGroupCommitFaultTest {
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     IndexedGroupCommitCoordinator coordinator =
         new IndexedGroupCommitCoordinator(manager, table, 0);
-    openCoordinator = coordinator;
+    cleanup.coordinator = coordinator;
     IndexedSessionContext context = context(manager, table, coordinator, vacuum);
     IndexedTransactionSession first = session(context, Long.BYTES);
     IndexedTransactionSession second = session(context, Long.BYTES);
@@ -527,35 +461,7 @@ final class IndexedGroupCommitFaultTest {
     }
   }
 
-  @Test
-  void constrainedPhysicalAdmissionMatchesDirectAndSingleMemberGroup() throws Exception {
-    SingleCommitResult direct = commitSingleUnderPressure(false, false);
-    SingleCommitResult grouped = commitSingleUnderPressure(true, false);
-
-    assertEquals(direct, grouped);
-    assertEquals(StatusCode.OK, direct.status());
-    assertEquals(TransactionState.COMMITTED, direct.state());
-    assertEquals(StatusCode.OK, direct.visibility());
-    assertEquals(710, direct.value());
-    assertEquals(1, direct.rows());
-    assertEquals(0, direct.activeTransactions());
-    assertEquals(0, direct.activeLocks());
-    assertEquals(0, direct.waitingLocks());
-
-    SingleCommitResult rejectedDirect = commitSingleUnderPressure(false, true);
-    SingleCommitResult rejectedGroup = commitSingleUnderPressure(true, true);
-
-    assertEquals(rejectedDirect, rejectedGroup);
-    assertEquals(StatusCode.RETRY, rejectedDirect.status());
-    assertEquals(TransactionState.ABORTED, rejectedDirect.state());
-    assertEquals(StatusCode.CONFLICT, rejectedDirect.visibility());
-    assertEquals(0, rejectedDirect.rows());
-    assertEquals(0, rejectedDirect.activeTransactions());
-    assertEquals(0, rejectedDirect.activeLocks());
-    assertEquals(0, rejectedDirect.waitingLocks());
-  }
-
-  private static void awaitQueueEnqueues(
+  static void awaitQueueEnqueues(
       IndexedGroupCommitCoordinator coordinator, long expected) throws InterruptedException {
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
     IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
@@ -599,83 +505,6 @@ final class IndexedGroupCommitFaultTest {
     }
   }
 
-  private SingleCommitResult commitSingleUnderPressure(
-      boolean grouped, boolean reject) throws Exception {
-    DatabasePageCachePlan constrained = DatabasePageCacheTestPlan.geometry(
-        reject ? 4 : 5, 8, 16);
-    FaultFixture faults = new FaultFixture();
-    LocalWalOpenResult walResult = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(faults.directory, DATABASE, GENERATION, walResult));
-    LocalWal wal = walResult.wal();
-    openDirectory = faults.directory;
-    openWal = wal;
-    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
-    assertEquals(StatusCode.OK, IndexedTableStore.create(
-        faults.directory, wal, DATABASE, GENERATION,
-        DatabasePageCacheTestPlan.providerLease(constrained, 4), storeResult));
-    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
-    assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
-    IndexedTable table = tableResult.table();
-    openTable = table;
-    IndexedPageSet pages = IndexedRelationalWalStorageFixtures.pageSet(storeResult.store());
-    IndexedPageGenerationPin[] pins = new IndexedPageGenerationPin[3];
-    if (reject) {
-      int[] pageIds = {
-          IndexedTableKernel.HEAP_PAGE_ID,
-          IndexedTableKernel.ROOT_META_PAGE_ID,
-          IndexedTableKernel.INITIAL_LEAF_PAGE_ID
-      };
-      for (int index = 0; index < pins.length; index++) {
-        pins[index] = new IndexedPageGenerationPin();
-        assertEquals(StatusCode.OK,
-            pages.pinPageAt(pageIds[index], table.currentCommitSequence(), pins[index]));
-      }
-    }
-    TransactionManager manager = new TransactionManager(
-        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
-    IndexedGroupCommitCoordinator coordinator = grouped
-        ? new IndexedGroupCommitCoordinator(manager, table) : null;
-    openCoordinator = coordinator;
-    IndexedTransactionSession session = session(context(manager, table, coordinator, vacuum), 8);
-    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(0, 71, row(710)));
-    TransactionOutcome outcome = new TransactionOutcome();
-    StatusCode status = session.commit(outcome);
-    HeapRowResult fetched = new HeapRowResult();
-    StatusCode visibility = table.fetchByKey(0, 71, fetched);
-    SingleCommitResult result = new SingleCommitResult(
-        status,
-        outcome.state(),
-        visibility,
-        visibility.isOk() ? value(fetched) : 0,
-        table.rowCount(),
-        manager.activeTransactionCount(),
-        manager.activeLockCount(),
-        manager.waitingLockCount());
-    assertEquals(StatusCode.OK, session.close());
-    if (coordinator != null) assertEquals(StatusCode.OK, coordinator.close());
-    if (reject) {
-      for (int index = pins.length - 1; index >= 0; index--) {
-        assertEquals(StatusCode.OK, pages.unpinPage(pins[index]));
-      }
-    }
-    assertEquals(StatusCode.OK, table.flush());
-    assertEquals(StatusCode.OK, table.close());
-    assertEquals(StatusCode.OK, wal.close());
-    return result;
-  }
-
-  private record SingleCommitResult(
-      StatusCode status,
-      TransactionState state,
-      StatusCode visibility,
-      long value,
-      long rows,
-      long activeTransactions,
-      long activeLocks,
-      long waitingLocks) {}
-
   @Test
   void forceFailureAfterPressureSplitTerminalizesAcceptedPrefixAndDeferredSuffix()
       throws Exception {
@@ -684,8 +513,8 @@ final class IndexedGroupCommitFaultTest {
     LocalWalOpenResult walResult = new LocalWalOpenResult();
     assertEquals(StatusCode.OK, LocalWal.open(faults.directory, DATABASE, GENERATION, walResult));
     LocalWal wal = walResult.wal();
-    openDirectory = faults.directory;
-    openWal = wal;
+    cleanup.directory = faults.directory;
+    cleanup.wal = wal;
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
         IndexedTableStore.create(
@@ -694,7 +523,7 @@ final class IndexedGroupCommitFaultTest {
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     IndexedTable table = tableResult.table();
-    openTable = table;
+    cleanup.table = table;
     long durableTail = wal.durableEnd();
     long publishedBefore = table.currentCommitSequence();
     long rowsBefore = table.rowCount();
@@ -707,7 +536,7 @@ final class IndexedGroupCommitFaultTest {
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     IndexedGroupCommitCoordinator coordinator = new IndexedGroupCommitCoordinator(
         manager, table, TimeUnit.MILLISECONDS.toNanos(500));
-    openCoordinator = coordinator;
+    cleanup.coordinator = coordinator;
     IndexedSessionContext context = context(manager, table, coordinator, vacuum);
     IndexedTransactionSession[] sessions = {
         session(context, Long.BYTES), session(context, Long.BYTES), session(context, Long.BYTES)
@@ -791,8 +620,8 @@ final class IndexedGroupCommitFaultTest {
     LocalWalOpenResult walResult = new LocalWalOpenResult();
     assertEquals(StatusCode.OK, LocalWal.open(fixture.directory, DATABASE, GENERATION, walResult));
     LocalWal wal = walResult.wal();
-    openDirectory = fixture.directory;
-    openWal = wal;
+    cleanup.directory = fixture.directory;
+    cleanup.wal = wal;
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -802,7 +631,7 @@ final class IndexedGroupCommitFaultTest {
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     IndexedTable table = tableResult.table();
-    openTable = table;
+    cleanup.table = table;
     long publishedBefore = table.currentCommitSequence();
     assertEquals(StatusCode.OK, fixture.arm(operation, faultOperation, action));
 
@@ -811,7 +640,7 @@ final class IndexedGroupCommitFaultTest {
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     IndexedGroupCommitCoordinator coordinator =
         new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
-    openCoordinator = coordinator;
+    cleanup.coordinator = coordinator;
     IndexedSessionContext context = context(manager, table, coordinator, vacuum);
     IndexedTransactionSession first = session(context, Long.BYTES);
     IndexedTransactionSession second = session(context, Long.BYTES);
@@ -880,7 +709,7 @@ final class IndexedGroupCommitFaultTest {
             FaultAction.FORCE_FAILURE));
   }
 
-  private static StatusCode coordinatedCommit(
+  static StatusCode coordinatedCommit(
       IndexedTransactionSession session,
       TransactionOutcome outcome,
       CountDownLatch ready,
@@ -890,7 +719,7 @@ final class IndexedGroupCommitFaultTest {
     return session.commit(outcome);
   }
 
-  private static ByteBuffer row(long value) {
+  static ByteBuffer row(long value) {
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     row.putLong(0, value);
     row.position(0);
@@ -898,13 +727,13 @@ final class IndexedGroupCommitFaultTest {
     return row;
   }
 
-  private static long value(HeapRowResult result) {
+  static long value(HeapRowResult result) {
     ByteBuffer target = ByteBuffer.allocate(result.length());
     assertEquals(StatusCode.OK, result.copyTo(target));
     return target.getLong(0);
   }
 
-  private static IndexedSessionContext context(
+  static IndexedSessionContext context(
       TransactionManager manager,
       IndexedTable table,
       IndexedGroupCommitCoordinator coordinator,
@@ -916,295 +745,12 @@ final class IndexedGroupCommitFaultTest {
     return result.context();
   }
 
-  private static IndexedTransactionSession session(
+  static IndexedTransactionSession session(
       IndexedSessionContext context, int maximumRowBytes) {
     IndexedTransactionSessionOpenResult result =
         new IndexedTransactionSessionOpenResult();
     assertEquals(StatusCode.OK, context.openSession(maximumRowBytes, result));
     return result.session();
-  }
-
-  private static final class ForcedGroupFixture {
-    private final FaultFixture faults = new FaultFixture();
-    private final LocalWal wal;
-    private final IndexedTableStore store;
-    private final IndexedTable table;
-    private final TransactionManager manager;
-    private final IndexedTransactionSession first;
-    private final IndexedTransactionSession second;
-    private final IndexedTransactionSession[] borrowed = new IndexedTransactionSession[4];
-    private final TransactionOutcome firstOutcome = new TransactionOutcome();
-    private final TransactionOutcome secondOutcome = new TransactionOutcome();
-    private final HeldForce heldForce;
-    private final IndexedGroupCommitCoordinator coordinator;
-    private final long firstSequence;
-    private final long secondSequence;
-    private final long rowsBefore;
-    private ExecutorService commits;
-    private Future<StatusCode> firstCommit;
-    private Future<StatusCode> secondCommit;
-    private int borrowedCount;
-    private boolean closed;
-
-    private ForcedGroupFixture() {
-      this(pageCachePlan());
-    }
-
-    private ForcedGroupFixture(boolean delete) {
-      this(pageCachePlan(), delete);
-    }
-
-    private ForcedGroupFixture(DatabasePageCachePlan cachePlan) {
-      this(cachePlan, false);
-    }
-
-    private ForcedGroupFixture(DatabasePageCachePlan cachePlan, boolean delete) {
-      LocalWalOpenResult walResult = new LocalWalOpenResult();
-      assertEquals(
-          StatusCode.OK,
-          LocalWal.open(faults.directory, DATABASE, GENERATION, walResult));
-      wal = walResult.wal();
-      IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
-      assertEquals(
-          StatusCode.OK,
-          IndexedTableStore.create(
-              faults.directory, wal, DATABASE, GENERATION,
-              DatabasePageCacheTestPlan.providerLease(cachePlan, 4), storeResult));
-      store = storeResult.store();
-      IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
-      assertEquals(StatusCode.OK, IndexedTable.create(store, tableResult));
-      table = tableResult.table();
-      manager = new TransactionManager(
-          DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-      IndexedVacuum vacuum = new IndexedVacuum(manager, table);
-      IndexedSessionContext directContext = context(manager, table, null, vacuum);
-      if (delete) {
-        IndexedTransactionSession seed = session(directContext, Long.BYTES);
-        assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-        assertEquals(StatusCode.OK, seed.insert(0, 43, row(430)));
-        assertEquals(StatusCode.OK, seed.insert(0, 999, row(9990)));
-        assertEquals(StatusCode.OK, seed.commit(new TransactionOutcome()));
-        assertEquals(StatusCode.OK, seed.close());
-      }
-      heldForce = new HeldForce(walFile(wal));
-      replaceWalFile(wal, heldForce);
-      coordinator = new IndexedGroupCommitCoordinator(
-          manager, table, TimeUnit.MILLISECONDS.toNanos(500));
-      IndexedSessionContext groupedContext = context(manager, table, coordinator, vacuum);
-      first = session(groupedContext, Long.BYTES);
-      second = session(groupedContext, Long.BYTES);
-      assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
-      assertEquals(StatusCode.OK, first.insert(0, 41, row(410)));
-      if (delete) assertEquals(StatusCode.OK, first.delete(0, 999));
-      assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
-      assertEquals(StatusCode.OK, second.insert(0, 42, row(420)));
-      rowsBefore = table.rowCount();
-      firstSequence = wal.nextCommitSequence();
-      secondSequence = firstSequence + 1;
-      assertTrue(manager.activeLockCount() > 0);
-    }
-
-    private void publish() throws Exception {
-      commits = Executors.newFixedThreadPool(2);
-      CountDownLatch ready = new CountDownLatch(2);
-      CountDownLatch start = new CountDownLatch(1);
-      firstCommit = commits.submit(
-          () -> coordinatedCommit(first, firstOutcome, ready, start));
-      secondCommit = commits.submit(
-          () -> coordinatedCommit(second, secondOutcome, ready, start));
-      assertTrue(ready.await(5, TimeUnit.SECONDS));
-      start.countDown();
-      awaitQueueEnqueues(coordinator, 2);
-      heldForce.awaitEntered();
-    }
-
-    private void complete(StatusCode expected) throws Exception {
-      heldForce.release();
-      assertEquals(expected, firstCommit.get(5, TimeUnit.SECONDS));
-      assertEquals(expected, secondCommit.get(5, TimeUnit.SECONDS));
-      commits.shutdownNow();
-      StatusCode closed = coordinator.close();
-      assertTrue(closed.isOk() || closed == StatusCode.CLOSED);
-      assertFalse(first.transactionLifecycleActive());
-      assertFalse(second.transactionLifecycleActive());
-    }
-
-    private void failHeldForce() { heldForce.fail(); }
-
-    private IndexedTransactionSession newSession() {
-      IndexedTransactionSession result =
-          session(context(manager, table, null, new IndexedVacuum(manager, table)), Long.BYTES);
-      borrowed[borrowedCount++] = result;
-      return result;
-    }
-
-    private void close() {
-      if (closed) return;
-      closed = true;
-      heldForce.release();
-      coordinator.close();
-      if (commits != null) {
-        commits.shutdownNow();
-        try {
-          commits.awaitTermination(5, TimeUnit.SECONDS);
-        } catch (InterruptedException interrupted) {
-          Thread.currentThread().interrupt();
-        }
-      }
-      closeSession(first);
-      closeSession(second);
-      for (int index = 0; index < borrowedCount; index++) closeSession(borrowed[index]);
-      StatusCode flush = table.flush();
-      if (flush.isOk()) {
-        table.close();
-      }
-      StatusCode walStatus = wal.close();
-      if (!flush.isOk() || !(walStatus.isOk() || walStatus == StatusCode.CLOSED)) {
-        faults.directory.crash();
-      }
-    }
-
-    private static void closeSession(IndexedTransactionSession session) {
-      if (session.transactionLifecycleActive()) {
-        session.abort(new TransactionOutcome());
-      }
-      session.close();
-    }
-
-    private void assertTerminalFailure() {
-      assertEquals(TransactionState.INDETERMINATE, first.transaction().state());
-      assertEquals(TransactionState.INDETERMINATE, second.transaction().state());
-      assertEquals(TransactionState.INDETERMINATE, firstOutcome.state());
-      assertEquals(TransactionState.INDETERMINATE, secondOutcome.state());
-      assertEquals(0, manager.activeTransactionCount());
-      assertEquals(0, manager.activeLockCount());
-      assertEquals(0, manager.waitingLockCount());
-      assertEquals(StatusCode.FENCED, store.admission());
-      assertEquals(StatusCode.FENCED, table.flush());
-      assertEquals(StatusCode.FENCED, wal.reserve(1, new io.riverdb.wal.local.LocalWalReservation()));
-      assertEquals(StatusCode.OK, first.close());
-      assertEquals(StatusCode.OK, second.close());
-    }
-
-    private static DurableFile walFile(LocalWal wal) {
-      try {
-        Field state = LocalWal.class.getDeclaredField("appendState");
-        state.setAccessible(true);
-        Object append = state.get(wal);
-        Field field = append.getClass().getDeclaredField("file");
-        field.setAccessible(true);
-        return (DurableFile) field.get(append);
-      } catch (ReflectiveOperationException reflection) {
-        throw new AssertionError(reflection);
-      }
-    }
-
-    private static void replaceWalFile(LocalWal wal, DurableFile file) {
-      try {
-        Field state = LocalWal.class.getDeclaredField("appendState");
-        state.setAccessible(true);
-        Object append = state.get(wal);
-        Field field = append.getClass().getDeclaredField("file");
-        field.setAccessible(true);
-        field.set(append, file);
-      } catch (ReflectiveOperationException reflection) {
-        throw new AssertionError(reflection);
-      }
-    }
-
-    private static final class HeldForce implements DurableFile {
-      private final DurableFile delegate;
-      private final CountDownLatch entered = new CountDownLatch(1);
-      private final CountDownLatch release = new CountDownLatch(1);
-      private volatile boolean fail;
-      private boolean first = true;
-
-      private HeldForce(DurableFile file) { delegate = file; }
-
-      private synchronized boolean hold() {
-        boolean result = first;
-        first = false;
-        return result;
-      }
-
-      private StatusCode force(ForceOperation operation) {
-        if (!hold()) return operation.force();
-        entered.countDown();
-        try {
-          if (!release.await(15, TimeUnit.SECONDS)) return StatusCode.IO_FAILURE;
-        } catch (InterruptedException interrupted) {
-          Thread.currentThread().interrupt();
-          return StatusCode.CANCELLED;
-        }
-        return fail ? StatusCode.IO_FAILURE : operation.force();
-      }
-
-      private void awaitEntered() throws InterruptedException {
-        assertTrue(entered.await(5, TimeUnit.SECONDS), "group force did not start");
-      }
-
-      private void release() { release.countDown(); }
-      private void fail() { fail = true; }
-
-      @Override public StatusCode force(ForceMode mode) {
-        return force(() -> delegate.force(mode));
-      }
-      @Override public StatusCode force(
-          long startInclusive, long endExclusive, ForceMode mode) {
-        return force(() -> delegate.force(startInclusive, endExclusive, mode));
-      }
-      @Override public StatusCode read(long offset, ByteBuffer target, IoResult result) {
-        return delegate.read(offset, target, result);
-      }
-      @Override public StatusCode write(long offset, ByteBuffer source, IoResult result) {
-        return delegate.write(offset, source, result);
-      }
-      @Override public StatusCode truncate(long bytes) { return delegate.truncate(bytes); }
-      @Override public StatusCode size(FileSizeResult result) { return delegate.size(result); }
-      @Override public StatusCode close() { return delegate.close(); }
-    }
-  }
-
-  @FunctionalInterface
-  private interface ForceOperation {
-    StatusCode force();
-  }
-
-  private static final class FaultFixture {
-    private final CrashPointController controller = new CrashPointController(1);
-    private final DirectoryFaultPoints points = new DirectoryFaultPoints();
-    private final FaultingDurableDirectory directory;
-
-    private FaultFixture() {
-      FaultPointRegistry registry = new FaultPointRegistry(
-          DirectoryOperation.values().length * FaultBoundary.values().length);
-      for (DirectoryOperation operation : DirectoryOperation.values()) {
-        for (FaultBoundary boundary : FaultBoundary.values()) {
-          FaultPointSlot slot = new FaultPointSlot();
-          String pointName = "engine-group."
-              + operation.name().toLowerCase(Locale.ROOT)
-              + "." + boundary.name().toLowerCase(Locale.ROOT);
-          assertEquals(StatusCode.OK, registry.register(pointName, slot));
-          points.set(operation, boundary, slot.value());
-        }
-      }
-      directory = new FaultingDurableDirectory(
-          16, 16 * 1024 * 1024, 32, controller, points);
-    }
-
-    private StatusCode arm(
-        DirectoryOperation operation,
-        FaultOperation faultOperation,
-        FaultAction action) {
-      return controller.addRule(
-          points.point(operation, FaultBoundary.BEFORE),
-          faultOperation,
-          FaultBoundary.BEFORE,
-          1,
-          1,
-          action,
-          1);
-    }
   }
 
 }

@@ -25,14 +25,29 @@ final class IndexedRelationalTupleApply {
     if (kernel.operationRowCount() != source.expectedHeapVersionAt(operation)) {
       return StatusCode.CORRUPTION;
     }
+    return applyLoaded(source, operation);
+  }
+
+  private StatusCode applyLoaded(
+      IndexedRelationalMutationBuffer source, int operation) {
     StatusCode status = registry.load(source, operation);
     int descriptor = source.suboperationDescriptorAt(operation);
     if (status.isOk()) status = prepare(source, operation, descriptor);
     if (status.isOk()) status = applyMutations(source, operation);
     if (status.isOk()) status = validateResult(source, operation);
+    if (status.isOk()) status = stageAndCleanup(source, operation, descriptor);
+    return complete(status, source, operation);
+  }
+
+  private StatusCode stageAndCleanup(
+      IndexedRelationalMutationBuffer source, int operation, int descriptor) {
     // Registry allocation precedes free-page publication; failure discards both staged changes.
-    if (status.isOk()) status = registry.stage(source, operation);
-    if (status.isOk()) status = cleanup(source, operation, descriptor);
+    StatusCode status = registry.stage(source, operation);
+    return status.isOk() ? cleanup(source, operation, descriptor) : status;
+  }
+
+  private StatusCode complete(
+      StatusCode status, IndexedRelationalMutationBuffer source, int operation) {
     return status.isOk() && resultingHeapMatches(source, operation)
         ? StatusCode.OK : status.isOk() ? StatusCode.CORRUPTION : status;
   }

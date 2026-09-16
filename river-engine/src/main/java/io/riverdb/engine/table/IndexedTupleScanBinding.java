@@ -33,18 +33,24 @@ final class IndexedTupleScanBinding {
       long privateOwner,
       TupleShape shape, TupleBTreeScanBounds bounds, TupleBTreeCursor cursor) {
     StatusCode status = bind(kernel, pageSet);
-    if (status.isOk()) status = root.load(privateOwner > 0 ? current : visible, keyId);
+    if (status.isOk()) status = configure(
+        kernel, visible, current, owner, keyId, schemaId, privateOwner, shape);
+    return status.isOk() ? cursor.open(tree, bounds, workspace) : status;
+  }
+
+  private StatusCode configure(
+      IndexedTableKernel kernel, long visible, long current, long owner,
+      long keyId, long schemaId, long privateOwner, TupleShape shape) {
+    long snapshot = privateOwner > 0 ? current : visible;
+    StatusCode status = root.load(snapshot, keyId);
     boolean matches = privateOwner > 0
         ? root.matchesBuilding(owner, keyId, schemaId, privateOwner, shape)
         : root.matches(owner, keyId, schemaId, shape);
-    if (status.isOk() && !matches) {
-      status = StatusCode.CORRUPTION;
-    }
+    if (status.isOk() && !matches) status = StatusCode.CORRUPTION;
     if (status.isOk()) status = provider.configure(
-        root.rootPageId(), keyId, kernel.nextPageId(), root.generation(),
-        privateOwner > 0 ? current : visible);
+        root.rootPageId(), keyId, kernel.nextPageId(), root.generation(), snapshot);
     if (status.isOk()) status = tree.configure(provider, schemaId, shape);
-    return status.isOk() ? cursor.open(tree, bounds, workspace) : status;
+    return status;
   }
 
   long observedCommitSequence() { return root.observedCommitSequence(); }
