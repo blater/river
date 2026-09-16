@@ -264,10 +264,12 @@ final class SqlHashJoinTest {
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
-    assertPlanRow(session, cursor, row, "table", -1, analyzed ? zero ? 0 : 3 : -1);
-    assertPlanRow(session, cursor, row, "table", 1, analyzed ? zero ? 0 : 3 : -1);
-    assertPlanRow(session, cursor, row, "on", 2, analyzed ? zero ? 0 : 2 : -1);
-    assertPlanRow(session, cursor, row, "hash", 2, analyzed ? zero ? 0 : 2 : -1);
+    long tableRows = analyzed ? zero ? 0 : 3 : -1;
+    long joinRows = analyzed ? zero ? 0 : 2 : -1;
+    assertPlanRow(session, cursor, row, "table", -1, tableRows);
+    assertPlanRow(session, cursor, row, "table", 1, tableRows);
+    assertPlanRow(session, cursor, row, "on", 2, joinRows);
+    assertPlanRow(session, cursor, row, "hash", 2, joinRows);
     if (zero) assertPlanRow(session, cursor, row, "limit", 0, 0);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));

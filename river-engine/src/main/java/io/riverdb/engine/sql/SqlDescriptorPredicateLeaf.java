@@ -32,21 +32,35 @@ final class SqlDescriptorPredicateLeaf {
     int test = program.leafTest(leaf);
     if (test >= SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS
         && test <= SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP) {
-      int column = bindings.column(leaf);
-      boolean isNull = column >= 0 && values.isNull(column);
-      long high = isNull || column < 0 ? 0 : values.highValue(column);
-      long value = isNull || column < 0 ? 0 : values.value(column);
-      status = subqueries.evaluate(
-          program.subqueryEdge(leaf), isNull, high, value, values);
-      return status.isOk() ? subqueries.truth() : -1;
+      return evaluateSubquery(leaf, values);
     }
     int column = bindings.column(leaf);
     if (test != SqlBooleanPredicateProgram.TEST_COMPARISON) {
-      int result = special.evaluate(test, leaf, column, values);
-      status = special.status();
-      return result;
+      return evaluateSpecial(test, leaf, column, values);
     }
     if (values.isNull(column)) return -1;
+    return evaluateComparison(leaf, column, values);
+  }
+
+  private int evaluateSubquery(int leaf, SqlDescriptorValueSource values) {
+    int column = bindings.column(leaf);
+    boolean isNull = column >= 0 && values.isNull(column);
+    long high = isNull || column < 0 ? 0 : values.highValue(column);
+    long value = isNull || column < 0 ? 0 : values.value(column);
+    status = subqueries.evaluate(
+        program.subqueryEdge(leaf), isNull, high, value, values);
+    return status.isOk() ? subqueries.truth() : -1;
+  }
+
+  private int evaluateSpecial(
+      int test, int leaf, int column, SqlDescriptorValueSource values) {
+    int result = special.evaluate(test, leaf, column, values);
+    status = special.status();
+    return result;
+  }
+
+  private int evaluateComparison(
+      int leaf, int column, SqlDescriptorValueSource values) {
     int compared = literals.compare(
         leaf,
         column,

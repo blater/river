@@ -38,31 +38,11 @@ final class SqlBlockScalarAggregateStage {
       int block, SqlBlockRowStore input, SqlBlockRowStore output) {
     StatusCode status = accumulator.reset(bound.aggregates);
     if (!status.isOk()) return status;
-    status = source.begin(input, sourceRow);
-    while (status.isOk()) {
-      status = source.next(input, sourceRow);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      if (!status.isOk()) break;
-      status = projector.project(block, sourceRow, operandRow, projected);
-      if (status.isOk() && projected.available) {
-        status = accumulator.accumulateBlock(bound.aggregates, operandRow);
-      }
-    }
-    status = source.finish(input, status);
+    status = scan(block, input);
     if (status.isOk()) status = accumulator.finish(bound.aggregates);
     if (status.isOk()) status = having.evaluate(
         bound.command, accumulator, 0, true, null, 0);
-    if (!status.isOk()) return status;
-    status = outputOrder.beginOutput(
-        bound.command, bound.blockPlans().schema(block), output);
-    if (status.isOk() && having.matched()) {
-      status = publisher.publish(block, accumulator, null, outputRow, false);
-      if (status.isOk()) status = output.append(outputRow);
-    }
-    return status.isOk() ? output.finish() : status;
+    return publish(block, output, status);
   }
 
   StatusCode executeJoined(
@@ -82,14 +62,7 @@ final class SqlBlockScalarAggregateStage {
     if (status.isOk()) status = accumulator.finish(bound.aggregates);
     if (status.isOk()) status = having.evaluate(
         bound.command, accumulator, 0, true, null, 0);
-    if (!status.isOk()) return status;
-    status = outputOrder.beginOutput(
-        bound.command, bound.blockPlans().schema(block), output);
-    if (status.isOk() && having.matched()) {
-      status = publisher.publish(block, accumulator, null, outputRow, false);
-      if (status.isOk()) status = output.append(outputRow);
-    }
-    return status.isOk() ? output.finish() : status;
+    return publish(block, output, status);
   }
 
   StatusCode publishAccumulated(
@@ -97,6 +70,27 @@ final class SqlBlockScalarAggregateStage {
     StatusCode status = accumulator.finish(bound.aggregates);
     if (status.isOk()) status = having.evaluate(
         bound.command, accumulator, 0, true, null, 0);
+    return publish(block, output, status);
+  }
+
+  private StatusCode scan(int block, SqlBlockRowStore input) {
+    StatusCode status = source.begin(input, sourceRow);
+    while (status.isOk()) {
+      status = source.next(input, sourceRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      if (!status.isOk()) break;
+      status = projector.project(block, sourceRow, operandRow, projected);
+      if (status.isOk() && projected.available) {
+        status = accumulator.accumulateBlock(bound.aggregates, operandRow);
+      }
+    }
+    return source.finish(input, status);
+  }
+
+  private StatusCode publish(int block, SqlBlockRowStore output, StatusCode status) {
     if (!status.isOk()) return status;
     status = outputOrder.beginOutput(
         bound.command, bound.blockPlans().schema(block), output);

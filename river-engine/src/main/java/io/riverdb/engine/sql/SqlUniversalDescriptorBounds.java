@@ -23,16 +23,27 @@ final class SqlUniversalDescriptorBounds {
       SqlNestedRowProvider ancestors,
       int direction) {
     int bytes = table.encodedMaximumRowBytes();
-    StatusCode status = lower.begin(table.columnCount(), bytes, command);
-    if (status.isOk()) status = upper.begin(table.columnCount(), bytes, command);
-    if (status.isOk()) status = equality(choice, rows, ancestors);
-    if (status.isOk()) status = range(choice, rows, ancestors);
+    StatusCode status = prepare(
+        table, command, choice, rows, ancestors, bytes);
     return status.isOk() ? bounds.set(
         choice.key, lowParts == 0 ? null : lower.buffer(), lowParts,
         !lowerRange || choice.lowerComparison == SqlComparison.GREATER_OR_EQUAL,
         highParts == 0 ? null : upper.buffer(), highParts,
         !upperRange || choice.upperComparison == SqlComparison.LESS_OR_EQUAL,
         direction) : status;
+  }
+
+  private StatusCode prepare(
+      TableDescriptor table, SqlCommand command,
+      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows,
+      SqlNestedRowProvider ancestors, int bytes) {
+    StatusCode status = lower.begin(table.columnCount(), bytes, command);
+    if (!status.isOk()) return status;
+    status = upper.begin(table.columnCount(), bytes, command);
+    if (!status.isOk()) return status;
+    status = equality(choice, rows, ancestors);
+    if (!status.isOk()) return status;
+    return range(choice, rows, ancestors);
   }
 
   private StatusCode equality(

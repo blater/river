@@ -124,25 +124,30 @@ final class SqlBlockPlanBinder {
       return StatusCode.OK;
     }
     accessDetail.reset();
-    StatusCode status = session.resolveDescriptor(
-        plans.command(plans.count() - 1).tableName(), accessPin, accessDetail);
-    if (status.isOk()) {
-      SqlUniversalDescriptorIndexAccess rootAccess = plans.rootAccess();
-      if (plans.count() > 1) accessLineage.prepare(plans);
-      rootAccess.prepare(
-          plans.command(0), accessPin.descriptor(), 0, null, bound.whereBoolean,
-          plans.count() > 1 ? accessLineage : null);
-      if (rootAccess.active()) {
-        status = rootAccess.bind(null);
-        if (status == StatusCode.CONFLICT) {
-          rootAccess.markEmpty();
-          status = StatusCode.OK;
-        }
-      }
-      if (status.isOk()) plans.setRootAccessColumn(rootAccess.accessColumn());
-    }
+    StatusCode status = bindRootAccess(session, bound, plans);
     StatusCode released = accessPin.isActive() ? accessPin.release() : StatusCode.OK;
     return status.isOk() ? released : status;
+  }
+
+  private StatusCode bindRootAccess(
+      RelationalSession session, BoundSqlStatement bound, SqlBoundBlockPlans plans) {
+    StatusCode status = session.resolveDescriptor(
+        plans.command(plans.count() - 1).tableName(), accessPin, accessDetail);
+    if (!status.isOk()) return status;
+    SqlUniversalDescriptorIndexAccess rootAccess = plans.rootAccess();
+    if (plans.count() > 1) accessLineage.prepare(plans);
+    rootAccess.prepare(
+        plans.command(0), accessPin.descriptor(), 0, null, bound.whereBoolean,
+        plans.count() > 1 ? accessLineage : null);
+    if (rootAccess.active()) {
+      status = rootAccess.bind(null);
+      if (status == StatusCode.CONFLICT) {
+        rootAccess.markEmpty();
+        status = StatusCode.OK;
+      }
+    }
+    if (status.isOk()) plans.setRootAccessColumn(rootAccess.accessColumn());
+    return status;
   }
 
 }

@@ -238,15 +238,6 @@ final class SqlAccessEdgeSelector {
     return column == 0 || table.hasUniqueIndexOn(column) ? 3 : 2;
   }
 
-  static SqlComparison reverse(SqlComparison comparison) {
-    return switch (comparison) {
-      case LESS_THAN -> SqlComparison.GREATER_THAN;
-      case LESS_OR_EQUAL -> SqlComparison.GREATER_OR_EQUAL;
-      case GREATER_THAN -> SqlComparison.LESS_THAN;
-      case GREATER_OR_EQUAL -> SqlComparison.LESS_OR_EQUAL;
-      default -> comparison;
-    };
-  }
 
   static boolean lower(SqlComparison comparison) {
     return comparison == SqlComparison.GREATER_THAN

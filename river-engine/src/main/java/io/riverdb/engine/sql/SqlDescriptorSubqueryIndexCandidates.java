@@ -33,6 +33,6 @@ final class SqlDescriptorSubqueryIndexCandidates
   SqlComparison comparison(int encoded) {
     SqlComparison result = program.comparison(encoded >>> 1);
     return (encoded & 1) == 0
-        ? result : SqlDescriptorSubqueryIndexMatch.reverse(result);
+        ? result : result.reverseOrder();
   }
 }

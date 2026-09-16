@@ -119,25 +119,43 @@ final class SqlDescriptorMutationValues {
     int supplied = insert
         ? command.insertTypeDescriptor(row, source) : command.updateTypeDescriptor(source);
     if (isNull) {
-      if (!SqlTypedNullAssignment.compatible(supplied, target)) {
-        return StatusCode.DATATYPE_MISMATCH;
-      }
-      return table.isNullable(column)
-          ? mutation.setNull(column, target) : StatusCode.INVALID_EXTERNAL_INPUT;
+      return assignNull(table, column, supplied, target);
     }
-    if (!SqlTypeDescriptor.canImplicitlyCast(supplied, target)
-        && !SqlNumericTypeRules.canAssign(supplied, target)) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
+    StatusCode status = validateAssignment(supplied, target);
+    if (!status.isOk()) return status;
     long high = insert
         ? command.insertValueHigh(row, source) : command.updateValueHigh(source);
     long value = insert ? command.insertValue(row, source) : command.updateValue(source);
+    return assignValue(command, column, high, value, supplied, target);
+  }
+
+  private StatusCode assignNull(
+      TableDescriptor table, int column, int supplied, int target) {
+    if (!SqlTypedNullAssignment.compatible(supplied, target)) {
+      return StatusCode.DATATYPE_MISMATCH;
+    }
+    return table.isNullable(column)
+        ? mutation.setNull(column, target) : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private static StatusCode validateAssignment(int supplied, int target) {
+    return SqlTypeDescriptor.canImplicitlyCast(supplied, target)
+        || SqlNumericTypeRules.canAssign(supplied, target)
+        ? StatusCode.OK : StatusCode.DATATYPE_MISMATCH;
+  }
+
+  private StatusCode assignValue(
+      SqlCommand command, int column, long high, long value, int supplied, int target) {
     if (SqlNumericTypeRules.isNumeric(target)) {
       return numeric.assign(mutation, column, high, value, supplied, target);
     }
     if (SqlTypeDescriptor.typeId(target) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       return mutation.setFixed(column, target, value);
     }
+    return assignText(command, column, value, target);
+  }
+
+  private StatusCode assignText(SqlCommand command, int column, long value, int target) {
     int required = command.textByteLength(value);
     StatusCode capacity = reserveCommandText(required);
     if (!capacity.isOk()) return capacity;

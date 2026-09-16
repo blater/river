@@ -24,17 +24,7 @@ final class SqlUnionExecution {
     if (!status.isOk()) return status;
     status = validate(query, outputCommand, leaves);
     if (!status.isOk()) return status;
-    status = schema.prepare(query, leaves);
-    if (status.isOk()) status = nodes.prepare(leaves, schema.output());
-    if (status.isOk()) status = ordering.beginOutput(outputCommand, schema.output(), output);
-    if (status.isOk()) status = nodes.append(query, query.setRootNode(), output, 0);
-    if (status.isOk()) status = output.finish();
-    long setRows = status.isOk() ? output.rowCount() : -1;
-    if (status.isOk()) status = output.limit(query.setRowLimit());
-    if (status.isOk()) status = stagePlan.prepare(
-        query,
-        query.isAnalyze() ? setRows : -1,
-        query.isAnalyze() ? output.rowCount() : -1);
+    status = execute(query, outputCommand, leaves);
     if (!status.isOk()) close();
     return status;
   }
@@ -46,6 +36,33 @@ final class SqlUnionExecution {
     if (status.isOk()) status = schema.prepare(query, leaves);
     if (status.isOk()) status = stagePlan.prepare(query, -1, -1);
     if (!status.isOk()) close();
+    return status;
+  }
+
+  private StatusCode execute(
+      SqlQuery query, SqlCommand outputCommand, SqlUnionLeafSource leaves) {
+    StatusCode status = prepareOutput(query, outputCommand, leaves);
+    if (status.isOk()) status = finishOutput(query);
+    return status;
+  }
+
+  private StatusCode prepareOutput(
+      SqlQuery query, SqlCommand outputCommand, SqlUnionLeafSource leaves) {
+    StatusCode status = schema.prepare(query, leaves);
+    if (status.isOk()) status = nodes.prepare(leaves, schema.output());
+    if (status.isOk()) status = ordering.beginOutput(outputCommand, schema.output(), output);
+    if (status.isOk()) status = nodes.append(query, query.setRootNode(), output, 0);
+    return status;
+  }
+
+  private StatusCode finishOutput(SqlQuery query) {
+    StatusCode status = output.finish();
+    long setRows = status.isOk() ? output.rowCount() : -1;
+    if (status.isOk()) status = output.limit(query.setRowLimit());
+    if (status.isOk()) status = stagePlan.prepare(
+        query,
+        query.isAnalyze() ? setRows : -1,
+        query.isAnalyze() ? output.rowCount() : -1);
     return status;
   }
 

@@ -34,7 +34,17 @@ final class SqlDescriptorHavingCount {
     reset();
     bound.reset();
     StatusCode status = bound.command.copyBlockFrom(source);
-    if (status.isOk()) status = bound.aggregates.reserve(aggregates.count());
+    if (status.isOk()) status = copyAggregates(aggregates);
+    if (status.isOk()) status = prepareProjection(materialization, keyCount);
+    if (status.isOk()) status = binder.bind(source, bound);
+    if (status.isOk()) status = evaluator.prepare(bound.command);
+    if (status.isOk()) command = bound.command;
+    if (!status.isOk()) reset();
+    return status;
+  }
+
+  private StatusCode copyAggregates(SqlBoundAggregateSet aggregates) {
+    StatusCode status = bound.aggregates.reserve(aggregates.count());
     for (int invocation = 0;
         status.isOk() && invocation < aggregates.count(); invocation++) {
       bound.aggregates.append(
@@ -43,18 +53,20 @@ final class SqlDescriptorHavingCount {
           aggregates.inputDescriptor(invocation),
           aggregates.resultDescriptor(invocation));
     }
-    if (status.isOk()) status = bound.reserveProjectionColumns(keyCount);
-    if (status.isOk()) bound.projectionPrograms.begin(keyCount);
+    return status;
+  }
+
+  private StatusCode prepareProjection(
+      SqlDescriptorSetMaterialization materialization, int keyCount) {
+    StatusCode status = bound.reserveProjectionColumns(keyCount);
+    if (!status.isOk()) return status;
+    bound.projectionPrograms.begin(keyCount);
     for (int key = 0; status.isOk() && key < keyCount; key++) {
       int descriptor = materialization.descriptor(key);
       bound.projectedTypeDescriptors[key] = descriptor;
       bound.projectionPrograms.finish(key, descriptor, -1);
     }
     if (status.isOk()) bound.projectedColumnCount = keyCount;
-    if (status.isOk()) status = binder.bind(source, bound);
-    if (status.isOk()) status = evaluator.prepare(bound.command);
-    if (status.isOk()) command = bound.command;
-    if (!status.isOk()) reset();
     return status;
   }
 

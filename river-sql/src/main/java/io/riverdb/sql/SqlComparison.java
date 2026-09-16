@@ -10,5 +10,16 @@ public enum SqlComparison {
   GREATER_OR_EQUAL,
   HALF_OPEN_RANGE,
   IN,
-  NOT_IN
+  NOT_IN;
+
+  /** Swaps ordered comparison direction; leaves other operators unchanged. */
+  public SqlComparison reverseOrder() {
+    return switch (this) {
+      case LESS_THAN -> GREATER_THAN;
+      case LESS_OR_EQUAL -> GREATER_OR_EQUAL;
+      case GREATER_THAN -> LESS_THAN;
+      case GREATER_OR_EQUAL -> LESS_OR_EQUAL;
+      default -> this;
+    };
+  }
 }

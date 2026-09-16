@@ -133,14 +133,23 @@ final class SqlDistinctValueStore {
   }
 
   private StatusCode prepareRows() {
+    StatusCode status = resetRows();
+    return status.isOk() && key.isText() ? prepareTextRows() : status;
+  }
+
+  private StatusCode resetRows() {
     StatusCode status = candidate.reset(1);
     if (status.isOk()) status = probe.reset(1);
     if (status.isOk()) status = last.reset(1);
     if (status.isOk()) status = copied.reset(1);
-    if (status.isOk() && key.isText()) status = candidate.prepareText(0);
-    if (status.isOk() && key.isText()) status = probe.prepareText(0);
-    if (status.isOk() && key.isText()) status = last.prepareText(0);
-    if (status.isOk() && key.isText()) status = copied.prepareText(0);
+    return status;
+  }
+
+  private StatusCode prepareTextRows() {
+    StatusCode status = candidate.prepareText(0);
+    if (status.isOk()) status = probe.prepareText(0);
+    if (status.isOk()) status = last.prepareText(0);
+    if (status.isOk()) status = copied.prepareText(0);
     return status;
   }
 

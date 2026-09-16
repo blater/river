@@ -37,15 +37,22 @@ final class SqlBlockRowSortKeyCompare {
           long rightValue = right.getLong(rightAt);
           leftAt += Long.BYTES;
           rightAt += Long.BYTES;
-          compared = wide ? compare128(leftHigh, leftValue, rightHigh, rightValue)
-              : SqlNumericTypeRules.isNumeric(descriptor)
-              ? SqlNumericValue.compare(leftValue, descriptor, rightValue, descriptor)
-              : Long.compare(leftValue, rightValue);
+          compared = compareNumeric(
+              leftHigh, leftValue, rightHigh, rightValue, descriptor, wide);
         }
       }
       if (compared != 0) return shape.descending(part) ? -compared : compared;
     }
     return 0;
+  }
+
+  private static int compareNumeric(
+      long leftHigh, long leftValue, long rightHigh, long rightValue,
+      int descriptor, boolean wide) {
+    if (wide) return compare128(leftHigh, leftValue, rightHigh, rightValue);
+    return SqlNumericTypeRules.isNumeric(descriptor)
+        ? SqlNumericValue.compare(leftValue, descriptor, rightValue, descriptor)
+        : Long.compare(leftValue, rightValue);
   }
 
   private static int compareBytes(

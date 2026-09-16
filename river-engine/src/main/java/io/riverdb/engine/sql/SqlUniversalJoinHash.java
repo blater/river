@@ -26,27 +26,38 @@ final class SqlUniversalJoinHash {
     if (stage < 0) return StatusCode.OK;
     int innerRole = stage + 1;
     TableDefinition inner = context.table(innerRole);
-    status = core.prepareDecodedBuild(
-        inner, context.table(context.strategyOuterRole(stage)), stage,
-        context.strategyInnerColumn(stage), context.strategyOuterColumn(stage));
-    if (status.isOk()) status = identities.begin();
-    if (status.isOk()) status = source.openFullScan(innerRole);
-    while (status.isOk()) {
-      status = source.next(innerRole);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      if (!status.isOk()) break;
-      status = core.store.append(source.row(innerRole));
-      if (status.isOk()) status = identities.append(source.key(innerRole));
-    }
+    status = prepareBuild(source, inner, stage, innerRole);
     StatusCode runtime = status;
     StatusCode closed = source.closeScan(innerRole);
     if (runtime.isOk()) runtime = closed;
     if (runtime.isOk()) runtime = core.finishDecodedBuild();
     if (runtime.isOk()) runtime = identities.finish();
     return runtime.isOk() ? runtime : failBegin(runtime);
+  }
+
+  private StatusCode prepareBuild(
+      SqlUniversalJoinRows source, TableDefinition inner, int stage, int innerRole) {
+    StatusCode status = core.prepareDecodedBuild(
+        inner, context.table(context.strategyOuterRole(stage)), stage,
+        context.strategyInnerColumn(stage), context.strategyOuterColumn(stage));
+    if (!status.isOk()) return status;
+    status = identities.begin();
+    if (!status.isOk()) return status;
+    status = source.openFullScan(innerRole);
+    if (!status.isOk()) return status;
+    return appendBuildRows(source, innerRole);
+  }
+
+  private StatusCode appendBuildRows(SqlUniversalJoinRows source, int innerRole) {
+    while (true) {
+      StatusCode status = source.next(innerRole);
+      if (status == StatusCode.CONFLICT) return StatusCode.OK;
+      if (!status.isOk()) return status;
+      status = core.store.append(source.row(innerRole));
+      if (!status.isOk()) return status;
+      status = identities.append(source.key(innerRole));
+      if (!status.isOk()) return status;
+    }
   }
 
   StatusCode beginProbe(SqlUniversalJoinRows source) {

@@ -98,15 +98,16 @@ final class SqlSortArrays {
   long requiredBytes(int rows, int projections) {
     long projectionBytes = this.projections.requiredBytes(rows, projections);
     if (projectionBytes == Long.MAX_VALUE) return Long.MAX_VALUE;
-    long rowLongs = (long) Math.max(rows, keys == null ? 0 : keys.length)
-        + Math.max(rows, keyHighs == null ? 0 : keyHighs.length)
-        + Math.max(rows, primaryKeys == null ? 0 : primaryKeys.length)
-        + Math.max(rows, ordinals == null ? 0 : ordinals.length);
-    long rowInts = (long) Math.max(rows, rowSlots == null ? 0 : rowSlots.length)
-        + Math.max(rows, rowLengths == null ? 0 : rowLengths.length);
+    long requiredLongBytes = (long) rows * Long.BYTES;
+    long requiredIntBytes = (long) rows * Integer.BYTES;
+    long longBytes = Math.max(requiredLongBytes, bytes(keys))
+        + Math.max(requiredLongBytes, bytes(keyHighs))
+        + Math.max(requiredLongBytes, bytes(primaryKeys))
+        + Math.max(requiredLongBytes, bytes(ordinals));
+    long intBytes = Math.max(requiredIntBytes, bytes(rowSlots))
+        + Math.max(requiredIntBytes, bytes(rowLengths));
     long nullBytes = Math.max(rows, keyNulls == null ? 0 : keyNulls.length);
-    return rowLongs * Long.BYTES + rowInts * Integer.BYTES + nullBytes
-        + projectionBytes;
+    return longBytes + intBytes + nullBytes + projectionBytes;
   }
 
   static long cleanRequiredBytes(int rows, int projections) {

@@ -14,9 +14,7 @@ final class SqlDescriptorSubqueryInvocation {
     state.plan.invoke(state.edge);
     prepareLeft(state, leftNull, leftHigh, left);
     if (state.cache.enabled(state.edge) && state.cache.available(state.edge)) {
-      state.outcome.cached(state.cache.truth(state.edge, state.leftOperand));
-      state.plan.result(state.edge);
-      return StatusCode.OK;
+      return completeCached(state);
     }
     state.plan.execute(state.edge);
     state.outcome.begin(leftNull, leftHigh, left);
@@ -24,15 +22,26 @@ final class SqlDescriptorSubqueryInvocation {
     if (state.caching && state.kind != io.riverdb.sql.SqlQuery.SUBQUERY_EXISTS) {
       state.cache.start(state.edge);
     }
-    StatusCode status = cursor.open(state, outer);
-    if (status.isOk()) status = candidates.scan(state, outer);
-    StatusCode closed = state.finishScan();
-    if (status.isOk()) status = closed;
+    StatusCode status = scan(state, outer);
     if (!status.isOk()) return status;
     status = state.outcome.finish();
     if (status.isOk() && state.caching) completeCache(state);
     if (status.isOk()) state.plan.result(state.edge);
     return status;
+  }
+
+  private StatusCode scan(
+      SqlDescriptorSubqueryFrameState state, SqlDescriptorValueSource outer) {
+    StatusCode status = cursor.open(state, outer);
+    if (status.isOk()) status = candidates.scan(state, outer);
+    StatusCode closed = state.finishScan();
+    return status.isOk() ? closed : status;
+  }
+
+  private static StatusCode completeCached(SqlDescriptorSubqueryFrameState state) {
+    state.outcome.cached(state.cache.truth(state.edge, state.leftOperand));
+    state.plan.result(state.edge);
+    return StatusCode.OK;
   }
 
   private static void prepareLeft(

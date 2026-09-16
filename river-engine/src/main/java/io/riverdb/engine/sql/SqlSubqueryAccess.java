@@ -133,7 +133,7 @@ final class SqlSubqueryAccess {
       local = SqlBooleanPredicateProgram.PROGRAM_RIGHT;
       source = SqlBooleanPredicateProgram.PROGRAM_LEFT;
       column = predicates.rawColumn(leaf, local);
-      comparison = reverse(comparison);
+      comparison = comparison.reverseOrder();
     }
     if (!stable(comparison)) return;
     if (!usable(block, predicates, leaf, local, source, column)) return;
@@ -209,15 +209,6 @@ final class SqlSubqueryAccess {
         || comparison == SqlComparison.GREATER_OR_EQUAL;
   }
 
-  private static SqlComparison reverse(SqlComparison comparison) {
-    return switch (comparison) {
-      case LESS_THAN -> SqlComparison.GREATER_THAN;
-      case LESS_OR_EQUAL -> SqlComparison.GREATER_OR_EQUAL;
-      case GREATER_THAN -> SqlComparison.LESS_THAN;
-      case GREATER_OR_EQUAL -> SqlComparison.LESS_OR_EQUAL;
-      default -> comparison;
-    };
-  }
 
   private void clear() {
     values.reset();

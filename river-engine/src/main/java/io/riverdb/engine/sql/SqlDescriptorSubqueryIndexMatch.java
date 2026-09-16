@@ -17,7 +17,7 @@ final class SqlDescriptorSubqueryIndexMatch {
       return leaf << 1;
     }
     return target(bindings, leaf, false, column)
-        && reverse(bindings.comparison(leaf)) == wanted && source(bindings, leaf, true)
+        && bindings.comparison(leaf).reverseOrder() == wanted && source(bindings, leaf, true)
         ? leaf << 1 | 1 : -1;
   }
 
@@ -29,15 +29,6 @@ final class SqlDescriptorSubqueryIndexMatch {
             && conjunctive(program, program.booleanRight(node));
   }
 
-  static SqlComparison reverse(SqlComparison comparison) {
-    return switch (comparison) {
-      case LESS_THAN -> SqlComparison.GREATER_THAN;
-      case LESS_OR_EQUAL -> SqlComparison.GREATER_OR_EQUAL;
-      case GREATER_THAN -> SqlComparison.LESS_THAN;
-      case GREATER_OR_EQUAL -> SqlComparison.LESS_OR_EQUAL;
-      default -> comparison;
-    };
-  }
 
   private static boolean target(
       SqlDescriptorCorrelatedBindings bindings, int leaf, boolean left, int column) {

@@ -23,12 +23,7 @@ final class SqlDescriptorTableRename {
     StatusCode status = atomic.begin(IsolationLevel.SERIALIZABLE);
     boolean began = status.isOk();
     boolean implicit = began && atomic.implicit();
-    if (status.isOk()) status = session.resolveDescriptor(
-        command.tableName(), current, detail);
-    if (status == StatusCode.CONFLICT) legacyTable = true;
-    if (status.isOk()) status = session.checkViewReferences(current.tableId());
-    if (status.isOk()) status = session.renameDescriptorTable(
-        command.tableName(), command.renamedTableName(), current, detail);
+    if (status.isOk()) status = prepare(status, session, command);
     status = release(status);
     if (began) status = atomic.finish(status);
     if (!status.isOk()) return status;
@@ -36,6 +31,18 @@ final class SqlDescriptorTableRename {
     result.setUpdate(0, commit);
     result.setTransaction(transactions.isExplicit(), commit);
     return StatusCode.OK;
+  }
+
+  private StatusCode prepare(
+      StatusCode status, RelationalSession session, SqlCommand command) {
+    if (!status.isOk()) return status;
+    status = session.resolveDescriptor(command.tableName(), current, detail);
+    if (status == StatusCode.CONFLICT) legacyTable = true;
+    if (!status.isOk()) return status;
+    status = session.checkViewReferences(current.tableId());
+    if (!status.isOk()) return status;
+    return session.renameDescriptorTable(
+        command.tableName(), command.renamedTableName(), current, detail);
   }
 
   boolean legacyTable() { return legacyTable; }
