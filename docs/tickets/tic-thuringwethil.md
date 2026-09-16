@@ -51,3 +51,16 @@ Independent Luna/high review approved the behavior and ownership boundaries.
 scan including tests: 51 files, maximum Slopmark 96.0974 and NPATH 54.
 Evidence: `/private/tmp/river-value-api-check.log` and
 `/private/tmp/river-value-api-final-slopmark.json`. No performance claim.
+
+### Protocol codec slice — 2026-09-16
+
+Six codec routines now separate request validation, payload sizing, and frame
+header/body emission. The query-open path groups row-layout checks and header
+emission rather than retaining trivial conditional wrappers. Wire layouts,
+status precedence, buffer ownership, and hot-path allocation remain unchanged;
+independent Luna/high review approved the final revision.
+`:river-protocol:check` passed 62 tests with no failures/errors/skips, including
+an integrated rerun against the accepted value API checkpoint. Full module scan
+including tests: 88 files, maximum Slopmark 38.6733 and NPATH 96.
+Evidence: `/private/tmp/river-protocol-check-integrated.log` and
+`/private/tmp/river-protocol-final-slopmark.json`. No performance claim.
