@@ -71,6 +71,14 @@ final class CatalogBuildCleaner {
     if (status.isOk()) status = session.beginScan(CatalogKeyspace.BUILD_INTENT_SPACE,
         Long.MIN_VALUE, CatalogKeyspace.OBJECT_HEAD_SPACE, Long.MIN_VALUE, cursor);
     if (status.isOk()) status = session.nextScan(cursor, scanned);
+    status = captureFirstIntent(status);
+    if (cursor.isActive()) {
+      StatusCode closed = session.closeScan(cursor);
+      if (status.isOk()) status = closed;
+    }
+    return transactions.finish(session, status, false);
+  }
+  private StatusCode captureFirstIntent(StatusCode status) {
     if (status == StatusCode.CONFLICT) {
       status = StatusCode.OK;
     } else if (status.isOk()
@@ -80,11 +88,7 @@ final class CatalogBuildCleaner {
     } else if (status.isOk()) {
       firstObjectId = scanned.key();
     }
-    if (cursor.isActive()) {
-      StatusCode closed = session.closeScan(cursor);
-      if (status.isOk()) status = closed;
-    }
-    return transactions.finish(session, status, false);
+    return status;
   }
 
 }

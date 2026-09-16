@@ -39,11 +39,12 @@ final class CatalogSuccessorBuildFlow {
       StatusDetail detail) {
     StatusCode status = privateBuild.reserveSuccessorIds(
         buildSession, current, proposed, plan, reservation);
-    if (status.isOk()) status = CatalogSuccessorKeyBinding.bind(
-        current, proposed, reservation, descriptor, detail);
-    if (status.isOk()) reservation.setPhysicalIndexCount(
+    if (!status.isOk()) return fail(detail, status);
+    status = CatalogSuccessorKeyBinding.bind(current, proposed, reservation, descriptor, detail);
+    if (!status.isOk()) return fail(detail, status);
+    reservation.setPhysicalIndexCount(
         CatalogTableKeys.reservedPhysicalIndexCount(descriptor.value(), reservation));
-    if (status.isOk()) status = cache.reserveSuccessor(
+    status = cache.reserveSuccessor(
         descriptor.value(), current.catalogGeneration(), prepared.admission());
     if (!status.isOk()) return fail(detail, status);
     prepared.activate(
@@ -52,7 +53,19 @@ final class CatalogSuccessorBuildFlow {
     TransactionState intentState = transactions.lastState();
     if (intentState == TransactionState.COMMITTED) prepared.markDurableBuildKnown();
     if (intentState == TransactionState.INDETERMINATE) prepared.forgetIntentCommitOutcome();
-    if (status.isOk()) status = privateBuild.writeDefinition(
+    if (status.isOk()) status = buildDefinition(
+        publicationSession, buildSession, descriptor, reservation,
+        plan, admission, prepared, stagePublication);
+    return status.isOk()
+        ? succeed(detail) : cancel(prepared, reservation, status, intentState, detail);
+  }
+
+  private StatusCode buildDefinition(
+      IndexedTransactionSession publicationSession, IndexedTransactionSession buildSession,
+      TableDescriptor.Result descriptor, CatalogReservation reservation,
+      CatalogTablePayloadPlan plan, CatalogBuildAdmission admission,
+      CatalogPreparedTable prepared, boolean stagePublication) {
+    StatusCode status = privateBuild.writeDefinition(
         buildSession, descriptor.value(), reservation, plan, admission);
     if (status.isOk()) status = privateBuild.validateDefinition(
         buildSession, reservation, descriptor);
@@ -63,8 +76,7 @@ final class CatalogSuccessorBuildFlow {
           publicationSession, descriptor.value(), reservation);
       if (status.isOk()) prepared.markPublicationStaged();
     }
-    return status.isOk()
-        ? succeed(detail) : cancel(prepared, reservation, status, intentState, detail);
+    return status;
   }
 
   private StatusCode cancel(

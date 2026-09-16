@@ -65,7 +65,17 @@ final class CatalogTableCreator {
     status = transactions.openBuild(opened);
     if (!status.isOk()) return fail(detail, status);
     IndexedTransactionSession buildSession = opened.session();
-    status = privateBuild.reserveIds(buildSession, provisional, plan, reservation);
+    status = prepareBuild(provisional, publicationSession, prepared, detail, buildSession);
+    StatusCode released = transactions.releaseBuild(buildSession);
+    if (status.isOk()) status = released;
+    return status.isOk() ? status : fail(detail, status);
+  }
+
+  private StatusCode prepareBuild(
+      TableDescriptor provisional, IndexedTransactionSession publicationSession,
+      CatalogPreparedTable prepared, StatusDetail detail,
+      IndexedTransactionSession buildSession) {
+    StatusCode status = privateBuild.reserveIds(buildSession, provisional, plan, reservation);
     if (status.isOk()) status = CatalogDescriptorIdentity.bind(
         provisional, reservation, descriptorResult, detail);
     TableDescriptor descriptor = status.isOk() ? descriptorResult.value() : null;
@@ -80,9 +90,7 @@ final class CatalogTableCreator {
       status = buildPrivate(
           buildSession, publicationSession, prepared, descriptor, detail);
     }
-    StatusCode released = transactions.releaseBuild(buildSession);
-    if (status.isOk()) status = released;
-    return status.isOk() ? status : fail(detail, status);
+    return status;
   }
 
   private StatusCode buildPrivate(
@@ -99,14 +107,7 @@ final class CatalogTableCreator {
     if (intentState == TransactionState.INDETERMINATE) {
       prepared.forgetIntentCommitOutcome();
     }
-    if (status.isOk()) status = privateBuild.writeDefinition(
-        buildSession, descriptor, reservation, plan, buildAdmission);
-    if (status.isOk()) status = privateBuild.validateDefinition(
-        buildSession, reservation, descriptorResult);
-    if (status.isOk()) status = privateBuild.buildIndexes(
-        buildSession, descriptor, reservation, plan, buildAdmission);
-    if (status.isOk()) status = privateBuild.stageReady(
-        publicationSession, descriptor, reservation);
+    if (status.isOk()) status = writeAndStage(buildSession, publicationSession, descriptor);
     if (!status.isOk()) {
       if (intentDurable
           || intentState == TransactionState.INDETERMINATE) {
@@ -118,6 +119,20 @@ final class CatalogTableCreator {
     }
     intentDurable = false;
     return succeed(detail);
+  }
+
+  private StatusCode writeAndStage(
+      IndexedTransactionSession buildSession, IndexedTransactionSession publicationSession,
+      TableDescriptor descriptor) {
+    StatusCode status = privateBuild.writeDefinition(
+        buildSession, descriptor, reservation, plan, buildAdmission);
+    if (status.isOk()) status = privateBuild.validateDefinition(
+        buildSession, reservation, descriptorResult);
+    if (status.isOk()) status = privateBuild.buildIndexes(
+        buildSession, descriptor, reservation, plan, buildAdmission);
+    if (status.isOk()) status = privateBuild.stageReady(
+        publicationSession, descriptor, reservation);
+    return status;
   }
 
   StatusCode finish(

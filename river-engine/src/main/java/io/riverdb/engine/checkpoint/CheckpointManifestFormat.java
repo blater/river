@@ -72,20 +72,14 @@ final class CheckpointManifestFormat {
   }
 
   private static boolean valid(ByteBuffer bytes, CheckpointChecksum checksum) {
+    return validAuthority(bytes, checksum)
+        && validVersions(bytes)
+        && validLogicalRowIds(bytes)
+        && CheckpointVersionFormat.zeroRange(bytes, 136, 152);
+  }
+
+  private static boolean validAuthority(ByteBuffer bytes, CheckpointChecksum checksum) {
     int stored = bytes.getInt(152);
-    int versionPages = bytes.getInt(68);
-    long flags = bytes.getLong(88);
-    long versionBytes = bytes.getLong(96);
-    long rowCount = bytes.getLong(72);
-    long maximumVersionPages = rowCount == 0 ? 0
-        : ((rowCount - 1) >>> CheckpointVersionFormat.PAGE_SHIFT) + 1;
-    int versionSlot = decodeSlot(bytes.getInt(104));
-    int cleanupSlot = decodeSlot(bytes.getInt(108));
-    int logicalCount = bytes.getInt(112);
-    long logicalBytes = bytes.getLong(120);
-    int logicalSlot = decodeSlot(bytes.getInt(128));
-    int logicalCleanupSlot = decodeSlot(bytes.getInt(132));
-    long expectedLogicalBytes = CheckpointLogicalRowIdFormat.fileBytes(logicalCount);
     return bytes.getLong(0) == MAGIC
         && bytes.getInt(8) == VERSION
         && bytes.getInt(12) == BYTES && bytes.getInt(156) == ~stored
@@ -93,7 +87,19 @@ final class CheckpointManifestFormat {
         && (bytes.getLong(16) != 0 || bytes.getLong(24) != 0)
         && bytes.getLong(32) > 0 && bytes.getLong(40) > 0
         && bytes.getLong(48) > 0 && bytes.getLong(56) > 0
-        && bytes.getInt(64) > 0 && versionPages >= 0
+        && bytes.getInt(64) > 0;
+  }
+
+  private static boolean validVersions(ByteBuffer bytes) {
+    int versionPages = bytes.getInt(68);
+    long rowCount = bytes.getLong(72);
+    long flags = bytes.getLong(88);
+    long versionBytes = bytes.getLong(96);
+    long maximumVersionPages = rowCount == 0 ? 0
+        : ((rowCount - 1) >>> CheckpointVersionFormat.PAGE_SHIFT) + 1;
+    int versionSlot = decodeSlot(bytes.getInt(104));
+    int cleanupSlot = decodeSlot(bytes.getInt(108));
+    return versionPages >= 0
         && rowCount >= 0 && rowCount <= CheckpointState.MAXIMUM_RUNTIME_ROWS
         && versionPages <= maximumVersionPages
         && bytes.getLong(80) >= 0
@@ -104,14 +110,21 @@ final class CheckpointManifestFormat {
         && (versionPages == 0) == (versionSlot < 0)
         && bytes.getInt(104) >= 0 && bytes.getInt(104) <= 2
         && bytes.getInt(108) >= 0 && bytes.getInt(108) <= 2
-        && (cleanupSlot < 0 || cleanupSlot != versionSlot)
-        && logicalCount >= 0 && expectedLogicalBytes >= 0
+        && (cleanupSlot < 0 || cleanupSlot != versionSlot);
+  }
+
+  private static boolean validLogicalRowIds(ByteBuffer bytes) {
+    int logicalCount = bytes.getInt(112);
+    long logicalBytes = bytes.getLong(120);
+    int logicalSlot = decodeSlot(bytes.getInt(128));
+    int logicalCleanupSlot = decodeSlot(bytes.getInt(132));
+    long expectedLogicalBytes = CheckpointLogicalRowIdFormat.fileBytes(logicalCount);
+    return logicalCount >= 0 && expectedLogicalBytes >= 0
         && logicalBytes == expectedLogicalBytes
         && logicalSlot >= 0
         && bytes.getInt(128) >= 1 && bytes.getInt(128) <= 2
         && bytes.getInt(132) >= 0 && bytes.getInt(132) <= 2
-        && (logicalCleanupSlot < 0 || logicalCleanupSlot != logicalSlot)
-        && CheckpointVersionFormat.zeroRange(bytes, 136, 152);
+        && (logicalCleanupSlot < 0 || logicalCleanupSlot != logicalSlot);
   }
 
   private static int encodeSlot(int slot) { return slot + 1; }

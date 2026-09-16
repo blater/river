@@ -209,24 +209,34 @@ final class CatalogDefinitionStore {
         status = inspected;
         break;
       }
-      if (manifest.catalogRecordId() != 0 && manifest.objectId() == objectId
-          && manifest.rowLayoutId() == rowLayoutId
-          && (generation == 0 || manifest.catalogGeneration() == generation)
-          && manifest.catalogGeneration() > selectedGeneration) {
+      if (newerMatchingManifest(objectId, rowLayoutId, generation, selectedGeneration)) {
         selectedId = manifest.catalogRecordId();
         selectedGeneration = manifest.catalogGeneration();
       }
     }
-    if (cursor.isActive()) {
-      StatusCode closed = session.closeScan(cursor);
-      if (status.isOk()) status = closed;
-    }
+    status = closeManifestScan(session, status);
     if (!status.isOk() || selectedId == 0) {
       return status.isOk() ? StatusCode.CONFLICT : status;
     }
     status = readManifestRecord(session, selectedId);
     if (!status.isOk()) return referenced(status);
     return installHead();
+  }
+
+  private StatusCode closeManifestScan(IndexedTransactionSession session, StatusCode status) {
+    if (cursor.isActive()) {
+      StatusCode closed = session.closeScan(cursor);
+      if (status.isOk()) status = closed;
+    }
+    return status;
+  }
+
+  private boolean newerMatchingManifest(
+      long objectId, long rowLayoutId, long generation, long selectedGeneration) {
+    return manifest.catalogRecordId() != 0 && manifest.objectId() == objectId
+        && manifest.rowLayoutId() == rowLayoutId
+        && (generation == 0 || manifest.catalogGeneration() == generation)
+        && manifest.catalogGeneration() > selectedGeneration;
   }
 
   StatusCode inspectManifest(HeapRowResult source, long key) {

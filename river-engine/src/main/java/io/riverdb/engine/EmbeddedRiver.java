@@ -556,18 +556,20 @@ public final class EmbeddedRiver {
       }
       StatusCode validationReleased = preparedValidation.reset();
       if (status.isOk()) status = validationReleased;
-      if (status.isOk()) status = programExecutor.close();
-      if (status.isOk()) status = transactionPrograms.clear();
-      if (status.isOk()) status = prepared.clear();
-      if (status.isOk()) status = handles.clear();
-      if (status.isOk()) {
-        status = session.close();
-      }
-      if (status.isOk()) {
-        closed = true;
-        owner.sessionClosed();
-      }
-      return status;
+      if (!status.isOk()) return status;
+      status = programExecutor.close();
+      if (!status.isOk()) return status;
+      status = transactionPrograms.clear();
+      if (!status.isOk()) return status;
+      status = prepared.clear();
+      if (!status.isOk()) return status;
+      status = handles.clear();
+      if (!status.isOk()) return status;
+      status = session.close();
+      if (!status.isOk()) return status;
+      closed = true;
+      owner.sessionClosed();
+      return StatusCode.OK;
     }
 
     private StatusCode copyExecution(CommandResult result) {
