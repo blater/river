@@ -26,16 +26,28 @@ final class SqlBlockRowSortProbe {
       SqlMaterializedPagedByteStream keys,
       SqlBlockRowSortKeyCodec shape) {
     if (!status.isOk()) return 0;
-    status = readIndex(index, keys.logicalLength(), left, leftIndex);
-    if (status.isOk()) status = readIndex(index, keys.logicalLength(), right, rightIndex);
-    if (status.isOk()) status = prepareKeys(leftIndex.keyLength(), rightIndex.keyLength());
-    if (status.isOk()) status = readKey(keys, leftIndex, leftKey);
-    if (status.isOk()) status = readKey(keys, rightIndex, rightKey);
-    if (status.isOk()) status = SqlBlockRowSortKeyValidation.validate(leftKey, shape);
-    if (status.isOk()) status = SqlBlockRowSortKeyValidation.validate(rightKey, shape);
+    status = prepareComparison(left, right, index, keys, shape);
     if (!status.isOk()) return 0;
     int compared = SqlBlockRowSortKeyCompare.compare(leftKey, rightKey, shape);
     return compared != 0 ? compared : Long.compare(left, right);
+  }
+
+  private StatusCode prepareComparison(
+      long left, long right, SqlMaterializedPagedByteStream index,
+      SqlMaterializedPagedByteStream keys, SqlBlockRowSortKeyCodec shape) {
+    status = readIndex(index, keys.logicalLength(), left, leftIndex);
+    if (!status.isOk()) return status;
+    status = readIndex(index, keys.logicalLength(), right, rightIndex);
+    if (!status.isOk()) return status;
+    status = prepareKeys(leftIndex.keyLength(), rightIndex.keyLength());
+    if (!status.isOk()) return status;
+    status = readKey(keys, leftIndex, leftKey);
+    if (!status.isOk()) return status;
+    status = readKey(keys, rightIndex, rightKey);
+    if (!status.isOk()) return status;
+    status = SqlBlockRowSortKeyValidation.validate(leftKey, shape);
+    if (!status.isOk()) return status;
+    return SqlBlockRowSortKeyValidation.validate(rightKey, shape);
   }
 
   StatusCode status() { return status; }

@@ -33,19 +33,33 @@ final class SqlDescriptorUpdateScan {
   StatusCode execute(SqlCommand command, SchemaPin pin) {
     affectedRows = 0;
     TableDescriptor table = pin.descriptor();
+    StatusCode status = prepare(command, pin, table);
+    if (status.isOk()) status = scan(command, table);
+    StatusCode closed = access.close();
+    return status.isOk() ? closed : status;
+  }
+
+  private StatusCode prepare(SqlCommand command, SchemaPin pin, TableDescriptor table) {
     StatusCode status = values.reserve(table);
-    if (status.isOk()) status = columns.mapUpdate(command, table);
-    if (status.isOk()) status = preparePredicate(command, table);
-    if (status.isOk()) status = access.prepare(command, table, predicate);
-    if (status.isOk()) status = access.open(pin);
+    if (!status.isOk()) return status;
+    status = columns.mapUpdate(command, table);
+    if (!status.isOk()) return status;
+    status = preparePredicate(command, table);
+    if (!status.isOk()) return status;
+    status = access.prepare(command, table, predicate);
+    if (!status.isOk()) return status;
+    return access.open(pin);
+  }
+
+  private StatusCode scan(SqlCommand command, TableDescriptor table) {
+    StatusCode status = StatusCode.OK;
     while (status.isOk()) {
       status = access.next(values);
       if (status == StatusCode.CONFLICT) { status = StatusCode.OK; break; }
       if (status.isOk()) status = evaluate();
       if (status.isOk() && matched()) status = lockAndUpdate(command, table);
     }
-    StatusCode closed = access.close();
-    return status.isOk() ? closed : status;
+    return status;
   }
 
   int affectedRows() { return affectedRows; }

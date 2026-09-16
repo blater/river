@@ -30,18 +30,25 @@ final class SqlDescriptorIndexDrop {
     StatusCode status = atomic.begin(IsolationLevel.SERIALIZABLE);
     boolean began = status.isOk();
     boolean implicit = began && atomic.implicit();
-    if (status.isOk()) status = session.resolveDescriptor(
-        command.tableName(), current, detail);
-    if (status == StatusCode.CONFLICT) legacyTable = true;
-    if (status.isOk()) status = change.drop(
-        current.descriptor(), command.indexName(), proposal, detail);
-    if (status.isOk()) status = dependencies.check(
-        session, proposal.value(), change.droppedKey());
-    if (status.isOk()) status = session.prepareDescriptorSuccessor(
-        command.tableName(), current, proposal.value(), detail);
+    if (status.isOk()) status = prepare(status, session, command);
     status = release(status);
     if (began) status = atomic.finish(status);
     return publish(status, implicit, transactions, result);
+  }
+
+  private StatusCode prepare(
+      StatusCode status, RelationalSession session, SqlCommand command) {
+    if (!status.isOk()) return status;
+    status = session.resolveDescriptor(command.tableName(), current, detail);
+    if (status == StatusCode.CONFLICT) legacyTable = true;
+    if (!status.isOk()) return status;
+    status = change.drop(
+        current.descriptor(), command.indexName(), proposal, detail);
+    if (!status.isOk()) return status;
+    status = dependencies.check(session, proposal.value(), change.droppedKey());
+    if (!status.isOk()) return status;
+    return session.prepareDescriptorSuccessor(
+        command.tableName(), current, proposal.value(), detail);
   }
 
   boolean legacyTable() { return legacyTable; }

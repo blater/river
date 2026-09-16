@@ -38,16 +38,24 @@ final class SqlDescriptorSetMaterialization {
         || keys == 0 && command.aggregates().invocationCount() == 0) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = reserveAggregateLanes(command.aggregates().invocationCount());
-    if (status.isOk()) status = prepareInput(table);
-    if (status.isOk()) status = bound.command.copyBlockFrom(command);
-    if (status.isOk()) status = binding.bind(
-        command, input, bound, keys, aggregateLanes);
-    laneCount = binding.laneCount();
-    if (status.isOk()) status = binding.describe(command, input, bound, output, keys);
-    if (status.isOk()) status = evaluator.prepare(bound);
+    StatusCode status = prepareStages(command, table, keys);
     if (!status.isOk()) reset();
     return status;
+  }
+
+  private StatusCode prepareStages(SqlCommand command, TableDescriptor table, int keys) {
+    StatusCode status = reserveAggregateLanes(command.aggregates().invocationCount());
+    if (!status.isOk()) return status;
+    status = prepareInput(table);
+    if (!status.isOk()) return status;
+    status = bound.command.copyBlockFrom(command);
+    if (!status.isOk()) return status;
+    status = binding.bind(command, input, bound, keys, aggregateLanes);
+    laneCount = binding.laneCount();
+    if (!status.isOk()) return status;
+    status = binding.describe(command, input, bound, output, keys);
+    if (!status.isOk()) return status;
+    return evaluator.prepare(bound);
   }
 
   StatusCode project(SqlBlockRow source, SqlBlockRow result) {

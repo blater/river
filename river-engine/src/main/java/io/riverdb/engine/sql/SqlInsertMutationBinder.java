@@ -53,18 +53,33 @@ final class SqlInsertMutationBinder {
 
   private StatusCode validateValue(
       SqlCommand command, BoundSqlStatement bound, int row, int column) {
+    StatusCode status = validateDefault(command, bound, row, column);
+    if (!status.isOk()) return status;
     int source = bound.insertSourceByColumn[column];
-    if (source >= 0 && command.insertIsDefault(row, source)
-        && !bound.table.hasDefault(column)
-        && !bound.table.isNullable(column)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = source >= 0 && command.insertHasExpression(row, source)
-        ? bindExpression(command, bound, row, source, column) : StatusCode.OK;
+    status = bindValueExpression(command, bound, row, column, source);
     if (!status.isOk()) return status;
     if (incompatibleLiteral(command, bound, row, column, source)) {
       return StatusCode.DATATYPE_MISMATCH;
     }
+    return validateNull(command, bound, row, column, source);
+  }
+
+  private StatusCode validateDefault(
+      SqlCommand command, BoundSqlStatement bound, int row, int column) {
+    int source = bound.insertSourceByColumn[column];
+    return source >= 0 && command.insertIsDefault(row, source)
+        && !bound.table.hasDefault(column) && !bound.table.isNullable(column)
+        ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.OK;
+  }
+
+  private StatusCode bindValueExpression(
+      SqlCommand command, BoundSqlStatement bound, int row, int column, int source) {
+    if (source < 0 || !command.insertHasExpression(row, source)) return StatusCode.OK;
+    return bindExpression(command, bound, row, source, column);
+  }
+
+  private StatusCode validateNull(
+      SqlCommand command, BoundSqlStatement bound, int row, int column, int source) {
     boolean nullValue = source < 0
         ? !bound.table.hasDefault(column)
         : command.insertIsNull(row, source)

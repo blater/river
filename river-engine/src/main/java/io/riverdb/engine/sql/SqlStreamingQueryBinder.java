@@ -58,23 +58,29 @@ final class SqlStreamingQueryBinder {
   }
 
   StatusCode join() {
+    return publish(prepareJoin());
+  }
+
+  private StatusCode prepareJoin() {
     SqlBoundJoinContext context = bound.joinContext(0);
     StatusCode status = binder.resolveJoinRoles(
         session, bound.command, context, bound.table, false);
-    if (status.isOk()) status = binder.bindQueryBlocks(session, bound);
-    if (status.isOk()) {
-      status = bound.executableQuery.edgeCount() == 0
-          ? binder.bindJoin(bound.command, bound, context)
-          : binder.bindJoinProjection(bound.command, bound, context);
-    }
-    if (status.isOk() && (bound.command.orderBy().count() > 0)) {
+    if (!status.isOk()) return status;
+    status = binder.bindQueryBlocks(session, bound);
+    if (!status.isOk()) return status;
+    status = bound.executableQuery.edgeCount() == 0
+        ? binder.bindJoin(bound.command, bound, context)
+        : binder.bindJoinProjection(bound.command, bound, context);
+    if (!status.isOk()) return status;
+    if (bound.command.orderBy().count() > 0) {
       status = binder.bindJoinOrder(bound.command, bound);
+      if (!status.isOk()) return status;
     }
-    if (status.isOk()) status = queries.configureJoin();
-    if (status.isOk()) status = queries.explainOnly()
+    status = queries.configureJoin();
+    if (!status.isOk()) return status;
+    return queries.explainOnly()
         ? temporal.validateZones(bound.command, bound.query)
         : queries.prepareProjectionPrograms();
-    return publish(status);
   }
 
   StatusCode group() {
