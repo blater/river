@@ -68,14 +68,30 @@ final class SqlSortSpillRecordReader {
     int dataBytes = record.getInt(0);
     int minimum = fixedBytes() + (containsText ? Integer.BYTES : 0);
     int maximum = minimum + (containsText ? TableSchema.MAXIMUM_ROW_BYTES : 0);
-    if (dataBytes < minimum || dataBytes > maximum
-        || (!containsText && dataBytes != fixedBytes())) return StatusCode.CORRUPTION;
+    if (!validDataBytes(dataBytes, minimum, maximum)) return StatusCode.CORRUPTION;
     int recordBytes = Integer.BYTES + dataBytes + Integer.BYTES;
     status = readRecord(stream, offset, recordBytes);
     if (!status.isOk()) return status;
-    if (record.getInt(Integer.BYTES + dataBytes)
-        != records.checksum(Integer.BYTES, dataBytes)) return StatusCode.CORRUPTION;
+    if (!validChecksum(record, dataBytes)) return StatusCode.CORRUPTION;
     record.position(Integer.BYTES);
+    status = readFixedValues(record, slot);
+    if (!status.isOk()) return status;
+    status = readOptionalValues(record, slot, dataBytes, outputRecord);
+    if (status.isOk()) next.value = offset + recordBytes;
+    return status;
+  }
+
+  private boolean validDataBytes(int dataBytes, int minimum, int maximum) {
+    return dataBytes >= minimum && dataBytes <= maximum
+        && (containsText || dataBytes == fixedBytes());
+  }
+
+  private boolean validChecksum(ByteBuffer record, int dataBytes) {
+    return record.getInt(Integer.BYTES + dataBytes)
+        == records.checksum(Integer.BYTES, dataBytes);
+  }
+
+  private StatusCode readFixedValues(ByteBuffer record, int slot) {
     decoded.keyHighs[slot] = record.getLong();
     decoded.keys[slot] = record.getLong();
     decoded.primaryKeys[slot] = record.getLong();
@@ -83,16 +99,25 @@ final class SqlSortSpillRecordReader {
     long keyNull = record.getLong();
     if (keyNull < 0 || keyNull > 1) return StatusCode.CORRUPTION;
     decoded.keyNulls[slot] = keyNull != 0;
-    status = decoded.nulls.read(record, slot, projections);
+    StatusCode status = decoded.nulls.read(record, slot, projections);
     int valueStart = slot * projections;
     for (int index = 0; status.isOk() && index < projections; index++) {
       decoded.highs[valueStart + index] = record.getLong();
       decoded.values[valueStart + index] = record.getLong();
     }
-    if (status.isOk() && outputRecord) status = generatedText.readOutput(record);
-    else if (status.isOk()) generatedText.skip(record);
+    return status;
+  }
+
+  private StatusCode readOptionalValues(
+      ByteBuffer record, int slot, int dataBytes, boolean outputRecord) {
+    StatusCode status;
+    if (outputRecord) {
+      status = generatedText.readOutput(record);
+    } else {
+      generatedText.skip(record);
+      status = StatusCode.OK;
+    }
     if (status.isOk() && containsText) status = readRowBytes(record, slot, dataBytes);
-    if (status.isOk()) next.value = offset + recordBytes;
     return status;
   }
 

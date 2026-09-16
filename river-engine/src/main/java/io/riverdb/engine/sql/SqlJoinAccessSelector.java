@@ -49,12 +49,27 @@ final class SqlJoinAccessSelector {
     int leftScope = context.localRole(program.scope(leaf, left, 0));
     int rightScope = context.localRole(program.scope(leaf, right, 0));
     int rightRole = stage + 1;
-    if (leftScope == rightScope
-        || leftScope != rightRole && rightScope != rightRole) return;
+    if (!hasRightScope(leftScope, rightScope, rightRole)) return;
     int outerRole = leftScope == rightRole ? rightScope : leftScope;
     if (outerRole < 0 || outerRole >= rightRole) return;
     int outer = leftScope == rightRole ? rightColumn : leftColumn;
     int inner = leftScope == rightRole ? leftColumn : rightColumn;
+    if (!compatible(context, outerRole, outer, rightRole, inner)) return;
+    int score = accessScore(context, rightRole, inner);
+    if (score > bestScore) {
+      context.setAccess(stage, outerRole, outer, inner);
+      bestScore = score;
+    }
+  }
+
+  private static boolean hasRightScope(int leftScope, int rightScope, int rightRole) {
+    return leftScope != rightScope
+        && (leftScope == rightRole || rightScope == rightRole);
+  }
+
+  private static boolean compatible(
+      SqlBoundJoinContext context, int outerRole, int outer,
+      int rightRole, int inner) {
     int outerDescriptor = context.table(outerRole).typeDescriptor(outer);
     int innerDescriptor = context.table(rightRole).typeDescriptor(inner);
     if (SqlTypeDescriptor.comparisonFamily(outerDescriptor)
@@ -62,12 +77,13 @@ final class SqlJoinAccessSelector {
         || outerDescriptor != innerDescriptor
             && SqlNumericTypeRules.isNumeric(innerDescriptor)
         || SqlTypeDescriptor.typeId(innerDescriptor)
-            == SqlTypeDescriptor.TYPE_ID_VARCHAR) return;
-    int score = inner == 0 || context.table(rightRole).hasUniqueIndexOn(inner)
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR) return false;
+    return true;
+  }
+
+  private static int accessScore(
+      SqlBoundJoinContext context, int rightRole, int inner) {
+    return inner == 0 || context.table(rightRole).hasUniqueIndexOn(inner)
         ? 2 : context.table(rightRole).hasIndexOn(inner) ? 1 : 0;
-    if (score > bestScore) {
-      context.setAccess(stage, outerRole, outer, inner);
-      bestScore = score;
-    }
   }
 }

@@ -76,15 +76,24 @@ final class SqlInsertRowEncoder {
         : command.insertIsNull(tuple, source)
             || command.insertIsDefault(tuple, source) && !table.hasDefault(column);
     boolean computed = source >= 0 && command.insertHasExpression(tuple, source);
-    if (computed) {
-      StatusCode status = expressions.evaluateMutation(
-          command.insertExpression(tuple, source), 0, null);
-      if (!status.isOk()) return status;
-      nullValue = expressions.resultNull();
-      if (nullValue && !table.isNullable(column)) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
+    if (computed) return encodeComputed(command, table, tuple, source, column);
+    return encodeReady(table, command, tuple, source, column, useDefault, nullValue, false);
+  }
+
+  private StatusCode encodeComputed(
+      SqlCommand command, TableDefinition table, int tuple, int source,
+      int column) {
+    StatusCode status = expressions.evaluateMutation(
+        command.insertExpression(tuple, source), 0, null);
+    if (!status.isOk()) return status;
+    boolean nullValue = expressions.resultNull();
+    if (nullValue && !table.isNullable(column)) return StatusCode.INVALID_EXTERNAL_INPUT;
+    return encodeReady(table, command, tuple, source, column, false, nullValue, true);
+  }
+
+  private StatusCode encodeReady(
+      TableDefinition table, SqlCommand command, int tuple, int source, int column,
+      boolean useDefault, boolean nullValue, boolean computed) {
     setNull(table, column, nullValue);
     int slot = table.valueOffset(column);
     if (!table.isVarchar(column)) {

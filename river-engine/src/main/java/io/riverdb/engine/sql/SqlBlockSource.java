@@ -147,14 +147,22 @@ final class SqlBlockSource {
   }
 
   StatusCode close() {
-    StatusCode status = cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK;
-    if (status.isOk() && descriptorActive) status = finishDescriptor(StatusCode.OK);
+    StatusCode status = closePhysicalScan();
+    if (status.isOk()) status = closeDescriptor();
     if (status.isOk() && subqueries.hasResources()) return StatusCode.CONFLICT;
     if (status.isOk()) status = descriptor.reset();
     if (status.isOk()) status = cursor.reset();
     if (status.isOk()) status = join.close();
     physical.reset();
     return status;
+  }
+
+  private StatusCode closePhysicalScan() {
+    return cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK;
+  }
+
+  private StatusCode closeDescriptor() {
+    return descriptorActive ? finishDescriptor(StatusCode.OK) : StatusCode.OK;
   }
 
   private StatusCode finishDescriptor(StatusCode body) {

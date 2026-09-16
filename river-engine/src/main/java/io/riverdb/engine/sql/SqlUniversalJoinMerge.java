@@ -37,26 +37,37 @@ final class SqlUniversalJoinMerge {
     outerRole = context.strategyOuterRole(stage);
     outerColumn = context.strategyOuterColumn(stage);
     inner = context.table(stage + 1);
-    status = prepare();
-    if (status.isOk()) status = store.begin(schema, innerColumn, false);
-    if (status.isOk()) status = identities.begin();
-    if (status.isOk()) status = source.openFullScan(stage + 1);
-    while (status.isOk()) {
-      status = source.next(stage + 1);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      if (!status.isOk()) break;
-      status = store.append(source.row(stage + 1));
-      if (status.isOk()) status = identities.append(source.key(stage + 1));
-    }
+    status = prepareMerge(source);
     StatusCode runtime = status;
     StatusCode closed = source.closeScan(stage + 1);
     if (runtime.isOk()) runtime = closed;
     if (runtime.isOk()) runtime = store.finish();
     if (runtime.isOk()) runtime = identities.finish();
     return runtime.isOk() ? runtime : failBegin(runtime);
+  }
+
+  private StatusCode prepareMerge(SqlUniversalJoinRows source) {
+    StatusCode status = prepare();
+    if (!status.isOk()) return status;
+    status = store.begin(schema, innerColumn, false);
+    if (!status.isOk()) return status;
+    status = identities.begin();
+    if (!status.isOk()) return status;
+    status = source.openFullScan(stage + 1);
+    if (!status.isOk()) return status;
+    return appendSource(source);
+  }
+
+  private StatusCode appendSource(SqlUniversalJoinRows source) {
+    while (true) {
+      StatusCode status = source.next(stage + 1);
+      if (status == StatusCode.CONFLICT) return StatusCode.OK;
+      if (!status.isOk()) return status;
+      status = store.append(source.row(stage + 1));
+      if (!status.isOk()) return status;
+      status = identities.append(source.key(stage + 1));
+      if (!status.isOk()) return status;
+    }
   }
 
   StatusCode beginProbe(SqlUniversalJoinRows source) {

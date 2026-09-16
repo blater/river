@@ -190,19 +190,25 @@ final class SqlSessionScanLifecycle {
   }
 
   private StatusCode beginStreaming(SqlScanCursor cursor, boolean scalar) {
-    StatusCode status = streaming.begin();
-    if (status.isOk()) status = temporal.beginStatement();
-    if (status.isOk()) status = streamingQueries.prepare();
-    if (status.isOk()) queries.adoptPreparedQuery();
-    if (status.isOk() && scalar && !queries.hasBlockPipelinePlan()
-        && !queries.descriptorScanMatched() && !queries.explainOnly()) {
-      queries.aggregateExecution().reset();
-      status = queries.executePointQuery(queries.aggregateExecution());
-    }
+    StatusCode status = prepareStreaming(scalar);
     if (!status.isOk()) return failStreamingStart(status);
     if (queries.explainOnly() && scalar && !queries.hasBlockPipelinePlan()
         && !queries.descriptorScanMatched()) return explainScalar(cursor);
     return beginPreparedStreaming(cursor);
+  }
+
+  private StatusCode prepareStreaming(boolean scalar) {
+    StatusCode status = streaming.begin();
+    if (!status.isOk()) return status;
+    status = temporal.beginStatement();
+    if (!status.isOk()) return status;
+    status = streamingQueries.prepare();
+    if (!status.isOk()) return status;
+    queries.adoptPreparedQuery();
+    if (!scalar || queries.hasBlockPipelinePlan()
+        || queries.descriptorScanMatched() || queries.explainOnly()) return StatusCode.OK;
+    queries.aggregateExecution().reset();
+    return queries.executePointQuery(queries.aggregateExecution());
   }
 
   private StatusCode explainScalar(SqlScanCursor cursor) {

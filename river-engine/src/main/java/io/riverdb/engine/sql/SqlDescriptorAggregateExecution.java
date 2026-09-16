@@ -27,16 +27,8 @@ final class SqlDescriptorAggregateExecution {
 
   StatusCode execute(SqlCommand command, SchemaPin pin, SqlExecutionResult result) {
     TableDescriptor table = pin.descriptor();
-    StatusCode status = values.reserve(table);
-    if (status.isOk()) status = predicate.prepare(command, table);
-    if (status.isOk()) status = aggregate.prepare(command, table, null);
-    if (status.isOk()) status = cursor.reset();
-    if (status.isOk()) status = session.descriptorRows().beginScan(pin, cursor);
-    while (status.isOk()) {
-      status = session.descriptorRows().nextScan(cursor, values.fetched(), identity);
-      if (status.isOk()) status = predicate.evaluate(values.fetched());
-      if (status.isOk() && predicate.matched()) status = aggregate.accumulate(values.fetched());
-    }
+    StatusCode status = prepare(command, pin, table);
+    if (status.isOk()) status = scanRows();
     if (status == StatusCode.CONFLICT) status = StatusCode.OK;
     StatusCode closed = closeCursor();
     if (status.isOk()) status = closed;
@@ -44,6 +36,34 @@ final class SqlDescriptorAggregateExecution {
     if (status.isOk()) status = aggregate.publish(result, session.visibleCommitSequence());
     if (status.isOk()) aggregate.reset();
     return status;
+  }
+
+  private StatusCode prepare(
+      SqlCommand command, SchemaPin pin, TableDescriptor table) {
+    StatusCode status = values.reserve(table);
+    if (!status.isOk()) return status;
+    status = predicate.prepare(command, table);
+    if (!status.isOk()) return status;
+    status = aggregate.prepare(command, table, null);
+    if (!status.isOk()) return status;
+    status = cursor.reset();
+    if (!status.isOk()) return status;
+    return session.descriptorRows().beginScan(pin, cursor);
+  }
+
+  private StatusCode scanRows() {
+    while (true) {
+      StatusCode status = session.descriptorRows().nextScan(
+          cursor, values.fetched(), identity);
+      if (status == StatusCode.CONFLICT) return status;
+      if (!status.isOk()) return status;
+      status = predicate.evaluate(values.fetched());
+      if (!status.isOk()) return status;
+      if (predicate.matched()) {
+        status = aggregate.accumulate(values.fetched());
+        if (!status.isOk()) return status;
+      }
+    }
   }
 
   boolean hasResources() { return cursor.isActive(); }
