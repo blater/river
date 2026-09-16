@@ -122,3 +122,12 @@ allocation behavior. Existing child routing is unchanged.
 maximum score 41.4655 and NPATH 100. Evidence:
 `/private/tmp/river-btree-check.log` and
 `/private/tmp/river-btree-final-slopmark.json`. No performance claim.
+
+### Client/server lifecycle slice — 2026-09-16
+
+Separated server-query close exchange from local completion, and named session
+state admission before request decoding. Integrator review confirmed unchanged
+status precedence and cleanup. Both affected module checks passed. Scan including
+tests: 51 files, maximum score 91.7783 and NPATH 48. Evidence:
+`/private/tmp/river-session-check.log` and
+`/private/tmp/river-session-final-slopmark.json`. No performance claim.
