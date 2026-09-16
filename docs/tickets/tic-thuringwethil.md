@@ -131,3 +131,12 @@ status precedence and cleanup. Both affected module checks passed. Scan includin
 tests: 51 files, maximum score 91.7783 and NPATH 48. Evidence:
 `/private/tmp/river-session-check.log` and
 `/private/tmp/river-session-final-slopmark.json`. No performance claim.
+
+### JDBC savepoint ownership slice — 2026-09-16
+
+Savepoint capacity, identity allocation, lookup, and invalidation now belong to
+one connection-owned registry. Admission and SQL publication order are unchanged.
+Independent Luna/high review approved the lifecycle; `:river-jdbc:check` passed.
+Full module scan including tests: maximum score 97.2898 and NPATH 32. Evidence:
+`/private/tmp/river-jdbc-check.log` and
+`/private/tmp/river-jdbc-final-slopmark.json`. No performance claim.
