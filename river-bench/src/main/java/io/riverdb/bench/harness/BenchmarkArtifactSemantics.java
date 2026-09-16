@@ -30,16 +30,30 @@ final class BenchmarkArtifactSemantics {
     long operations = sample.path("operation_count").asLong(-1);
     long interval = sample.path("expected_interval_ns").asLong(-1);
     long histogramCount = sample.path("histogram_count").asLong(-1);
+    validateMode(mode, metric, interval, errors);
+    validateHistogram(metric, histogramCount, operations, errors);
+    long minimum = sample.path("minimum_ns").asLong(-1);
+    long p50 = sample.path("p50_ns").asLong(-1);
+    long p95 = sample.path("p95_ns").asLong(-1);
+    long p99 = sample.path("p99_ns").asLong(-1);
+    long p999 = sample.path("p999_ns").asLong(-1);
+    long maximum = sample.path("maximum_ns").asLong(-1);
+    validateQuantiles(minimum, p50, p95, p99, p999, maximum, errors);
+    double mean = sample.path("mean_ns").asDouble(Double.NaN);
+    validateMean(mean, minimum, maximum, errors);
+  }
+
+  private static void validateMode(String mode, String metric, long interval, List<String> errors) {
     if ("closed_loop".equals(mode)) {
-      if (!"service".equals(metric)) {
-        errors.add("$.metric: closed_loop only permits service");
-      }
-      if (interval != 0) {
-        errors.add("$.expected_interval_ns: closed_loop requires zero");
-      }
+      if (!"service".equals(metric)) errors.add("$.metric: closed_loop only permits service");
+      if (interval != 0) errors.add("$.expected_interval_ns: closed_loop requires zero");
     } else if ("open_loop".equals(mode) && interval < 1) {
       errors.add("$.expected_interval_ns: open_loop requires a positive interval");
     }
+  }
+
+  private static void validateHistogram(
+      String metric, long histogramCount, long operations, List<String> errors) {
     if ("coordinated_omission_corrected_service".equals(metric)) {
       if (histogramCount < operations) {
         errors.add("$.histogram_count: corrected count cannot be below operation count");
@@ -47,17 +61,17 @@ final class BenchmarkArtifactSemantics {
     } else if (histogramCount != operations) {
       errors.add("$.histogram_count: service/scheduled count must equal operation count");
     }
-    long minimum = sample.path("minimum_ns").asLong(-1);
-    long p50 = sample.path("p50_ns").asLong(-1);
-    long p95 = sample.path("p95_ns").asLong(-1);
-    long p99 = sample.path("p99_ns").asLong(-1);
-    long p999 = sample.path("p999_ns").asLong(-1);
-    long maximum = sample.path("maximum_ns").asLong(-1);
-    if (!(minimum <= p50 && p50 <= p95 && p95 <= p99
-        && p99 <= p999 && p999 <= maximum)) {
+  }
+
+  private static void validateQuantiles(
+      long minimum, long p50, long p95, long p99, long p999, long maximum,
+      List<String> errors) {
+    if (!(minimum <= p50 && p50 <= p95 && p95 <= p99 && p99 <= p999 && p999 <= maximum)) {
       errors.add("$: latency quantiles must be monotonic from minimum through maximum");
     }
-    double mean = sample.path("mean_ns").asDouble(Double.NaN);
+  }
+
+  private static void validateMean(double mean, long minimum, long maximum, List<String> errors) {
     if (!Double.isFinite(mean) || mean < minimum || mean > maximum) {
       errors.add("$.mean_ns: mean must be finite and within minimum/maximum");
     }
