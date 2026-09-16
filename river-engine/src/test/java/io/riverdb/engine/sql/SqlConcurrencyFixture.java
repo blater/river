@@ -204,15 +204,15 @@ final class SqlConcurrencyFixture implements AutoCloseable {
       var manager = (io.riverdb.tx.TransactionManager) read(read(database, "embedded"), "transactions");
       var snapshot = manager.newDeadlockDiagnosticsSnapshot();
       assertEquals(StatusCode.OK, manager.snapshotDeadlockDiagnostics(snapshot));
-      assertEquals(expected.length, snapshot.exemplarEdgeCountAt(0));
+      assertEquals(expected.length, snapshot.exemplars().edgeCountAt(0));
       var digests = new HashMap<Integer, Long>();
       for (int i = 0; i < expected.length; i++) {
-        int edge = snapshot.exemplarEdgeIndex(0, i);
-        int owner = (int) snapshot.edgeWaiterDiagnosticTagAt(edge) - 101;
-        long digest = snapshot.edgeResourceDigestAt(edge);
+        int edge = snapshot.exemplars().edgeIndex(0, i);
+        int owner = (int) snapshot.edges().waiterDiagnosticTagAt(edge) - 101;
+        long digest = snapshot.edges().resourceDigestAt(edge);
         digests.put(owner, digest);
         System.out.println("attempt_tag=" + (101 + owner) + " resource_digest=" + digest
-            + " blocker_resource_digest=" + snapshot.edgeBlockingResourceDigestAt(edge));
+            + " blocker_resource_digest=" + snapshot.edges().blockingResourceDigestAt(edge));
       }
       if (expected.length == 3 && expected[2].held.equals("null")) {
         assertEquals(digests.get(1), digests.get(2), "same row1 KEY resource");

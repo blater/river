@@ -114,38 +114,61 @@ final class LockExactAdmissionController {
 
   private StatusCode prepareSlots(long id, long generation, LockRequest request) {
     LockExactAdmission a = table.admission;
-    a.resourceSlot = table.state.directory.resource(request);
-    a.transactionSlot = table.state.directory.transaction(id, generation);
-    a.holdingSlot = a.resourceSlot < 0 ? -1
-        : table.state.directory.holding(a.resourceSlot, id, generation);
-    a.newResource = a.resourceSlot < 0;
-    a.newTransaction = a.transactionSlot < 0;
-    StatusCode status;
-    if (a.newResource) {
-      status = table.state.resources.reserve(a.resource);
-      if (!status.isOk()) return status;
-      a.resourceSlot = a.resource.slot;
-      status = table.state.resources.prepareTuple(a.resourceSlot, request);
-      if (!status.isOk()) return status;
-    }
-    if (a.newTransaction) {
-      status = table.state.transactions.reserve(a.transaction);
-      if (!status.isOk()) return status;
-      a.transactionSlot = a.transaction.slot;
-    }
-    status = table.state.requests.reserve(a.request);
+    locateExistingSlots(a, id, generation, request);
+    StatusCode status = reserveResource(a, request);
     if (!status.isOk()) return status;
-    a.requestSlot = a.request.slot;
-    a.newHolding = a.holdingSlot < 0;
-    if (a.newHolding && (table.nextCapability <= 0 || table.nextCapability == Long.MAX_VALUE)) {
+    status = reserveTransaction(a);
+    if (!status.isOk()) return status;
+    status = reserveRequest(a);
+    if (!status.isOk()) return status;
+    return reserveHolding(a);
+  }
+
+  private void locateExistingSlots(
+      LockExactAdmission admission, long id, long generation, LockRequest request) {
+    admission.resourceSlot = table.state.directory.resource(request);
+    admission.transactionSlot = table.state.directory.transaction(id, generation);
+    admission.holdingSlot = admission.resourceSlot < 0 ? -1
+        : table.state.directory.holding(admission.resourceSlot, id, generation);
+    admission.newResource = admission.resourceSlot < 0;
+    admission.newTransaction = admission.transactionSlot < 0;
+  }
+
+  private StatusCode reserveResource(LockExactAdmission admission, LockRequest request) {
+    if (!admission.newResource) return StatusCode.OK;
+    StatusCode status = table.state.resources.reserve(admission.resource);
+    if (!status.isOk()) return status;
+    admission.resourceSlot = admission.resource.slot;
+    return table.state.resources.prepareTuple(admission.resourceSlot, request);
+  }
+
+  private StatusCode reserveTransaction(LockExactAdmission admission) {
+    if (!admission.newTransaction) return StatusCode.OK;
+    StatusCode status = table.state.transactions.reserve(admission.transaction);
+    if (!status.isOk()) return status;
+    admission.transactionSlot = admission.transaction.slot;
+    return StatusCode.OK;
+  }
+
+  private StatusCode reserveRequest(LockExactAdmission admission) {
+    StatusCode status = table.state.requests.reserve(admission.request);
+    if (status.isOk()) admission.requestSlot = admission.request.slot;
+    return status;
+  }
+
+  private StatusCode reserveHolding(LockExactAdmission admission) {
+    admission.newHolding = admission.holdingSlot < 0;
+    if (admission.newHolding) return reserveNewHolding(admission);
+    return references(admission.holdingSlot) == Long.MAX_VALUE
+        ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.OK;
+  }
+
+  private StatusCode reserveNewHolding(LockExactAdmission admission) {
+    if (table.nextCapability <= 0 || table.nextCapability == Long.MAX_VALUE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    if (!a.newHolding && references(a.holdingSlot) == Long.MAX_VALUE) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    if (!a.newHolding) return StatusCode.OK;
-    status = table.state.holdings.reserve(a.holding);
-    if (status.isOk()) a.holdingSlot = a.holding.slot;
+    StatusCode status = table.state.holdings.reserve(admission.holding);
+    if (status.isOk()) admission.holdingSlot = admission.holding.slot;
     return status;
   }
 

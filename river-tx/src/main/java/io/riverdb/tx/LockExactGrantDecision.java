@@ -32,79 +32,105 @@ final class LockExactGrantDecision {
     long transaction = requests.transactions[offset];
     boolean conversion = table.state.requests.conversion(request);
     LockQueueKind waiterQueue = conversion ? LockQueueKind.CONVERSION : LockQueueKind.ORDINARY;
-    long blocker;
-
     if (table.lifecycle.frozen(transaction)) {
       if (describe) table.blockCausality.unclassifiedBlock();
       return false;
     }
-    if (conversion) {
-      if (conversionHead(resource) != request) {
-        blocker = LockTypedSlots.decode(requests.previousConversion[offset]);
-        if (blocker < 0) blocker = conversionHead(resource);
-        if (describe) recordQueueBlock(request, blocker, waiterQueue,
-            LockDeadlockEdgeKind.FIFO_FAIRNESS, LockGrantPrecondition.FIFO_QUEUE_HEAD);
-        return false;
-      }
-    } else {
-      blocker = conversionHead(resource);
-      if (blocker >= 0) {
-        if (describe) recordQueueBlock(request, blocker, waiterQueue,
-            LockDeadlockEdgeKind.CONVERSION_PRIORITY,
-            LockGrantPrecondition.CONVERSION_QUEUE_EMPTY);
-        return false;
-      }
-      if (waitHead(resource) != request) {
-        blocker = LockTypedSlots.decode(requests.previousResource[offset]);
-        if (blocker < 0) blocker = waitHead(resource);
-        if (describe) recordQueueBlock(request, blocker, waiterQueue,
-            LockDeadlockEdgeKind.FIFO_FAIRNESS, LockGrantPrecondition.FIFO_QUEUE_HEAD);
-        return false;
-      }
+    if (!queueGrantable(resource, request, requests, offset, conversion, waiterQueue, describe)) {
+      return false;
     }
+    if (!intervalGrantable(resource, request, transaction, resources, resourceOffset, conversion,
+        waiterQueue, describe)) {
+      return false;
+    }
+    return activeGrantable(resource, request, transaction, resources, requests,
+        resourceOffset, offset, waiterQueue, describe);
+  }
 
-    if (interval(resources.scopes[resourceOffset]) && !conversion) {
-      blocker = table.conflicts.earlierBlocker(resource, request);
-      if (blocker >= 0) {
-        if (describe) recordQueueBlock(request, blocker, waiterQueue,
-            LockDeadlockEdgeKind.FIFO_FAIRNESS,
-            LockGrantPrecondition.NO_EARLIER_INCOMPATIBLE_WAITER);
-        return false;
-      }
-      blocker = table.conflicts.conversionBlocker(resource, transaction);
-      if (blocker >= 0) {
-        if (describe) recordQueueBlock(request, blocker, waiterQueue,
-            LockDeadlockEdgeKind.CONVERSION_PRIORITY,
-            LockGrantPrecondition.CONVERSION_QUEUE_EMPTY);
-        return false;
-      }
+  private boolean queueGrantable(
+      long resource, long request, LockExactRequestStore.Chunk requests, int requestOffset,
+      boolean conversion,
+      LockQueueKind waiterQueue, boolean describe) {
+    long blocker;
+    if (conversion) {
+      if (conversionHead(resource) == request) return true;
+      blocker = LockTypedSlots.decode(requests.previousConversion[requestOffset]);
+      if (blocker < 0) blocker = conversionHead(resource);
+      if (describe) recordQueueBlock(request, blocker, waiterQueue,
+          LockDeadlockEdgeKind.FIFO_FAIRNESS, LockGrantPrecondition.FIFO_QUEUE_HEAD);
+      return false;
     }
+    blocker = conversionHead(resource);
+    if (blocker >= 0) {
+      if (describe) recordQueueBlock(request, blocker, waiterQueue,
+          LockDeadlockEdgeKind.CONVERSION_PRIORITY,
+          LockGrantPrecondition.CONVERSION_QUEUE_EMPTY);
+      return false;
+    }
+    if (waitHead(resource) == request) return true;
+    blocker = LockTypedSlots.decode(requests.previousResource[requestOffset]);
+    if (blocker < 0) blocker = waitHead(resource);
+    if (describe) recordQueueBlock(request, blocker, waiterQueue,
+        LockDeadlockEdgeKind.FIFO_FAIRNESS, LockGrantPrecondition.FIFO_QUEUE_HEAD);
+    return false;
+  }
+
+  private boolean intervalGrantable(
+      long resource, long request, long transaction, LockExactResourceStore.Chunk resources,
+      int resourceOffset, boolean conversion, LockQueueKind waiterQueue, boolean describe) {
+    if (!interval(resources.scopes[resourceOffset]) || conversion) return true;
+    long blocker = table.conflicts.earlierBlocker(resource, request);
+    if (blocker >= 0) {
+      if (describe) recordQueueBlock(request, blocker, waiterQueue,
+          LockDeadlockEdgeKind.FIFO_FAIRNESS,
+          LockGrantPrecondition.NO_EARLIER_INCOMPATIBLE_WAITER);
+      return false;
+    }
+    blocker = table.conflicts.conversionBlocker(resource, transaction);
+    if (blocker < 0) return true;
+    if (describe) recordQueueBlock(request, blocker, waiterQueue,
+        LockDeadlockEdgeKind.CONVERSION_PRIORITY,
+        LockGrantPrecondition.CONVERSION_QUEUE_EMPTY);
+    return false;
+  }
+
+  private boolean activeGrantable(
+      long resource, long request, long transaction, LockExactResourceStore.Chunk resources,
+      LockExactRequestStore.Chunk requests, int resourceOffset, int requestOffset,
+      LockQueueKind waiterQueue, boolean describe) {
+    long blocker;
     if (interval(resources.scopes[resourceOffset])) {
-      blocker = table.conflicts.activeBlocker(resource, transaction, requests.modes[offset]);
+      blocker = table.conflicts.activeBlocker(resource, transaction, requests.modes[requestOffset]);
       if (blocker < 0) return true;
     } else {
-      long holding = requests.holdings[offset];
-      LockExactHoldingStore.Chunk holdings = table.state.holdings.record(holding);
-      int holdingOffset = LockTypedSlots.offset(holding);
-      boolean grantable = holdings.active[holdingOffset] == 0
-          ? LockExactCompatibility.grantable(
-              requests.modes[offset], resources.ownerCounts[resourceOffset],
-              resources.sharedCounts[resourceOffset], resources.updateCounts[resourceOffset])
-          : holdings.modes[holdingOffset] >= requests.modes[offset]
-              || LockExactCompatibility.upgradeable(
-                  requests.modes[offset], resources.ownerCounts[resourceOffset],
-                  resources.sharedCounts[resourceOffset], resources.updateCounts[resourceOffset]);
-      if (grantable) return true;
+      if (exactHoldingGrantable(resourceOffset, requestOffset, requests, resources)) return true;
       if (!describe) return false;
       blocker = table.conflicts.exactActiveBlocker(
-          resource, transaction, requests.modes[offset]);
+          resource, transaction, requests.modes[requestOffset]);
       if (blocker < 0) {
-        if (describe) table.blockCausality.unclassifiedBlock();
+        table.blockCausality.unclassifiedBlock();
         return false;
       }
     }
     if (describe) recordActiveOwner(request, blocker, waiterQueue);
     return false;
+  }
+
+  private boolean exactHoldingGrantable(
+      int resourceOffset, int requestOffset, LockExactRequestStore.Chunk requests,
+      LockExactResourceStore.Chunk resources) {
+    long holding = requests.holdings[requestOffset];
+    LockExactHoldingStore.Chunk holdings = table.state.holdings.record(holding);
+    int holdingOffset = LockTypedSlots.offset(holding);
+    if (holdings.active[holdingOffset] == 0) {
+      return LockExactCompatibility.grantable(
+          requests.modes[requestOffset], resources.ownerCounts[resourceOffset],
+          resources.sharedCounts[resourceOffset], resources.updateCounts[resourceOffset]);
+    }
+    return holdings.modes[holdingOffset] >= requests.modes[requestOffset]
+        || LockExactCompatibility.upgradeable(
+            requests.modes[requestOffset], resources.ownerCounts[resourceOffset],
+            resources.sharedCounts[resourceOffset], resources.updateCounts[resourceOffset]);
   }
 
   private void recordActiveOwner(

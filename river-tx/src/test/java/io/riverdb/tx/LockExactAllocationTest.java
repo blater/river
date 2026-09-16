@@ -93,9 +93,9 @@ final class LockExactAllocationTest {
     assertEquals(0, locks.waitingCount());
     LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(diagnostics);
     assertEquals(StatusCode.OK, locks.snapshotDeadlockDiagnostics(snapshot));
-    assertEquals(11_000, snapshot.totalVictimSelections());
-    assertEquals(1, snapshot.signatureCount());
-    assertEquals(0, snapshot.victimEventOverflows());
+    assertEquals(11_000, snapshot.counters.totalVictimSelections());
+    assertEquals(1, snapshot.counters.signatureCount());
+    assertEquals(0, snapshot.counters.victimEventOverflows());
     if (capture) {
       LockBlockCausalitySnapshot blocks = new LockBlockCausalitySnapshot();
       assertEquals(StatusCode.OK, locks.endBlockCausalityCapture(blocks));
