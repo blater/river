@@ -317,3 +317,30 @@ maximum NPATH 100. Metrics: `/private/tmp/river-sql-final-integrated-after.json`
 Complete SQL and engine checks passed: 89 SQL tests and 1044 engine tests,
 no failures/errors/skips. Log: `/private/tmp/river-sql-final-integrated-check.log`.
 No performance claim; the cumulative diagnostic concern remains open.
+
+### Table mutation, recovery, and fault-test checkpoint — 2026-09-16
+
+Twenty production files simplify cohort preflight, mutation compilation, replay,
+scan admission, checkpoint repair, tuple publication, and version-page counting.
+Independent Luna/high review plus integrator review checked durable ordering,
+status precedence, pin/release, lock/snapshot, and cleanup boundaries. Transient
+phase counters remain locals/parameters. A reviewer's proposed cancellation on
+admission failure was rejected after checking original source: admission failures
+return before group creation, preserving rejection accounting.
+
+Fault/pressure tests share concrete fixture and cleanup owners; assertions and
+fault scenarios remain intact. Integration compilation found missing test helper
+imports/throws and auxiliary-class warnings, fixed without suppressions. The
+26 touched source files meet both limits (maximum score 62.5208, NPATH 99).
+Metrics: `/private/tmp/river-table-integrated-after.json`; initial compilation
+logs: `/private/tmp/river-table-integrated-check.log` and
+`/private/tmp/river-table-integrated-check-final.log`.
+The full engine run caught a real draft pressure-split regression: the extracted
+member phase returned a split but its caller then cleared it via rejectAll.
+Restored the original immediate return on member failure, preserving accepted
+prefix/deferred suffix accounting. All group fault and pressure tests then passed
+(`/private/tmp/river-table-pressure-correction.log`); failing evidence remains at
+`/private/tmp/river-table-integrated-check-reviewed.log`.
+Independent review approved the correction; the final complete engine check
+passed 1044 tests with no failures/errors/skips. Accepted-source log:
+`/private/tmp/river-table-integrated-check-accepted.log`. No performance claim.
