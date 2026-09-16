@@ -3599,3 +3599,79 @@ production source outside the candidate is unchanged from its tested base.
 The integration receives `perf-checkpoint-20260916-tuple-key-admission` and is the
 baseline for the fresh tic-waymeet comparison. That comparison will use the fixed
 harness for both sides; historical results are not mixed into it.
+
+## 2026-09-16 — scalar routing recheck with retained warmup workers (tic-waymeet)
+
+The control now includes accepted tuple-key admission at `7daab25a`, tagged
+`perf-checkpoint-20260916-tuple-key-admission`. Candidate `df9cb264` applies the
+unchanged reviewed `0a70f881` scalar-routing mechanism to that checkpoint on
+`ticket/tic-waymeet-recheck`. The installed variants differ in exactly one jar
+entry: `io/riverdb/storage/btree/BTreePage.class`. No broader optimization was
+introduced. The original feature branch remains available.
+
+Focused combined validation passed: 11 `BTreePageTest` tests and 49
+`IndexedTransactionSessionTest` tests, zero failures/errors/skips. Command:
+
+```sh
+GRADLE_USER_HOME=/private/tmp/river-gradle-routing ./gradlew --no-daemon \
+  --project-cache-dir /private/tmp/river-project-cache-routing \
+  :river-storage:test --tests io.riverdb.storage.btree.BTreePageTest \
+  :river-engine:test --tests io.riverdb.engine.table.IndexedTransactionSessionTest \
+  :river-storage:jar
+```
+
+Build log: `/private/tmp/river-waymeet-focused.log`, successful in 47 seconds.
+The earlier standalone routing clean full checkpoint remains recorded above;
+this recheck does not accept or merge the routing feature.
+
+Both sides used external harness `7d91f4f` with the reviewed warmup-worker reuse
+fix. Its standard `-buildvcs=false` native build reports `devel`; the actual
+source commit is explicitly recorded here. All four runs were unprofiled and
+serial, with no build or competing workload active: sample New-Order,
+READ COMMITTED with explicit FOR UPDATE, one worker and warehouse, seed 42,
+retries 3, warmup 20s, measurement 30s, durable local WAL, loopback TCP/TLS,
+GraalVM 25.0.4 and `-Xmx1g`. Command/CPU collector and all captures live at
+`/private/tmp/river-waymeet-perf/`; each `*-command.json` retains the exact
+invocation. Control executable: `/private/tmp/river-two-hotpaths/tuple-revised/river`;
+candidate: `/private/tmp/river-waymeet-perf/candidate/river`. Version labels are
+`7daab25a-waymeet-control-a/b` and `df9cb264-waymeet-routing-a/b`.
+
+| Run order | Committed TPS | Server CPU ms/commit | Client CPU ms/commit | p99 ms |
+|---|---:|---:|---:|---:|
+| control A | 388.331 | 2.275 | 1.170 | 3.953 |
+| routing A | 388.431 | 2.257 | 1.175 | 4.045 |
+| routing B | 390.178 | 2.227 | 1.166 | 4.012 |
+| control B | 380.261 | 2.316 | 1.183 | 4.264 |
+
+All four passed: zero warmup cancellations, zero retries/failures/unknowns in
+both phases, invariant success, reconciled outcome counts and report hashes,
+graceful shutdown, and inactive owned services afterward. Measured deadline
+cancellations and expected rollbacks are retained. CPU is whole-process `ps`
+CPU divided by measured commits, including JVM/background work. Start brackets
+were within 0.08 ms of the measured start; end brackets were 15.1–17.5 ms afterward.
+The fixed runner owns workers through both phases; these unprofiled runs do not
+add a separate physical-socket continuity recording.
+
+Native report IDs under `/Users/blater/src/ingres/river-harness/runs/`:
+
+- control A: `river_harness_20260916_085638_d0fdde7c`
+- routing A: `river_harness_20260916_085802_c222c776`
+- routing B: `river_harness_20260916_085923_f350a047`
+- control B: `river_harness_20260916_090029_2982b0fe`
+
+All four have identical declared configuration and comparison key
+`2eb18a26f6e6a3e13195557f9c4cc79a81c7b97b0c1b1c4f125adf32d50641b2`, eligibility
+`eligible`. Older pre-fix samples are preserved but not mixed into this comparison.
+
+**Decision:** the previous repeated CPU penalty did not recur. Both routing
+CPU figures are below both controls. The short-run arithmetic means favor
+routing by 2.32% CPU/commit and 1.30% TPS, but the first pair has effectively flat
+throughput and the final slower control materially affects the mean. This is a
+modest favorable CPU signal, not an established throughput improvement or a
+reconstruction of the old adverse samples. Keep the ticket open and the routing
+feature unmerged; the user's requested tuple merge is already delivered.
+
+Independent measurement review agrees that these four samples complete the
+requested recheck; another attribution campaign is not needed. The former
+CPU-regression concern is not reproduced, while the throughput evidence remains
+variable.

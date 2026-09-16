@@ -5,8 +5,8 @@ type: task
 priority: 1
 assignee: blater
 delivery: code
-base-commit: 64329eda629acdfce0803c1e0a5ae08e21c401be
-branch: ticket/tic-waymeet-binary-routing
+base-commit: 7daab25ae133e447f2c25834ff117e0549d9eca7
+branch: ticket/tic-waymeet-recheck
 links:
     - tic-gothmog
     - tic-bert
@@ -45,3 +45,7 @@ Performance acceptance held. Interleaved identical20s-warmup/30s sample New-Orde
 ### 2026-09-15T21:56:35Z
 
 Independent performance review agrees: no established workload benefit, and server CPU is higher in both routing samples versus the adjacent unchanged control. This is not proof that binary search intrinsically regresses; attribution remains unresolved. Keep ticket open, publish tested feature branch and docs-only outcomes, and create no production integration checkpoint tag.
+
+### 2026-09-16T09:03:06Z
+
+Rechecked the unchanged binary-routing mechanism on accepted tuple checkpoint 7daab25a, using fixed external harness7d91f4f (workers retained across warmup). Rebased implementation df9cb264 is on ticket/tic-waymeet-recheck; original branch and adverse evidence remain retained. Runnable variants differ only in BTreePage.class. Targeted BTreePageTest and IndexedTransactionSessionTest: 60 tests, zero failures/errors/skips, build47s; /private/tmp/river-waymeet-focused.log. Fresh unprofiled sample New-Order, READ COMMITTED, 1 worker/warehouse, seed42, retries3, warmup20s/duration30s, durable WAL/TCP-TLS, GraalVM25.0.4 -Xmx1g: controlA388.331TPS/2.275ms serverCPU/p993.953ms; routingA388.431/2.257/4.045; routingB390.178/2.227/4.012; controlB380.261/2.316/4.264. All passed, zero warmup cancellations/retries/failures/unknowns, invariants/accounting/report hashes/cleanup passed. Earlier CPU penalty did not recur: both candidate CPU figures are lower than both controls. Short-run mean CPU is2.32% lower and TPS1.30% higher, but first-pair TPS is flat and the slower final control influences the mean. Modest favorable CPU signal, no established throughput improvement; ticket remains open and routing unmerged. Individual samples, configuration and report IDs are in docs/performance-checkpoints.md under the 2026-09-16 tic-waymeet recheck; artifacts /private/tmp/river-waymeet-perf/.
