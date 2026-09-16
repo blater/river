@@ -35,9 +35,18 @@ final class RiverDaemonIdentityCreate {
     DirectoryListResult entries = new DirectoryListResult(16);
     status = directory.list(entries);
     if (!status.isOk()) {
-      RiverDaemonIdentityFiles.closeDirectory(directory, status.isOk() ? StatusCode.CONFLICT : status);
-      return status.isOk() ? StatusCode.CONFLICT : status;
+      RiverDaemonIdentityFiles.closeDirectory(directory, status);
+      return status;
     }
+    return continueCreate(datadir, directory, filesystem, incarnation, random, pid,
+        processStartEpochMillis, entries, result);
+  }
+
+  private static StatusCode continueCreate(
+      Path datadir, RiverDirectory directory, RiverDaemonFileSystem filesystem,
+      DatabaseIncarnation incarnation, SecureRandom random, long pid,
+      long processStartEpochMillis, DirectoryListResult entries,
+      RiverDaemonIdentity.IdentityResult result) {
     boolean hasBootstrap = RiverDaemonIdentityNamespace.hasEntry(entries, "bootstrap.properties");
     boolean hasLock = RiverDaemonIdentityNamespace.hasEntry(entries, RiverDaemonIdentity.LOCK_FILE);
     String prebootstrapStage = RiverDaemonIdentityNamespace.prebootstrapStageName(entries, hasBootstrap, hasLock);
@@ -65,9 +74,18 @@ final class RiverDaemonIdentityCreate {
           processStartEpochMillis, entries, result);
     }
 
+    return openBootstrapLock(datadir, directory, filesystem, incarnation, random, pid,
+        processStartEpochMillis, hasLock, result);
+  }
+
+  private static StatusCode openBootstrapLock(
+      Path datadir, RiverDirectory directory, RiverDaemonFileSystem filesystem,
+      DatabaseIncarnation incarnation, SecureRandom random, long pid,
+      long processStartEpochMillis, boolean hasLock,
+      RiverDaemonIdentity.IdentityResult result) {
     RiverFileResult lockFileResult = new RiverFileResult();
-    status = directory.openFile(RiverDaemonIdentity.LOCK_FILE, hasLock ? RiverOpenMode.EXISTING : RiverOpenMode.CREATE_NEW,
-        lockFileResult);
+    StatusCode status = directory.openFile(RiverDaemonIdentity.LOCK_FILE,
+        hasLock ? RiverOpenMode.EXISTING : RiverOpenMode.CREATE_NEW, lockFileResult);
     // A sole prebootstrap lock is reopened and verified before its owner record is replaced.
     if (!status.isOk()) {
       RiverDaemonIdentityFiles.closeDirectory(directory, status);
@@ -81,40 +99,47 @@ final class RiverDaemonIdentityCreate {
       RiverDaemonIdentityFiles.closeDirectory(directory, status);
       return status;
     }
-    RiverDaemonIdentityRecords.LockRecord priorOwner = null;
-    if (hasLock) {
-      DirectoryListResult heldEntries = new DirectoryListResult(16);
-      status = directory.list(heldEntries);
-      if (status.isOk() && (heldEntries.size() != 1 || !RiverDaemonIdentityNamespace.hasEntry(heldEntries, RiverDaemonIdentity.LOCK_FILE))) {
-        status = StatusCode.CONFLICT;
-      }
-      byte[] priorBytes = new byte[MAX_RECORD_BYTES];
-      if (status.isOk()) {
-        status = RiverDaemonIdentityFiles.readRecord(lockFile, priorBytes, RiverDaemonIdentity.LOCK_FILE);
-        if (status == StatusCode.CORRUPTION) {
-          status = StatusCode.OK;
-        } else if (status.isOk()) {
-          priorOwner = RiverDaemonIdentityRecords.parseLock(priorBytes);
-          if (priorOwner != null) {
-            if (!RiverDaemonIdentityNamespace.canonicalPath(datadir).equals(priorOwner.datadir)) {
-              status = StatusCode.CORRUPTION;
-            } else {
-              status = RiverDaemonIdentityNamespace.proveOwnerAbsent(priorOwner);
-            }
-          }
-        }
-      }
-      Arrays.fill(priorBytes, (byte) 0);
-    }
+    PriorRead prior = hasLock ? readPriorOwner(directory, lockFile, datadir)
+        : new PriorRead(StatusCode.OK, null);
+    status = prior.status;
     if (!status.isOk()) {
       lockResult.lock().close();
       lockFile.close();
       RiverDaemonIdentityFiles.closeDirectory(directory, status);
       return status;
     }
-    return RiverDaemonIdentityBootstrapCreate.createBootstrap(datadir, directory, lockFile, lockResult.lock(), incarnation, random,
-        pid, processStartEpochMillis, result, priorOwner, hasLock);
+    return RiverDaemonIdentityBootstrapCreate.createBootstrap(datadir, directory, lockFile,
+        lockResult.lock(), incarnation, random, pid, processStartEpochMillis, result,
+        prior.owner, hasLock);
   }
+
+  private static PriorRead readPriorOwner(RiverDirectory directory, RiverFile lockFile,
+      Path datadir) {
+    DirectoryListResult entries = new DirectoryListResult(16);
+    StatusCode status = directory.list(entries);
+    if (status.isOk() && (entries.size() != 1
+        || !RiverDaemonIdentityNamespace.hasEntry(entries, RiverDaemonIdentity.LOCK_FILE))) {
+      status = StatusCode.CONFLICT;
+    }
+    byte[] bytes = new byte[MAX_RECORD_BYTES];
+    RiverDaemonIdentityRecords.LockRecord owner = null;
+    if (status.isOk()) {
+      status = RiverDaemonIdentityFiles.readRecord(lockFile, bytes, RiverDaemonIdentity.LOCK_FILE);
+      if (status == StatusCode.CORRUPTION) {
+        status = StatusCode.OK;
+      } else if (status.isOk()) {
+        owner = RiverDaemonIdentityRecords.parseLock(bytes);
+        if (owner != null) {
+          status = RiverDaemonIdentityNamespace.canonicalPath(datadir).equals(owner.datadir)
+              ? RiverDaemonIdentityNamespace.proveOwnerAbsent(owner) : StatusCode.CORRUPTION;
+        }
+      }
+    }
+    Arrays.fill(bytes, (byte) 0);
+    return new PriorRead(status, owner);
+  }
+
+  private record PriorRead(StatusCode status, RiverDaemonIdentityRecords.LockRecord owner) { }
 
 
 }

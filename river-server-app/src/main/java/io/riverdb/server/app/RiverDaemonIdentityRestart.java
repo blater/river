@@ -44,26 +44,39 @@ final class RiverDaemonIdentityRestart {
       RiverDaemonIdentityFiles.closeDirectory(directory, status);
       return status;
     }
-    byte[] lockBytes = new byte[MAX_RECORD_BYTES];
-    RiverDaemonIdentityRecords.LockRecord owner = null;
-    status = RiverDaemonIdentityFiles.readRecord(lockFile, lockBytes, RiverDaemonIdentity.LOCK_FILE);
-    if (status.isOk()) owner = RiverDaemonIdentityRecords.parseLock(lockBytes);
-    Arrays.fill(lockBytes, (byte) 0);
-    if (status.isOk() && owner == null) status = StatusCode.CORRUPTION;
-    if (status.isOk() && owner != null && !RiverDaemonIdentityNamespace.canonicalPath(datadir).equals(owner.datadir)) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (status.isOk() && owner != null) status = RiverDaemonIdentityNamespace.proveOwnerAbsent(owner);
+    OwnerRead ownerRead = readOwner(lockFile, datadir);
+    status = ownerRead.status;
     if (!status.isOk()) {
-      lockResult.lock().close();
-      lockFile.close();
-      RiverDaemonIdentityFiles.closeDirectory(directory, status);
+      closeOpened(directory, lockFile, lockResult.lock(), status);
       return status;
     }
+    return finishRestart(directory, lockFile, lockResult.lock(), ownerRead.owner,
+        datadir, random, pid, processStartEpochMillis, result);
+  }
+
+  private static OwnerRead readOwner(RiverFile lockFile, Path datadir) {
+    byte[] bytes = new byte[MAX_RECORD_BYTES];
+    StatusCode status = RiverDaemonIdentityFiles.readRecord(
+        lockFile, bytes, RiverDaemonIdentity.LOCK_FILE);
+    RiverDaemonIdentityRecords.LockRecord owner = status.isOk()
+        ? RiverDaemonIdentityRecords.parseLock(bytes) : null;
+    Arrays.fill(bytes, (byte) 0);
+    if (status.isOk() && (owner == null
+        || !RiverDaemonIdentityNamespace.canonicalPath(datadir).equals(owner.datadir))) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk()) status = RiverDaemonIdentityNamespace.proveOwnerAbsent(owner);
+    return new OwnerRead(status, owner);
+  }
+
+  private static StatusCode finishRestart(
+      RiverDirectory directory, RiverFile lockFile, RiverLock lock,
+      RiverDaemonIdentityRecords.LockRecord owner, Path datadir, SecureRandom random,
+      long pid, long processStartEpochMillis, RiverDaemonIdentity.IdentityResult result) {
     RiverFileResult fileResult = new RiverFileResult();
-    status = directory.openFile(RiverDaemonIdentity.INSTANCE_FILE, RiverOpenMode.EXISTING, fileResult);
+    StatusCode status = directory.openFile(RiverDaemonIdentity.INSTANCE_FILE, RiverOpenMode.EXISTING, fileResult);
     if (!status.isOk()) {
-      lockResult.lock().close();
+      lock.close();
       lockFile.close();
       RiverDaemonIdentityFiles.closeDirectory(directory, status);
       return status;
@@ -89,11 +102,11 @@ final class RiverDaemonIdentityRestart {
       StatusCode closeFile = file.close();
       if (status.isOk() && !closeFile.isOk()) status = closeFile;
       if (!status.isOk()) {
-        lockResult.lock().close();
+        lock.close();
         lockFile.close();
         RiverDaemonIdentityFiles.closeDirectory(directory, status);
       } else {
-        result.complete(directory, lockResult.lock(), acceptedInstance.incarnation,
+        result.complete(directory, lock, acceptedInstance.incarnation,
             acceptedInstance.generation);
         result.setLockFile(lockFile);
         result.prepareRestart(RiverDaemonIdentityNamespace.canonicalPath(datadir), owner, RiverDaemonIdentityNamespace.nonce(random), pid,
@@ -104,6 +117,14 @@ final class RiverDaemonIdentityRestart {
   }
 
 
+  private static void closeOpened(RiverDirectory directory, RiverFile lockFile,
+      RiverLock lock, StatusCode status) {
+    lock.close();
+    lockFile.close();
+    RiverDaemonIdentityFiles.closeDirectory(directory, status);
+  }
+
+  private record OwnerRead(StatusCode status, RiverDaemonIdentityRecords.LockRecord owner) { }
 
   static StatusCode handoffOwner(RiverDaemonIdentity.IdentityResult result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;

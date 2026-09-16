@@ -344,3 +344,20 @@ prefix/deferred suffix accounting. All group fault and pressure tests then passe
 Independent review approved the correction; the final complete engine check
 passed 1044 tests with no failures/errors/skips. Accepted-source log:
 `/private/tmp/river-table-integrated-check-accepted.log`. No performance claim.
+
+### Daemon lifecycle slice — reviewed candidate, 2026-09-16
+
+Fourteen files separate identity recovery, publication, cleanup, and command
+routing phases. Integrator review corrected opened-stage cleanup, corruption
+precedence, complete restart finally ownership, and CLOSED normalization.
+All 75 daemon module tests passed, including a rerun against accepted coordinator
+changes. Standalone version smoke passed. Full module including tests: 80 files,
+maximum score 85.2311 and NPATH 96. Logs:
+`/private/tmp/river-server-app-check.log`,
+`/private/tmp/river-server-app-check-final.log`, and
+`/private/tmp/river-server-app-final-slopmark.json`.
+Final independent lifecycle review approved identity, stage ownership, cleanup,
+and failure precedence against the original source. A complete integration check
+and an isolated daemon performance comparison are pending before promotion.
+The cumulative adverse samples and component probes remain retained in
+`docs/performance-checkpoints.md`; they have not been dismissed or attributed.

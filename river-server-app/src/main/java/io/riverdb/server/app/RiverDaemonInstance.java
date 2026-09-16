@@ -102,47 +102,67 @@ public final class RiverDaemonInstance {
   /** Closes listener, TLS, credentials, database, and duplicate component handles. */
   public synchronized StatusCode closeServices() {
     if (servicesClosed) return StatusCode.CLOSED;
-    StatusCode status = StatusCode.OK;
-
-    if (server != null) {
-      StatusCode closedServer = server.close();
-      // A timed-out worker can still own database memory and file mappings.
-      // Retain every dependency and the identity lock until terminal shutdown.
-      if (!terminal(closedServer)) return closedServer;
-      status = firstFailure(status, closedServer);
-      if (terminal(closedServer)) server = null;
-    }
-    if (validityFence != null) {
-      StatusCode closedFence = validityFence.close();
-      status = firstFailure(status, closedFence);
-      if (terminal(closedFence)) validityFence = null;
-    }
-    if (tls != null) {
-      StatusCode cleanedTls = RiverDaemonTlsContext.cleanup(tls);
-      status = firstFailure(status, cleanedTls);
-      if (terminal(cleanedTls)) tls = null;
-    }
-    if (material != null) {
-      StatusCode destroyedMaterial = material.destroy();
-      status = firstFailure(status, destroyedMaterial);
-      if (terminal(destroyedMaterial)) material = null;
-    }
-    if (database != null) {
-      StatusCode closedDatabase = closeDatabaseValue(database);
-      status = firstFailure(status, closedDatabase);
-      if (terminal(closedDatabase)) database = null;
-    }
-    if (databaseDirectory != null) {
-      StatusCode closedDatabaseDirectory = closeDirectory(databaseDirectory);
-      status = firstFailure(status, closedDatabaseDirectory);
-      if (terminal(closedDatabaseDirectory)) databaseDirectory = null;
-    }
-    if (securityDirectory != null) {
-      StatusCode closedSecurityDirectory = closeDirectory(securityDirectory);
-      status = firstFailure(status, closedSecurityDirectory);
-      if (terminal(closedSecurityDirectory)) securityDirectory = null;
-    }
+    StatusCode status = closeServer();
+    if (!terminal(status)) return status;
+    if (status == StatusCode.CLOSED) status = StatusCode.OK;
+    status = firstFailure(status, closeValidityFence());
+    status = firstFailure(status, closeTls());
+    status = firstFailure(status, closeMaterial());
+    status = firstFailure(status, closeDatabaseOwner());
+    status = firstFailure(status, closeDatabaseDirectory());
+    status = firstFailure(status, closeSecurityDirectory());
     if (status.isOk()) servicesClosed = true;
+    return status;
+  }
+
+  private StatusCode closeServer() {
+    if (server == null) return StatusCode.OK;
+    StatusCode status = server.close();
+    // A timed-out worker can still own database memory and file mappings.
+    // Retain every dependency and the identity lock until terminal shutdown.
+    if (terminal(status)) server = null;
+    return status;
+  }
+
+  private StatusCode closeValidityFence() {
+    if (validityFence == null) return StatusCode.OK;
+    StatusCode status = validityFence.close();
+    if (terminal(status)) validityFence = null;
+    return status;
+  }
+
+  private StatusCode closeTls() {
+    if (tls == null) return StatusCode.OK;
+    StatusCode status = RiverDaemonTlsContext.cleanup(tls);
+    if (terminal(status)) tls = null;
+    return status;
+  }
+
+  private StatusCode closeMaterial() {
+    if (material == null) return StatusCode.OK;
+    StatusCode status = material.destroy();
+    if (terminal(status)) material = null;
+    return status;
+  }
+
+  private StatusCode closeDatabaseOwner() {
+    if (database == null) return StatusCode.OK;
+    StatusCode status = closeDatabaseValue(database);
+    if (terminal(status)) database = null;
+    return status;
+  }
+
+  private StatusCode closeDatabaseDirectory() {
+    if (databaseDirectory == null) return StatusCode.OK;
+    StatusCode status = closeDirectory(databaseDirectory);
+    if (terminal(status)) databaseDirectory = null;
+    return status;
+  }
+
+  private StatusCode closeSecurityDirectory() {
+    if (securityDirectory == null) return StatusCode.OK;
+    StatusCode status = closeDirectory(securityDirectory);
+    if (terminal(status)) securityDirectory = null;
     return status;
   }
 

@@ -35,6 +35,18 @@ final class RiverDaemonIdentityResidueCleanup {
     return false;
   }
 
+  private static BootstrapRead readBootstrap(RiverFile file) {
+    byte[] bytes = new byte[MAX_RECORD_BYTES];
+    StatusCode status = RiverDaemonIdentityFiles.readRecord(file, bytes, "bootstrap.properties");
+    RiverDaemonIdentityRecords.BootstrapRecord bootstrap = status.isOk()
+        ? RiverDaemonIdentityRecords.parseBootstrap(bytes) : null;
+    Arrays.fill(bytes, (byte) 0);
+    return new BootstrapRead(status, bootstrap);
+  }
+
+  private record BootstrapRead(StatusCode status,
+      RiverDaemonIdentityRecords.BootstrapRecord record) { }
+
   private static StatusCode removeResidue(RiverDirectory directory, Residue residue) {
     StatusCode status = StatusCode.OK;
     if (residue.instanceIdentity != null) status = directory.removeOwned(
@@ -83,11 +95,9 @@ final class RiverDaemonIdentityResidueCleanup {
       if (!status.isOk()) return new Residue(status);
       RiverFile file = fileResult.file();
       FileIdentity bootstrapIdentity = file.identity();
-      byte[] bytes = new byte[MAX_RECORD_BYTES];
-      status = RiverDaemonIdentityFiles.readRecord(file, bytes, "bootstrap.properties");
-      RiverDaemonIdentityRecords.BootstrapRecord bootstrap = status.isOk()
-          ? RiverDaemonIdentityRecords.parseBootstrap(bytes) : null;
-      Arrays.fill(bytes, (byte) 0);
+      BootstrapRead bootstrapRead = RiverDaemonIdentityResidueCleanup.readBootstrap(file);
+      RiverDaemonIdentityRecords.BootstrapRecord bootstrap = bootstrapRead.record;
+      status = bootstrapRead.status;
       StatusCode close = file.close();
       if (status.isOk() && !close.isOk() && close != StatusCode.CLOSED) status = close;
       if (status.isOk()) status = validateBootstrap(bootstrap, bootstrapIdentity, result);
