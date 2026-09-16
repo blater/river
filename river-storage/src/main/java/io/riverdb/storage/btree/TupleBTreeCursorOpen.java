@@ -44,14 +44,7 @@ final class TupleBTreeCursorOpen {
   private static StatusCode attach(TupleBTreeCursor cursor, TupleBTree tree, int pageId) {
     StatusCode status = tree.provider().pin(pageId, false, cursor.reference);
     if (status.isOk()) cursor.tree = tree;
-    if (status.isOk()) status = TupleBTreePageAdmission.validate(
-        cursor.reference.page(), cursor.reference.start(), tree.schemaId(), tree.shape(),
-        TupleBTreePageCodec.TYPE_LEAF, cursor.workspace,
-        tree.provider(), cursor.reference);
-    if (status.isOk() && cursor.workspace.header.type() != TupleBTreePageCodec.TYPE_LEAF) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (status.isOk() && !sameRoot(cursor, tree)) status = StatusCode.RETRY;
+    if (status.isOk()) status = validateAttached(cursor, tree);
     if (!status.isOk()) return TupleBTreeProviderAccess.release(
         tree.provider(), cursor.reference, status);
     cursor.page = cursor.reference.page();
@@ -62,6 +55,18 @@ final class TupleBTreeCursorOpen {
     if (cursor.index == Integer.MIN_VALUE) return TupleBTreeProviderAccess.release(
         tree.provider(), cursor.reference, StatusCode.INVARIANT_BROKEN);
     return StatusCode.OK;
+  }
+
+  private static StatusCode validateAttached(TupleBTreeCursor cursor, TupleBTree tree) {
+    StatusCode status = TupleBTreePageAdmission.validate(
+        cursor.reference.page(), cursor.reference.start(), tree.schemaId(), tree.shape(),
+        TupleBTreePageCodec.TYPE_LEAF, cursor.workspace,
+        tree.provider(), cursor.reference);
+    if (!status.isOk()) return status;
+    if (cursor.workspace.header.type() != TupleBTreePageCodec.TYPE_LEAF) {
+      return StatusCode.CORRUPTION;
+    }
+    return sameRoot(cursor, tree) ? StatusCode.OK : StatusCode.RETRY;
   }
 
   private static void copyBounds(
