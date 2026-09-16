@@ -223,20 +223,7 @@ final class OfflineBackupCatalog {
   private StatusCode readControl(NioDurableDirectory source) {
     StatusCode status = source.reopen(CONTROL_FILE_NAME, FileIoMode.POSITIONAL, operation);
     DurableFile file = status.isOk() ? operation.file() : null;
-    if (status.isOk()) {
-      status = file.size(fileSize);
-    }
-    if (status.isOk() && fileSize.sizeBytes() != ControlFileCodec.RECORD_BYTES) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (status.isOk()) {
-      controlBuffer.clear();
-      status = OfflineBackupIo.readExact(file, controlBuffer, 0, io);
-    }
-    if (status.isOk()) {
-      controlBuffer.flip();
-      status = ControlFileCodec.decode(controlBuffer, controlResult);
-    }
+    if (status.isOk()) status = readControlRecord(file);
     StatusCode close = file == null ? StatusCode.OK : file.close();
     if (status.isOk()) {
       status = close;
@@ -249,6 +236,17 @@ final class OfflineBackupCatalog {
     return status;
   }
 
+  private StatusCode readControlRecord(DurableFile file) {
+    StatusCode status = file.size(fileSize);
+    if (!status.isOk()) return status;
+    if (fileSize.sizeBytes() != ControlFileCodec.RECORD_BYTES) return StatusCode.CORRUPTION;
+    controlBuffer.clear();
+    status = OfflineBackupIo.readExact(file, controlBuffer, 0, io);
+    if (!status.isOk()) return status;
+    controlBuffer.flip();
+    return ControlFileCodec.decode(controlBuffer, controlResult);
+  }
+
   private StatusCode readManifestBytes(NioDurableDirectory source) {
     StatusCode status = source.reopen(MANIFEST_FILE_NAME, FileIoMode.POSITIONAL, operation);
     DurableFile file = status.isOk() ? operation.file() : null;
@@ -256,15 +254,7 @@ final class OfflineBackupCatalog {
       status = file.size(fileSize);
     }
     manifestBytes = fileSize.sizeBytes();
-    if (status.isOk() && (manifestBytes < HEADER_BYTES + DIGEST_BYTES
-        || manifestBytes > MAXIMUM_MANIFEST_BYTES)) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (status.isOk()) {
-      manifestBuffer.clear();
-      manifestBuffer.limit((int) manifestBytes);
-      status = OfflineBackupIo.readExact(file, manifestBuffer, 0, io);
-    }
+    if (status.isOk()) status = readManifestPayload(file);
     StatusCode close = file == null ? StatusCode.OK : file.close();
     if (status.isOk()) {
       status = close;
@@ -273,6 +263,14 @@ final class OfflineBackupCatalog {
       manifestBuffer.flip();
     }
     return status;
+  }
+
+  private StatusCode readManifestPayload(DurableFile file) {
+    if (manifestBytes < HEADER_BYTES + DIGEST_BYTES
+        || manifestBytes > MAXIMUM_MANIFEST_BYTES) return StatusCode.CORRUPTION;
+    manifestBuffer.clear();
+    manifestBuffer.limit((int) manifestBytes);
+    return OfflineBackupIo.readExact(file, manifestBuffer, 0, io);
   }
 
   private StatusCode validateHeader(long bytes) {

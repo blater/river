@@ -64,3 +64,14 @@ an integrated rerun against the accepted value API checkpoint. Full module scan
 including tests: 88 files, maximum Slopmark 38.6733 and NPATH 96.
 Evidence: `/private/tmp/river-protocol-check-integrated.log` and
 `/private/tmp/river-protocol-final-slopmark.json`. No performance claim.
+
+### Offline backup and inspection slice — 2026-09-16
+
+Separated control/manifest reads and verified payload copying from their file
+cleanup lifecycle. Directory transfer and page inspection stop on the first
+failure before later I/O. Existing close order, failure precedence, and result
+publication remain unchanged; independent Luna/high review approved these paths.
+`:river-backup:check :river-inspect:check` passed all five integration tests,
+with no failures/errors/skips. Scan including tests: 14 files, maximum score
+62.3839 and NPATH 65. Evidence: `/private/tmp/river-backup-inspect-check.log`
+and `/private/tmp/river-offline-final-slopmark.json`. No performance claim.
