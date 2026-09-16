@@ -42,6 +42,21 @@ final class LockDeadlockDiagnosticsTest {
   }
 
   @Test
+  void publicSnapshotAdmissionChecksBudgetWhileInternalCopyUsesDimensions() {
+    LockDeadlockDiagnosticsConfig first = diagnostics(4_096, 1, 2, 2, 0, 8);
+    LockDeadlockDiagnosticsConfig second = diagnostics(8_192, 1, 2, 2, 0, 8);
+    LockManager manager = new LockManager(new LockMemoryEnvelope(16L << 20), first);
+    LockDeadlockDiagnosticsSnapshot admitted = manager.newDeadlockDiagnosticsSnapshot();
+    LockDeadlockDiagnosticsSnapshot differentBudget = new LockDeadlockDiagnosticsSnapshot(second);
+    assertEquals(StatusCode.OK, manager.snapshotDeadlockDiagnostics(admitted));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        manager.snapshotDeadlockDiagnostics(differentBudget));
+    admitted.counters.totalVictimSelections = 7;
+    differentBudget.copyFrom(admitted);
+    assertEquals(7, differentBudget.counters().totalVictimSelections());
+  }
+
+  @Test
   void disabledStorageStillAccountsEveryVictimCleanupAndOutcome() {
     LockDeadlockDiagnosticsConfig disabled = LockDeadlockDiagnosticsConfig.disabled();
     Fixture fixture = new Fixture(disabled);
@@ -51,15 +66,15 @@ final class LockDeadlockDiagnosticsTest {
 
     LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(disabled);
     fixture.table.snapshotDeadlocks(snapshot);
-    assertFalse(snapshot.enabled());
-    assertEquals(0, snapshot.retainedPayloadBytes());
-    assertEquals(1, snapshot.totalVictimSelections());
-    assertEquals(1, snapshot.victimTransactionOutcomes());
-    assertEquals(1, snapshot.queuedRequestsCancelled());
-    assertEquals(1, snapshot.holdingsReleased());
-    assertEquals(0, snapshot.signatureCount());
-    assertEquals(0, snapshot.victimEventCount());
-    assertEquals(0, snapshot.exemplarCount());
+    assertFalse(snapshot.config.enabled());
+    assertEquals(0, snapshot.config.retainedPayloadBytes());
+    assertEquals(1, snapshot.counters.totalVictimSelections());
+    assertEquals(1, snapshot.counters.victimTransactionOutcomes());
+    assertEquals(1, snapshot.counters.queuedRequestsCancelled());
+    assertEquals(1, snapshot.counters.holdingsReleased());
+    assertEquals(0, snapshot.counters.signatureCount());
+    assertEquals(0, snapshot.counters.victimEventCount());
+    assertEquals(0, snapshot.counters.exemplarCount());
     assertFalse(snapshot.validForDiagnosticGate());
   }
 
@@ -76,13 +91,13 @@ final class LockDeadlockDiagnosticsTest {
 
     LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(config);
     fixture.table.snapshotDeadlocks(snapshot);
-    assertEquals(2, snapshot.totalVictimSelections());
-    assertEquals(2, snapshot.victimTransactionOutcomes());
-    assertEquals(2, snapshot.signatureVictimSelectionsAt(0));
-    assertEquals(2, snapshot.signatureVictimOutcomesAt(0));
-    assertEquals(2, snapshot.victimEventCount());
-    assertEquals(0, snapshot.exemplarCount());
-    assertEquals(0, snapshot.exemplarOverflows());
+    assertEquals(2, snapshot.counters.totalVictimSelections());
+    assertEquals(2, snapshot.counters.victimTransactionOutcomes());
+    assertEquals(2, snapshot.signatures.victimSelectionsAt(0));
+    assertEquals(2, snapshot.signatures.victimOutcomesAt(0));
+    assertEquals(2, snapshot.counters.victimEventCount());
+    assertEquals(0, snapshot.counters.exemplarCount());
+    assertEquals(0, snapshot.counters.exemplarOverflows());
     assertTrue(snapshot.validForDiagnosticGate());
   }
 
@@ -122,17 +137,17 @@ final class LockDeadlockDiagnosticsTest {
 
     LockDeadlockDiagnosticsSnapshot snapshot = manager.newDeadlockDiagnosticsSnapshot();
     assertEquals(StatusCode.OK, manager.snapshotDeadlockDiagnostics(snapshot));
-    assertEquals(1, snapshot.totalVictimSelections());
-    assertEquals(1, snapshot.victimTransactionOutcomes());
-    assertEquals(1, snapshot.queuedRequestsCancelled());
-    assertEquals(1, snapshot.holdingsReleased());
-    assertEquals(1, snapshot.victimEventCount());
-    assertEquals(7, snapshot.eventEpochAt(0));
-    assertEquals(202, snapshot.eventDiagnosticTagAt(0));
-    assertEquals(17, snapshot.eventDiagnosticStepTagAt(0));
-    assertEquals(StatusCode.DEADLOCK, snapshot.eventOutcomeStatusAt(0));
-    assertTrue(snapshot.eventOutcomeSequenceAt(0) > snapshot.eventSequenceAt(0));
-    assertTrue(snapshot.eventCleanupValidAt(0));
+    assertEquals(1, snapshot.counters.totalVictimSelections());
+    assertEquals(1, snapshot.counters.victimTransactionOutcomes());
+    assertEquals(1, snapshot.counters.queuedRequestsCancelled());
+    assertEquals(1, snapshot.counters.holdingsReleased());
+    assertEquals(1, snapshot.counters.victimEventCount());
+    assertEquals(7, snapshot.events.epochAt(0));
+    assertEquals(202, snapshot.events.diagnosticTagAt(0));
+    assertEquals(17, snapshot.events.diagnosticStepTagAt(0));
+    assertEquals(StatusCode.DEADLOCK, snapshot.events.outcomeStatusAt(0));
+    assertTrue(snapshot.events.outcomeSequenceAt(0) > snapshot.events.sequenceAt(0));
+    assertTrue(snapshot.events.cleanupValidAt(0));
     assertTrue(snapshot.validForDiagnosticGate());
 
     LockToken granted = new LockToken();
@@ -168,19 +183,19 @@ final class LockDeadlockDiagnosticsTest {
 
     LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(DIAGNOSTICS);
     fixture.table.snapshotDeadlocks(snapshot);
-    assertEquals(3, snapshot.totalVictimSelections());
-    assertEquals(3, snapshot.victimTransactionOutcomes());
-    assertEquals(2, snapshot.signatureCount());
-    assertEquals(2, snapshot.signatureVictimSelectionsAt(0));
-    assertEquals(2, snapshot.signatureVictimOutcomesAt(0));
-    assertEquals(1, snapshot.signatureVictimSelectionsAt(1));
-    assertEquals(snapshot.fingerprintAt(0), snapshot.fingerprintAt(1));
-    assertEquals(3, snapshot.victimEventCount());
-    assertEquals(10, snapshot.eventEpochAt(2));
-    assertEquals(2, snapshot.exemplarCount());
-    assertEquals(1, snapshot.exemplarOverflows());
-    assertNotEquals(0, snapshot.fingerprintAt(0));
-    assertTrue(snapshot.eventSequenceAt(1) > snapshot.eventSequenceAt(0));
+    assertEquals(3, snapshot.counters.totalVictimSelections());
+    assertEquals(3, snapshot.counters.victimTransactionOutcomes());
+    assertEquals(2, snapshot.counters.signatureCount());
+    assertEquals(2, snapshot.signatures.victimSelectionsAt(0));
+    assertEquals(2, snapshot.signatures.victimOutcomesAt(0));
+    assertEquals(1, snapshot.signatures.victimSelectionsAt(1));
+    assertEquals(snapshot.signatures.fingerprintAt(0), snapshot.signatures.fingerprintAt(1));
+    assertEquals(3, snapshot.counters.victimEventCount());
+    assertEquals(10, snapshot.events.epochAt(2));
+    assertEquals(2, snapshot.counters.exemplarCount());
+    assertEquals(1, snapshot.counters.exemplarOverflows());
+    assertNotEquals(0, snapshot.signatures.fingerprintAt(0));
+    assertTrue(snapshot.events.sequenceAt(1) > snapshot.events.sequenceAt(0));
     assertTrue(snapshot.validForDiagnosticGate());
   }
 
@@ -199,26 +214,26 @@ final class LockDeadlockDiagnosticsTest {
 
     LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(DIAGNOSTICS);
     fixture.table.snapshotDeadlocks(snapshot);
-    assertEquals(1, snapshot.totalVictimSelections());
-    assertEquals(1, snapshot.exemplarCount());
+    assertEquals(1, snapshot.counters.totalVictimSelections());
+    assertEquals(1, snapshot.counters.exemplarCount());
     boolean fairness = false;
-    int count = snapshot.exemplarEdgeCountAt(0);
+    int count = snapshot.exemplars.edgeCountAt(0);
     for (int index = 0; index < count; index++) {
-      int edge = snapshot.exemplarEdgeIndex(0, index);
-      if (snapshot.edgeKindAt(edge) == LockDeadlockEdgeKind.FIFO_FAIRNESS) {
+      int edge = snapshot.exemplars.edgeIndex(0, index);
+      if (snapshot.edges.kindAt(edge) == LockDeadlockEdgeKind.FIFO_FAIRNESS) {
         fairness = true;
-        assertEquals(LockQueueKind.ORDINARY, snapshot.edgeWaiterQueueKindAt(edge));
-        assertEquals(LockQueueKind.ORDINARY, snapshot.edgeBlockerQueueKindAt(edge));
-        assertEquals(LockMode.SHARED, snapshot.edgeRequestedModeAt(edge));
-        assertEquals(LockMode.EXCLUSIVE, snapshot.edgeBlockerRequestedModeAt(edge));
-        assertEquals(null, snapshot.edgeHeldModeAt(edge));
+        assertEquals(LockQueueKind.ORDINARY, snapshot.edges.waiterQueueKindAt(edge));
+        assertEquals(LockQueueKind.ORDINARY, snapshot.edges.blockerQueueKindAt(edge));
+        assertEquals(LockMode.SHARED, snapshot.edges.requestedModeAt(edge));
+        assertEquals(LockMode.EXCLUSIVE, snapshot.edges.blockerRequestedModeAt(edge));
+        assertEquals(null, snapshot.edges.heldModeAt(edge));
         assertEquals(LockGrantPrecondition.NO_EARLIER_INCOMPATIBLE_WAITER,
-            snapshot.edgePreconditionAt(edge));
-        assertFalse(snapshot.edgeGrantPredicateResultAt(edge));
+            snapshot.edges.preconditionAt(edge));
+        assertFalse(snapshot.edges.grantPredicateResultAt(edge));
       }
     }
     assertTrue(fairness);
-    assertEquals(0, snapshot.selfValidationFailures());
+    assertEquals(0, snapshot.counters.selfValidationFailures());
   }
 
   @Test
@@ -251,10 +266,10 @@ final class LockDeadlockDiagnosticsTest {
 
     LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(config);
     fixture.table.snapshotDeadlocks(snapshot);
-    assertEquals(1, snapshot.signatureCount());
-    assertEquals(1, snapshot.fingerprintCollisions());
-    assertEquals(3, snapshot.fingerprintOverflows());
-    assertEquals(1, snapshot.epochOverflows());
+    assertEquals(1, snapshot.counters.signatureCount());
+    assertEquals(1, snapshot.counters.fingerprintCollisions());
+    assertEquals(3, snapshot.counters.fingerprintOverflows());
+    assertEquals(1, snapshot.counters.epochOverflows());
     assertFalse(snapshot.validForDiagnosticGate());
   }
 
@@ -272,11 +287,11 @@ final class LockDeadlockDiagnosticsTest {
     LockDeadlockDiagnosticsSnapshot eventSnapshot =
         new LockDeadlockDiagnosticsSnapshot(eventConfig);
     events.table.snapshotDeadlocks(eventSnapshot);
-    assertEquals(2, eventSnapshot.totalVictimSelections());
-    assertEquals(2, eventSnapshot.victimTransactionOutcomes());
+    assertEquals(2, eventSnapshot.counters().totalVictimSelections());
+    assertEquals(2, eventSnapshot.counters().victimTransactionOutcomes());
     assertEquals(2, events.table.deadlockVictimSelections());
-    assertEquals(1, eventSnapshot.victimEventCount());
-    assertEquals(1, eventSnapshot.victimEventOverflows());
+    assertEquals(1, eventSnapshot.counters().victimEventCount());
+    assertEquals(1, eventSnapshot.counters().victimEventOverflows());
     assertFalse(eventSnapshot.validForDiagnosticGate());
 
     LockDeadlockDiagnosticsConfig edgeConfig =
@@ -291,9 +306,9 @@ final class LockDeadlockDiagnosticsTest {
     LockDeadlockDiagnosticsSnapshot edgeSnapshot =
         new LockDeadlockDiagnosticsSnapshot(edgeConfig);
     edges.table.snapshotDeadlocks(edgeSnapshot);
-    assertEquals(1, edgeSnapshot.totalVictimSelections());
-    assertEquals(1, edgeSnapshot.cycleEdgeOverflows());
-    assertEquals(1, edgeSnapshot.victimEventCount());
+    assertEquals(1, edgeSnapshot.counters().totalVictimSelections());
+    assertEquals(1, edgeSnapshot.counters().cycleEdgeOverflows());
+    assertEquals(1, edgeSnapshot.counters().victimEventCount());
     assertFalse(edgeSnapshot.validForDiagnosticGate());
   }
 

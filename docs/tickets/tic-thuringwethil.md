@@ -222,3 +222,31 @@ the complete engine module check passed. Evidence:
 `/private/tmp/river-engine-complexity-batch-after.json`. This is a correctness
 and maintainability checkpoint; it does not resolve or claim improvement in
 the cumulative performance investigation above.
+
+### Transaction diagnostics and blocker traversal checkpoint — 2026-09-16
+
+Snapshot counters, signatures, events, exemplars, and edges now have concrete
+owners; cycle capture scratch has one reusable owner. No inheritance ladder or
+compatibility facade remains. Engine production/test consumers use the new API.
+Independent review checked admission order, lock grant predicates, cycle
+traversal, snapshot copy, budget admission, and exemplar stride ownership.
+
+A new acyclic interval-conversion test exposed an existing infinite DFS loop:
+interval fairness repeatedly returned its single predecessor without advancing
+the active request. Thread evidence is retained at
+`/private/tmp/river-tx-complexity-stall-threads.txt`. Minimal fix `8ea3b7a1` clears
+the active request after that one-shot edge, matching exact-resource traversal.
+The separate regression checks active owner, one FIFO predecessor, termination,
+and cleanup. This correctness fix is separate from the refactor commit.
+
+The initial draft had incomplete API migration/imports; validation also caught
+an invalid deadlocking test setup. Both were corrected. A second focused test
+preserves the distinction between public budget admission and internal
+dimension-compatible copying. Complete transaction check: 151 tests passed;
+three engine deadlock integration tests passed. The phase-refactored cursor then
+passed the complete transaction check again. Full tx scan including tests:
+98 files, maximum score 95.2102, NPATH 64. Logs:
+`/private/tmp/river-interval-fairness-fix-test.log`,
+`/private/tmp/river-tx-complexity-check-final.log`,
+`/private/tmp/river-tx-complexity-refactor-check.log`; metrics:
+`/private/tmp/river-tx-bench-final-slopmark.json`. No performance claim.

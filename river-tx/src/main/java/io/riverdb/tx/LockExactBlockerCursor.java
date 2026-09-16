@@ -82,10 +82,21 @@ final class LockExactBlockerCursor {
       long transaction, LockExactTransactionStore.Chunk frame, int frameOffset) {
     long request = LockTypedSlots.decode(frame.frameActiveRequests[frameOffset]);
     if (request < 0) return -1;
+    if (frame.framePhases[frameOffset] <= EXACT_FAIRNESS) {
+      return nextExactPhase(transaction, request, frame, frameOffset);
+    }
+    if (frame.framePhases[frameOffset] <= INTERVAL_FAIRNESS) {
+      return nextIntervalPhase(transaction, request, frame, frameOffset);
+    }
+    return -1;
+  }
+
+  private long nextExactPhase(
+      long transaction, long request,
+      LockExactTransactionStore.Chunk frame, int frameOffset) {
     boolean conversion = table.state.requests.conversion(request);
     if (frame.framePhases[frameOffset] == EXACT_OWNERS) {
-      long blocker = nextOwner(
-          transaction, request, requestResource(request), frame, frameOffset);
+      long blocker = nextOwner(transaction, request, requestResource(request), frame, frameOffset);
       if (blocker >= 0) return blocker;
       frame.framePhases[frameOffset] = conversion ? EXACT_FAIRNESS : EXACT_CONVERSIONS;
     }
@@ -96,11 +107,15 @@ final class LockExactBlockerCursor {
           LockGrantPrecondition.CONVERSION_QUEUE_EMPTY);
       frame.framePhases[frameOffset] = EXACT_FAIRNESS;
     }
-    if (frame.framePhases[frameOffset] == EXACT_FAIRNESS) {
-      long blocker = exactFairness(transaction, request, conversion);
-      frame.frameActiveRequests[frameOffset] = 0;
-      return blocker;
-    }
+    long blocker = exactFairness(transaction, request, conversion);
+    frame.frameActiveRequests[frameOffset] = 0;
+    return blocker;
+  }
+
+  private long nextIntervalPhase(
+      long transaction, long request,
+      LockExactTransactionStore.Chunk frame, int frameOffset) {
+    boolean conversion = table.state.requests.conversion(request);
     if (frame.framePhases[frameOffset] == INTERVAL_OWNERS) {
       long blocker = nextIntervalOwner(transaction, request, frame, frameOffset);
       if (blocker >= 0) return blocker;
@@ -117,17 +132,16 @@ final class LockExactBlockerCursor {
       frame.frameIntervals[frameOffset] = LockIntervalCursor.INITIAL;
       frame.framePhases[frameOffset] = INTERVAL_FAIRNESS;
     }
-    if (frame.framePhases[frameOffset] == INTERVAL_FAIRNESS) {
-      long blocker = conversion
-          ? exactFairness(transaction, request, true)
-          : fairness.next(transaction, request, frame, frameOffset);
-      if (blocker >= 0 && !conversion) return requestBlocker(request, blocker,
-          LockDeadlockEdgeKind.FIFO_FAIRNESS,
-          LockGrantPrecondition.NO_EARLIER_INCOMPATIBLE_WAITER);
-      if (blocker >= 0) return blocker;
+    if (conversion) {
+      long blocker = exactFairness(transaction, request, true);
       frame.frameActiveRequests[frameOffset] = 0;
-      return -1;
+      return blocker;
     }
+    long blocker = fairness.next(transaction, request, frame, frameOffset);
+    if (blocker >= 0) return requestBlocker(request, blocker,
+        LockDeadlockEdgeKind.FIFO_FAIRNESS,
+        LockGrantPrecondition.NO_EARLIER_INCOMPATIBLE_WAITER);
+    frame.frameActiveRequests[frameOffset] = 0;
     return -1;
   }
 
