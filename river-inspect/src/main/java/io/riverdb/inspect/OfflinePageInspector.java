@@ -23,25 +23,24 @@ final class OfflinePageInspector {
       String name,
       DatabaseInspectionResult result) {
     StatusCode status = file.open(directory, name);
-    if (status.isOk()) {
-      status = file.readSize();
-    }
-    long size = file.sizeBytes();
-    if (status.isOk() && (size == 0 || size % PageCodec.PAGE_BYTES != 0)) {
-      status = StatusCode.CORRUPTION;
-    }
-    long pageTotal = size / PageCodec.PAGE_BYTES;
-    if (status.isOk() && pageTotal > Integer.MAX_VALUE) {
-      status = StatusCode.RESOURCE_EXHAUSTED;
-    }
-    int pages = status.isOk() ? (int) pageTotal : 0;
-    for (int index = 0; status.isOk() && index < pages; index++) {
-      status = inspectPage(name, result, index);
-    }
-    if (status.isOk()) {
-      result.addPageFile(size, pages);
-    }
+    if (status.isOk()) status = inspectOpenFile(name, result);
     return file.close(status);
+  }
+
+  private StatusCode inspectOpenFile(String name, DatabaseInspectionResult result) {
+    StatusCode status = file.readSize();
+    if (!status.isOk()) return status;
+    long size = file.sizeBytes();
+    if (size == 0 || size % PageCodec.PAGE_BYTES != 0) return StatusCode.CORRUPTION;
+    long pageTotal = size / PageCodec.PAGE_BYTES;
+    if (pageTotal > Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
+    int pages = (int) pageTotal;
+    for (int index = 0; index < pages; index++) {
+      status = inspectPage(name, result, index);
+      if (!status.isOk()) return status;
+    }
+    result.addPageFile(size, pages);
+    return StatusCode.OK;
   }
 
   private StatusCode inspectPage(

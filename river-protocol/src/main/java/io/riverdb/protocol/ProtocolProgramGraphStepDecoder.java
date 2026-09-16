@@ -24,12 +24,9 @@ final class ProtocolProgramGraphStepDecoder {
     int captureCount = source.getInt(input + 36);
     long minimumAffected = source.getLong(input + 40);
     long maximumAffected = source.getLong(input + 48);
-    if (parameterCount < 0 || captureCount < 0
-        || firstParameter != parameter
-        || firstCapture != capture || guard < -1
-        || guard >= expressions && guard != -1
-        || guard < 0 && falseTarget != -1
-        || emptyTarget < -1) return -1;
+    if (!validHeader(
+        parameterCount, captureCount, firstParameter, parameter,
+        firstCapture, capture, guard, expressions, falseTarget, emptyTarget)) return -1;
     StatusCode status = program.beginStep(handle, action);
     if (!status.isOk()) return -1;
     if (action == TransactionProgramAction.COMMAND) {
@@ -62,6 +59,24 @@ final class ProtocolProgramGraphStepDecoder {
     }
     status = program.endStep();
     return status.isOk() ? next : -1;
+  }
+
+  private static boolean validHeader(
+      int parameterCount,
+      int captureCount,
+      int firstParameter,
+      int parameter,
+      int firstCapture,
+      int capture,
+      int guard,
+      int expressions,
+      int falseTarget,
+      int emptyTarget) {
+    if (parameterCount < 0 || captureCount < 0) return false;
+    if (firstParameter != parameter || firstCapture != capture) return false;
+    if (guard < -1 || emptyTarget < -1) return false;
+    if (guard >= expressions && guard != -1) return false;
+    return guard >= 0 || falseTarget == -1;
   }
 
 }

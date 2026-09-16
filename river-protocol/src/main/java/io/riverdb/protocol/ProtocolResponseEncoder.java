@@ -91,24 +91,40 @@ final class ProtocolResponseEncoder {
       long rowsReturned,
       CommandResult completion,
       boolean queryActive) {
-    if (type != ProtocolMessageType.FETCH || status == null || row == null
-        || status.isOk() && queryActive == (completion != null)
-        || !status.isOk() && queryActive && completion != null) {
+    if (!validRow(type, status, row, completion, queryActive)) {
       return ProtocolFrameWire.invalidTarget(target);
     }
     if (!status.isOk() && completion == null) {
       return encodeStatus(target, type, requestId, status, queryActive);
     }
-    int flags = (row.isAvailable() ? ProtocolFrameCodec.FLAG_ROW_AVAILABLE : 0)
-        | (queryActive ? ProtocolFrameCodec.FLAG_QUERY_ACTIVE
-            : ProtocolFrameCodec.FLAG_END_OF_STREAM);
-    if (completion != null && completion.transactionActive()) {
-      flags |= ProtocolFrameCodec.FLAG_TRANSACTION_ACTIVE;
-    }
+    int flags = rowFlags(row, completion, queryActive);
     return ProtocolResponseFrameWriter.encode(
         target, type, requestId, status, flags,
         completion == null ? 0 : completion.affectedRows(), row.columnCount(),
         completion == null ? 0 : completion.commitSequence(), row.key(), rowsReturned,
         0, 0, null, row);
+  }
+
+  private static boolean validRow(
+      ProtocolMessageType type,
+      StatusCode status,
+      RowResult row,
+      CommandResult completion,
+      boolean queryActive) {
+    if (type != ProtocolMessageType.FETCH || status == null || row == null) return false;
+    if (status.isOk()) return queryActive != (completion != null);
+    return !queryActive || completion == null;
+  }
+
+  private static int rowFlags(
+      RowResult row, CommandResult completion, boolean queryActive) {
+    int flags = queryActive
+        ? ProtocolFrameCodec.FLAG_QUERY_ACTIVE
+        : ProtocolFrameCodec.FLAG_END_OF_STREAM;
+    if (row.isAvailable()) flags |= ProtocolFrameCodec.FLAG_ROW_AVAILABLE;
+    if (completion != null && completion.transactionActive()) {
+      flags |= ProtocolFrameCodec.FLAG_TRANSACTION_ACTIVE;
+    }
+    return flags;
   }
 }

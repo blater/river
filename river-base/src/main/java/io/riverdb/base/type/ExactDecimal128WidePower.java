@@ -17,15 +17,26 @@ final class ExactDecimal128WidePower {
   private static boolean multiply(
       int exponent, boolean divisor, ExactDecimal128.Scratch scratch) {
     if (exponent < 0 || exponent > MAXIMUM_POWER) return false;
-    long v3 = divisor ? scratch.d3 : scratch.w3;
-    long v2 = divisor ? scratch.d2 : scratch.w2;
-    long v1 = divisor ? scratch.d1 : scratch.w1;
-    long v0 = divisor ? scratch.d0 : scratch.w0;
+    long v3;
+    long v2;
+    long v1;
+    long v0;
+    if (divisor) {
+      v3 = scratch.d3;
+      v2 = scratch.d2;
+      v1 = scratch.d1;
+      v0 = scratch.d0;
+    } else {
+      v3 = scratch.w3;
+      v2 = scratch.w2;
+      v1 = scratch.w1;
+      v0 = scratch.w0;
+    }
     for (int index = 0; index < exponent; index++) {
-      long carry0 = high(v0, 10);
-      long carry1 = high(v1, 10);
-      long carry2 = high(v2, 10);
-      long carry3 = high(v3, 10);
+      long carry0 = Math.unsignedMultiplyHigh(v0, 10);
+      long carry1 = Math.unsignedMultiplyHigh(v1, 10);
+      long carry2 = Math.unsignedMultiplyHigh(v2, 10);
+      long carry3 = Math.unsignedMultiplyHigh(v3, 10);
       v0 *= 10;
       long next = v1 * 10 + carry0;
       if (Long.compareUnsigned(next, carry0) < 0) carry1++;
@@ -60,11 +71,5 @@ final class ExactDecimal128WidePower {
       scratch.w1 = v1;
       scratch.w0 = v0;
     }
-  }
-
-  private static long high(long left, long right) {
-    return Math.multiplyHigh(left, right)
-        + (left < 0 ? right : 0)
-        + (right < 0 ? left : 0);
   }
 }

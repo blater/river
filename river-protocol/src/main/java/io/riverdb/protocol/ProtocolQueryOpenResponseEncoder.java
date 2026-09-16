@@ -29,10 +29,9 @@ final class ProtocolQueryOpenResponseEncoder {
     boolean rowAvailable = row.isAvailable();
     int valueBytes = rowAvailable
         ? ProtocolResponseValueEncoder.bytes(null, row, columns) : 0;
-    if (metadataBytes < 0 || valueBytes < 0
-        || !ProtocolQueryMetadataWriter.matches(metadata, row, columns)
-        || queryActive && !rowAvailable
-        || rowsReturned != (rowAvailable ? 1 : 0)) {
+    if (!validPayload(
+        metadata, row, columns, metadataBytes, valueBytes,
+        rowAvailable, queryActive, rowsReturned)) {
       return ProtocolFrameWire.invalidTarget(target);
     }
     int rowNullBytes = rowAvailable
@@ -43,10 +42,39 @@ final class ProtocolQueryOpenResponseEncoder {
         target, type, requestId, payloadBytes, ProtocolFrameWire.FRAME_RESPONSE);
     if (!encoded.isOk()) return encoded;
 
-    int flags = ProtocolFrameCodec.FLAG_COLUMN_METADATA
-        | (queryActive ? ProtocolFrameCodec.FLAG_QUERY_ACTIVE
-            : ProtocolFrameCodec.FLAG_END_OF_STREAM)
-        | (rowAvailable ? ProtocolFrameCodec.FLAG_ROW_AVAILABLE : 0);
+    writeHeader(target, status, queryActive, rowAvailable, completion, row,
+        columns, rowsReturned, rowNullBytes, metadataBytes);
+    int offset = ProtocolQueryMetadataWriter.write(target, metadata, columns);
+    if (!writeRow(target, offset, row, columns, rowAvailable)) {
+      return ProtocolFrameWire.invalidTarget(target);
+    }
+    return ProtocolResponseSegmenter.finish(target, type, requestId, payloadBytes);
+  }
+
+  private static boolean validPayload(
+      ProtocolQueryMetadata metadata,
+      RowResult row,
+      int columns,
+      int metadataBytes,
+      int valueBytes,
+      boolean rowAvailable,
+      boolean queryActive,
+      long rowsReturned) {
+    if (metadataBytes < 0 || valueBytes < 0) return false;
+    if (!ProtocolQueryMetadataWriter.matches(metadata, row, columns)) return false;
+    if (queryActive && !rowAvailable) return false;
+    return rowsReturned == (rowAvailable ? 1 : 0);
+  }
+
+  private static void writeHeader(
+      ByteBuffer target, StatusCode status, boolean queryActive, boolean rowAvailable,
+      CommandResult completion, RowResult row, int columns, long rowsReturned,
+      int rowNullBytes, int metadataBytes) {
+    int flags = ProtocolFrameCodec.FLAG_COLUMN_METADATA;
+    flags |= queryActive
+        ? ProtocolFrameCodec.FLAG_QUERY_ACTIVE
+        : ProtocolFrameCodec.FLAG_END_OF_STREAM;
+    if (rowAvailable) flags |= ProtocolFrameCodec.FLAG_ROW_AVAILABLE;
     if (completion != null && completion.transactionActive()) {
       flags |= ProtocolFrameCodec.FLAG_TRANSACTION_ACTIVE;
     }
@@ -56,14 +84,13 @@ final class ProtocolQueryOpenResponseEncoder {
         completion == null ? 0 : completion.commitSequence(),
         rowAvailable ? row.key() : 0, rowsReturned, 0, 0,
         rowNullBytes, metadataBytes);
-    int offset = ProtocolQueryMetadataWriter.write(target, metadata, columns);
-    if (rowAvailable) {
-      offset = ProtocolResponseValueEncoder.writeNulls(target, offset, null, row, columns);
-      if (!ProtocolResponseValueEncoder.writeValues(target, offset, null, row, columns)) {
-        return ProtocolFrameWire.invalidTarget(target);
-      }
-    }
-    return ProtocolResponseSegmenter.finish(target, type, requestId, payloadBytes);
+  }
+
+  private static boolean writeRow(
+      ByteBuffer target, int offset, RowResult row, int columns, boolean rowAvailable) {
+    if (!rowAvailable) return true;
+    int next = ProtocolResponseValueEncoder.writeNulls(target, offset, null, row, columns);
+    return ProtocolResponseValueEncoder.writeValues(target, next, null, row, columns);
   }
 
   private static boolean validTarget(
@@ -73,13 +100,15 @@ final class ProtocolQueryOpenResponseEncoder {
       RowResult row,
       CommandResult completion,
       boolean queryActive) {
-    if ((type != ProtocolMessageType.BEGIN_QUERY
-            && type != ProtocolMessageType.BEGIN_PREPARED_QUERY)
-        || status == null || status.isOk() && (metadata == null
-            || row == null || queryActive == (completion != null))) {
-      return false;
-    }
-    return status.isOk() || (metadata == null && row == null && completion == null);
+    if (!isQueryOpenType(type) || status == null) return false;
+    if (!status.isOk()) return metadata == null && row == null && completion == null;
+    if (metadata == null || row == null) return false;
+    return queryActive != (completion != null);
+  }
+
+  private static boolean isQueryOpenType(ProtocolMessageType type) {
+    return type == ProtocolMessageType.BEGIN_QUERY
+        || type == ProtocolMessageType.BEGIN_PREPARED_QUERY;
   }
 
   private static StatusCode encodeStatus(

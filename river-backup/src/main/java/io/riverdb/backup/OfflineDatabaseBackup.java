@@ -74,24 +74,20 @@ public final class OfflineDatabaseBackup {
       return StatusCode.CONFLICT;
     }
     StatusCode status = requireEmpty(target);
-    if (status.isOk()) {
-      status = restoring
-          ? catalog.readManifest(source)
-          : catalog.collectDatabaseFiles(source);
-    }
-    if (status.isOk() && restoring) {
+    if (!status.isOk()) return status;
+    status = restoring
+        ? catalog.readManifest(source)
+        : catalog.collectDatabaseFiles(source);
+    if (!status.isOk()) return status;
+    if (restoring) {
       status = catalog.validateBackupEntries(source);
+      if (!status.isOk()) return status;
     }
-    if (status.isOk()) {
-      status = copyFiles(source, target, restoring);
-    }
-    if (status.isOk()) {
-      status = target.force(targetOperation);
-    }
-    if (status.isOk() && !restoring) {
-      status = catalog.writeManifest(target);
-    }
-    return status;
+    status = copyFiles(source, target, restoring);
+    if (!status.isOk()) return status;
+    status = target.force(targetOperation);
+    if (!status.isOk()) return status;
+    return restoring ? StatusCode.OK : catalog.writeManifest(target);
   }
 
   private StatusCode copyFiles(

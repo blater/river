@@ -57,18 +57,21 @@ final class OfflineBackupFileCopier {
     }
     DurableFile output = status.isOk() ? targetOperation.file() : null;
     if (status.isOk()) {
-      status = copyContents(input, output, bytes);
-    }
-    if (status.isOk()) {
-      status = finishDigest();
-    }
-    if (status.isOk()) {
-      status = catalog.acceptDigest(index, bytes, digestOutput, verifyExpected);
-    }
-    if (status.isOk()) {
-      status = output.force(ForceMode.CONTENT_AND_METADATA);
+      status = copyAndForce(input, output, bytes, catalog, index, verifyExpected);
     }
     return close(input, output, status);
+  }
+
+  private StatusCode copyAndForce(
+      DurableFile input, DurableFile output, long bytes,
+      OfflineBackupCatalog catalog, int index, boolean verifyExpected) {
+    StatusCode status = copyContents(input, output, bytes);
+    if (!status.isOk()) return status;
+    status = finishDigest();
+    if (!status.isOk()) return status;
+    status = catalog.acceptDigest(index, bytes, digestOutput, verifyExpected);
+    if (!status.isOk()) return status;
+    return output.force(ForceMode.CONTENT_AND_METADATA);
   }
 
   private StatusCode copyContents(

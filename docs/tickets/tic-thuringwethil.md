@@ -22,3 +22,67 @@ Complete Slopmark scan satisfies requested limits; affected tests pass; durable 
 ### 2026-09-16T09:57:29Z
 
 Owner: Codex integrator with Luna/high implementation and review. Base: 3636c7b3. Worktree: /private/tmp/river-localwal-complexity. Baseline: /private/tmp/river-slopmark-baseline.json (2180 production sources, 16 scores >=100, 195 NPATH routines >100 in 177 files). First slice: LocalWal.
+
+### Decimal arithmetic slice — 2026-09-16
+
+Independent Luna/high review approved the unsigned carry/high-product equivalence,
+scale-reduction rounding bounds, and unchanged scratch publication behavior.
+`ExactDecimal128WidePower.multiply` selects all limbs once (NPATH 274 → 36);
+`ExactDecimalQuantize.apply` removes unreachable quotient-overflow branches
+(132 → 42); `ExactDecimal128WideProduct.multiply` shares unsigned carry calculation
+(128 → 1) and uses the JDK unsigned high-product primitive.
+
+Validation: `:river-base:check` passed 111 tests with no failures, errors, or skips.
+The 625-case limb-boundary test compares the full product with BigInteger.
+Module scan including tests: 114 files, maximum score 87.7803, maximum NPATH 75.
+Artifacts: `/private/tmp/river-decimal-check.log` and
+`/private/tmp/river-decimal-final-slopmark.json`.
+This is a structural refactor; no throughput improvement is claimed. The overall
+ticket remains open. Subsequent WAL/query slices receive occasional workload checks.
+
+### Transaction value API slice — 2026-09-16
+
+Directory growth and memory charging now belong to the existing
+TransactionValueArenaSizing owner. The borrowed CharSequence view has its own
+package-private implementation, retaining its arena-owned reuse lifetime.
+Comparison operand validation is named alongside the existing numeric rule.
+Independent Luna/high review approved the behavior and ownership boundaries.
+`:river-engine-api:check` passed 32 tests, no failures/errors/skips. Full module
+scan including tests: 51 files, maximum Slopmark 96.0974 and NPATH 54.
+Evidence: `/private/tmp/river-value-api-check.log` and
+`/private/tmp/river-value-api-final-slopmark.json`. No performance claim.
+
+### Protocol codec slice — 2026-09-16
+
+Six codec routines now separate request validation, payload sizing, and frame
+header/body emission. The query-open path groups row-layout checks and header
+emission rather than retaining trivial conditional wrappers. Wire layouts,
+status precedence, buffer ownership, and hot-path allocation remain unchanged;
+independent Luna/high review approved the final revision.
+`:river-protocol:check` passed 62 tests with no failures/errors/skips, including
+an integrated rerun against the accepted value API checkpoint. Full module scan
+including tests: 88 files, maximum Slopmark 38.6733 and NPATH 96.
+Evidence: `/private/tmp/river-protocol-check-integrated.log` and
+`/private/tmp/river-protocol-final-slopmark.json`. No performance claim.
+
+### Offline backup and inspection slice — 2026-09-16
+
+Separated control/manifest reads and verified payload copying from their file
+cleanup lifecycle. Directory transfer and page inspection stop on the first
+failure before later I/O. Existing close order, failure precedence, and result
+publication remain unchanged; independent Luna/high review approved these paths.
+`:river-backup:check :river-inspect:check` passed all five integration tests,
+with no failures/errors/skips. Scan including tests: 14 files, maximum score
+62.3839 and NPATH 65. Evidence: `/private/tmp/river-backup-inspect-check.log`
+and `/private/tmp/river-offline-final-slopmark.json`. No performance claim.
+
+### Durable format validation slice — 2026-09-16
+
+Simplified build-intent key validation, vacuum progress validation, and indexed
+page root classification. Existing ranges, state constraints, short-circuit
+ordering, and format/status behavior remain unchanged. Independent Luna/high
+review and integrator review approved the predicates.
+`:river-format:check` passed 83 tests, no failures/errors/skips. Full module
+scan including tests: 108 files, maximum score 45.1567 and NPATH 92.
+Evidence: `/private/tmp/river-format-check.log` and
+`/private/tmp/river-format-final-slopmark.json`. No performance claim.
