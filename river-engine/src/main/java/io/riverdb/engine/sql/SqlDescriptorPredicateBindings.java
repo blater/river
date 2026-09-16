@@ -189,12 +189,8 @@ final class SqlDescriptorPredicateBindings implements SqlDescriptorIndexCandidat
   private static SqlComparison reverse(SqlComparison comparison, boolean reversed) {
     if (!reversed) return comparison;
     return switch (comparison) {
-      case LESS_THAN -> SqlComparison.GREATER_THAN;
-      case LESS_OR_EQUAL -> SqlComparison.GREATER_OR_EQUAL;
-      case GREATER_THAN -> SqlComparison.LESS_THAN;
-      case GREATER_OR_EQUAL -> SqlComparison.LESS_OR_EQUAL;
-      case EQUAL, NOT_EQUAL -> comparison;
-      default -> null;
+      case HALF_OPEN_RANGE, IN, NOT_IN -> null;
+      default -> comparison.reverseOrder();
     };
   }
 }

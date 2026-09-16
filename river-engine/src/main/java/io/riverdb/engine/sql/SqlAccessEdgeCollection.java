@@ -28,7 +28,7 @@ final class SqlAccessEdgeCollection {
     int left = SqlBooleanPredicateProgram.PROGRAM_LEFT, right = SqlBooleanPredicateProgram.PROGRAM_RIGHT;
     int column = programs.rawColumn(leaf, left), literalProgram = right;
     SqlComparison comparison = source.comparison(leaf);
-    if (column < 0) { column = programs.rawColumn(leaf, right); literalProgram = left; comparison = SqlAccessEdgeSelector.reverse(comparison); }
+    if (column < 0) { column = programs.rawColumn(leaf, right); literalProgram = left; comparison = comparison.reverseOrder(); }
     if (column >= 0 && !target.rootScope(programs.scope(leaf, literalProgram == right ? left : right, 0))) return;
     if (column < 0 || !target.literal(source, leaf, literalProgram)) return;
     int index = target.count++;

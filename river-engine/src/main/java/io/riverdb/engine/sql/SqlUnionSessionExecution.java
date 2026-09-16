@@ -26,13 +26,13 @@ final class SqlUnionSessionExecution {
 
   StatusCode prepare(SqlQuery query, SqlCommand command) {
     StatusCode status = close();
-    if (status.isOk()) status = leaves.prepare(query);
+    if (!status.isOk()) return leaves.close(status);
+    status = leaves.prepare(query);
+    if (!status.isOk()) return leaves.close(status);
     boolean explainOnly = query != null && query.isExplain() && !query.isAnalyze();
-    if (status.isOk()) {
-      status = explainOnly
-          ? union.describe(query, command, leaves)
-          : union.run(query, command, leaves);
-    }
+    status = explainOnly
+        ? union.describe(query, command, leaves)
+        : union.run(query, command, leaves);
     if (status.isOk() && explainOnly) status = leaves.close(StatusCode.OK);
     if (status.isOk()) status = output.prepare(union.schema());
     if (!status.isOk()) return leaves.close(status);

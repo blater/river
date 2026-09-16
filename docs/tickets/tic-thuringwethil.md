@@ -300,3 +300,20 @@ Final independently reviewed source passed the complete engine check: 1044 tests
 no failures/errors/skips. Touched-file maximum score 85.7341, maximum NPATH 99.
 Final evidence: `/private/tmp/river-sql-execution-integrated-check-reviewed.log`
 and `/private/tmp/river-sql-execution-integrated-after.json`. No performance claim.
+
+### Remaining SQL descriptors and comparison ownership — 2026-09-16
+
+Forty-seven files simplify descriptor admission, update/scan/materialization,
+aggregate/join execution, and test diagnostics. Ordered comparison reversal now
+belongs to SqlComparison; all equivalent parser/engine switches are removed.
+Unsupported predicate admission remains with its existing caller. SQL concurrency
+assertions have a concrete diagnostics helper; test assertions and fixture
+cleanup are preserved. Sort-key comparison retains single reads and original
+cursor advances, without helper-carrier state or extra allocations.
+
+Independent Luna/high reviews approved each constituent slice and the integrator
+corrections. All touched files meet both limits: maximum score 74.2456 and
+maximum NPATH 100. Metrics: `/private/tmp/river-sql-final-integrated-after.json`.
+Complete SQL and engine checks passed: 89 SQL tests and 1044 engine tests,
+no failures/errors/skips. Log: `/private/tmp/river-sql-final-integrated-check.log`.
+No performance claim; the cumulative diagnostic concern remains open.

@@ -46,7 +46,7 @@ final class SqlSubqueryComparisonParser {
     int leaf = target.appendLeaf(right);
     if (leaf < 0) return StatusCode.RESOURCE_EXHAUSTED;
     if (!target.setSubqueryComparison(
-        leaf, reverse(comparison), subqueries.edge(synthetic))) {
+        leaf, comparison.reverseOrder(), subqueries.edge(synthetic))) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     subqueries.setLeaf(synthetic, leaf);
@@ -63,13 +63,4 @@ final class SqlSubqueryComparisonParser {
         || comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN;
   }
 
-  private static SqlComparison reverse(SqlComparison comparison) {
-    return switch (comparison) {
-      case LESS_THAN -> SqlComparison.GREATER_THAN;
-      case LESS_OR_EQUAL -> SqlComparison.GREATER_OR_EQUAL;
-      case GREATER_THAN -> SqlComparison.LESS_THAN;
-      case GREATER_OR_EQUAL -> SqlComparison.LESS_OR_EQUAL;
-      default -> comparison;
-    };
-  }
 }

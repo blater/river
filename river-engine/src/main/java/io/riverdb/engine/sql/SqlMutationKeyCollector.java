@@ -35,7 +35,7 @@ final class SqlMutationKeyCollector {
       return status;
     }
     status = keys.begin();
-    if (status.isOk()) status = begin(command, bound);
+    if (status.isOk()) status = begin(bound);
     boolean active = status.isOk();
     while (status.isOk()) {
       status = next(command, bound);
@@ -69,28 +69,23 @@ final class SqlMutationKeyCollector {
     return status.isOk() ? cursor.reset() : status;
   }
 
-  private StatusCode begin(SqlCommand command, BoundSqlStatement bound) {
-    boolean bounded = bound.accessPredicate >= 0;
-    boolean equality = bounded && bound.accessComparison == SqlComparison.EQUAL;
-    indexedScan = bounded && bound.predicateColumn > 0
-        && bound.table.hasIndexOn(bound.predicateColumn);
-    boolean primaryRange = bounded && bound.predicateColumn == 0;
-    if (!indexedScan && !primaryRange) {
+  private StatusCode begin(BoundSqlStatement bound) {
+    indexedScan = false;
+    if (bound.accessPredicate < 0) return session.beginScan(bound.table, cursor);
+    indexedScan = bound.predicateColumn > 0 && bound.table.hasIndexOn(bound.predicateColumn);
+    if (!indexedScan && bound.predicateColumn != 0) {
       return session.beginScan(bound.table, cursor);
     }
-    long lower = equality
-        ? accessValue(command, bound) : accessLower(command, bound);
-    if (equality) {
+    if (bound.accessComparison == SqlComparison.EQUAL) {
       return indexedScan
           ? session.beginExactValueScan(
-              bound.table, bound.predicateColumn, lower, cursor)
-          : session.beginExactScan(bound.table, lower, cursor);
+              bound.table, bound.predicateColumn, bound.accessValue, cursor)
+          : session.beginExactScan(bound.table, bound.accessValue, cursor);
     }
-    long upper = accessUpper(command, bound);
     return indexedScan
-        ? session.beginValueScan(
-            bound.table, bound.predicateColumn, lower, upper, cursor)
-        : session.beginScan(bound.table, lower, upper, cursor);
+        ? session.beginValueScan(bound.table, bound.predicateColumn,
+            bound.accessLowerInclusive, bound.accessUpperExclusive, cursor)
+        : session.beginScan(bound.table, bound.accessLowerInclusive, bound.accessUpperExclusive, cursor);
   }
 
   private StatusCode next(SqlCommand command, BoundSqlStatement bound) {
@@ -127,18 +122,4 @@ final class SqlMutationKeyCollector {
         ? StatusCode.CORRUPTION : StatusCode.OK;
   }
 
-  private static long accessValue(
-      SqlCommand command, BoundSqlStatement bound) {
-    return bound.accessValue;
-  }
-
-  private static long accessLower(
-      SqlCommand command, BoundSqlStatement bound) {
-    return bound.accessLowerInclusive;
-  }
-
-  private static long accessUpper(
-      SqlCommand command, BoundSqlStatement bound) {
-    return bound.accessUpperExclusive;
-  }
 }

@@ -18,8 +18,9 @@ final class SqlUniversalDescriptorIndexLeaf {
     }
     if (program.leafTest(leaf) != SqlBooleanPredicateProgram.TEST_COMPARISON) return false;
     int side = targetSide(program, context, queryBlock, leaf, role, column, lineage);
-    if (side < 0
-        || normalized(program.comparison(leaf), side) != comparison) return false;
+    if (side < 0) return false;
+    SqlComparison actual = program.comparison(leaf);
+    if ((side == 0 ? actual : actual.reverseOrder()) != comparison) return false;
     int valueSide = side == 0 ? 1 : 0;
     if (literal(program, leaf, valueSide)) {
       if (result != null) result.literal(program, leaf, valueSide);
@@ -98,14 +99,4 @@ final class SqlUniversalDescriptorIndexLeaf {
     return context == null ? 0 : context.localRole(scope);
   }
 
-  private static SqlComparison normalized(SqlComparison comparison, int targetSide) {
-    if (targetSide == 0) return comparison;
-    return switch (comparison) {
-      case LESS_THAN -> SqlComparison.GREATER_THAN;
-      case LESS_OR_EQUAL -> SqlComparison.GREATER_OR_EQUAL;
-      case GREATER_THAN -> SqlComparison.LESS_THAN;
-      case GREATER_OR_EQUAL -> SqlComparison.LESS_OR_EQUAL;
-      default -> comparison;
-    };
-  }
 }
