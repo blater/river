@@ -116,6 +116,40 @@ final class LockIntervalTableTest {
   }
 
   @Test
+  void intervalConversionFairnessEmitsPredecessorOnceAndTerminates() {
+    Fixture fixture = new Fixture();
+    LockToken updateOwner = acquire(
+        fixture, 3, range(6, 0, 6, 100, LockMode.UPDATE));
+    LockToken firstShared = acquire(
+        fixture, 1, range(6, 0, 6, 100, LockMode.SHARED));
+    LockToken secondShared = acquire(
+        fixture, 2, range(6, 0, 6, 100, LockMode.SHARED));
+    LockRequest update = range(6, 0, 6, 100, LockMode.UPDATE);
+    Wait firstWait = enqueue(fixture, 1, 1, update, StatusCode.RETRY);
+    Wait secondWait = enqueue(fixture, 2, 1, update, StatusCode.RETRY);
+
+    long firstTransaction = fixture.table.state.directory.transaction(1, 1);
+    long secondTransaction = fixture.table.state.directory.transaction(2, 1);
+    long updateTransaction = fixture.table.state.directory.transaction(3, 1);
+    LockExactBlockerCursor blockers = new LockExactBlockerCursor(fixture.table);
+    blockers.begin(secondTransaction);
+
+    assertEquals(updateTransaction, blockers.next(secondTransaction));
+    assertEquals(LockDeadlockEdgeKind.ACTIVE_OWNER.ordinal(), blockers.edgeKind());
+    assertEquals(firstTransaction, blockers.next(secondTransaction));
+    assertEquals(LockDeadlockEdgeKind.FIFO_FAIRNESS.ordinal(), blockers.edgeKind());
+    assertEquals(-1, blockers.next(secondTransaction));
+
+    assertEquals(StatusCode.TIMEOUT,
+        fixture.table.cancel(secondWait.lane, secondWait.handle, StatusCode.TIMEOUT));
+    assertEquals(StatusCode.TIMEOUT,
+        fixture.table.cancel(firstWait.lane, firstWait.handle, StatusCode.TIMEOUT));
+    assertEquals(StatusCode.OK, fixture.table.release(secondShared));
+    assertEquals(StatusCode.OK, fixture.table.release(firstShared));
+    assertEquals(StatusCode.OK, fixture.table.release(updateOwner));
+  }
+
+  @Test
   void mixedExactAndIntervalCycleUsesOneGraphAndGrantsSurvivor() {
     Fixture fixture = new Fixture();
     LockToken exact = acquire(fixture, 1, row(7, 9));

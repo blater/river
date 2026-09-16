@@ -124,9 +124,8 @@ final class LockExactBlockerCursor {
       if (blocker >= 0 && !conversion) return requestBlocker(request, blocker,
           LockDeadlockEdgeKind.FIFO_FAIRNESS,
           LockGrantPrecondition.NO_EARLIER_INCOMPATIBLE_WAITER);
-      if (blocker >= 0) return blocker;
       frame.frameActiveRequests[frameOffset] = 0;
-      return -1;
+      return blocker;
     }
     return -1;
   }
