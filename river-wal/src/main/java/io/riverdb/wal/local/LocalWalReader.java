@@ -11,6 +11,7 @@ final class LocalWalReader {
   }
 
   static StatusCode read(LocalWal wal, long offset, LocalWalReadResult result) {
+    LocalWalRecoveryState recovery = wal.recoveryState();
     if (result == null
         || offset < WalFileHeaderCodec.HEADER_BYTES
         || offset >= wal.durableEnd()) {
@@ -21,10 +22,10 @@ final class LocalWalReader {
     if (!status.isOk()) {
       return status;
     }
-    ByteBuffer record = wal.recoveryRecord();
+    ByteBuffer record = recovery.recordBuffer();
     record.clear();
     record.limit(WalRecordCodec.HEADER_BYTES);
-    status = wal.readExactForRecovery(offset, record);
+    status = recovery.readExact(offset, record);
     if (!status.isOk()) {
       return status;
     }
@@ -35,23 +36,23 @@ final class LocalWalReader {
     }
     record.clear();
     record.limit(result.header().totalBytes());
-    status = wal.readExactForRecovery(offset, record);
+    status = recovery.readExact(offset, record);
     if (!status.isOk()) {
       result.reset();
       return status;
     }
     record.flip();
-    status = WalRecordCodec.validate(record, result.header(), wal.recoveryChecksum());
+    status = WalRecordCodec.validate(record, result.header(), recovery.checksum());
     if (!status.isOk()) {
       return status;
     }
-    ByteBuffer payload = wal.readPayloadBuffer();
+    ByteBuffer payload = recovery.payloadBuffer();
     payload.clear();
     payload.limit(result.header().payloadBytes());
     long nextOffset = offset + result.header().totalBytes();
     long recordEnd = nextOffset;
     if (nextOffset <= wal.durableEnd() - io.riverdb.format.wal.WalCommitGroupCodec.FOOTER_BYTES) {
-      StatusCode footer = wal.readFooterAt(nextOffset);
+      StatusCode footer = recovery.readFooterAt(nextOffset, wal.durableEnd());
       if (footer.isOk()) {
         nextOffset += io.riverdb.format.wal.WalCommitGroupCodec.FOOTER_BYTES;
       } else if (footer != StatusCode.INVALID_EXTERNAL_INPUT) {

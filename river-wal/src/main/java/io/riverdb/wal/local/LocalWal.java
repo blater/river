@@ -3,21 +3,8 @@ package io.riverdb.wal.local;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.format.wal.WalFileHeader;
-import io.riverdb.format.wal.WalFileHeaderCodec;
-import io.riverdb.format.wal.WalFileHeaderDecodeResult;
-import io.riverdb.format.wal.WalCommitGroupCodec;
-import io.riverdb.format.wal.WalCommitGroupHeader;
-import io.riverdb.format.wal.WalRecordCodec;
-import io.riverdb.format.wal.WalRecordHeader;
-import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
-import io.riverdb.platform.file.FileSizeResult;
-import io.riverdb.platform.file.ForceMode;
-import io.riverdb.platform.file.IoResult;
-import java.nio.ByteBuffer;
-import java.util.zip.CRC32C;
 
 /**
  * Single-owner synchronous WAL with reusable provider storage and globally ordered commit CSNs.
@@ -25,72 +12,38 @@ import java.util.zip.CRC32C;
 public final class LocalWal {
   public static final String FILE_NAME = "river.wal";
 
-  private DurableFile file;
   private final DatabaseIncarnation databaseIncarnation;
   private WalGeneration walGeneration;
   private String fileName;
-  private final ByteBuffer appendRecord;
-  private final ByteBuffer appendPayload;
-  private final ByteBuffer readRecord;
-  private final ByteBuffer readPayload;
-  private final LocalWalCommitGroup commitGroup = new LocalWalCommitGroup();
-  private final IoResult ioResult = new IoResult();
-  private final FileSizeResult fileSizeResult = new FileSizeResult();
-  private final WalRecordHeader recoveryHeader = new WalRecordHeader();
-  private final WalCommitGroupHeader recoveryFooter = new WalCommitGroupHeader();
+  private final LocalWalAppendState appendState;
+  private final LocalWalRecoveryState recoveryState;
+  private final LocalWalStreamState streamState;
+  private final LocalWalLifecycleState lifecycleState;
+  private final LocalWalReservationState reservationState;
   private final LocalWalForceTarget publishForceTarget = new LocalWalForceTarget();
-  private final LocalWalBatchAdmissionResult batchAdmissionResult =
-      new LocalWalBatchAdmissionResult();
-  private final LocalWalReadResult suffixReadResult = new LocalWalReadResult();
-  private final LocalWalForceMetrics forceMetrics = new LocalWalForceMetrics();
-  private final CRC32C checksum = new CRC32C();
-  private long tailEnd = WalFileHeaderCodec.HEADER_BYTES;
-  private long durableEnd = WalFileHeaderCodec.HEADER_BYTES;
-  private long nextJournalSequence = 1;
+  private final LocalWalForceState forceState;
   private long nextReservationToken = 1;
-  private long lastCommitSequence;
-  private long lastAppendedCommitSequence;
-  private long retainedMaximumTransactionId;
-  private long recoveryCommitSequence;
-  private long recoveryMaximumTransactionId;
-  private long pendingStart;
-  private long sealedStart;
-  private long sealedRecordCount;
-  private long sealedCommitSequence;
-  private int sealedPreviousDigest;
-  private int sealedDigest;
-  private int durableDigest;
-  private long maximumTransactionId = 1;
-  private long activeReservationToken;
-  private long activeLogicalStreamToken;
-  private long copiedPayloadBytes;
-  private long pendingRecordCount;
+  long nextForceToken = 1;
+  long activeReservationToken;
   private DurableWalQuorum durableQuorum;
-  private LocalWalForceTarget activeForceTarget;
-  private LocalWalForceWorker forceWorker;
-  private LocalWalForceCause activeForceCause;
-  private long nextForceToken = 1;
-  private boolean forceInProgress;
-  private boolean logicalStreamAppended;
-  private boolean logicalStreamFinalAppended;
-  private boolean recoveryTailOpen = true;
-  private boolean failed;
-  private boolean closed;
+  boolean recoveryTailOpen = true;
+  boolean failed;
+  boolean closed;
 
   LocalWal(
       DurableFile file,
       DatabaseIncarnation database,
       WalGeneration generation,
       String openedFileName) {
-    this.file = file;
+    appendState = new LocalWalAppendState(this, file);
+    recoveryState = new LocalWalRecoveryState(this, appendState);
+    streamState = new LocalWalStreamState(this);
+    forceState = new LocalWalForceState(this, appendState);
+    lifecycleState = new LocalWalLifecycleState(this, appendState, forceState);
+    reservationState = new LocalWalReservationState(this);
     databaseIncarnation = database;
     walGeneration = generation;
     fileName = openedFileName;
-    int capacity = WalRecordCodec.HEADER_BYTES + WalRecordCodec.MAX_PAYLOAD_BYTES;
-    appendRecord = ByteBuffer.allocateDirect(capacity);
-    appendPayload = payloadView(appendRecord);
-    readRecord = ByteBuffer.allocateDirect(capacity);
-    readPayload = payloadView(readRecord);
   }
 
   public static StatusCode open(
@@ -177,7 +130,7 @@ public final class LocalWal {
   }
 
   public long tailEnd() {
-    return tailEnd;
+    return appendState.tailEnd();
   }
 
   public DatabaseIncarnation databaseIncarnation() {
@@ -193,40 +146,28 @@ public final class LocalWal {
   }
 
   public long nextJournalSequence() {
-    return nextJournalSequence;
+    return appendState.nextJournalSequence();
   }
 
   public long nextCommitSequence() {
-    return lastAppendedCommitSequence == Long.MAX_VALUE
-        ? 0 : lastAppendedCommitSequence + 1;
+    return appendState.nextCommitSequence();
   }
 
   public long currentCommitSequence() {
-    return lastCommitSequence;
+    return appendState.currentCommitSequence();
   }
 
   public long nextTransactionId() {
-    return maximumTransactionId == Long.MAX_VALUE ? 0 : maximumTransactionId + 1;
+    long maximum = appendState.maximumTransactionId();
+    return maximum == Long.MAX_VALUE ? 0 : maximum + 1;
   }
 
   public long maximumTransactionId() {
-    return maximumTransactionId;
+    return appendState.maximumTransactionId();
   }
 
   public StatusCode adoptCheckpointState(long commitSequence, long transactionId) {
-    if (commitSequence <= 0
-        || transactionId <= 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (lastCommitSequence != 0 && lastCommitSequence <= commitSequence) {
-      return StatusCode.CORRUPTION;
-    }
-    if (lastCommitSequence == 0) {
-      lastCommitSequence = commitSequence;
-      lastAppendedCommitSequence = commitSequence;
-    }
-    maximumTransactionId = Math.max(maximumTransactionId, transactionId);
-    return StatusCode.OK;
+    return appendState.validateAndAdoptCheckpoint(commitSequence, transactionId);
   }
 
   public static String generationFileName(WalGeneration generation) {
@@ -246,34 +187,34 @@ public final class LocalWal {
 
   /** Exclusive local byte end known forced by this synchronous provider. */
   public long durableEnd() {
-    return durableEnd;
+    return appendState.durableEnd();
   }
 
   /** Explicit River-side payload copies; device transfer bytes are not copies. */
   public long copiedPayloadBytes() {
-    return copiedPayloadBytes;
+    return appendState.copiedPayloadBytes();
   }
 
   /** Copies bounded force telemetry into caller-owned storage without allocating. */
   public StatusCode copyMetrics(LocalWalMetrics result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    forceMetrics.copyTo(result);
+    forceState.metrics().copyTo(result);
     return StatusCode.OK;
   }
 
   /** Starts one explicit aggregate-only observation window. */
   public StatusCode beginMetricsCapture() {
-    return forceMetrics.beginCapture();
+    return forceState.metrics().beginCapture();
   }
 
   /** Ends the active observation window into caller-owned storage. */
   public StatusCode endMetricsCapture(LocalWalMetrics result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    return forceMetrics.endCapture(result);
+    return forceState.metrics().endCapture(result);
   }
 
   public StatusCode cancelMetricsCapture() {
-    return forceMetrics.cancelCapture();
+    return forceState.metrics().cancelCapture();
   }
 
   /**
@@ -313,30 +254,7 @@ public final class LocalWal {
       int formatId,
       int formatVersion,
       LocalWalLogicalStream stream) {
-    if (stream == null || transactionId <= 0 || formatId <= 0 || formatVersion <= 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = admission();
-    if (!status.isOk()) return status;
-    if (activeLogicalStreamToken != 0 || activeReservationToken != 0
-        || hasPendingRecords() || hasRetainedForceTarget()) {
-      return StatusCode.CONFLICT;
-    }
-    long token = claimNextReservationToken();
-    status = stream.claim(this, token, transactionId, formatId, formatVersion);
-    if (!status.isOk()) return status;
-    activeLogicalStreamToken = token;
-    recoveryTailOpen = false;
-    logicalStreamAppended = false;
-    logicalStreamFinalAppended = false;
-    if (durableQuorum != null) {
-      status = durableQuorum.beginLogicalStream(transactionId, formatId, formatVersion);
-      if (!status.isOk()) {
-        completeLogicalStream(stream);
-        if (status == StatusCode.FENCED) failed = true;
-      }
-    }
-    return status;
+    return streamState.begin(transactionId, formatId, formatVersion, stream);
   }
 
   public StatusCode appendLogicalStreamContinuation(
@@ -365,39 +283,23 @@ public final class LocalWal {
       LocalWalForceTarget target,
       LocalWalForceCause cause) {
     if (cause == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
+    if (!streamState.owns(stream)) return StatusCode.CONFLICT;
     return LocalWalForceCoordinator.force(this, target, cause);
   }
 
   public StatusCode releaseLogicalStreamBatch(
       LocalWalLogicalStream stream, LocalWalForceTarget target, long token) {
-    if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
-    StatusCode status = releaseForcedBatchInternal(target, token);
-    if (status.isOk() && logicalStreamFinalAppended) completeLogicalStream(stream);
-    return status;
+    return streamState.release(stream, target, token);
   }
 
   /** Cancels a stream only while no bytes from it have been accepted. */
   public StatusCode cancelLogicalStream(LocalWalLogicalStream stream) {
-    if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
-    if (logicalStreamAppended || hasPendingRecords() || hasRetainedForceTarget()) {
-      return StatusCode.CONFLICT;
-    }
-    if (activeReservationToken != 0) return StatusCode.CONFLICT;
-    StatusCode status = durableQuorum == null
-        ? StatusCode.OK : durableQuorum.cancelLogicalStreams();
-    if (status.isOk()) completeLogicalStream(stream);
-    return status;
+    return streamState.cancel(stream);
   }
 
   /** Permanently fences this provider after a partially accepted logical stream fails. */
   public StatusCode fenceLogicalStream(LocalWalLogicalStream stream) {
-    if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
-    failed = true;
-    activeReservationToken = 0;
-    if (durableQuorum != null) durableQuorum.fenceLogicalStreams();
-    completeLogicalStream(stream);
-    return StatusCode.OK;
+    return streamState.fence(stream);
   }
 
   public StatusCode publish(
@@ -535,57 +437,22 @@ public final class LocalWal {
   /** Opens the locally forced captured range; quorum uses it before configured completion. */
   public StatusCode openForcedCursor(
       LocalWalForceTarget target, long token, LocalWalForcedCursor cursor) {
-    if (target == null || cursor == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (!ownsForceTarget(target, token) || !target.locallyForced()) {
-      return StatusCode.CONFLICT;
-    }
-    return cursor.open(this, target, token);
+    return forceState.openCursor(target, token, cursor);
   }
 
   /** Releases exactly the completed target, invalidating cursors before storage reuse. */
   public StatusCode releaseForcedBatch(LocalWalForceTarget target, long token) {
     if (hasOpenLogicalStream()) return StatusCode.CONFLICT;
-    return releaseForcedBatchInternal(target, token);
-  }
-
-  private StatusCode releaseForcedBatchInternal(LocalWalForceTarget target, long token) {
-    StatusCode status = admission();
-    if (!status.isOk()) return status;
-    if (forceInProgress || !ownsForceTarget(target, token) || !target.durabilityComplete()) {
-      return StatusCode.CONFLICT;
-    }
-    target.release();
-    activeForceTarget = null;
-    return StatusCode.OK;
-  }
-
-  boolean ownsForceTarget(LocalWalForceTarget target, long token) {
-    return target != null && activeForceTarget == target && target.ownedBy(this, token);
+    return forceState.release(target, token);
   }
 
   public StatusCode cancel(LocalWalReservation reservation) {
-    if (reservation == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode admission = admission();
-    if (!admission.isOk()) {
-      return admission;
-    }
-    if (!reservation.isOwnedBy(this, activeReservationToken)) {
-      return StatusCode.CONFLICT;
-    }
-    activeReservationToken = 0;
-    reservation.complete();
-    return StatusCode.OK;
+    return reservationState.cancel(reservation);
   }
 
   /** Fences a partially assembled decision batch whose outcome can no longer be reported safely. */
   public StatusCode fencePendingBatch() {
-    if ((!hasPendingRecords() && !hasRetainedForceTarget()) || activeReservationToken != 0) {
-      return StatusCode.CONFLICT;
-    }
-    failed = true;
-    return StatusCode.OK;
+    return reservationState.fencePendingBatch();
   }
 
   public StatusCode read(long offset, LocalWalReadResult result) {
@@ -597,106 +464,16 @@ public final class LocalWal {
    */
   public StatusCode truncateDecisionlessRecoveredSuffix(
       long startOffset, long firstJournalSequence) {
-    StatusCode status = admission();
-    if (!status.isOk()) return status;
-    if (!recoveryTailOpen || durableQuorum != null || activeReservationToken != 0
-        || hasPendingRecords() || hasRetainedForceTarget() || hasOpenLogicalStream()
-        || startOffset < WalFileHeaderCodec.HEADER_BYTES || startOffset >= tailEnd
-        || firstJournalSequence <= 0 || firstJournalSequence >= nextJournalSequence) {
-      return StatusCode.CONFLICT;
-    }
-    int predecessorDigest;
-    if (startOffset == WalFileHeaderCodec.HEADER_BYTES) {
-      predecessorDigest = 0;
-    } else {
-      long footerOffset = startOffset - WalCommitGroupCodec.FOOTER_BYTES;
-      if (footerOffset < WalFileHeaderCodec.HEADER_BYTES) return StatusCode.CONFLICT;
-      status = readFooterAt(footerOffset, startOffset);
-      if (!status.isOk()) return status == StatusCode.INVALID_EXTERNAL_INPUT
-          ? StatusCode.CONFLICT : status;
-      if (recoveryFooter.groupStart() > footerOffset
-          || recoveryFooter.groupBytes() != startOffset - recoveryFooter.groupStart()) {
-        return StatusCode.CONFLICT;
-      }
-      predecessorDigest = footerDigest();
-    }
-    long offset = startOffset;
-    long sequence = firstJournalSequence;
-    while (offset < tailEnd) {
-      status = read(offset, suffixReadResult);
-      if (!status.isOk()) return status;
-      WalRecordHeader header = suffixReadResult.header();
-      if (header.journalSequence() != sequence || header.decisionCode() != 0
-          || header.commitSequence() != 0 || suffixReadResult.nextOffset() <= offset) {
-        return StatusCode.CORRUPTION;
-      }
-      offset = suffixReadResult.nextOffset();
-      sequence = sequence == Long.MAX_VALUE ? 0 : sequence + 1;
-    }
-    if (offset != tailEnd || sequence != nextJournalSequence) {
-      return StatusCode.CORRUPTION;
-    }
-    status = maximumTransactionIdBefore(startOffset);
-    if (!status.isOk()) return status;
-    status = truncateTail(startOffset, firstJournalSequence);
-    if (status.isOk()) {
-      commitGroup.setDigest(predecessorDigest);
-      durableDigest = predecessorDigest;
-      maximumTransactionId = retainedMaximumTransactionId;
-      recoveryTailOpen = false;
-    }
-    else failed = true;
-    return status;
-  }
-
-  private StatusCode maximumTransactionIdBefore(long endOffset) {
-    long maximum = 1;
-    long offset = WalFileHeaderCodec.HEADER_BYTES;
-    while (offset < endOffset) {
-      StatusCode status = read(offset, suffixReadResult);
-      if (!status.isOk()) return status;
-      if (suffixReadResult.nextOffset() <= offset || suffixReadResult.nextOffset() > endOffset) {
-        return StatusCode.CORRUPTION;
-      }
-      maximum = Math.max(maximum, suffixReadResult.header().transactionId());
-      offset = suffixReadResult.nextOffset();
-    }
-    retainedMaximumTransactionId = maximum;
-    return StatusCode.OK;
+    return recoveryState.truncateDecisionless(startOffset, firstJournalSequence);
   }
 
   /** Ends the startup-only recovered-tail repair window without changing bytes. */
   public StatusCode completeRecovery() {
-    StatusCode status = admission();
-    if (!status.isOk()) return status;
-    if (activeReservationToken != 0 || hasPendingRecords()
-        || hasRetainedForceTarget() || hasOpenLogicalStream()) return StatusCode.CONFLICT;
-    recoveryTailOpen = false;
-    return StatusCode.OK;
+    return recoveryState.completeRecovery();
   }
 
   public StatusCode close() {
-    if (closed) {
-      return StatusCode.CLOSED;
-    }
-    if (!failed && (hasPendingRecords()
-        || hasRetainedForceTarget() || hasOpenLogicalStream())) {
-      return StatusCode.CONFLICT;
-    }
-    if (forceWorker != null) {
-      StatusCode workerStatus = forceWorker.close();
-      if (!workerStatus.isOk() && workerStatus != StatusCode.CLOSED) return workerStatus;
-      forceWorker = null;
-      forceInProgress = false;
-    } else if (forceInProgress) {
-      return StatusCode.CONFLICT;
-    }
-    closed = true;
-    if (activeForceTarget != null) {
-      activeForceTarget.release();
-      activeForceTarget = null;
-    }
-    return file.close();
+    return lifecycleState.close();
   }
 
   private StatusCode recoverValidTail() {
@@ -709,26 +486,7 @@ public final class LocalWal {
 
   private StatusCode initializeFile(
       DurableDirectory directory, LocalWalForceCause forceCause) {
-    ByteBuffer header = ByteBuffer.allocate(WalFileHeaderCodec.HEADER_BYTES);
-    StatusCode status = WalFileHeaderCodec.encode(
-        new WalFileHeader(databaseIncarnation, walGeneration),
-        header);
-    if (!status.isOk()) {
-      return status;
-    }
-    header.flip();
-    status = file.write(0, header, ioResult);
-    if (status.isOk() && ioResult.bytesTransferred() != WalFileHeaderCodec.HEADER_BYTES) {
-      status = StatusCode.IO_FAILURE;
-    }
-    if (status.isOk()) {
-      status = forceFile(forceCause, WalFileHeaderCodec.HEADER_BYTES);
-    }
-    if (status.isOk()) {
-      DirectoryOperationResult forceResult = new DirectoryOperationResult();
-      status = directory.force(forceResult);
-    }
-    return status;
+    return lifecycleState.initialize(directory, forceCause);
   }
 
   StatusCode initializeFileForOpen(
@@ -737,33 +495,7 @@ public final class LocalWal {
   }
 
   StatusCode closeFileAfterOpen() {
-    return file.close();
-  }
-
-  private StatusCode truncateTail(long validEnd, long sequence) {
-    StatusCode status = file.truncate(validEnd);
-    if (status.isOk()) {
-      status = forceFile(LocalWalForceCause.RECOVERY_MAINTENANCE, validEnd);
-    }
-    if (status.isOk()) {
-      tailEnd = validEnd;
-      durableEnd = validEnd;
-      nextJournalSequence = sequence;
-      commitGroup.resetPending();
-      sealedStart = sealedRecordCount = sealedCommitSequence = 0;
-      sealedPreviousDigest = sealedDigest = 0;
-      durableDigest = commitGroup.digest();
-    }
-    return status;
-  }
-
-  private StatusCode readExact(long offset, ByteBuffer target) {
-    int expected = target.remaining();
-    StatusCode status = file.read(offset, target, ioResult);
-    if (status.isOk() && ioResult.bytesTransferred() != expected) {
-      return StatusCode.IO_FAILURE;
-    }
-    return status;
+    return appendState.file().close();
   }
 
   private StatusCode admission() {
@@ -776,7 +508,7 @@ public final class LocalWal {
     return StatusCode.OK;
   }
 
-  private boolean validDecision(
+  boolean decisionCodeValid(
       long transactionId,
       long commitSequence,
       int decisionCode,
@@ -789,274 +521,71 @@ public final class LocalWal {
     };
   }
 
-  private static ByteBuffer payloadView(ByteBuffer record) {
-    record.position(WalRecordCodec.HEADER_BYTES);
-    ByteBuffer payload = record.slice();
-    record.clear();
-    return payload;
-  }
-
   boolean hasActiveReservation() {
     return activeReservationToken != 0;
   }
 
   boolean hasOpenLogicalStream() {
-    return activeLogicalStreamToken != 0;
+    return streamState.open();
   }
 
   boolean ownsLogicalStream(LocalWalLogicalStream stream) {
-    return stream != null && stream.isOwnedBy(this, activeLogicalStreamToken);
+    return streamState.owns(stream);
   }
 
   long logicalStreamToken(LocalWalLogicalStream stream) {
-    return stream == null ? 0 : activeLogicalStreamToken;
+    return streamState.token(stream);
   }
 
   void acceptLogicalStreamBatch(boolean finalBatch) {
-    logicalStreamAppended = true;
-    logicalStreamFinalAppended = finalBatch;
+    streamState.acceptBatch(finalBatch);
   }
 
   private void completeLogicalStream(LocalWalLogicalStream stream) {
-    activeLogicalStreamToken = 0;
-    logicalStreamAppended = false;
-    logicalStreamFinalAppended = false;
-    stream.complete();
+    streamState.complete(stream);
   }
 
   boolean hasPendingRecords() {
-    return pendingRecordCount != 0 || sealedRecordCount != 0;
+    return appendState.hasPendingRecords();
   }
 
   boolean hasRetainedForceTarget() {
-    return activeForceTarget != null;
+    return forceState.hasTarget();
   }
 
   StatusCode admissionStatus() {
     return admission();
   }
 
+  LocalWalAppendState appendState() { return appendState; }
+
+  LocalWalForceState forceState() { return forceState; }
+
+  LocalWalRecoveryState recoveryState() { return recoveryState; }
+
   void installDurableQuorum(DurableWalQuorum quorum) {
     durableQuorum = quorum;
   }
 
-  StatusCode readFileSize() {
-    return file.size(fileSizeResult);
+  DurableWalQuorum durableQuorum() { return durableQuorum; }
+
+  StatusCode cancelDurableLogicalStream() {
+    return durableQuorum == null ? StatusCode.OK : durableQuorum.cancelLogicalStreams();
   }
 
-  long fileSizeBytes() {
-    return fileSizeResult.sizeBytes();
+  void fenceDurableLogicalStream() {
+    if (durableQuorum != null) durableQuorum.fenceLogicalStreams();
   }
 
-  ByteBuffer recoveryRecord() {
-    return readRecord;
-  }
-
-  ByteBuffer readPayloadBuffer() {
-    return readPayload;
-  }
-
-  WalRecordHeader recoveryHeader() {
-    return recoveryHeader;
-  }
-
-  WalCommitGroupHeader recoveryFooter() {
-    return recoveryFooter;
-  }
-
-  java.util.zip.CRC32C recoveryChecksum() {
-    return checksum;
-  }
-
-  StatusCode readExactForRecovery(long offset, ByteBuffer target) {
-    return readExact(offset, target);
-  }
-
-  StatusCode readFooterAt(long offset) {
-    return readFooterAt(offset, durableEnd);
-  }
-
-  StatusCode readFooterAt(long offset, long limit) {
-    if (offset < WalFileHeaderCodec.HEADER_BYTES
-        || limit < WalCommitGroupCodec.FOOTER_BYTES
-        || offset > limit - WalCommitGroupCodec.FOOTER_BYTES) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    ByteBuffer footer = commitGroup.footer();
-    footer.clear();
-    footer.limit(WalCommitGroupCodec.FOOTER_BYTES);
-    StatusCode status = readExact(offset, footer);
-    if (!status.isOk()) return status;
-    footer.flip();
-    if (!WalCommitGroupCodec.matchesMagic(footer)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode decoded = WalCommitGroupCodec.decodeHeader(footer, recoveryFooter, checksum);
-    if (decoded.isOk()) footer.position(0);
-    return decoded;
-  }
-
-  int footerDigest() {
-    return WalCommitGroupCodec.chainDigest(commitGroup.footer());
-  }
-
-  int groupDigest() {
-    return commitGroup.digest();
-  }
-
-  void beginRecoveryGroup() {
-    commitGroup.begin(0);
-    recoveryCommitSequence = lastAppendedCommitSequence;
-    recoveryMaximumTransactionId = maximumTransactionId;
-  }
-
-  void includeRecoveryRecord(ByteBuffer record, int recordBytes) {
-    commitGroup.includeRaw(record, recordBytes);
-  }
-
-  boolean validRecoveryFooter(long groupStart, long recordBytes, long recordCount,
-      long firstSequence, long lastSequence) {
-    return validRecoveryFooterRecords(groupStart, recordBytes, recordCount,
-        firstSequence, lastSequence)
-        && recoveryFooter.previousDigest() == commitGroup.digest();
-  }
-
-  boolean validRecoveryFooterRecords(long groupStart, long recordBytes, long recordCount,
-      long firstSequence, long lastSequence) {
-    return recoveryFooter.groupStart() == groupStart
-        && recoveryFooter.recordBytes() == recordBytes
-        && recoveryFooter.recordCount() == recordCount
-        && recoveryFooter.firstJournalSequence() == firstSequence
-        && recoveryFooter.lastJournalSequence() == lastSequence
-        && recoveryFooter.groupChecksum() == commitGroup.checksumValue();
-  }
-
-  void commitRecoveredGroup() {
-    lastAppendedCommitSequence = recoveryCommitSequence;
-    lastCommitSequence = recoveryCommitSequence;
-    maximumTransactionId = recoveryMaximumTransactionId;
-    commitGroup.setDigest(footerDigest());
-    durableDigest = commitGroup.digest();
-  }
-
-  StatusCode truncateTailForRecovery(long validEnd, long sequence) {
-    return truncateTail(validEnd, sequence);
-  }
-
-  boolean validDecisionForRecovery(WalRecordHeader header) {
-    return validDecision(header.transactionId(), header.commitSequence(),
-        header.decisionCode(), recoveryCommitSequence);
-  }
-
-  void acceptRecoveredRecord(WalRecordHeader header) {
-    if (header.decisionCode() == 1) {
-      recoveryCommitSequence = header.commitSequence();
-    }
-    if (header.transactionId() > recoveryMaximumTransactionId) {
-      recoveryMaximumTransactionId = header.transactionId();
-    }
-  }
-
-  void finishRecovery(long offset, long sequence) {
-    tailEnd = offset;
-    durableEnd = offset;
-    nextJournalSequence = sequence;
-    commitGroup.resetPending();
-    durableDigest = commitGroup.digest();
-  }
+  void clearActiveReservation() { activeReservationToken = 0; }
 
   boolean ownsReservation(LocalWalReservation reservation) {
     return reservation.isOwnedBy(this, activeReservationToken);
   }
 
   boolean validDecisionForAppend(long transactionId, long commitSequence, int decisionCode) {
-    return validDecision(
-        transactionId, commitSequence, decisionCode, lastAppendedCommitSequence);
-  }
-
-  ByteBuffer appendRecordBuffer() {
-    return appendRecord;
-  }
-
-  ByteBuffer appendPayloadBuffer() {
-    return appendPayload;
-  }
-
-  ByteBuffer prepareAppendPayload(int payloadBytes) {
-    appendRecord.clear();
-    appendPayload.clear();
-    appendPayload.limit(payloadBytes);
-    return appendPayload;
-  }
-
-  void beginPendingGroup(long firstSequence) {
-    if (pendingRecordCount == 0) {
-      commitGroup.begin(firstSequence);
-    }
-  }
-
-  void includePendingRecord(ByteBuffer record, int recordBytes, long sequence) {
-    commitGroup.include(record, recordBytes, sequence);
-  }
-
-  StatusCode appendPendingFooter() {
-    if (pendingRecordCount <= 0 || commitGroup.recordBytes() <= 0
-        || tailEnd > Long.MAX_VALUE - WalCommitGroupCodec.FOOTER_BYTES
-        || sealedRecordCount > Long.MAX_VALUE - pendingRecordCount) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    int predecessorDigest = commitGroup.digest();
-    StatusCode status = WalCommitGroupCodec.encodeReserved(
-        pendingStart,
-        commitGroup.recordBytes(),
-        pendingRecordCount,
-        commitGroup.firstSequence(),
-        commitGroup.lastSequence(),
-        commitGroup.digest(),
-        commitGroup.checksumValue(),
-        commitGroup.footer(),
-        checksum);
-    if (!status.isOk()) return status;
-    try {
-      status = writeAppendFooter(tailEnd);
-    } catch (Throwable unexpected) {
-      failed = true;
-      throw unexpected;
-    }
-    if (!status.isOk()) {
-      failed = true;
-      return status;
-    }
-    int terminalDigest = WalCommitGroupCodec.chainDigest(commitGroup.footer());
-    if (sealedRecordCount == 0) {
-      sealedStart = pendingStart;
-      sealedPreviousDigest = predecessorDigest;
-    }
-    sealedRecordCount += pendingRecordCount;
-    sealedCommitSequence = lastAppendedCommitSequence;
-    sealedDigest = terminalDigest;
-    commitGroup.setDigest(terminalDigest);
-    tailEnd += WalCommitGroupCodec.FOOTER_BYTES;
-    pendingStart = 0;
-    pendingRecordCount = 0;
-    commitGroup.resetPending();
-    return StatusCode.OK;
-  }
-
-  private StatusCode writeAppendFooter(long offset) {
-    ioResult.reset();
-    StatusCode status = file.write(offset, commitGroup.footer(), ioResult);
-    commitGroup.footer().position(0);
-    return status.isOk() && ioResult.bytesTransferred() != WalCommitGroupCodec.FOOTER_BYTES
-        ? StatusCode.IO_FAILURE : status;
-  }
-
-  long pendingRecordCountValue() {
-    return pendingRecordCount;
-  }
-
-  LocalWalBatchAdmissionResult batchAdmissionResult() {
-    return batchAdmissionResult;
+    return decisionCodeValid(
+        transactionId, commitSequence, decisionCode, appendState.lastAppendedCommitSequence());
   }
 
   long claimNextReservationToken() {
@@ -1068,124 +597,16 @@ public final class LocalWal {
     recoveryTailOpen = false;
   }
 
-  StatusCode forceAppendFile(LocalWalForceTarget target, LocalWalForceCause cause) {
-    long started = System.nanoTime();
-    StatusCode status = target.file().force(
-        target.startOffset(), target.endOffset(), ForceMode.CONTENT_AND_METADATA);
-    forceMetrics.record(
-        cause, target.endOffset() - target.startOffset(), System.nanoTime() - started, status);
-    return status;
-  }
 
-  private StatusCode forceFile(LocalWalForceCause cause, long coveredBytes) {
-    long started = System.nanoTime();
-    StatusCode status = file.force(ForceMode.CONTENT_AND_METADATA);
-    forceMetrics.record(cause, coveredBytes, System.nanoTime() - started, status);
-    return status;
-  }
-
-  private StatusCode forceRangeFile(LocalWalForceCause cause, long startOffset, long endOffset) {
-    long started = System.nanoTime();
-    StatusCode status = file.force(startOffset, endOffset, ForceMode.CONTENT_AND_METADATA);
-    forceMetrics.record(cause, endOffset - startOffset, System.nanoTime() - started, status);
-    return status;
-  }
 
   void markFailed() {
     failed = true;
   }
 
   StatusCode captureForceTarget(LocalWalForceTarget target) {
-    StatusCode status = pendingRecordCount == 0 ? StatusCode.OK : sealPendingBatch();
-    return status.isOk() ? captureSealedForceTarget(target) : status;
+    StatusCode status = appendState.pendingRecordCount() == 0 ? StatusCode.OK : sealPendingBatch();
+    return status.isOk() ? forceState.capture(target) : status;
   }
-
-  StatusCode captureSealedForceTarget(LocalWalForceTarget target) {
-    if (target.retained() || activeForceTarget != null || sealedRecordCount <= 0) {
-      return StatusCode.CONFLICT;
-    }
-    if (nextForceToken == 0) return StatusCode.RESOURCE_EXHAUSTED;
-    long token = nextForceToken;
-    nextForceToken = token == Long.MAX_VALUE ? 0 : token + 1;
-    target.capture(
-        this, file, token, sealedStart, tailEnd, sealedRecordCount,
-        sealedCommitSequence, sealedPreviousDigest, sealedDigest);
-    activeForceTarget = target;
-    forceInProgress = true;
-    sealedStart = sealedRecordCount = sealedCommitSequence = 0;
-    sealedPreviousDigest = sealedDigest = 0;
-    return StatusCode.OK;
-  }
-
-  void restoreCapturedSuffix(LocalWalForceTarget target) {
-    sealedStart = target.startOffset();
-    sealedRecordCount = target.recordCount();
-    sealedCommitSequence = target.commitSequence();
-    sealedPreviousDigest = target.previousDigest();
-    sealedDigest = target.finalDigest();
-    target.release();
-    activeForceTarget = null;
-    forceInProgress = false;
-  }
-
-  StatusCode validateCapturedTarget(LocalWalForceTarget target) {
-    return target.file() == file
-            && target.startOffset() == durableEnd
-            && target.endOffset() > target.startOffset()
-            && target.endOffset() <= tailEnd
-            && target.previousDigest() == durableDigest
-        ? StatusCode.OK : StatusCode.INVARIANT_BROKEN;
-  }
-
-  void markForced(LocalWalForceTarget target) {
-    durableEnd = target.endOffset();
-    lastCommitSequence = target.commitSequence();
-    durableDigest = target.finalDigest();
-    target.completeLocalForce();
-  }
-
-  void finishForce() { forceInProgress = false; }
-
-  boolean hasSealedRecords() { return sealedRecordCount != 0; }
-
-  boolean forceWorkerEnabled() { return forceWorker != null; }
-
-  boolean concurrentAppendPermitted() { return forceWorker != null && forceInProgress; }
-
-  StatusCode installForceWorker(Thread completionOwner) {
-    if (completionOwner == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (forceWorker != null) return StatusCode.CONFLICT;
-    forceWorker = new LocalWalForceWorker(completionOwner);
-    return StatusCode.OK;
-  }
-
-  StatusCode submitForceCommand(LocalWalForceTarget target, LocalWalForceCause cause) {
-    return forceWorker == null ? StatusCode.CONFLICT : forceWorker.submit(target, cause);
-  }
-
-  boolean forceResultReady(LocalWalForceTarget target) {
-    return forceWorker != null && forceWorker.resultReady(target);
-  }
-
-  StatusCode consumeForceResult(LocalWalForceTarget target) {
-    return forceWorker == null ? StatusCode.CONFLICT : forceWorker.consume(target);
-  }
-
-  void beginAsyncForce(LocalWalForceCause cause) { activeForceCause = cause; }
-
-  LocalWalForceCause takeAsyncForceCause() {
-    LocalWalForceCause cause = activeForceCause;
-    activeForceCause = null;
-    return cause;
-  }
-
-  void recordAsyncForce(LocalWalForceTarget target, LocalWalForceCause cause) {
-    forceMetrics.record(
-        cause, target.endOffset() - target.startOffset(),
-        target.forceElapsedNanos(), target.forceStatus());
-  }
-
-  void completeForceDurability(LocalWalForceTarget target) { target.completeDurability(); }
 
   StatusCode replicateForcedBatch(LocalWalForceTarget target, LocalWalForceCause cause) {
     return hasOpenLogicalStream()
@@ -1198,39 +619,11 @@ public final class LocalWal {
       String nextFileName,
       WalGeneration nextGeneration,
       long checkpointTransactionId) {
-    forceMetrics.merge(replacement.forceMetrics);
-    replacement.lastCommitSequence = lastCommitSequence;
-    replacement.lastAppendedCommitSequence = lastCommitSequence;
-    replacement.maximumTransactionId = Math.max(maximumTransactionId, checkpointTransactionId);
-    DurableFile previousFile = file;
-    file = replacement.file;
+    forceState.mergeMetrics(replacement.forceState);
     fileName = nextFileName;
     walGeneration = nextGeneration;
-    tailEnd = replacement.tailEnd;
-    durableEnd = replacement.durableEnd;
-    nextJournalSequence = replacement.nextJournalSequence;
     nextReservationToken = replacement.nextReservationToken;
-    lastCommitSequence = replacement.lastCommitSequence;
-    lastAppendedCommitSequence = replacement.lastAppendedCommitSequence;
-    commitGroup.setDigest(replacement.commitGroup.digest());
-    durableDigest = replacement.durableDigest;
-    maximumTransactionId = replacement.maximumTransactionId;
-    copiedPayloadBytes += replacement.copiedPayloadBytes;
-    return previousFile.close();
-  }
-
-  long nextJournalSequenceValue() {
-    return nextJournalSequence;
-  }
-
-  CRC32C appendChecksum() {
-    return checksum;
-  }
-
-  StatusCode writeAppendRecord(long offset, ByteBuffer record, int recordBytes) {
-    StatusCode status = file.write(offset, record, ioResult);
-    return status.isOk() && ioResult.bytesTransferred() != recordBytes
-        ? StatusCode.IO_FAILURE : status;
+    return appendState.adoptFrom(replacement.appendState, checkpointTransactionId);
   }
 
   void abortAppend(LocalWalReservation reservation) {
@@ -1239,71 +632,8 @@ public final class LocalWal {
     reservation.complete();
   }
 
-  void acceptAppend(
-      LocalWalReservation reservation,
-      LocalWalAppendResult result,
-      long transactionId,
-      long commitSequence,
-      int decisionCode,
-      int recordBytes) {
-    long start = tailEnd;
-    if (pendingRecordCount == 0) {
-      pendingStart = start;
-    }
-    tailEnd += recordBytes;
-    result.set(start, tailEnd, nextJournalSequence);
-    nextJournalSequence = nextJournalSequence == Long.MAX_VALUE
-        ? 0 : nextJournalSequence + 1;
-    pendingRecordCount++;
-    if (decisionCode == 1) {
-      lastAppendedCommitSequence = commitSequence;
-    }
-    if (transactionId > maximumTransactionId) {
-      maximumTransactionId = transactionId;
-    }
-    activeReservationToken = 0;
-    reservation.complete();
-  }
-
   void abortRecordBatchAppend() {
     failed = true;
   }
 
-  void acceptRecordBatchAppend(
-      LocalWalGroupAppendResult result,
-      long transactionId,
-      long commitSequence,
-      long appendedEnd,
-      int recordCount) {
-    long start = tailEnd;
-    long firstSequence = nextJournalSequence;
-    if (pendingRecordCount == 0) pendingStart = start;
-    tailEnd = appendedEnd;
-    pendingRecordCount += recordCount;
-    nextJournalSequence = firstSequence > Long.MAX_VALUE - recordCount
-        ? 0 : firstSequence + recordCount;
-    if (commitSequence > 0) lastAppendedCommitSequence = commitSequence;
-    if (transactionId > maximumTransactionId) maximumTransactionId = transactionId;
-    result.set(start, tailEnd, firstSequence, recordCount);
-  }
-
-  void acceptDecisionBatchAppend(
-      LocalWalGroupAppendResult result,
-      LocalWalDecisionBatch batch,
-      long appendedEnd) {
-    long start = tailEnd;
-    long firstSequence = nextJournalSequence;
-    if (pendingRecordCount == 0) pendingStart = start;
-    int records = batch.recordCount();
-    tailEnd = appendedEnd;
-    pendingRecordCount += records;
-    nextJournalSequence = firstSequence > Long.MAX_VALUE - records
-        ? 0 : firstSequence + records;
-    int transactions = batch.transactionCount();
-    lastAppendedCommitSequence = batch.commitSequence(transactions - 1);
-    for (int index = 0; index < transactions; index++) {
-      maximumTransactionId = Math.max(maximumTransactionId, batch.transactionId(index));
-    }
-    result.set(start, tailEnd, firstSequence, records);
-  }
 }

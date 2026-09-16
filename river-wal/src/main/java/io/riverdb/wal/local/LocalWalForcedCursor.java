@@ -14,7 +14,7 @@ public final class LocalWalForcedCursor {
   public long remaining() { return remaining; }
 
   public StatusCode next(LocalWalReadResult result) {
-    if (owner == null || !owner.ownsForceTarget(target, token)
+    if (owner == null || !owner.forceState().owns(target, token)
         || result == null || remaining <= 0 || nextOffset >= endOffset) {
       return StatusCode.CONFLICT;
     }

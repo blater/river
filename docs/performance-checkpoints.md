@@ -3675,3 +3675,52 @@ Independent measurement review agrees that these four samples complete the
 requested recheck; another attribution campaign is not needed. The former
 CPU-regression concern is not reproduced, while the throughput evidence remains
 variable.
+
+
+## 2026-09-16 — complexity reduction through WAL ownership
+
+Ticket: `tic-thuringwethil`. Candidate `ff6ed6f9` on
+`ticket/tic-thuringwethil-localwal-complexity`, compared with pre-ticket
+production `3636c7b3`. This cumulative checkpoint includes decimal, value API,
+format, protocol, and WAL changes; it does not attribute a result to WAL alone.
+LocalWal Slopmark fell from 176.0825 to 96.2091; the complete WAL module,
+including tests, has maximum NPATH 89. Independent Luna/high reviewers approved
+append/recovery and force/lifecycle/stream ownership. Clean full check passed
+2034 tests, zero failures/errors, 19 skips; final dead-code cleanup passed WAL
+module checks. Logs are `/private/tmp/river-wal-clean-check-final.log` and
+`/private/tmp/river-wal-dead-code-check.log`.
+
+Four serial, unprofiled runs used harness source `7d91f4f`, GraalVM 25.0.4,
+`-Xmx1g`, durable WAL, TCP/TLS, READ_COMMITTED, sample new-order, one worker,
+one warehouse, seed 42, max retries 3, 20-second warmup and 30-second measurement.
+Each command and version label is retained in
+`/private/tmp/river-complexity-perf/*-command.json`. Executables were
+`/private/tmp/river-two-hotpaths/tuple-revised/river` and
+`/private/tmp/river-complexity-perf/candidate/river`. No builds or other workloads
+overlapped these runs.
+
+| Run | Committed TPS | Server CPU ms/commit | Client CPU ms/commit | p99 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Control A | 397.866 | 2.158 | 1.124 | 3.797 |
+| Candidate A | 396.933 | 2.167 | 1.128 | 3.809 |
+| Candidate B | 396.361 | 2.194 | 1.133 | 3.840 |
+| Control B | 393.599 | 2.198 | 1.129 | 3.877 |
+
+All passed with identical eligible comparison keys, successful invariants,
+reconciled accounting and hashes, zero warmup cancellations, retries, failures,
+or unknown outcomes. Shutdown was graceful and all owned processes exited.
+CPU measures whole-process deltas, including JVM/background work; start brackets
+were within 0.08 ms and end brackets within 17 ms of the measured phase.
+
+Reports under `/Users/blater/src/ingres/river-harness/runs/`, in table order:
+
+- `river_harness_20260916_104419_c4d55227`
+- `river_harness_20260916_104552_576e1800`
+- `river_harness_20260916_104717_a81f248b`
+- `river_harness_20260916_104839_74ac3251`
+
+Capture details and verification: `/private/tmp/river-complexity-perf/`.
+**Decision:** promote this reviewed slice. Both candidates fall within the two
+controls' observed ranges for throughput, server CPU per commit, and p99.
+There is no regression signal and no established speedup. Independent review
+agrees. The wider complexity ticket remains open for subsequent checkpoints.

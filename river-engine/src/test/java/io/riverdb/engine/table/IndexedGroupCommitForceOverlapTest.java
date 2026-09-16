@@ -220,9 +220,12 @@ final class IndexedGroupCommitForceOverlapTest {
   }
 
   private static void replaceWalFile(LocalWal wal, DurableFile file) throws Exception {
-    Field field = LocalWal.class.getDeclaredField("file");
+    Field state = LocalWal.class.getDeclaredField("appendState");
+    state.setAccessible(true);
+    Object append = state.get(wal);
+    Field field = append.getClass().getDeclaredField("file");
     field.setAccessible(true);
-    field.set(wal, file);
+    field.set(append, file);
   }
 
   private record PendingCommit(
@@ -403,9 +406,12 @@ final class IndexedGroupCommitForceOverlapTest {
   }
 
   private static DurableFile walFile(LocalWal wal) throws Exception {
-    Field field = LocalWal.class.getDeclaredField("file");
+    Field state = LocalWal.class.getDeclaredField("appendState");
+    state.setAccessible(true);
+    Object append = state.get(wal);
+    Field field = append.getClass().getDeclaredField("file");
     field.setAccessible(true);
-    return (DurableFile) field.get(wal);
+    return (DurableFile) field.get(append);
   }
 
   /** Holds each real mapped force independently after publication and before provider I/O. */

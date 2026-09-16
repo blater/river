@@ -27,22 +27,22 @@ final class LocalWalReservationAdmission {
     }
     int recordBytes = WalRecordCodec.encodedBytes(payloadBytes);
     if (wal.hasActiveReservation()
-        || wal.hasRetainedForceTarget() && !wal.concurrentAppendPermitted()) {
+        || wal.hasRetainedForceTarget() && !wal.forceState().concurrentAppendPermitted()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    if (wal.nextJournalSequenceValue() <= 0
-        || wal.tailEnd() > Long.MAX_VALUE - recordBytes) {
+    if (wal.appendState().nextJournalSequence() <= 0
+        || wal.appendState().tailEnd() > Long.MAX_VALUE - recordBytes) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    ByteBuffer appendRecord = wal.appendRecordBuffer();
-    ByteBuffer appendPayload = wal.appendPayloadBuffer();
+    ByteBuffer appendRecord = wal.appendState().appendRecord();
+    ByteBuffer appendPayload = wal.appendState().appendPayload();
     appendRecord.clear();
     appendPayload.clear();
     appendPayload.limit(payloadBytes);
     long token = wal.claimNextReservationToken();
-    long endOffset = wal.tailEnd() + recordBytes;
+    long endOffset = wal.appendState().tailEnd() + recordBytes;
     StatusCode status = reservation.claim(
-        wal, token, appendPayload, payloadBytes, wal.tailEnd(), endOffset);
+        wal, token, appendPayload, payloadBytes, wal.appendState().tailEnd(), endOffset);
     if (status.isOk()) {
       wal.activateReservation(token);
     }
