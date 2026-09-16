@@ -3724,3 +3724,96 @@ Capture details and verification: `/private/tmp/river-complexity-perf/`.
 controls' observed ranges for throughput, server CPU per commit, and p99.
 There is no regression signal and no established speedup. Independent review
 agrees. The wider complexity ticket remains open for subsequent checkpoints.
+
+## Complexity checkpoint 2 — regression investigation, 2026-09-16
+
+Ticket: `tic-thuringwethil`. Control is the accepted `ff6ed6f9` runtime;
+candidate `fa6f069a` includes B-tree, session/JDBC lifecycle, hybrid sizing,
+SQL parser, commit coordinator, and daemon lifecycle refactors. This is a
+cumulative comparison. Candidate promotion is pending investigation.
+
+The same harness `7d91f4f`, GraalVM 25.0.4, `-Xmx1g`, durable WAL, TCP/TLS,
+READ_COMMITTED, sample new-order, one worker, one warehouse, seed 42, and
+max retries 3 were used. Warmup was 20 seconds. Runs were serial without
+compilation, tests, profiling, or other workload overlap.
+
+### Initial 30-second measurements
+
+| Run | Committed TPS | Server CPU ms/commit | Client CPU ms/commit | p99 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Control-a | 376.334 | 2.221 | 1.170 | 4.649 |
+| Candidate-a | 367.656 | 2.196 | 1.169 | 4.739 |
+| Candidate-b | 371.599 | 2.195 | 1.176 | 4.690 |
+| Control-b | 378.466 | 2.185 | 1.152 | 4.620 |
+
+Capture, commands, verification, and report identifiers: `/private/tmp/river-complexity-perf-2/`.
+
+### Longer 60-second measurements
+
+| Run | Committed TPS | Server CPU ms/commit | Client CPU ms/commit | p99 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Control-a | 369.583 | 2.211 | 1.179 | 4.694 |
+| Candidate-a | 365.417 | 2.232 | 1.174 | 4.735 |
+| Candidate-b | 363.217 | 2.262 | 1.180 | 4.719 |
+| Control-b | 367.350 | 2.234 | 1.186 | 4.686 |
+
+Capture, commands, verification, and report identifiers: `/private/tmp/river-complexity-perf-2-long/`.
+
+### SQL-only reversion probe, 60 seconds
+
+| Run | Committed TPS | Server CPU ms/commit | Client CPU ms/commit | p99 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Full candidate | 369.584 | 2.228 | 1.166 | 4.690 |
+| Reverted component | 364.250 | 2.243 | 1.175 | 4.760 |
+
+Capture, commands, verification, and report identifiers: `/private/tmp/river-complexity-sql-probe/`.
+
+### Engine-only reversion probe, 60 seconds
+
+| Run | Committed TPS | Server CPU ms/commit | Client CPU ms/commit | p99 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Full candidate | 360.566 | 2.263 | 1.172 | 4.723 |
+| Reverted component | 367.934 | 2.243 | 1.174 | 4.760 |
+
+Capture, commands, verification, and report identifiers: `/private/tmp/river-complexity-engine-probe/`.
+
+Both original pairs repeated lower candidate throughput and higher p99 outside
+the controls' observed ranges. This is a regression signal requiring explanation,
+not a discarded outlier. SQL-only reversion did not improve the adjacent result.
+Engine-only reversion improved throughput but had worse p99 in its single pair;
+that is a lead, not causal proof. A repeated pre-coordinator engine probe is recorded below.
+
+All completed runs passed with eligible matching comparison keys for the same
+measurement length, successful invariants, reconciled accounting and artifact
+hashes, zero warmup cancellations, retries, failures, and unknown outcomes.
+Shutdown was graceful with the managed service inactive. CPU is a whole-process
+phase-bracket estimate, including JIT and background work.
+
+### Pre-coordinator engine probe, 60 seconds
+
+Only the engine jar differs: sizing checkpoint `8190b1f8` versus candidate
+`fa6f069a`. All other jar hashes match. Commands retain the same configuration.
+
+| Run order | Variant | Committed TPS | Server CPU ms/commit | p99 ms |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Pre-coordinator | 372.816 | 2.200 | 4.698 |
+| 2 | Full candidate | 377.184 | 2.327 | 4.239 |
+| 3 | Full candidate | 365.517 | 2.391 | 4.997 |
+| 4 | Pre-coordinator | 353.117 | 2.534 | 4.960 |
+
+The full candidate has higher throughput in both component pairs. This does not
+support attributing the cumulative slowdown to the queue refactor. Absolute
+throughput and CPU vary between repeats; p99 effects are mixed. These component
+probes do not clear the earlier cumulative regression signal.
+
+Independent Luna/high audit verified all four probe captures using the standard
+checker with explicit label mapping at `/private/tmp/river-complexity-prequeue-check`.
+Captures and report identifiers are in `/private/tmp/river-complexity-prequeue-probe`
+and `/private/tmp/river-complexity-fullcandidate-probe`. No owned client/server
+process from the 16 checkpoint-2 cumulative/component runs remained running.
+
+**Decision:** keep the cumulative performance investigation open. Do not claim a
+speedup or dismiss the repeated adverse measurements. Daemon lifecycle may be
+assessed separately against immediate master with only its jar changed; such a
+result would establish only that slice's behavior. The next cumulative diagnostic
+should inspect mechanism telemetry rather than extend this timing-only matrix.
