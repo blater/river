@@ -90,27 +90,34 @@ final class SqlScanPreparation {
 
   private StatusCode beginGrouped(
       BoundSqlQuery.Block command, boolean distinct, boolean explainOnly) {
+    prepareGroupedPlan(distinct);
+    int groupedColumn = distinct ? bound.distinctColumn : bound.groupColumn;
+    int aggregateColumn = distinct ? -1 : bound.groupAggregateColumn;
+    boolean ordered = groupedInputOrdered(groupedColumn);
+    plan.setSort(!ordered);
+    plan.setAccessColumn(ordered ? groupedColumn : -1);
+    StatusCode status = ordered
+        ? beginOrdered(command, groupedColumn, groupedColumn > 0)
+        : beginMaterialized(groupedColumn, aggregateColumn, distinct, explainOnly);
+    if (!status.isOk()) return status;
+    long sortedRows = !ordered && !explainOnly ? sorts.totalRows() : -1;
+    configureGrouped(command, groupedColumn, aggregateColumn, distinct);
+    return scan.claimSortedInput(sortedRows);
+  }
+
+  private void prepareGroupedPlan(boolean distinct) {
     plan.setHavingCount(distinct ? 0
         : bound.command.booleanHavingPredicates().leafCount());
     plan.setFilterCount(bound.predicateCount);
-    int groupedColumn = distinct ? bound.distinctColumn : bound.groupColumn;
-    int aggregateColumn = distinct ? -1 : bound.groupAggregateColumn;
-    boolean ordered = bound.command.grouping().count() == 1
+  }
+
+  private boolean groupedInputOrdered(int groupedColumn) {
+    return bound.command.grouping().count() == 1
         && (groupedColumn == 0
         || groupedColumn > 0
             && bound.table.hasIndexOn(groupedColumn)
             && !bound.table.isVarchar(groupedColumn)
             && !bound.table.isNullable(groupedColumn));
-    plan.setSort(!ordered);
-    plan.setAccessColumn(ordered ? groupedColumn : -1);
-    long sortedRows = -1;
-    StatusCode status = ordered
-        ? beginOrdered(command, groupedColumn, groupedColumn > 0)
-        : beginMaterialized(groupedColumn, aggregateColumn, distinct, explainOnly);
-    if (status.isOk() && !ordered && !explainOnly) sortedRows = sorts.totalRows();
-    if (!status.isOk()) return status;
-    configureGrouped(command, groupedColumn, aggregateColumn, distinct);
-    return scan.claimSortedInput(sortedRows);
   }
 
   private void configureGrouped(
@@ -171,23 +178,31 @@ final class SqlScanPreparation {
     plan.setNestedDepth(query.planDepth());
     plan.setFilterCount(bound.predicateCount);
     configureRowResult(command);
-    if (explainOnly && query.blockCount() > 1) {
-      bound.accessPredicate = -1;
-      bound.predicateColumn = -1;
-    }
+    clearAccessForExplain(explainOnly);
     int orderColumn = command.isOrdered() ? plan.orderColumn() : -1;
     boolean materialized = requiresMaterializedSort(command, orderColumn);
     plan.setSort(materialized);
     int indexColumn = scanIndexColumn(command, orderColumn, materialized);
     boolean valueIndex = indexColumn > 0;
-    plan.setAccessColumn(valueIndex
-        ? indexColumn
-        : bound.accessPredicate >= 0 && bound.predicateColumn == 0 ? 0 : -1);
+    plan.setAccessColumn(rowAccessColumn(valueIndex, indexColumn));
     StatusCode status = openRowSource(command, indexColumn);
     if (!status.isOk()) return status;
     if (!materialized || explainOnly) return scan.claim();
     status = sorts.materialize(valueIndex, orderColumn);
     return status.isOk() ? scan.claimSorted(sorts.totalRows()) : status;
+  }
+
+  private void clearAccessForExplain(boolean explainOnly) {
+    if (explainOnly && query.blockCount() > 1) {
+      bound.accessPredicate = -1;
+      bound.predicateColumn = -1;
+    }
+  }
+
+  private int rowAccessColumn(boolean valueIndex, int indexColumn) {
+    return valueIndex
+        ? indexColumn
+        : bound.accessPredicate >= 0 && bound.predicateColumn == 0 ? 0 : -1;
   }
 
   private void configureRowResult(BoundSqlQuery.Block command) {

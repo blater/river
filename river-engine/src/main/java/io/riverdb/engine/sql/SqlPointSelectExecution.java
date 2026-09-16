@@ -39,27 +39,29 @@ final class SqlPointSelectExecution {
     BoundSqlQuery.Block command = bound.executableQuery.root();
     SqlPhysicalStepKind physicalKind =
         SqlPhysicalStepClassifier.classifySingleton(bound);
-    if (!selectCommand(command)
-        || !physicalKind.point() && bound.executableQuery.edgeCount() == 0
-            && !bound.expandedView && bound.pointTextColumn < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (!physicalKind.point()) {
-      return executeScan(result);
-    }
-    long primaryKey;
-    HeapRowResult source;
-    StatusCode status;
+    if (!validCommand(command, physicalKind)) return StatusCode.INVALID_EXTERNAL_INPUT;
+    return physicalKind.point() ? executePoint(result) : executeScan(result);
+  }
+
+  private boolean validCommand(
+      BoundSqlQuery.Block command, SqlPhysicalStepKind physicalKind) {
+    return selectCommand(command)
+        && (physicalKind.point() || bound.executableQuery.edgeCount() != 0
+            || bound.expandedView || bound.pointTextColumn >= 0);
+  }
+
+  private StatusCode executePoint(SqlExecutionResult result) {
     if (bound.predicateColumn == 0) {
-      primaryKey = bound.accessValue;
-      status = session.fetch(bound.table, primaryKey, fetched);
-      source = fetched;
-    } else {
-      status = session.fetchByUniqueValue(
-          bound.table, bound.predicateColumn, bound.accessValue, indexed);
-      primaryKey = indexed.key();
-      source = indexed.row();
+      StatusCode status = session.fetch(bound.table, bound.accessValue, fetched);
+      return processPoint(status, bound.accessValue, fetched, result);
     }
+    StatusCode status = session.fetchByUniqueValue(
+        bound.table, bound.predicateColumn, bound.accessValue, indexed);
+    return processPoint(status, indexed.key(), indexed.row(), result);
+  }
+
+  private StatusCode processPoint(
+      StatusCode status, long primaryKey, HeapRowResult source, SqlExecutionResult result) {
     if (status.isOk()) status = validateRow(source);
     if (status.isOk()) status = predicates.evaluate(primaryKey, source);
     if (status.isOk() && !predicates.matched()) {

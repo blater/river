@@ -46,7 +46,20 @@ final class SqlBlockRowExternalOrder {
     int runPages = SqlMaterializedSortRunSizing.pages(
         statement.sortRunPages(), source.pageBytes(), rowCount);
     if (runPages <= 0) return closeAfter(source, target, StatusCode.INVARIANT_BROKEN);
-    status = reservation.acquire(statement, runPages);
+    return buildRuns(
+        statement, source, target, index, keys, shape, rowCount, runPages);
+  }
+
+  private StatusCode buildRuns(
+      SqlMaterializedStatement statement,
+      SqlMaterializedPagedByteStream source,
+      SqlMaterializedPagedByteStream target,
+      SqlMaterializedPagedByteStream index,
+      SqlMaterializedPagedByteStream keys,
+      SqlBlockRowSortKeyCodec shape,
+      long rowCount,
+      int runPages) {
+    StatusCode status = reservation.acquire(statement, runPages);
     boolean reserved = status.isOk();
     long width = runRows(runPages, source.pageBytes());
     if (status.isOk() && width <= 0) status = StatusCode.RESOURCE_EXHAUSTED;
@@ -63,6 +76,13 @@ final class SqlBlockRowExternalOrder {
     if (reserved) {
       status = reservation.release(status);
     }
+    return completeBuild(source, target, status);
+  }
+
+  private StatusCode completeBuild(
+      SqlMaterializedPagedByteStream source,
+      SqlMaterializedPagedByteStream target,
+      StatusCode status) {
     if (!status.isOk()) return closeAfter(source, target, status);
     status = target.close(detail);
     if (!status.isOk()) return closeAfter(source, status);
