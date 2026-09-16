@@ -11,12 +11,12 @@ final class IndexedTupleLockKey {
     return TupleKeyCodec.validate(key, offset, length);
   }
 
+  // Projections require an admitted key, stable for the synchronous operation.
   static int userOffset(ByteBuffer key, int offset, int length) {
-    return valid(key, offset, length) ? offset + TupleKeyCodec.headerBytes(key, offset, length) : -1;
+    return offset + TupleKeyCodec.headerBytes(key, offset, length);
   }
 
   static int userLength(ByteBuffer key, int offset, int length) {
-    if (!valid(key, offset, length)) return -1;
     int bytes = length - TupleKeyCodec.headerBytes(key, offset, length);
     return TupleKeyCodec.isPhysical(key, offset, length)
         ? bytes - TupleKeyCodec.LOGICAL_ROW_ID_BYTES : bytes;

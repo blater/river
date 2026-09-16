@@ -51,6 +51,12 @@ final class IndexedTransactionTupleScans {
       long keyId, TupleBTreeScanBounds bounds, LockMode serializableSourceMode) {
     ByteBuffer lower = bounds.lowerKey();
     ByteBuffer upper = bounds.upperKey();
+    if (lower != null && !IndexedTupleLockKey.valid(
+        lower, bounds.lowerOffset(), bounds.lowerLength())
+        || upper != null && !IndexedTupleLockKey.valid(
+            upper, bounds.upperOffset(), bounds.upperLength())) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     int lowerOffset = tupleOffset(lower, bounds.lowerOffset(), bounds.lowerLength());
     int upperOffset = tupleOffset(upper, bounds.upperOffset(), bounds.upperLength());
     int lowerLength = tupleLength(lower, bounds.lowerOffset(), bounds.lowerLength());

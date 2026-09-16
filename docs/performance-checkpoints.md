@@ -3584,3 +3584,18 @@ independently of the warmup generator.
 Only documentation changed in this investigation. Prior candidate correctness
 checks remain the two clean 2,029-test checkpoints recorded above; no build was
 repeated for this documentation update.
+
+## 2026-09-16 — accepted tuple-key admission (tic-bert)
+
+The user explicitly accepted and requested merging the unchanged `da1096b2`
+three-class candidate after the connection-replacement confound was identified.
+The external harness fix is merged as `7d91f4f`: warmup drains transactions and
+retains workers/connections into measurement. This acceptance supersedes the
+hold above, without claiming a measured tuple speedup or discarding old adverse
+samples. Independent correctness review and the existing clean full checkpoint
+(2,029 tests, zero failures/errors, 19 skips) cover the exact integrated source;
+production source outside the candidate is unchanged from its tested base.
+
+The integration receives `perf-checkpoint-20260916-tuple-key-admission` and is the
+baseline for the fresh tic-waymeet comparison. That comparison will use the fixed
+harness for both sides; historical results are not mixed into it.
