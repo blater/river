@@ -49,42 +49,53 @@ public final class RiverdMain {
     RiverDaemonFileSystemResult filesystem = new RiverDaemonFileSystemResult();
     StatusCode status = RiverDaemonFileSystems.current(filesystem);
     Path home = Path.of(System.getProperty("user.home"));
-    if (status.isOk() && command.command() == RiverdCommand.PS) {
-      status = RiverDaemonTargets.list(filesystem.fileSystem(), home, output, errors);
-    } else if (status.isOk()) {
-      RiverDaemonTarget.Result result = new RiverDaemonTarget.Result();
-      status = RiverDaemonTargets.resolve(filesystem.fileSystem(), home,
-          command.datadir(), command.server(), result, errors);
-      if (status.isOk()) {
-        RiverDaemonTarget target = result.target();
-        if (target == null) {
-          String selected = command.server() != null ? command.server()
-              : command.datadir() != null ? command.datadir().toString() : "the default instance";
-          output.println("No River server is running for " + selected + ".");
-          return 0;
-        }
-        status = RiverDaemonStopClient.request(target, command.timeoutMillis());
-        StatusCode close = target.close();
-        if (status.isOk() && !close.isOk() && close != StatusCode.CLOSED) status = close;
-        if (status.isOk()) {
-          String server = target.runtime == null ? target.datadir.toString()
-              : RiverDaemonEndpoint.of(target.runtime.address, target.runtime.port).toString();
-          output.println("Stopped River server " + server + ".");
-          output.println("riverd_datadir=" + target.datadir);
-          output.println("riverd_pid=" + target.owner.pid);
-          output.println("riverd_status=OK");
-        }
-      }
+    if (status.isOk()) {
+      status = command.command() == RiverdCommand.PS
+          ? RiverDaemonTargets.list(filesystem.fileSystem(), home, output, errors)
+          : stopOperation(command, filesystem.fileSystem(), home, output, errors);
     }
     if (!status.isOk()) {
-      String diagnostic = command.command() == RiverdCommand.PS
-          ? "Could not list River servers."
-          : status == StatusCode.TIMEOUT
-              ? "Timed out waiting for shutdown; the server may still be stopping."
-              : "Could not stop the selected server. Use `river ps` to list running instances.";
-      reportCommandFailure(status, diagnostic, errors);
+      reportCommandFailure(status, operationDiagnostic(command, status), errors);
     }
     return command.exitCode(status);
+  }
+
+  private static StatusCode stopOperation(RiverdCommandResult command,
+      io.riverdb.platform.riverd.RiverDaemonFileSystem filesystem, Path home,
+      PrintStream output, PrintStream errors) {
+    RiverDaemonTarget.Result result = new RiverDaemonTarget.Result();
+    StatusCode status = RiverDaemonTargets.resolve(filesystem, home,
+        command.datadir(), command.server(), result, errors);
+    if (!status.isOk()) return status;
+    RiverDaemonTarget target = result.target();
+    if (target == null) {
+      String selected = command.server() != null ? command.server()
+          : command.datadir() != null ? command.datadir().toString() : "the default instance";
+      output.println("No River server is running for " + selected + ".");
+      return StatusCode.OK;
+    }
+    status = RiverDaemonStopClient.request(target, command.timeoutMillis());
+    StatusCode close = target.close();
+    if (status.isOk() && !close.isOk() && close != StatusCode.CLOSED) status = close;
+    if (status.isOk()) printStopped(output, target);
+    return status;
+  }
+
+  private static void printStopped(PrintStream output, RiverDaemonTarget target) {
+    String server = target.runtime == null ? target.datadir.toString()
+        : RiverDaemonEndpoint.of(target.runtime.address, target.runtime.port).toString();
+    output.println("Stopped River server " + server + ".");
+    output.println("riverd_datadir=" + target.datadir);
+    output.println("riverd_pid=" + target.owner.pid);
+    output.println("riverd_status=OK");
+  }
+
+  private static String operationDiagnostic(RiverdCommandResult command, StatusCode status) {
+    if (command.command() == RiverdCommand.PS) return "Could not list River servers.";
+    if (status == StatusCode.TIMEOUT) {
+      return "Timed out waiting for shutdown; the server may still be stopping.";
+    }
+    return "Could not stop the selected server. Use `river ps` to list running instances.";
   }
 
   /** Main and the shutdown hook share one final failure record, including signal-driven shutdown. */

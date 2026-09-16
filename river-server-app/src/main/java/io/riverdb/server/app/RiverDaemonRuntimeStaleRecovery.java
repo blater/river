@@ -40,15 +40,30 @@ final class RiverDaemonRuntimeStaleRecovery {
       RiverDaemonFileSystem filesystem, String datadir,
       RiverDaemonIdentity.IdentityResult identity) {
     String runtimeName = RiverDaemonRuntimeStorage.runtimeName(datadir);
+    RuntimeState state = readRuntime(runtimeRoot, runtimeName, datadir, identity);
+    if (!state.status.isOk()) return state.status;
+    if (state.runtime == null) return StatusCode.OK;
+    RiverDaemonRuntimeModel.ReadyTarget ready = null;
+    if (!"none".equals(state.runtime.readyFile)) {
+      ready = RiverDaemonRuntimeReadyAccess.open(
+          filesystem, state.runtime, datadir, runtimeRootPath);
+      if (!ready.status.isOk()) return ready.status;
+    }
+    return RiverDaemonRuntimeCleanup.removeValidated(runtimeRoot, runtimeName,
+        state.identity, ready);
+  }
+
+  private static RuntimeState readRuntime(RiverDirectory runtimeRoot, String runtimeName,
+      String datadir, RiverDaemonIdentity.IdentityResult identity) {
     RiverFileResult result = new RiverFileResult();
     StatusCode status = runtimeRoot.openFile(runtimeName, RiverOpenMode.EXISTING, result);
-    if (status == StatusCode.CONFLICT) return StatusCode.OK;
-    if (!status.isOk()) return status;
+    if (status == StatusCode.CONFLICT) return new RuntimeState(StatusCode.OK, null, null);
+    if (!status.isOk()) return new RuntimeState(status, null, null);
     RiverFile file = result.file();
     FileIdentity fileIdentity = file.identity();
     RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
     StatusCode closeStatus = file.close();
-    if (!read.status.isOk()) status = read.status;
+    status = read.status;
     if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
       status = closeStatus;
     }
@@ -58,12 +73,9 @@ final class RiverDaemonRuntimeStaleRecovery {
         || !runtime.matches(datadir, identity.incarnation(), identity.priorOwner()))) {
       status = StatusCode.CORRUPTION;
     }
-    if (!status.isOk()) return status;
-    RiverDaemonRuntimeModel.ReadyTarget ready = null;
-    if (!"none".equals(runtime.readyFile)) {
-      ready = RiverDaemonRuntimeReadyAccess.open(filesystem, runtime, datadir, runtimeRootPath);
-      if (!ready.status.isOk()) return ready.status;
-    }
-    return RiverDaemonRuntimeCleanup.removeValidated(runtimeRoot, runtimeName, fileIdentity, ready);
+    return new RuntimeState(status, runtime, fileIdentity);
   }
+
+  private record RuntimeState(StatusCode status,
+      RiverDaemonRuntimeModel.RuntimeRecord runtime, FileIdentity identity) { }
 }
