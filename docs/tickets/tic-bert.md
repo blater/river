@@ -1,12 +1,14 @@
 ---
 id: tic-bert
-status: open
+status: closed
 type: task
 priority: 1
 assignee: blater
 delivery: code
 base-commit: 64329eda629acdfce0803c1e0a5ae08e21c401be
 branch: ticket/tic-bert-tuple-key-admission
+delivered-commit: da1096b2e3d9d966842b243afd7c696d2b9e182f
+checkpoint-tag: perf-checkpoint-20260916-tuple-key-admission
 links:
     - tic-gothmog
     - tic-waymeet
