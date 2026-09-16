@@ -39,3 +39,15 @@ Artifacts: `/private/tmp/river-decimal-check.log` and
 `/private/tmp/river-decimal-final-slopmark.json`.
 This is a structural refactor; no throughput improvement is claimed. The overall
 ticket remains open. Subsequent WAL/query slices receive occasional workload checks.
+
+### Transaction value API slice — 2026-09-16
+
+Directory growth and memory charging now belong to the existing
+TransactionValueArenaSizing owner. The borrowed CharSequence view has its own
+package-private implementation, retaining its arena-owned reuse lifetime.
+Comparison operand validation is named alongside the existing numeric rule.
+Independent Luna/high review approved the behavior and ownership boundaries.
+`:river-engine-api:check` passed 32 tests, no failures/errors/skips. Full module
+scan including tests: 51 files, maximum Slopmark 96.0974 and NPATH 54.
+Evidence: `/private/tmp/river-value-api-check.log` and
+`/private/tmp/river-value-api-final-slopmark.json`. No performance claim.

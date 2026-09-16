@@ -8,7 +8,6 @@ import java.util.Arrays;
 
 /** Chunked, lease-accounted typed storage shared by transaction arguments and results. */
 final class TransactionValueArena {
-  static final long DIRECTORY_HEADER_BYTES = 24L;
   private final RetainedMemoryLease memory;
   private TransactionValueChunk[] values = new TransactionValueChunk[0];
   private TransactionTextChunk[] text = new TransactionTextChunk[0];
@@ -17,7 +16,7 @@ final class TransactionValueArena {
   private int highSlot;
   private int textCharacters;
   private long retainedBytes;
-  private final TextView textView = new TextView(this);
+  private final TransactionValueTextView textView = new TransactionValueTextView(this);
 
   TransactionValueArena(RetainedMemoryLease retainedMemory) {
     if (retainedMemory == null) throw new IllegalArgumentException("retainedMemory");
@@ -154,10 +153,10 @@ final class TransactionValueArena {
     }
     int required = (slots + TransactionValueChunk.SIZE - 1) >> TransactionValueChunk.SHIFT;
     while (valueChunkCount < required) {
-      int capacity = directoryCapacity(values.length, valueChunkCount + 1);
+      int capacity = TransactionValueArenaSizing.growDirectory(values.length, valueChunkCount + 1);
       if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
       long nextBytes = retainedBytes + TransactionValueChunk.RETAINED_BYTES
-          + directoryDelta(values.length, capacity);
+          + TransactionValueArenaSizing.directoryDelta(values.length, capacity);
       StatusCode status = memory.resize(nextBytes);
       if (!status.isOk()) return status;
       try {
@@ -181,10 +180,10 @@ final class TransactionValueArena {
     }
     int required = (characters + TransactionTextChunk.SIZE - 1) >> TransactionTextChunk.SHIFT;
     while (textChunkCount < required) {
-      int capacity = directoryCapacity(text.length, textChunkCount + 1);
+      int capacity = TransactionValueArenaSizing.growDirectory(text.length, textChunkCount + 1);
       if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
       long nextBytes = retainedBytes + TransactionTextChunk.RETAINED_BYTES
-          + directoryDelta(text.length, capacity);
+          + TransactionValueArenaSizing.directoryDelta(text.length, capacity);
       StatusCode status = memory.resize(nextBytes);
       if (!status.isOk()) return status;
       try {
@@ -232,31 +231,4 @@ final class TransactionValueArena {
     text[index >> TransactionTextChunk.SHIFT].characters[index & TransactionTextChunk.MASK] = value;
   }
   private static boolean validSlot(int slot) { return slot >= 0; }
-  private static int directoryCapacity(int current, int required) {
-    if (required <= current) return current;
-    int next = current == 0 ? 4 : current << 1;
-    return next > current && next >= required ? next : required;
-  }
-  private static long directoryDelta(int current, int next) {
-    long before = current == 0 ? 0 : DIRECTORY_HEADER_BYTES + (long) current * Long.BYTES;
-    long after = DIRECTORY_HEADER_BYTES + (long) next * Long.BYTES;
-    return after - before;
-  }
-
-  private static final class TextView implements CharSequence {
-    private final TransactionValueArena arena;
-    private int slot;
-
-    private TextView(TransactionValueArena owner) {
-      arena = owner;
-    }
-
-    private void pointTo(int valueSlot) { slot = valueSlot; }
-
-    @Override public int length() { return arena.textLength(slot); }
-    @Override public char charAt(int index) { return arena.textCharacterAt(slot, index); }
-    @Override public CharSequence subSequence(int start, int end) {
-      throw new UnsupportedOperationException();
-    }
-  }
 }
