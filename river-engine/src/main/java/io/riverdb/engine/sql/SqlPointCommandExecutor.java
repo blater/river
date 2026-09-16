@@ -52,52 +52,82 @@ final class SqlPointCommandExecutor {
     catalogGeneration = 0;
     StatusCode status = descriptorPreparation.prepare();
     if (status.isOk() && bound.query.hasNestedTopology()) {
-      status = descriptorExecution.close();
-      if (status.isOk()) status = bound.query.promoteRootBlockPipeline(bound.command);
-      return status.isOk() ? executePromoted(result, true) : finish(status);
+      return executeNested(result);
     }
     boolean boundPredicate = status.isOk()
         && SqlDescriptorExpressionRouting.mutationPredicateRequired(bound.command);
-    if (boundPredicate) {
-      status = descriptorExecution.prepareBinding(bound.table);
-      if (status.isOk()) {
-        status = binder.bindDataCommand(bound.command, bound.query, bound);
-      }
-      if (status.isOk()) status = binder.captureExecutableQuery(bound);
-      if (status.isOk()) queries.adoptPreparedQuery();
-      if (status.isOk()) status = queries.prepareProjectionPrograms();
-      if (status.isOk()) status = descriptorExecution.prepareBoundPredicate();
-    }
-    if (status.isOk() && !boundPredicate
-        && (bound.command.type() == SqlCommandType.INSERT
-            || bound.command.type() == SqlCommandType.UPDATE)
-        && bound.command.mutationExpressions().programCount() > 0) {
-      status = descriptorExecution.prepareBinding(bound.table);
-      if (status.isOk()) {
-        status = binder.bindDescriptorMutationExpressions(
-            bound.command, bound, bound.command.type() == SqlCommandType.UPDATE);
-      }
-      if (status.isOk()) status = rowExpressions.prepare(bound);
-    }
+    if (status.isOk()) status = prepareCommand(boundPredicate);
+    return route(status, boundPredicate, result);
+  }
+
+  private StatusCode prepareCommand(boolean boundPredicate) {
+    if (boundPredicate) return prepareBoundPredicate();
+    if (bound.command.type() != SqlCommandType.INSERT
+        && bound.command.type() != SqlCommandType.UPDATE) return StatusCode.OK;
+    return bound.command.mutationExpressions().programCount() > 0
+        ? prepareDescriptorMutation() : StatusCode.OK;
+  }
+
+  private StatusCode route(
+      StatusCode status, boolean boundPredicate, SqlExecutionResult result) {
     if (status == StatusCode.CONFLICT
         && bound.command.type() == SqlCommandType.JOIN_SCAN
         && (bound.command.orderBy().count() > 0)) {
-      status = bound.query.promoteRootBlockPipeline(bound.command);
-      return status.isOk() ? executePromoted(result) : finish(status);
+      return executeJoinOrder(result);
     }
-    if (status.isOk() && (bound.query.isBlockPipeline()
-        || SqlDescriptorExpressionRouting.required(bound.command)
-        || !boundPredicate
-            && SqlDescriptorExpressionRouting.predicateRequired(bound.command))) {
-      status = descriptorExecution.close();
-      if (status.isOk() && !bound.query.isBlockPipeline()) {
-        status = bound.query.promoteRootBlockPipeline(bound.command);
-      }
-      return status.isOk() ? executePromoted(result) : finish(status);
+    if (status.isOk() && requiresPromotion(boundPredicate)) {
+      return executeRequiredPipeline(result);
     }
     return status == StatusCode.CONFLICT
         ? executeLegacy(result) : executeDescriptor(status, result);
   }
+
+  private StatusCode executeNested(SqlExecutionResult result) {
+    StatusCode status = descriptorExecution.close();
+    if (status.isOk()) status = bound.query.promoteRootBlockPipeline(bound.command);
+    return status.isOk() ? executePromoted(result, true) : finish(status);
+  }
+
+  private StatusCode prepareBoundPredicate() {
+    StatusCode status = descriptorExecution.prepareBinding(bound.table);
+    if (status.isOk()) status = binder.bindDataCommand(bound.command, bound.query, bound);
+    if (status.isOk()) status = binder.captureExecutableQuery(bound);
+    if (status.isOk()) queries.adoptPreparedQuery();
+    if (status.isOk()) status = queries.prepareProjectionPrograms();
+    if (status.isOk()) status = descriptorExecution.prepareBoundPredicate();
+    return status;
+  }
+
+  private StatusCode prepareDescriptorMutation() {
+    StatusCode status = descriptorExecution.prepareBinding(bound.table);
+    if (status.isOk()) {
+      status = binder.bindDescriptorMutationExpressions(
+          bound.command, bound, bound.command.type() == SqlCommandType.UPDATE);
+    }
+    if (status.isOk()) status = rowExpressions.prepare(bound);
+    return status;
+  }
+
+  private StatusCode executeJoinOrder(SqlExecutionResult result) {
+    StatusCode status = bound.query.promoteRootBlockPipeline(bound.command);
+    return status.isOk() ? executePromoted(result) : finish(status);
+  }
+
+  private boolean requiresPromotion(boolean boundPredicate) {
+    return bound.query.isBlockPipeline()
+        || SqlDescriptorExpressionRouting.required(bound.command)
+        || !boundPredicate && SqlDescriptorExpressionRouting.predicateRequired(bound.command);
+  }
+
+  private StatusCode executeRequiredPipeline(SqlExecutionResult result) {
+    StatusCode status = descriptorExecution.close();
+    if (status.isOk() && !bound.query.isBlockPipeline()) {
+      status = bound.query.promoteRootBlockPipeline(bound.command);
+    }
+    return status.isOk() ? executePromoted(result) : finish(status);
+  }
+
+
 
   private StatusCode executeDescriptor(
       StatusCode status, SqlExecutionResult result) {
