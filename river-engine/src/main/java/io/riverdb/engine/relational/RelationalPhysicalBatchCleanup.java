@@ -1,8 +1,6 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.table.IndexedScanCursor;
-import io.riverdb.engine.table.IndexedScanResult;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
 
@@ -34,12 +32,18 @@ final class RelationalPhysicalBatchCleanup {
       cleanup.rowSpaces[index] = 0;
       cleanup.rowKeys[index] = 0;
     }
-    if (status.isOk()) status = session.commitBuildPhase(outcome);
-    else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      StatusCode abort = session.abortBuildPhase(outcome);
-      if (!abort.isOk()) status = abort;
-    }
+    status = finishBatch(session, outcome, status);
     cleanup.batchComplete = status.isOk() && cleanup.scanExhausted;
+    return status;
+  }
+
+  private static StatusCode finishBatch(
+      RelationalSession session, TransactionOutcome outcome, StatusCode status) {
+    if (status.isOk()) return session.commitBuildPhase(outcome);
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abortBuildPhase(outcome);
+      if (!abort.isOk()) return abort;
+    }
     return status;
   }
 

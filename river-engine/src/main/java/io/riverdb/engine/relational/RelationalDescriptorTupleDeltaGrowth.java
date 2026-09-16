@@ -32,7 +32,7 @@ final class RelationalDescriptorTupleDeltaGrowth {
     StatusCode status = budget == null ? StatusCode.OK : budget.reserve(replacement);
     if (!status.isOk()) return status;
     try {
-      return allocate(storage, keyCapacity, byteCapacity, userCapacity, replacement);
+      return allocate(storage, keyCapacity, byteCapacity, userCapacity);
     } catch (OutOfMemoryError failure) {
       if (budget != null) budget.rollback(replacement);
       return StatusCode.RESOURCE_EXHAUSTED;
@@ -41,14 +41,20 @@ final class RelationalDescriptorTupleDeltaGrowth {
 
   private StatusCode allocate(
       RelationalDescriptorTupleDeltaStorage storage,
-      int keyCapacity, int byteCapacity, int userCapacity, long replacement) {
+      int keyCapacity, int byteCapacity, int userCapacity) {
     RelationalDescriptorTupleDeltaAllocator allocator = storage.allocator();
-    boolean growKeys = keyCapacity != storage.keysArray().length;
-    KeyDescriptor[] keys = growKeys ? allocator.keys(keyCapacity) : storage.keysArray();
-    int[] beforeOffsets = growKeys ? allocator.integers(keyCapacity) : storage.beforeOffsetsArray();
-    int[] beforeLengths = growKeys ? allocator.integers(keyCapacity) : storage.beforeLengthsArray();
-    int[] afterOffsets = growKeys ? allocator.integers(keyCapacity) : storage.afterOffsetsArray();
-    int[] afterLengths = growKeys ? allocator.integers(keyCapacity) : storage.afterLengthsArray();
+    KeyDescriptor[] keys = storage.keysArray();
+    int[] beforeOffsets = storage.beforeOffsetsArray();
+    int[] beforeLengths = storage.beforeLengthsArray();
+    int[] afterOffsets = storage.afterOffsetsArray();
+    int[] afterLengths = storage.afterLengthsArray();
+    if (keyCapacity != keys.length) {
+      keys = allocator.keys(keyCapacity);
+      beforeOffsets = allocator.integers(keyCapacity);
+      beforeLengths = allocator.integers(keyCapacity);
+      afterOffsets = allocator.integers(keyCapacity);
+      afterLengths = allocator.integers(keyCapacity);
+    }
     byte[] retained = byteCapacity == storage.bytesArray().length
         ? storage.bytesArray() : allocator.bytes(byteCapacity);
     ByteBuffer retainedView = retained == storage.bytesArray()

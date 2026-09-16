@@ -25,6 +25,12 @@ final class RelationalCatalogCleanup {
       if (status.isOk()) status = close;
     }
     cleanup.catalogCursor.reset();
+    status = deleteCollected(cleanup, session, table, tableName, count, status);
+    return RelationalPhysicalCleanup.finishTransaction(session, outcome, status);
+  }
+  private static StatusCode deleteCollected(
+      RelationalPhysicalCleanup cleanup, RelationalSession session, TableDefinition table,
+      CharSequence tableName, int count, StatusCode status) {
     for (int index = 0; status.isOk() && index < count; index++) {
       status = session.indexedSession().delete(RelationalKey.CATALOG_OBJECT_SPACE,
           cleanup.indexCatalogKeys[index]);
@@ -34,6 +40,7 @@ final class RelationalCatalogCleanup {
     if (status.isOk()) status = session.indexedSession().delete(
         cleanup.catalogKey.space(), cleanup.catalogKey.key());
     if (status.isOk()) status = cleanup.deleteStatistics(session, table.tableId());
-    return RelationalPhysicalCleanup.finishTransaction(session, outcome, status);
+    return status;
   }
+
 }

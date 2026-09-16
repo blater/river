@@ -76,12 +76,7 @@ final class RelationalDescriptorScanAccess {
     }
     result.reset();
     TableDescriptor table = cursor.descriptor();
-    int textBytes = maximumTextBytes(table);
-    StatusCode status = textBytes < 0 ? StatusCode.RESOURCE_EXHAUSTED
-        : destination.reserve(
-            table.columnCount(), SqlShapeLimits.MAX_TABLE_COLUMNS,
-            textBytes, TableSchema.MAXIMUM_ROW_BYTES);
-    if (status.isOk()) status = rowAccess.reserve(table);
+    StatusCode status = reserveRow(table, destination);
     if (!status.isOk()) return status;
     while (true) {
       status = nextPhysical(cursor);
@@ -100,6 +95,15 @@ final class RelationalDescriptorScanAccess {
       result.set(logicalRowId);
       return StatusCode.OK;
     }
+  }
+
+  private StatusCode reserveRow(TableDescriptor table, SqlValueBuffer destination) {
+    int textBytes = maximumTextBytes(table);
+    if (textBytes < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode status = destination.reserve(
+        table.columnCount(), SqlShapeLimits.MAX_TABLE_COLUMNS,
+        textBytes, TableSchema.MAXIMUM_ROW_BYTES);
+    return status.isOk() ? rowAccess.reserve(table) : status;
   }
 
   private StatusCode nextPhysical(RelationalDescriptorScanCursor cursor) {
