@@ -43,29 +43,18 @@ final class RiverDaemonTarget {
     status = directory.openFile(RiverDaemonIdentity.LOCK_FILE, RiverOpenMode.EXISTING, lockResult);
     if (!status.isOk()) return close(directory, status);
     RiverFile lockFile = lockResult.file();
-    FileIdentity lockIdentity = lockFile.identity();
-    RiverDaemonRuntimeModel.ReadResult lockRead = RiverDaemonRuntimeStorage.read(lockFile);
-    RiverDaemonIdentityRecords.LockRecord owner = lockRead.status.isOk()
-        ? RiverDaemonIdentityRecords.parseLock(lockRead.bytes) : null;
-    if (!lockRead.status.isOk()) status = lockRead.status;
-    if (status.isOk() && (owner == null || lockIdentity == null
-        || !datadir.toString().equals(owner.datadir))) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (status.isOk()) {
-      status = RiverDaemonTargetBinding.verifyInstance(directory, owner);
-    }
-    if (!status.isOk()) return close(lockFile, directory, status);
+    LockState lock = readLock(directory, lockFile, datadir);
+    if (!lock.status.isOk()) return close(lockFile, directory, lock.status);
 
     RiverDaemonTargetBinding.BoundRuntime runtime =
-        RiverDaemonTargetBinding.readBoundRuntime(filesystem, runtimeRoot, datadir, owner);
+        RiverDaemonTargetBinding.readBoundRuntime(filesystem, runtimeRoot, datadir, lock.owner);
     if (!runtime.status.isOk()) return close(lockFile, directory, runtime.status);
     RiverDaemonTarget target = new RiverDaemonTarget();
     target.filesystem = filesystem;
     target.directory = directory;
     target.lockFile = lockFile;
-    target.lockIdentity = lockIdentity;
-    target.owner = owner;
+    target.lockIdentity = lock.identity;
+    target.owner = lock.owner;
     target.runtime = runtime.record;
     target.runtimeIdentity = runtime.identity;
     target.runtimeChecksum = runtime.record == null ? null : runtime.record.checksum;
@@ -73,6 +62,19 @@ final class RiverDaemonTarget {
     target.runtimeRoot = runtimeRoot;
     result.set(target);
     return StatusCode.OK;
+  }
+
+  private static LockState readLock(RiverDirectory directory, RiverFile lockFile, Path datadir) {
+    FileIdentity identity = lockFile.identity();
+    RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(lockFile);
+    if (!read.status.isOk()) return new LockState(read.status, identity, null);
+    RiverDaemonIdentityRecords.LockRecord owner =
+        RiverDaemonIdentityRecords.parseLock(read.bytes);
+    if (owner == null || identity == null || !datadir.toString().equals(owner.datadir)) {
+      return new LockState(StatusCode.CORRUPTION, identity, owner);
+    }
+    StatusCode status = RiverDaemonTargetBinding.verifyInstance(directory, owner);
+    return new LockState(status, identity, owner);
   }
 
   StatusCode openRuntime(RiverFileResult result) {
@@ -159,6 +161,9 @@ final class RiverDaemonTarget {
     }
     return primary;
   }
+
+  private record LockState(StatusCode status, FileIdentity identity,
+      RiverDaemonIdentityRecords.LockRecord owner) { }
 
   static final class Result {
     private RiverDaemonTarget target;

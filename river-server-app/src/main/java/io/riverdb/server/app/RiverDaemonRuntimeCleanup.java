@@ -61,40 +61,45 @@ final class RiverDaemonRuntimeCleanup {
 
   private static StatusCode cleanupIn(RiverDaemonFileSystem filesystem, RiverDirectory runtimeRoot,
       RiverDaemonRuntimeRecords.Metadata metadata) {
-    RiverDaemonRuntimeModel.RuntimeRecord runtime = null;
-    FileIdentity runtimeIdentity = null;
-    RiverFileResult result = new RiverFileResult();
-    StatusCode status = runtimeRoot.openFile(
-        RiverDaemonRuntimeStorage.runtimeName(metadata.datadir), RiverOpenMode.EXISTING, result);
-    if (status != StatusCode.CONFLICT) {
-      if (!status.isOk()) return status;
-      RiverFile file = result.file();
-      runtimeIdentity = file.identity();
-      RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
-      StatusCode closeStatus = file.close();
-      status = read.status;
-      if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
-        status = closeStatus;
-      }
-      runtime = status.isOk() ? RiverDaemonRuntimeCodec.parseRuntime(read.bytes) : null;
-      if (status.isOk() && (runtime == null || runtimeIdentity == null
-          || !runtime.matches(metadata.datadir, metadata.incarnation, metadata.owner)
-          || !metadata.readyFile.equals(runtime.readyFile))) {
-        status = StatusCode.CORRUPTION;
-      }
-      if (!status.isOk()) return status;
-    } else {
-      status = StatusCode.OK;
-    }
-    RiverDaemonRuntimeModel.RuntimeRecord expected = runtime == null
-        ? RiverDaemonRuntimeStorage.expectedRuntime(metadata) : runtime;
+    RuntimeState state = readRuntime(runtimeRoot, metadata);
+    if (!state.status.isOk()) return state.status;
+    RiverDaemonRuntimeModel.RuntimeRecord expected = state.runtime == null
+        ? RiverDaemonRuntimeStorage.expectedRuntime(metadata) : state.runtime;
     RiverDaemonRuntimeModel.ReadyTarget ready = null;
     if (!"none".equals(metadata.readyFile)) {
       ready = RiverDaemonRuntimeReadyAccess.open(filesystem, expected, metadata.datadir,
-          metadata.runtimeRoot);
+        metadata.runtimeRoot);
       if (!ready.status.isOk()) return ready.status;
     }
     return removeValidated(runtimeRoot, RiverDaemonRuntimeStorage.runtimeName(metadata.datadir),
-        runtimeIdentity, ready);
+        state.identity, ready);
   }
+
+  private static RuntimeState readRuntime(RiverDirectory runtimeRoot,
+      RiverDaemonRuntimeRecords.Metadata metadata) {
+    RiverFileResult result = new RiverFileResult();
+    StatusCode status = runtimeRoot.openFile(
+        RiverDaemonRuntimeStorage.runtimeName(metadata.datadir), RiverOpenMode.EXISTING, result);
+    if (status == StatusCode.CONFLICT) return new RuntimeState(StatusCode.OK, null, null);
+    if (!status.isOk()) return new RuntimeState(status, null, null);
+    RiverFile file = result.file();
+    FileIdentity identity = file.identity();
+    RiverDaemonRuntimeModel.ReadResult read = RiverDaemonRuntimeStorage.read(file);
+    StatusCode closeStatus = file.close();
+    status = read.status;
+    if (status.isOk() && !closeStatus.isOk() && closeStatus != StatusCode.CLOSED) {
+      status = closeStatus;
+    }
+    RiverDaemonRuntimeModel.RuntimeRecord runtime = status.isOk()
+        ? RiverDaemonRuntimeCodec.parseRuntime(read.bytes) : null;
+    if (status.isOk() && (runtime == null || identity == null
+        || !runtime.matches(metadata.datadir, metadata.incarnation, metadata.owner)
+        || !metadata.readyFile.equals(runtime.readyFile))) {
+      status = StatusCode.CORRUPTION;
+    }
+    return new RuntimeState(status, runtime, identity);
+  }
+
+  private record RuntimeState(StatusCode status,
+      RiverDaemonRuntimeModel.RuntimeRecord runtime, FileIdentity identity) { }
 }

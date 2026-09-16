@@ -123,14 +123,17 @@ final class RiverdForeground {
     status = directoryResult.directory().openFile(
         RiverDaemonIdentity.INSTANCE_FILE, RiverOpenMode.EXISTING, fileResult);
     RiverFile openedFile = fileResult.file();
+    status = closeProbe(directoryResult, openedFile, status);
+    return new Probe(status, status.isOk() && fileResult.file() != null);
+  }
+
+  private static StatusCode closeProbe(RiverDirectoryResult directoryResult,
+      RiverFile openedFile, StatusCode status) {
     StatusCode fileClose = openedFile == null ? StatusCode.OK : openedFile.close();
     StatusCode close = directoryResult.directory().close();
-    if (status.isOk() && fileClose != StatusCode.OK && fileClose != StatusCode.CLOSED) {
-      status = fileClose;
-    }
-    if (status == StatusCode.CONFLICT) status = StatusCode.OK;
-    if (status.isOk() && close != StatusCode.OK && close != StatusCode.CLOSED) status = close;
-    return new Probe(status, status.isOk() && fileResult.file() != null);
+    status = status.isOk() ? firstFailure(status, fileClose) : status;
+    status = status == StatusCode.CONFLICT ? StatusCode.OK : status;
+    return firstFailure(status, close);
   }
 
   private static InetAddress literalAddress(String value) throws Exception {
@@ -240,7 +243,7 @@ final class RiverdForeground {
   private static DatabaseIncarnation randomIncarnation(SecureRandom random) {
     long high = random.nextLong();
     long low = random.nextLong();
-    if (high == 0 && low == 0) low = 1;
+    if ((high | low) == 0) low = 1;
     return DatabaseIncarnation.of(high, low);
   }
 

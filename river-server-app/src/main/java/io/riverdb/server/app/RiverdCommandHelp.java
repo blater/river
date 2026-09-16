@@ -74,7 +74,18 @@ public final class RiverdCommandHelp {
     StringBuilder output = new StringBuilder();
     output.append(spec.summary).append('\n').append('\n')
         .append("Usage: ").append(RiverCommandCatalog.usage(spec)).append("\n\n");
+    appendAvailability(output, spec);
+    appendLeafDetails(output, spec);
+    appendOptions(output, spec);
+    appendAliases(output, spec);
+    return output.toString();
+  }
+
+  private static void appendAvailability(StringBuilder output, RiverCommandCatalog.Spec spec) {
     if (!spec.available) output.append("Availability: unavailable in this milestone.\n\n");
+  }
+
+  private static void appendLeafDetails(StringBuilder output, RiverCommandCatalog.Spec spec) {
     if (spec == RiverCommandCatalog.CLI) {
       output.append("CLIENT_PROPERTIES is an absolute path to the generated security/client.properties;\n"
           + "when omitted, the default is ~/.river/default/security/client.properties.\n"
@@ -113,6 +124,9 @@ public final class RiverdCommandHelp {
       output.append("Reports the distribution contract and protocol version without connecting\n"
           + "to an instance or changing instance files.\n");
     }
+  }
+
+  private static void appendOptions(StringBuilder output, RiverCommandCatalog.Spec spec) {
     if (!spec.options.isEmpty()) {
       output.append("\nOptions:\n");
       for (RiverCommandCatalog.Option option : spec.options) {
@@ -124,6 +138,9 @@ public final class RiverdCommandHelp {
     } else if (spec != RiverCommandCatalog.CLI) {
       output.append("This command has no operation options, apart from its help switches.\n");
     }
+  }
+
+  private static void appendAliases(StringBuilder output, RiverCommandCatalog.Spec spec) {
     if (spec == RiverCommandCatalog.START) {
       output.append("\nAliases: river start [options]\n"
           + "Example: river server start --datadir=/path/to/database --port=9191\n");
@@ -136,7 +153,6 @@ public final class RiverdCommandHelp {
     } else if (spec == RiverCommandCatalog.RENEW) {
       output.append("\nExample: river server credentials renew --datadir=/path/to/database\n");
     }
-    return output.toString();
   }
 
   private static String lastWord(String topic) {

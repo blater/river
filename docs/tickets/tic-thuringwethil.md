@@ -185,3 +185,16 @@ check then passed. Logs: `/private/tmp/river-commit-queue-test.log`,
 `/private/tmp/river-deferred-test-ordering.log`,
 `/private/tmp/river-commit-queue-check-final.log`; metrics:
 `/private/tmp/river-commit-queue-after.json`. No performance claim.
+
+### Daemon lifecycle slice — reviewed candidate, 2026-09-16
+
+Fourteen files separate identity recovery, publication, cleanup, and command
+routing phases. Integrator review corrected opened-stage cleanup, corruption
+precedence, complete restart finally ownership, and CLOSED normalization.
+All 75 daemon module tests passed, including a rerun against accepted coordinator
+changes. Standalone version smoke passed. Full module including tests: 80 files,
+maximum score 85.2311 and NPATH 96. Logs:
+`/private/tmp/river-server-app-check.log`,
+`/private/tmp/river-server-app-check-final.log`, and
+`/private/tmp/river-server-app-final-slopmark.json`.
+Periodic cumulative perf comparison is pending before promotion.
