@@ -243,18 +243,8 @@ final class SqlCommandDispatcher {
     StatusCode status = atomic.begin(IsolationLevel.SERIALIZABLE);
     boolean began = status.isOk();
     boolean implicit = began && atomic.implicit();
-    if (status.isOk() && create) {
-      status = viewValidator.validate(session, viewSql);
-    }
-    if (status.isOk()) {
-      status = create
-          ? session.createView(
-              viewName,
-              viewSql,
-              viewValidator.tableIds(),
-              viewValidator.tableCount())
-          : session.dropView(viewName);
-    }
+    if (status.isOk()) status = changeView(
+        create, viewName, viewSql, viewValidator);
     if (began) {
       status = atomic.finish(status);
     }
@@ -264,6 +254,16 @@ final class SqlCommandDispatcher {
       result.setTransaction(transactions.isExplicit(), commitSequence);
     }
     return status;
+  }
+
+  private StatusCode changeView(
+      boolean create, CharSequence viewName, CharSequence viewSql,
+      SqlViewDefinitionValidator validator) {
+    if (!create) return session.dropView(viewName);
+    StatusCode status = validator.validate(session, viewSql);
+    return status.isOk()
+        ? session.createView(
+            viewName, viewSql, validator.tableIds(), validator.tableCount()) : status;
   }
 
   private StatusCode prepareCreateSchema(SqlCommand command) {

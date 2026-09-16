@@ -38,29 +38,12 @@ final class SqlAnalyzeTableExecution {
 
   StatusCode analyze(CharSequence tableName) {
     reset();
-    StatusCode status = descriptorScan.resolve(tableName, table);
-    descriptor = status.isOk();
-    if (status == StatusCode.CONFLICT) status = session.resolveTable(tableName, table);
+    StatusCode status = resolveTable(tableName);
     if (status.isOk()) status = prepareRow();
-    if (status.isOk()) status = descriptor
-        ? descriptorScan.begin() : session.beginScan(table, cursor);
-    while (status.isOk()) {
-      status = descriptor ? descriptorScan.next() : session.nextScan(cursor, scan);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      if (!status.isOk()) break;
-      if (!descriptor) status = reader.read(scan.key(), scan.row(), table, row);
-      if (status.isOk()) {
-        currentRow = descriptor ? descriptorScan.row() : row;
-        accumulate();
-      }
-      scan.reset();
-    }
+    if (status.isOk()) status = beginScan();
+    if (status.isOk()) status = readRows();
     StatusCode runtime = status;
-    StatusCode closed = descriptor ? descriptorScan.reset()
-        : cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK;
+    StatusCode closed = closeScan();
     if (!runtime.isOk()) return runtime;
     if (!closed.isOk()) return closed;
     StatusCode published = publish();
@@ -68,6 +51,37 @@ final class SqlAnalyzeTableExecution {
         ? session.writeStatistics(table, statistics) : published;
     eraseScratch();
     return written;
+  }
+
+  private StatusCode resolveTable(CharSequence tableName) {
+    StatusCode status = descriptorScan.resolve(tableName, table);
+    descriptor = status.isOk();
+    return status == StatusCode.CONFLICT
+        ? session.resolveTable(tableName, table) : status;
+  }
+
+  private StatusCode beginScan() {
+    return descriptor ? descriptorScan.begin() : session.beginScan(table, cursor);
+  }
+
+  private StatusCode readRows() {
+    while (true) {
+      StatusCode status = descriptor ? descriptorScan.next() : session.nextScan(cursor, scan);
+      if (status == StatusCode.CONFLICT) return StatusCode.OK;
+      if (!status.isOk()) return status;
+      if (!descriptor) status = reader.read(scan.key(), scan.row(), table, row);
+      if (status.isOk()) {
+        currentRow = descriptor ? descriptorScan.row() : row;
+        accumulate();
+      }
+      scan.reset();
+      if (!status.isOk()) return status;
+    }
+  }
+
+  private StatusCode closeScan() {
+    if (descriptor) return descriptorScan.reset();
+    return cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK;
   }
 
   int rowCount() { return rowCount; }

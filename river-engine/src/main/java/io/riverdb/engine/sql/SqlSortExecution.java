@@ -86,18 +86,32 @@ final class SqlSortExecution {
   StatusCode materialize(boolean valueIndex, int orderColumn) {
     joinedRows = false;
     BoundSqlQuery.Block command = bound.executableQuery.root();
-    boolean textKey = bound.sortKeyProjection < 0
-        && bound.table.isVarchar(orderColumn);
-    int storedProjections = SqlBinder.isGroupAggregate(command.type())
-        ? bound.projectionPrograms.count() : bound.projectedColumnCount;
-    int groupKeys = SqlBinder.isGroupAggregate(command.type())
-        ? bound.command.grouping().count()
-        : command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN
-            ? bound.projectedColumnCount
-            : bound.command.orderBy().count() > 1
-                ? bound.command.orderBy().count() : 0;
+    int storedProjections = storedProjectionCount(command);
+    int groupKeys = groupKeyCount(command);
     StatusCode status = reserveValues(storedProjections);
-    if (status.isOk()) status = workspace.begin(
+    if (status.isOk()) status = beginWorkspace(
+        command, orderColumn, storedProjections, groupKeys);
+    if (status.isOk()) status = materializeRows(valueIndex, orderColumn);
+    return finish(status);
+  }
+
+  private int storedProjectionCount(BoundSqlQuery.Block command) {
+    return SqlBinder.isGroupAggregate(command.type())
+        ? bound.projectionPrograms.count() : bound.projectedColumnCount;
+  }
+
+  private int groupKeyCount(BoundSqlQuery.Block command) {
+    if (SqlBinder.isGroupAggregate(command.type())) return bound.command.grouping().count();
+    if (command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN) {
+      return bound.projectedColumnCount;
+    }
+    return bound.command.orderBy().count() > 1 ? bound.command.orderBy().count() : 0;
+  }
+
+  private StatusCode beginWorkspace(
+      BoundSqlQuery.Block command, int orderColumn, int storedProjections, int groupKeys) {
+    boolean textKey = bound.sortKeyProjection < 0 && bound.table.isVarchar(orderColumn);
+    return workspace.begin(
         bound.table,
         command.isDescendingOrder(),
         storedProjections,
@@ -109,19 +123,22 @@ final class SqlSortExecution {
         bound,
         groupKeys,
         SqlBinder.isGroupAggregate(command.type()));
+  }
+
+  private StatusCode materializeRows(boolean valueIndex, int orderColumn) {
+    StatusCode status = StatusCode.OK;
     while (status.isOk()) {
       status = nextInput(valueIndex);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      if (status.isOk()) {
-        long primaryKey = valueIndex ? indexed.key() : row.key();
-        HeapRowResult source = valueIndex ? indexed.row() : row.row();
-        status = append(primaryKey, source, orderColumn);
-      }
+      if (status == StatusCode.CONFLICT) return StatusCode.OK;
+      if (status.isOk()) status = appendCurrentRow(valueIndex, orderColumn);
     }
-    return finish(status);
+    return status;
+  }
+
+  private StatusCode appendCurrentRow(boolean valueIndex, int orderColumn) {
+    long primaryKey = valueIndex ? indexed.key() : row.key();
+    HeapRowResult source = valueIndex ? indexed.row() : row.row();
+    return append(primaryKey, source, orderColumn);
   }
 
   private StatusCode reserveValues(int count) {

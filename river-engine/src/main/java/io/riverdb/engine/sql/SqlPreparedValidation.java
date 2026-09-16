@@ -32,34 +32,56 @@ final class SqlPreparedValidation {
   StatusCode validatePrepared(
       String sql, SqlPreparedPlan candidate, SqlRetainedBudget budget,
       SqlPreparedValidationResult result) {
-    StatusCode status = StatusCode.OK;
     boolean reuse = candidate != null
         && session.matchesPreparedGeneration(candidate.preparationGeneration());
     boolean parsed = !reuse;
-    status = prepareCandidate(sql, candidate, reuse);
-    boolean began = false;
-    if (status.isOk()) {
-      status = atomic.begin(IsolationLevel.READ_COMMITTED);
-      began = status.isOk();
-    }
+    StatusCode status = prepareCandidate(sql, candidate, reuse);
+    status = beginAdmission(status);
+    boolean began = status.isOk();
     if (status.isOk() && reuse
         && !session.matchesPreparedGeneration(candidate.preparationGeneration())) {
       reuse = false;
       parsed = true;
-      bound.reset();
-      status = parser.parseTemplate(sql, bound.query, bound.command);
+      status = reparse(sql);
     }
     if (status.isOk()) status = resolveTable(reuse);
-    long generation = status.isOk() ? session.catalogGeneration() : 0;
-    long preparationGeneration = session.matchesPreparedGeneration(generation) ? generation : 0;
+    long generation = catalogGeneration(status);
+    long preparationGeneration = preparedGeneration(generation);
     if (began) status = atomic.finish(status);
-    if (status.isOk() && reuse) result.reuse(candidate);
-    else if (status.isOk()) {
-      status = preparation.capturePrepared(
-          budget, result, generation, preparationGeneration);
-    }
+    status = publish(status, reuse, candidate, budget, result,
+        generation, preparationGeneration);
     if (parsed) bound.reset();
     return status;
+  }
+
+  private StatusCode beginAdmission(StatusCode status) {
+    return status.isOk() ? atomic.begin(IsolationLevel.READ_COMMITTED) : status;
+  }
+
+  private StatusCode reparse(String sql) {
+    bound.reset();
+    return parser.parseTemplate(sql, bound.query, bound.command);
+  }
+
+  private long catalogGeneration(StatusCode status) {
+    return status.isOk() ? session.catalogGeneration() : 0;
+  }
+
+  private long preparedGeneration(long generation) {
+    return session.matchesPreparedGeneration(generation) ? generation : 0;
+  }
+
+  private StatusCode publish(
+      StatusCode status, boolean reuse, SqlPreparedPlan candidate,
+      SqlRetainedBudget budget, SqlPreparedValidationResult result,
+      long generation, long preparationGeneration) {
+    if (!status.isOk()) return status;
+    if (reuse) {
+      result.reuse(candidate);
+      return StatusCode.OK;
+    }
+    return preparation.capturePrepared(
+        budget, result, generation, preparationGeneration);
   }
 
   private StatusCode prepareCandidate(

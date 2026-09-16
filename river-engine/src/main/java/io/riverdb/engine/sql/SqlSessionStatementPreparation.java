@@ -94,10 +94,19 @@ final class SqlSessionStatementPreparation {
     recompile = plan.needsRecompile(session);
     bindingCatalogGeneration = recompile ? session.catalogGeneration() : 0;
     bound.reset();
+    StatusCode status = restorePrepared(plan, parameters);
+    runtimeParameters.reset();
+    return finishPrepared(status, queryOnly);
+  }
+
+  private StatusCode restorePrepared(SqlPreparedPlan plan, ParameterSet parameters) {
     StatusCode status = plan.template().restore(bound.query, bound.command);
     if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
     if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
-    runtimeParameters.reset();
+    return status;
+  }
+
+  private StatusCode finishPrepared(StatusCode status, boolean queryOnly) {
     if (status.isOk()) status = authorize(bound.command.type());
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
     if (status.isOk() && queryOnly && !SqlSessionCommandKinds.query(bound.command.type())) {

@@ -76,24 +76,33 @@ final class SqlBlockStageRunner {
     StatusCode status = prepareFusedScalarJoin(plans);
     for (int block = plans.count() - 1;
         status.isOk() && block >= 0; block--) {
-      SqlBlockSchema child = block + 1 == plans.count()
-          ? plans.baseSchema() : plans.schema(block + 1);
-      status = binder.activate(bound, block, child);
-      if (status.isOk()) status = prepareActive(block);
-      SqlBlockRowStore output = input == first ? second : first;
-      if (status.isOk()) status = execute(block, input, output, sourceRow);
-      if (status.isOk() && finalStore != null) {
-        status = finalStore.limit(plans.command(block).rowLimit());
-      }
-      if (status.isOk() && block == plans.count() - 1
-          && bound.command.type() != SqlCommandType.JOIN_SCAN) {
-        plan.setRootAccess(source.accessColumn());
-      }
+      status = runBlock(plans, block, input, sourceRow, plan);
       input = status.isOk() ? finalStore : input;
-      if (status.isOk()) plan.setRows(block, stageRows(block));
     }
     finalStore = status.isOk() ? input : null;
     return status;
+  }
+
+  private StatusCode runBlock(
+      SqlBoundBlockPlans plans, int block, SqlBlockRowStore input, SqlBlockRow sourceRow,
+      SqlBlockStagePlan plan) {
+    SqlBlockSchema child = block + 1 == plans.count()
+        ? plans.baseSchema() : plans.schema(block + 1);
+    StatusCode status = binder.activate(bound, block, child);
+    if (!status.isOk()) return status;
+    status = prepareActive(block);
+    if (!status.isOk()) return status;
+    SqlBlockRowStore output = input == first ? second : first;
+    status = execute(block, input, output, sourceRow);
+    if (!status.isOk()) return status;
+    if (finalStore != null) status = finalStore.limit(plans.command(block).rowLimit());
+    if (!status.isOk()) return status;
+    if (block == plans.count() - 1
+        && bound.command.type() != SqlCommandType.JOIN_SCAN) {
+      plan.setRootAccess(source.accessColumn());
+    }
+    plan.setRows(block, stageRows(block));
+    return StatusCode.OK;
   }
 
   private StatusCode prepareActive(int block) {

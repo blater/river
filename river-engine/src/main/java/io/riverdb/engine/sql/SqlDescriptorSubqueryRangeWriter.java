@@ -16,27 +16,40 @@ final class SqlDescriptorSubqueryRangeWriter {
       SqlDescriptorValueSource outer,
       RelationalDescriptorIndexBounds bounds) {
     empty = false;
-    int lowParts = plan.equalParts();
-    int highParts = plan.equalParts();
     boolean lowRange = false;
     boolean highRange = false;
     StatusCode status = StatusCode.OK;
     if (plan.lowerComparison() != null) {
       status = assign(plan, plan.lower(), lower, outer);
-      if (status.isOk() && !empty) { lowParts++; lowRange = true; }
-      else if (status == StatusCode.CONFLICT) status = StatusCode.OK;
+      lowRange = status.isOk() && !empty;
+      if (status == StatusCode.CONFLICT) status = StatusCode.OK;
     }
-    if (status.isOk() && !empty && plan.upperComparison() != null) {
+    if (!status.isOk() || empty) return status;
+    if (plan.upperComparison() != null) {
       status = assign(plan, plan.upper(), upper, outer);
-      if (status.isOk() && !empty) { highParts++; highRange = true; }
-      else if (status == StatusCode.CONFLICT) status = StatusCode.OK;
+      highRange = status.isOk() && !empty;
+      if (status == StatusCode.CONFLICT) status = StatusCode.OK;
     }
-    return status.isOk() && !empty ? bounds.set(
+    if (!status.isOk() || empty) return status;
+    return publishBounds(
+        plan, lower, upper, bounds, lowRange, highRange);
+  }
+
+  private static StatusCode publishBounds(
+      SqlDescriptorSubqueryIndexPlan plan,
+      SqlDescriptorPrimaryValues lower,
+      SqlDescriptorPrimaryValues upper,
+      RelationalDescriptorIndexBounds bounds,
+      boolean lowRange,
+      boolean highRange) {
+    int lowParts = plan.equalParts() + (lowRange ? 1 : 0);
+    int highParts = plan.equalParts() + (highRange ? 1 : 0);
+    return bounds.set(
         plan.key(), lowParts == 0 ? null : lower.buffer(), lowParts,
         !lowRange || inclusive(plan.lowerComparison()),
         highParts == 0 ? null : upper.buffer(), highParts,
         !highRange || inclusive(plan.upperComparison()),
-        TupleBTreeScanBounds.FORWARD) : status;
+        TupleBTreeScanBounds.FORWARD);
   }
 
   private StatusCode assign(

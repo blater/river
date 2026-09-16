@@ -38,16 +38,23 @@ final class SqlDescriptorSingletonScan {
     matches = 0;
     TableDescriptor table = pin.descriptor();
     StatusCode status = preparation.open(command, pin, table);
-    while (status.isOk()) {
-      status = access.next(values);
-      if (status == StatusCode.CONFLICT) { status = StatusCode.OK; break; }
-      if (status.isOk()) status = evaluate();
-      if (status.isOk() && matched()) status = publish(command, table, result);
-      if (status.isOk() && matches != 0 && access.exactUnique()) break;
-    }
+    if (status.isOk()) status = scanCandidates(command, table, result);
     StatusCode closed = access.close();
     if (status.isOk()) status = closed;
     return status.isOk() && matches == 0 ? StatusCode.CONFLICT : status;
+  }
+
+  private StatusCode scanCandidates(
+      SqlCommand command, TableDescriptor table, SqlExecutionResult result) {
+    while (true) {
+      StatusCode status = access.next(values);
+      if (status == StatusCode.CONFLICT) return StatusCode.OK;
+      if (!status.isOk()) return status;
+      status = evaluate();
+      if (status.isOk() && matched()) status = publish(command, table, result);
+      if (!status.isOk()) return status;
+      if (matches != 0 && access.exactUnique()) return StatusCode.OK;
+    }
   }
 
   private StatusCode evaluate() {
@@ -65,25 +72,26 @@ final class SqlDescriptorSingletonScan {
       result.reset();
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = command.isSelectForUpdate()
+    boolean forUpdate = command.isSelectForUpdate();
+    StatusCode status = forUpdate
         ? access.lockCandidate(values) : StatusCode.OK;
-    if (status.isOk() && command.isSelectForUpdate() && !access.candidateLocked()) {
-      return StatusCode.OK;
+    if (forUpdate && status.isOk()) {
+      if (!access.candidateLocked()) return StatusCode.OK;
+      status = evaluate();
+      if (status.isOk() && !matched()) return access.finishCandidate(StatusCode.OK);
     }
-    if (status.isOk() && command.isSelectForUpdate()) status = evaluate();
-    if (status.isOk() && command.isSelectForUpdate() && !matched()) {
-      return access.finishCandidate(StatusCode.OK);
-    }
-    if (status.isOk()) status = projection.publish(
+    if (!status.isOk()) return finishCandidate(status, forUpdate);
+    status = projection.publish(
         values.fetched(), SqlDescriptorPublicRowKey.from(table, values.fetched()),
         session.visibleCommitSequence(), result);
-    if (command.isSelectForUpdate() && session.descriptorRows().currentBorrowed()) {
-      if (status.isOk()) status = session.descriptorRows().retainCurrent();
-      else {
-        status = access.finishCandidate(status);
-      }
-    }
+    status = finishCandidate(status, forUpdate);
     if (status.isOk()) matches = 1;
     return status;
+  }
+
+  private StatusCode finishCandidate(StatusCode status, boolean forUpdate) {
+    if (!forUpdate || !session.descriptorRows().currentBorrowed()) return status;
+    return status.isOk()
+        ? session.descriptorRows().retainCurrent() : access.finishCandidate(status);
   }
 }

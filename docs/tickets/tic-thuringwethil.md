@@ -278,3 +278,25 @@ Complete engine module check passed 1044 tests with no failures/errors/skips.
 Touched files all meet both limits. Evidence:
 `/private/tmp/river-engine-boundaries-check.log` and
 `/private/tmp/river-engine-boundaries-integrated-after.json`. No performance claim.
+
+### SQL execution phases checkpoint — 2026-09-16
+
+Twenty-seven files separate point dispatch, scan preparation, join binding,
+aggregate materialization, sorting/spill, statement preparation, and resource
+cleanup phases. Independent Luna/high reviews plus integrator review preserve
+status precedence, terminal cleanup, and reusable row ownership. Integrator fixed
+two compile omissions and restored subquery bound rejection handling: CONFLICT
+must not increment the admitted range-part count. The final range writer keeps
+those decisions local and shares only bounds publication.
+
+Initial full check stopped at the allocation test (1528 bytes against 512).
+Adjacent unchanged-control and candidate focused allocation checks both passed;
+the initial failure remains recorded. No allocation threshold was changed.
+Validation logs: `/private/tmp/river-sql-execution-integrated-check.log`,
+`/private/tmp/river-sql-execution-integrated-check-final.log`,
+`/private/tmp/river-sql-execution-allocation-control.log`, and
+`/private/tmp/river-sql-execution-allocation-candidate.log`.
+Final independently reviewed source passed the complete engine check: 1044 tests,
+no failures/errors/skips. Touched-file maximum score 85.7341, maximum NPATH 99.
+Final evidence: `/private/tmp/river-sql-execution-integrated-check-reviewed.log`
+and `/private/tmp/river-sql-execution-integrated-after.json`. No performance claim.

@@ -14,32 +14,44 @@ final class SqlJoinMergeSelector {
     orderedColumns[0] = rootOrder(context);
     int selected = context.physicalStrategyStage();
     for (int stage = 0; stage < command.joinChain().stageCount(); stage++) {
-      int outerRole = context.accessOuterRole(stage);
-      int outerColumn = context.accessOuterColumn(stage);
-      int innerColumn = context.accessInnerColumn(stage);
-      if (selected == stage && context.strategy(stage) == SqlJoinStrategy.HASH) {
-        outerRole = context.strategyOuterRole(stage);
-        outerColumn = context.strategyOuterColumn(stage);
-        innerColumn = context.strategyInnerColumn(stage);
-      }
-      boolean ordered = outerRole >= 0 && innerColumn >= 0
-          && orderedColumns[outerRole] == outerColumn;
-      boolean selectableOrder = ordered || stage == 0
-          && selected <= 0
-          && context.accessPredicate < 0
-          && outerRole == 0
-          && outerColumn >= 0
-          && (context.table(0).hasPrimaryIndexOn(outerColumn)
-              || context.table(0).hasIndexOn(outerColumn));
-      if (selectableOrder
-          && selectable(
-              command, context, stage, selected, outerRole, outerColumn)) {
-        context.setStrategy(
-            stage, SqlJoinStrategy.MERGE, outerRole, outerColumn, innerColumn);
-        return;
-      }
-      if (ordered) orderedColumns[stage + 1] = innerColumn;
+      if (selectStage(command, context, stage, selected)) return;
     }
+  }
+
+  private boolean selectStage(
+      SqlCommand command, SqlBoundJoinContext context, int stage, int selected) {
+    int outerRole = context.accessOuterRole(stage);
+    int outerColumn = context.accessOuterColumn(stage);
+    int innerColumn = context.accessInnerColumn(stage);
+    if (selected == stage && context.strategy(stage) == SqlJoinStrategy.HASH) {
+      outerRole = context.strategyOuterRole(stage);
+      outerColumn = context.strategyOuterColumn(stage);
+      innerColumn = context.strategyInnerColumn(stage);
+    }
+    boolean ordered = ordered(outerRole, outerColumn, innerColumn);
+    if (selectableOrder(context, stage, selected, outerRole, outerColumn, ordered)
+        && selectable(command, context, stage, selected, outerRole, outerColumn)) {
+      context.setStrategy(
+          stage, SqlJoinStrategy.MERGE, outerRole, outerColumn, innerColumn);
+      return true;
+    }
+    if (ordered) orderedColumns[stage + 1] = innerColumn;
+    return false;
+  }
+
+  private boolean ordered(int outerRole, int outerColumn, int innerColumn) {
+    return outerRole >= 0 && innerColumn >= 0
+        && orderedColumns[outerRole] == outerColumn;
+  }
+
+  private static boolean selectableOrder(
+      SqlBoundJoinContext context, int stage, int selected,
+      int outerRole, int outerColumn, boolean ordered) {
+    if (ordered) return true;
+    if (stage != 0 || selected > 0 || context.accessPredicate >= 0
+        || outerRole != 0 || outerColumn < 0) return false;
+    return context.table(0).hasPrimaryIndexOn(outerColumn)
+        || context.table(0).hasIndexOn(outerColumn);
   }
 
   private static boolean selectable(

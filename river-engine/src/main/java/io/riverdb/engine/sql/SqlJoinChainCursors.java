@@ -88,32 +88,48 @@ final class SqlJoinChainCursors {
     activeRoleCount = command.joinChain().roleCount();
     TableDefinition root = context.table(0);
     if (context.strategy(0) == SqlJoinStrategy.MERGE) {
-      int column = context.strategyOuterColumn(0);
-      rootValueIndex = column > 0;
-      return rootValueIndex
-          ? session.beginValueScan(root, column, cursors[0])
-          : session.beginScan(root, cursors[0]);
+      return beginMergeRoot(root);
     }
+    return beginPredicateRoot(root);
+  }
+
+  private StatusCode beginMergeRoot(TableDefinition root) {
+    int column = context.strategyOuterColumn(0);
+    rootValueIndex = column > 0;
+    return rootValueIndex
+        ? session.beginValueScan(root, column, cursors[0])
+        : session.beginScan(root, cursors[0]);
+  }
+
+  private StatusCode beginPredicateRoot(TableDefinition root) {
     boolean predicate = context.accessPredicate >= 0;
+    if (!predicate) {
+      rootValueIndex = false;
+      return session.beginScan(root, cursors[0]);
+    }
     boolean equality = predicate && context.accessComparison == SqlComparison.EQUAL;
     rootValueIndex = predicate && context.predicateColumn > 0
         && root.hasIndexOn(context.predicateColumn);
     boolean primary = predicate && context.predicateColumn == 0;
-    long lower = !predicate ? 0
-        : equality ? context.accessValue : context.accessLowerInclusive;
-    long upper = !predicate || equality ? 0 : context.accessUpperExclusive;
-    if (rootValueIndex) {
-      return equality
-          ? session.beginExactValueScan(
-              root, context.predicateColumn, lower, cursors[0])
-          : session.beginValueScan(
-              root, context.predicateColumn, lower, upper, cursors[0]);
-    }
-    return primary
-        ? equality
-            ? session.beginExactScan(root, lower, cursors[0])
-            : session.beginScan(root, lower, upper, cursors[0])
-        : session.beginScan(root, cursors[0]);
+    if (rootValueIndex) return beginIndexedRoot(root, equality);
+    if (!primary) return session.beginScan(root, cursors[0]);
+    return beginPrimaryRoot(root, equality);
+  }
+
+  private StatusCode beginIndexedRoot(TableDefinition root, boolean equality) {
+    long lower = equality ? context.accessValue : context.accessLowerInclusive;
+    return equality
+        ? session.beginExactValueScan(root, context.predicateColumn, lower, cursors[0])
+        : session.beginValueScan(
+            root, context.predicateColumn, lower,
+            context.accessUpperExclusive, cursors[0]);
+  }
+
+  private StatusCode beginPrimaryRoot(TableDefinition root, boolean equality) {
+    long lower = equality ? context.accessValue : context.accessLowerInclusive;
+    return equality
+        ? session.beginExactScan(root, lower, cursors[0])
+        : session.beginScan(root, lower, context.accessUpperExclusive, cursors[0]);
   }
 
   StatusCode nextRoot() {
