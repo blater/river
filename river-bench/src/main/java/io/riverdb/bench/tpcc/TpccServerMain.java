@@ -212,141 +212,131 @@ public final class TpccServerMain {
     private static final long DEFAULT_RESOURCE_STAGED_PAGE_CAPACITY = 4_096;
 
     private static ServerArguments parse(String[] arguments) {
-      Path directory = null;
-      Path readyFile = null;
-      Path jfr = null;
-      Path traceStartFile = null;
-      Path traceStartedFile = null;
-      Path stopFile = null;
-      Path metricsFile = null;
-      Path metricsStartFile = null;
-      Path metricsStartedFile = null;
-      Path metricsStopFile = null;
-      Path metricsStoppedFile = null;
-      int port = -1;
-      int maximumConnections = -1;
-      long resourceMaximumBytes = DEFAULT_RESOURCE_MAXIMUM_BYTES;
-      long resourceDeliveryBytes = DEFAULT_RESOURCE_DELIVERY_BYTES;
-      long resourceLockProviderBytes = DEFAULT_RESOURCE_LOCK_PROVIDER_BYTES;
-      long resourceVersionWorkspaceBytes = DEFAULT_RESOURCE_VERSION_WORKSPACE_BYTES;
-      long resourcePageCacheBytes = DEFAULT_RESOURCE_PAGE_CACHE_BYTES;
-      long resourceStagingFrameBytes = DEFAULT_RESOURCE_STAGING_FRAME_BYTES;
-      long resourceStagedPageCapacity = DEFAULT_RESOURCE_STAGED_PAGE_CAPACITY;
-      long deadlockDiagnosticsBytes = 0;
-      int deadlockDiagnosticsEpochs = 0;
-      int deadlockDiagnosticsSignaturesPerEpoch = 0;
-      int deadlockDiagnosticsEventsPerEpoch = 0;
-      int deadlockDiagnosticsExemplarsPerSignature = 0;
-      int deadlockDiagnosticsMaximumCycleEdges = 0;
-      for (String argument : arguments) {
-        if (argument.startsWith("--directory=")) {
-          directory = Path.of(argument.substring("--directory=".length()));
-        } else if (argument.startsWith("--port=")) {
-          port = Integer.parseInt(argument.substring("--port=".length()));
-        } else if (argument.startsWith("--maximum-connections=")) {
-          maximumConnections = Integer.parseInt(
-              argument.substring("--maximum-connections=".length()));
-        } else if (argument.startsWith("--ready-file=")) {
-          readyFile = Path.of(argument.substring("--ready-file=".length()));
-        } else if (argument.startsWith("--jfr=")) {
-          jfr = Path.of(argument.substring("--jfr=".length()));
-        } else if (argument.startsWith("--trace-start-file=")) {
-          traceStartFile = Path.of(argument.substring("--trace-start-file=".length()));
-        } else if (argument.startsWith("--trace-started-file=")) {
-          traceStartedFile = Path.of(argument.substring("--trace-started-file=".length()));
-        } else if (argument.startsWith("--stop-file=")) {
-          stopFile = Path.of(argument.substring("--stop-file=".length()));
-        } else if (argument.startsWith("--metrics-file=")) {
-          metricsFile = Path.of(argument.substring("--metrics-file=".length()));
-        } else if (argument.startsWith("--metrics-start-file=")) {
-          metricsStartFile = Path.of(
-              argument.substring("--metrics-start-file=".length()));
-        } else if (argument.startsWith("--metrics-started-file=")) {
-          metricsStartedFile = Path.of(
-              argument.substring("--metrics-started-file=".length()));
-        } else if (argument.startsWith("--metrics-stop-file=")) {
-          metricsStopFile = Path.of(
-              argument.substring("--metrics-stop-file=".length()));
-        } else if (argument.startsWith("--metrics-stopped-file=")) {
-          metricsStoppedFile = Path.of(
-              argument.substring("--metrics-stopped-file=".length()));
-        } else if (argument.startsWith("--resource-maximum-bytes=")) {
-          resourceMaximumBytes = Long.parseLong(
-              argument.substring("--resource-maximum-bytes=".length()));
-        } else if (argument.startsWith("--resource-delivery-bytes=")) {
-          resourceDeliveryBytes = Long.parseLong(
-              argument.substring("--resource-delivery-bytes=".length()));
-        } else if (argument.startsWith("--resource-lock-provider-bytes=")) {
-          resourceLockProviderBytes = Long.parseLong(
-              argument.substring("--resource-lock-provider-bytes=".length()));
-        } else if (argument.startsWith("--resource-version-workspace-bytes=")) {
-          resourceVersionWorkspaceBytes = Long.parseLong(
-              argument.substring("--resource-version-workspace-bytes=".length()));
-        } else if (argument.startsWith("--resource-page-cache-bytes=")) {
-          resourcePageCacheBytes = Long.parseLong(
-              argument.substring("--resource-page-cache-bytes=".length()));
-        } else if (argument.startsWith("--resource-staging-frame-bytes=")) {
-          resourceStagingFrameBytes = Long.parseLong(
-              argument.substring("--resource-staging-frame-bytes=".length()));
-        } else if (argument.startsWith("--resource-staged-page-capacity=")) {
-          resourceStagedPageCapacity = Long.parseLong(
-              argument.substring("--resource-staged-page-capacity=".length()));
-        } else if (argument.startsWith("--deadlock-diagnostics-bytes=")) {
-          deadlockDiagnosticsBytes = Long.parseLong(
-              argument.substring("--deadlock-diagnostics-bytes=".length()));
-        } else if (argument.startsWith("--deadlock-diagnostics-epochs=")) {
-          deadlockDiagnosticsEpochs = Integer.parseInt(
-              argument.substring("--deadlock-diagnostics-epochs=".length()));
-        } else if (argument.startsWith("--deadlock-diagnostics-signatures-per-epoch=")) {
-          deadlockDiagnosticsSignaturesPerEpoch = Integer.parseInt(argument.substring(
-              "--deadlock-diagnostics-signatures-per-epoch=".length()));
-        } else if (argument.startsWith("--deadlock-diagnostics-events-per-epoch=")) {
-          deadlockDiagnosticsEventsPerEpoch = Integer.parseInt(
-              argument.substring("--deadlock-diagnostics-events-per-epoch=".length()));
-        } else if (argument.startsWith("--deadlock-diagnostics-exemplars-per-signature=")) {
-          deadlockDiagnosticsExemplarsPerSignature = Integer.parseInt(argument.substring(
-              "--deadlock-diagnostics-exemplars-per-signature=".length()));
-        } else if (argument.startsWith("--deadlock-diagnostics-maximum-cycle-edges=")) {
-          deadlockDiagnosticsMaximumCycleEdges = Integer.parseInt(argument.substring(
-              "--deadlock-diagnostics-maximum-cycle-edges=".length()));
-        } else {
-          throw new IllegalArgumentException("unknown TPS server argument: " + argument);
+      Builder builder = new Builder();
+      for (String argument : arguments) builder.accept(argument);
+      return builder.build();
+    }
+
+    private static final class Builder {
+      private Path directory;
+      private Path readyFile;
+      private Path jfr;
+      private Path traceStartFile;
+      private Path traceStartedFile;
+      private Path stopFile;
+      private Path metricsFile;
+      private Path metricsStartFile;
+      private Path metricsStartedFile;
+      private Path metricsStopFile;
+      private Path metricsStoppedFile;
+      private int port = -1;
+      private int maximumConnections = -1;
+      private long resourceMaximumBytes = DEFAULT_RESOURCE_MAXIMUM_BYTES;
+      private long resourceDeliveryBytes = DEFAULT_RESOURCE_DELIVERY_BYTES;
+      private long resourceLockProviderBytes = DEFAULT_RESOURCE_LOCK_PROVIDER_BYTES;
+      private long resourceVersionWorkspaceBytes = DEFAULT_RESOURCE_VERSION_WORKSPACE_BYTES;
+      private long resourcePageCacheBytes = DEFAULT_RESOURCE_PAGE_CACHE_BYTES;
+      private long resourceStagingFrameBytes = DEFAULT_RESOURCE_STAGING_FRAME_BYTES;
+      private long resourceStagedPageCapacity = DEFAULT_RESOURCE_STAGED_PAGE_CAPACITY;
+      private long deadlockDiagnosticsBytes;
+      private int deadlockDiagnosticsEpochs;
+      private int deadlockDiagnosticsSignaturesPerEpoch;
+      private int deadlockDiagnosticsEventsPerEpoch;
+      private int deadlockDiagnosticsExemplarsPerSignature;
+      private int deadlockDiagnosticsMaximumCycleEdges;
+
+      private void accept(String argument) {
+        int split = argument.indexOf('=');
+        if (split < 0) throw unknown(argument);
+        String key = argument.substring(0, split);
+        String value = argument.substring(split + 1);
+        switch (key) {
+          case "--directory" -> directory = Path.of(value);
+          case "--port" -> port = Integer.parseInt(value);
+          case "--maximum-connections" -> maximumConnections = Integer.parseInt(value);
+          case "--ready-file" -> readyFile = Path.of(value);
+          case "--jfr" -> jfr = Path.of(value);
+          case "--trace-start-file" -> traceStartFile = Path.of(value);
+          case "--trace-started-file" -> traceStartedFile = Path.of(value);
+          case "--stop-file" -> stopFile = Path.of(value);
+          case "--metrics-file" -> metricsFile = Path.of(value);
+          case "--metrics-start-file" -> metricsStartFile = Path.of(value);
+          case "--metrics-started-file" -> metricsStartedFile = Path.of(value);
+          case "--metrics-stop-file" -> metricsStopFile = Path.of(value);
+          case "--metrics-stopped-file" -> metricsStoppedFile = Path.of(value);
+          case "--resource-maximum-bytes" -> resourceMaximumBytes = Long.parseLong(value);
+          case "--resource-delivery-bytes" -> resourceDeliveryBytes = Long.parseLong(value);
+          case "--resource-lock-provider-bytes" -> resourceLockProviderBytes = Long.parseLong(value);
+          case "--resource-version-workspace-bytes" -> resourceVersionWorkspaceBytes = Long.parseLong(value);
+          case "--resource-page-cache-bytes" -> resourcePageCacheBytes = Long.parseLong(value);
+          case "--resource-staging-frame-bytes" -> resourceStagingFrameBytes = Long.parseLong(value);
+          case "--resource-staged-page-capacity" -> resourceStagedPageCapacity = Long.parseLong(value);
+          case "--deadlock-diagnostics-bytes" -> deadlockDiagnosticsBytes = Long.parseLong(value);
+          case "--deadlock-diagnostics-epochs" -> deadlockDiagnosticsEpochs = Integer.parseInt(value);
+          case "--deadlock-diagnostics-signatures-per-epoch" ->
+              deadlockDiagnosticsSignaturesPerEpoch = Integer.parseInt(value);
+          case "--deadlock-diagnostics-events-per-epoch" ->
+              deadlockDiagnosticsEventsPerEpoch = Integer.parseInt(value);
+          case "--deadlock-diagnostics-exemplars-per-signature" ->
+              deadlockDiagnosticsExemplarsPerSignature = Integer.parseInt(value);
+          case "--deadlock-diagnostics-maximum-cycle-edges" ->
+              deadlockDiagnosticsMaximumCycleEdges = Integer.parseInt(value);
+          default -> throw unknown(argument);
         }
       }
-      if (directory == null || readyFile == null || port < 0 || port > 65_535
-          || maximumConnections < 1 || resourceMaximumBytes <= 0
-          || resourceDeliveryBytes <= 0 || resourceLockProviderBytes <= 0
-          || resourceVersionWorkspaceBytes <= 0
-          || resourcePageCacheBytes <= 0 || resourceStagingFrameBytes <= 0
-          || resourceStagedPageCapacity <= 0) {
-        throw new IllegalArgumentException("invalid TPS server configuration");
+
+      private ServerArguments build() {
+        validate();
+        return new ServerArguments(
+            directory, port, maximumConnections, readyFile, jfr,
+            traceStartFile, traceStartedFile, stopFile, metricsFile,
+            metricsStartFile, metricsStartedFile, metricsStopFile, metricsStoppedFile,
+            resourceMaximumBytes, resourceDeliveryBytes, resourceLockProviderBytes,
+            resourceVersionWorkspaceBytes, resourcePageCacheBytes, resourceStagingFrameBytes,
+            resourceStagedPageCapacity, deadlockDiagnosticsBytes, deadlockDiagnosticsEpochs,
+            deadlockDiagnosticsSignaturesPerEpoch, deadlockDiagnosticsEventsPerEpoch,
+            deadlockDiagnosticsExemplarsPerSignature, deadlockDiagnosticsMaximumCycleEdges);
       }
-      if (traceStartFile != null && jfr == null) {
-        throw new IllegalArgumentException("trace start file requires --jfr");
+
+      private void validate() {
+        validateBase();
+        validateTraceStart();
+        validateMetricsFiles();
       }
-      if (traceStartedFile != null && jfr == null) {
-        throw new IllegalArgumentException("trace started file requires --jfr");
+
+      private void validateBase() {
+        if (directory == null || readyFile == null || port < 0 || port > 65_535
+            || maximumConnections < 1 || resourceMaximumBytes <= 0
+            || resourceDeliveryBytes <= 0 || resourceLockProviderBytes <= 0
+            || resourceVersionWorkspaceBytes <= 0 || resourcePageCacheBytes <= 0
+            || resourceStagingFrameBytes <= 0 || resourceStagedPageCapacity <= 0) {
+          throw new IllegalArgumentException("invalid TPS server configuration");
+        }
       }
-      int metricsControlFiles = (metricsStartFile == null ? 0 : 1)
-          + (metricsStartedFile == null ? 0 : 1)
-          + (metricsStopFile == null ? 0 : 1)
-          + (metricsStoppedFile == null ? 0 : 1);
-      if (metricsControlFiles != 0 && metricsControlFiles != 4) {
-        throw new IllegalArgumentException(
-            "performance capture requires all four control files");
+
+      private void validateTraceStart() {
+        if (traceStartFile != null && jfr == null) {
+          throw new IllegalArgumentException("trace start file requires --jfr");
+        }
+        if (traceStartedFile != null && jfr == null) {
+          throw new IllegalArgumentException("trace started file requires --jfr");
+        }
       }
-      return new ServerArguments(
-          directory, port, maximumConnections, readyFile, jfr,
-          traceStartFile, traceStartedFile, stopFile, metricsFile,
-          metricsStartFile, metricsStartedFile, metricsStopFile, metricsStoppedFile,
-          resourceMaximumBytes, resourceDeliveryBytes, resourceLockProviderBytes,
-          resourceVersionWorkspaceBytes,
-          resourcePageCacheBytes, resourceStagingFrameBytes,
-          resourceStagedPageCapacity,
-          deadlockDiagnosticsBytes, deadlockDiagnosticsEpochs,
-          deadlockDiagnosticsSignaturesPerEpoch, deadlockDiagnosticsEventsPerEpoch,
-          deadlockDiagnosticsExemplarsPerSignature,
-          deadlockDiagnosticsMaximumCycleEdges);
+
+      private void validateMetricsFiles() {
+        int metricsControlFiles = (metricsStartFile == null ? 0 : 1)
+            + (metricsStartedFile == null ? 0 : 1)
+            + (metricsStopFile == null ? 0 : 1)
+            + (metricsStoppedFile == null ? 0 : 1);
+        if (metricsControlFiles != 0 && metricsControlFiles != 4) {
+          throw new IllegalArgumentException(
+              "performance capture requires all four control files");
+        }
+      }
+
+      private static IllegalArgumentException unknown(String argument) {
+        return new IllegalArgumentException("unknown TPS server argument: " + argument);
+      }
     }
 
     DatabaseResourcePlanRequest resourceRequest() {

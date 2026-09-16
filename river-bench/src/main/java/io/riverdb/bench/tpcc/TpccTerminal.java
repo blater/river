@@ -61,39 +61,52 @@ final class TpccTerminal implements AutoCloseable {
     long receivedBefore = metrics == null ? 0 : session.bytesReceived();
     long start = System.nanoTime();
     try {
-      session.prepareAttempt(type);
-      TpccAttempt attempt = prepare(type);
-      attemptAccounting.begin(type, metrics, deadline, session, metrics == null ? 1 : 2);
-      TpccRetry.Result result = TpccRetry.execute(
-          attempt, config, deadline, attemptAccounting);
-      long completed = System.nanoTime();
-      if (metrics != null) {
-        if (completed <= deadline) {
-          metrics.record(type, completed - start, result);
-          recordProtocol(metrics, type, requestsBefore, sentBefore, receivedBefore, true);
-        } else {
-          metrics.recordDrain(type, result);
-          recordProtocol(metrics, type, requestsBefore, sentBefore, receivedBefore, false);
-        }
-      }
+      runAttempt(type, metrics, deadline, start, requestsBefore, sentBefore, receivedBefore);
     } catch (SQLException failure) {
-      long failedAt = System.nanoTime();
-      boolean measuredFailure = failedAt <= deadline;
-      if (metrics != null) {
-        if ("40001".equals(failure.getSQLState())
-            && TpccStatusCodes.decode(failure) == null) {
-          metrics.retry().unclassifiedRetryFailure(measuredFailure);
-        }
-        metrics.failure(type, failedAt - start, measuredFailure);
-        recordProtocol(
-            metrics, type, requestsBefore, sentBefore, receivedBefore, measuredFailure);
-      }
-      if ("40001".equals(failure.getSQLState()) && !measuredFailure) return;
-      throw failure;
+      handleFailure(failure, type, metrics, deadline, start,
+          requestsBefore, sentBefore, receivedBefore);
+      return;
     } finally {
       transactionActive = false;
     }
     waitFor(type, false, deadline);
+  }
+
+  private void runAttempt(
+      TpccTransactionType type, TpccMetrics metrics, long deadline, long start,
+      long requestsBefore, long sentBefore, long receivedBefore) throws SQLException {
+    session.prepareAttempt(type);
+    TpccAttempt attempt = prepare(type);
+    attemptAccounting.begin(type, metrics, deadline, session, metrics == null ? 1 : 2);
+    TpccRetry.Result result = TpccRetry.execute(attempt, config, deadline, attemptAccounting);
+    long completed = System.nanoTime();
+    if (metrics == null) return;
+    boolean measured = completed <= deadline;
+    if (measured) metrics.record(type, completed - start, result);
+    else metrics.recordDrain(type, result);
+    recordProtocol(metrics, type, requestsBefore, sentBefore, receivedBefore, measured);
+  }
+
+  private void handleFailure(
+      SQLException failure, TpccTransactionType type, TpccMetrics metrics, long deadline,
+      long start, long requestsBefore, long sentBefore, long receivedBefore) throws SQLException {
+    long failedAt = System.nanoTime();
+    boolean measured = failedAt <= deadline;
+    if (metrics != null) recordFailure(
+        metrics, type, failure, failedAt - start, measured,
+        requestsBefore, sentBefore, receivedBefore);
+    if ("40001".equals(failure.getSQLState()) && !measured) return;
+    throw failure;
+  }
+
+  private void recordFailure(
+      TpccMetrics metrics, TpccTransactionType type, SQLException failure, long elapsed,
+      boolean measured, long requestsBefore, long sentBefore, long receivedBefore) {
+    if ("40001".equals(failure.getSQLState()) && TpccStatusCodes.decode(failure) == null) {
+      metrics.retry().unclassifiedRetryFailure(measured);
+    }
+    metrics.failure(type, elapsed, measured);
+    recordProtocol(metrics, type, requestsBefore, sentBefore, receivedBefore, measured);
   }
 
   boolean transactionActive() { return transactionActive; }

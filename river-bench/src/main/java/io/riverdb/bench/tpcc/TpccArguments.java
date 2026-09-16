@@ -85,9 +85,8 @@ final class TpccArguments {
     int customers = tiny ? 30 : 3_000;
     int items = tiny ? 100 : 100_000;
     int orders = tiny ? 30 : 3_000;
-    int configuredTerminals = terminalsExplicit ? terminals : Math.multiplyExact(warehouses, 10);
-    int configuredAttempts = tiny && scheduling == TpccScheduling.NO_WAIT_STRESS
-        && !attemptsExplicit ? 32 : attempts;
+    int configuredTerminals = configuredTerminals();
+    int configuredAttempts = configuredAttempts();
     return new TpccConfig(url, warehouses, 10, customers, items, orders,
         tiny ? 22 : 2_101, configuredTerminals,
         Duration.ofSeconds(warmup), Duration.ofSeconds(measured), batch, configuredAttempts,
@@ -97,5 +96,14 @@ final class TpccArguments {
         Duration.ofMillis(retryMaximumMillis), artifact, jfr,
         metricsStartFile, metricsStartedFile, metricsStopFile, metricsStoppedFile,
         evidence);
+  }
+
+  private int configuredTerminals() {
+    return terminalsExplicit ? terminals : Math.multiplyExact(warehouses, 10);
+  }
+
+  private int configuredAttempts() {
+    return tiny && scheduling == TpccScheduling.NO_WAIT_STRESS && !attemptsExplicit
+        ? 32 : attempts;
   }
 }

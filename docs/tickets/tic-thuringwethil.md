@@ -250,3 +250,15 @@ passed the complete transaction check again. Full tx scan including tests:
 `/private/tmp/river-tx-complexity-check-final.log`,
 `/private/tmp/river-tx-complexity-refactor-check.log`; metrics:
 `/private/tmp/river-tx-bench-final-slopmark.json`. No performance claim.
+
+### Benchmark configuration and reporting checkpoint — 2026-09-16
+
+Seven files separate configuration admission, server argument parsing, attempt
+completion/failure accounting, and report/manifest validation phases. Integrator
+review preserved option defaults, validation precedence, measured/drain boundaries,
+and output schema; removed an unnecessary boolean failure carrier. Complete
+benchmark check passed: 109 tests, zero failures/errors, two skips, including
+TPC-C load/checkpoint/reopen recovery validation. Full module scan including
+tests: 152 files, maximum score 78.7607 and NPATH 96. Evidence:
+`/private/tmp/river-bench-complexity-check.log` and
+`/private/tmp/river-tx-bench-final-slopmark.json`. No performance claim.

@@ -71,6 +71,12 @@ final class TpccReport {
             ? 0.0 : metrics.protocol().requests() / (double) metrics.retry().transactionAttempts()));
     System.out.println("worker_allocated_bytes=" + (metrics.allocationObserved()
         ? metrics.allocatedBytes() : "unavailable_on_this_vm"));
+    printRetryStatuses(metrics);
+    printTransactionResults(metrics);
+    printProgramFailures(metrics);
+  }
+
+  private static void printRetryStatuses(TpccMetrics metrics) {
     for (StatusCode status : StatusCode.values()) {
       long outcomes = metrics.retry().retryableOutcomes(status);
       long clientRetries = metrics.retry().clientRetries(status);
@@ -84,6 +90,9 @@ final class TpccReport {
             + " drain_client_retries=" + drainRetries);
       }
     }
+  }
+
+  private static void printTransactionResults(TpccMetrics metrics) {
     for (TpccTransactionType type : TpccTransactionType.values()) {
       System.out.println("transaction=" + type + " committed=" + metrics.committed(type)
           + " expected_rollbacks=" + metrics.expectedRollbacks(type)
@@ -119,6 +128,9 @@ final class TpccReport {
         }
       }
     }
+  }
+
+  private static void printProgramFailures(TpccMetrics metrics) {
     for (int kind = 0; kind < TpccRiverNewOrder.FAILURE_KINDS; kind++) {
       long failures = metrics.newOrderProgramFailures(kind);
       if (failures > 0) {
