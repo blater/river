@@ -3443,3 +3443,144 @@ increase and no established workload benefit, not proof that binary search
 intrinsically regresses. Publish the tested feature branch and documentation;
 leave the ticket open and create no performance integration tag. No root cache,
 lock-manager redesign, protocol change, or broader profiling campaign is included.
+
+## 2026-09-16 — tuple CPU attribution: warmup connection replacement (tic-bert)
+
+**Finding:** the new profiles reproduce high and low whole-process CPU modes on
+both the stable and tuple-admission binaries. The high mode follows physical
+connection replacement at the warmup boundary, cold-session deoptimization, and
+extra compiler CPU. This is a concrete measurement confound; the previous
+unprofiled adverse results remain evidence, but do not establish that removing
+checks intrinsically increases CPU. No production change is accepted here.
+
+### Scope and execution
+
+Stable production is `64329eda`; the candidate is the three-class revision
+`da1096b2` on `ticket/tic-bert-tuple-key-admission`. Installed jar entries differ
+only in `IndexedTupleLockKey`, `IndexedTupleCurrentResolution`, and
+`IndexedTransactionTupleScans`. Validation reads bytes without changing state;
+no additional logical successful-transaction work was introduced. The scan
+admission change is inactive in these READ COMMITTED runs.
+
+Four sequential runs, in order control A / candidate A / candidate B / control B,
+used sample New-Order, READ COMMITTED with explicit FOR UPDATE, one worker and
+warehouse, seed 42, retries 3, 20-second warmup, 60-second measurement, local
+durable WAL, TCP/TLS, GraalVM 25.0.4 and `-Xmx1g`. No build or other workload
+ran concurrently. JFR began during initial load, before warmup, on both builds.
+Compilation events, one-second thread CPU events, GC events, socket writes, and
+128-frame execution stacks were retained. This is diagnostic profiling, not a
+throughput claim; recording socket events itself has overhead.
+
+Artifacts, exact commands, collector, analysis scripts, recordings and verified
+results: `/private/tmp/river-bert-cpu/`. Invoke the collector as:
+
+```sh
+python3 /private/tmp/river-bert-cpu/capture.py river baseline-profile-a \
+  --profile --executable=/private/tmp/river-gothmog-current/river \
+  --version=64329eda-bert-cpu-profile --duration=60s
+```
+
+Candidate uses `/private/tmp/river-two-hotpaths/tuple-revised/river`; its version
+is `da1096b2-bert-cpu-profile`. The second pair uses the corresponding `-b`
+version suffix. The collector invokes the installed external harness; it does
+not build or modify either database or the harness.
+
+### Individual results
+
+CPU units are milliseconds per committed transaction. Compiler and carrier CPU
+are approximate JFR integrations; whole-server CPU is the measured `ps` delta.
+Carriers execute virtual connection and WAL threads, plus scheduling work.
+The remainder after subtracting compiler CPU still includes other background
+and native work; it is not pure request CPU.
+
+| Run | Connection across boundary | TPS | Whole-server CPU | Compiler CPU | Carrier CPU | Deopts in first 2s |
+|---|---|---:|---:|---:|---:|---:|
+| control A | replaced | 376.696 | 2.444 | 0.231 | 1.745 | 88 |
+| candidate A | reused | 378.031 | 2.338 | 0.127 | 1.732 | 0 |
+| candidate B | replaced | 375.515 | 2.458 | 0.227 | 1.755 | 93 |
+| control B | reused | 376.348 | 2.379 | 0.139 | 1.750 | 1 |
+
+Repeating the same candidate increases whole-server CPU by 0.1196 ms/commit;
+compiler CPU increases by approximately 0.1005 ms/commit, about 84% of that
+change. Subtracting compiler CPU leaves 2.214 / 2.211 / 2.230 / 2.241 ms/commit
+in run order. GC CPU events report only 0.07–0.11 seconds per measured window;
+GC pause sums are 0.024–0.035 seconds. These figures do not attribute all native
+CPU or explain every difference. All four runs passed, with no retries, failures
+or unknown outcomes in either phase, successful invariants, reconciled outcome
+counts, graceful shutdown and inactive owned services afterward. Expected
+rollbacks and deadline cancellations are retained in the reports.
+
+Native report identifiers under `/Users/blater/src/ingres/river-harness/runs/`:
+
+- control A: `river_harness_20260916_081310_3c452f24`
+- candidate A: `river_harness_20260916_081747_05023201`
+- candidate B: `river_harness_20260916_081943_0aef92de`
+- control B: `river_harness_20260916_082140_8a57e552`
+
+All have comparison eligibility `eligible` and identical key
+`a42c04a2d12863b021589c17c76faddf547758c3b6cda0941c47658f9a98cefc`.
+That metadata does not describe physical connection reuse at the phase boundary;
+matching it alone did not eliminate this confound.
+
+### Mechanism and checks
+
+The harness runs warmup and measurement as separate `RunMixed` calls in
+`cmd/river-harness/full_phases.go`. Each call creates a timeout context in
+`internal/workload/mixed_runner.go` and passes it into transaction execution.
+At the boundary, an in-flight transaction can be cancelled. The River Go adapter
+applies that deadline to socket I/O; transport failure closes the connection.
+Additionally, Go `database/sql` can discard a connection on cancellation-driven
+rollback when the driver lacks the full session-reset/validation contract.
+River implements validation but does not implement `SessionResetter`.
+Depending on where cancellation lands, the measured worker either gets the
+warmed physical connection or a replacement.
+
+This was checked against physical peer ports AND Java thread IDs from JFR socket
+writes, not inferred solely from the reusable `river-connection-N` slot name:
+
+- control A changes thread/port `46:49616` to `56:49620` at the boundary;
+- candidate B changes `46:49765` to `56:49771`;
+- candidate A retains `46:49682` throughout warmup and measurement;
+- control B retains `46:49788` throughout both phases.
+
+The two replacement runs immediately deoptimize cold capacity/reserve/grow paths,
+including `ProtocolUtf8Decoder.reserve`, `SqlBoundQueryBlocks.grow`,
+`SqlBoundQueryTopology.reserve`, and `IndexedSessionSavepoints.create`.
+Measured JVMCI compilations are 406 / 111 / 426 / 107 in run order. These are
+compilation counts, not CPU time. Full execution stacks show the same principal
+transaction paths, with fewer tuple-validation samples in the candidate and no
+new replacement workload.
+
+Thread CPU normalization was checked against the
+[OpenJDK 25 implementation](https://raw.githubusercontent.com/openjdk/jdk/jdk-25-ga/src/hotspot/share/jfr/periodic/jfrThreadCPULoadEvent.cpp).
+Integration uses periodic tick intervals and the latest preceding thread-start
+for dynamic compiler-thread restarts, clips to the measured phase, and includes
+off-tick lifetime events. The JVM uses the host's 10 processors without an active
+processor override. Summed Java-thread CPU leaves 0.54–0.94 seconds per 60-second
+window unattributed against `ps`; process-load integration independently agrees
+within 0.13–0.25 seconds. These limits are retained rather than assigning the
+residual to transactions. Compilation wall durations are never counted as CPU.
+
+### Review and decision
+
+Independent measurement review agrees that the crossover, physical connection
+trace, immediate deoptimization burst, and compiler CPU attribution identify a
+warmup-boundary confound. No additional run is needed simply to establish its
+existence. It does **not** reconstruct the connection history of the previous
+unprofiled bad sample, establish a tuple speedup, or exclude code timing affecting
+the probability of boundary cancellation. The candidate remains open and held;
+there is no production merge or performance tag.
+
+The smallest next acceptance step is a matched comparison with deliberately
+identical boundary behavior: finish the warmup transaction without cancelling it
+and verify physical connection reuse, or explicitly create and warm replacement
+connections on both builds. Merely lengthening warmup does not prevent the
+subsequent cancellation from replacing its session. This belongs to harness
+phase handling, not tuple validation or River lock semantics. Do not add a dummy
+`SessionResetter` without implementing its real contract. Warmup cardinality also
+varies with throughput; the measured generator starts from the declared seed
+independently of the warmup generator.
+
+Only documentation changed in this investigation. Prior candidate correctness
+checks remain the two clean 2,029-test checkpoints recorded above; no build was
+repeated for this documentation update.
