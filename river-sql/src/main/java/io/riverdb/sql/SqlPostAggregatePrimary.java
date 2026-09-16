@@ -62,17 +62,18 @@ final class SqlPostAggregatePrimary {
     int groupKey = kind == 0
         ? SqlGroupExpressions.groupKey(command, grouped, slot, identifier) : -1;
     boolean groupValue = groupKey >= 0;
-    int operand = kind == 0
-        ? selectedInvocation(slot, groupOutputs)
-        : repeatedInvocation(sql, kind);
+    int operand = groupValue ? groupKey
+        : kind == 0 ? selectedInvocation(slot, groupOutputs) : repeatedInvocation(sql, kind);
     if (!status.isOk()) return status;
-    if (groupValue) operand = groupKey;
+    return appendValue(operand, groupValue);
+  }
+
+  private StatusCode appendValue(int operand, boolean groupValue) {
     int operator = groupValue
         ? SqlScalarExpression.GROUP_VALUE : SqlScalarExpression.AGGREGATE_VALUE;
-    if (operand < 0 || !expressions.hasStackCapacity()
-        || !expressions.appendNode(operator, operand, 0)) {
-      return operand < 0
-          ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.RESOURCE_EXHAUSTED;
+    if (operand < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!expressions.hasStackCapacity() || !expressions.appendNode(operator, operand, 0)) {
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
     leaves++;
     expressions.pushDescriptor(0);
@@ -92,30 +93,45 @@ final class SqlPostAggregatePrimary {
 
   private int repeatedInvocation(CharSequence sql, int requestedKind) {
     if (!input.consumeCharacter(sql, '(')) return invalid();
-    boolean countStar = requestedKind == SqlAggregateKind.COUNT
-        && input.consumeCharacter(sql, '*');
-    boolean countDistinct = requestedKind == SqlAggregateKind.COUNT
-        && !countStar && input.consumeKeyword(sql, "DISTINCT");
-    int kind = countStar ? SqlAggregateKind.COUNT
-        : countDistinct ? SqlAggregateKind.COUNT_DISTINCT
-        : requestedKind == SqlAggregateKind.COUNT
-            ? SqlAggregateKind.COUNT_VALUE : requestedKind;
+    int kind = repeatedKind(sql, requestedKind);
+    boolean countStar = kind == SqlAggregateKind.COUNT;
     if (!countStar) {
       status = matcher.parseScratch(sql, command, repeated);
       if (!status.isOk()) return -1;
     }
     if (!input.consumeCharacter(sql, ')')) return invalid();
+    int existing = findInvocation(kind, countStar);
+    if (existing >= 0) return existing;
+    return appendInvocation(kind, countStar);
+  }
+
+  private int repeatedKind(CharSequence sql, int requestedKind) {
+    if (requestedKind != SqlAggregateKind.COUNT) return requestedKind;
+    if (input.consumeCharacter(sql, '*')) return SqlAggregateKind.COUNT;
+    return input.consumeKeyword(sql, "DISTINCT")
+        ? SqlAggregateKind.COUNT_DISTINCT : SqlAggregateKind.COUNT_VALUE;
+  }
+
+  private int findInvocation(int kind, boolean countStar) {
     for (int invocation = 0;
         invocation < command.aggregates().invocationCount(); invocation++) {
       if (command.aggregates().kind(invocation) != kind) continue;
       int projection = command.aggregates().operandProjection(invocation);
-      if (countStar && projection < 0
-          || !countStar && projection >= 0
-              && SqlAggregateExpressionParser.same(
-          command, command.aggregateOperandExpression(projection), repeated)) {
+      if (sameInvocation(command, projection, countStar)) {
         return invocation;
       }
     }
+    return -1;
+  }
+
+  private boolean sameInvocation(SqlCommand target, int projection, boolean countStar) {
+    return countStar && projection < 0
+        || !countStar && projection >= 0
+            && SqlAggregateExpressionParser.same(
+        target, target.aggregateOperandExpression(projection), repeated);
+  }
+
+  private int appendInvocation(int kind, boolean countStar) {
     int projection = countStar ? -1 : freeOperandProjection();
     if (!countStar && projection < 0) {
       status = StatusCode.RESOURCE_EXHAUSTED;

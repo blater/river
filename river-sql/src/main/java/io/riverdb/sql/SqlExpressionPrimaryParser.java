@@ -104,14 +104,8 @@ final class SqlExpressionPrimaryParser {
   }
 
   private StatusCode cast(CharSequence sql) {
-    StatusCode status = input.requireCharacter(sql, '(');
-    if (status.isOk()) status = expressions.parseNestedAdditive(sql);
-    if (status.isOk()) status = input.requireKeyword(sql, "AS");
-    if (status.isOk()) status = input.typeDescriptor(sql, literal);
-    if (status.isOk()) status = input.requireCharacter(sql, ')');
-    if (!status.isOk() || !expressions.hasValue()) {
-      return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
-    }
+    StatusCode status = parseCastBody(sql);
+    if (!status.isOk()) return status;
     int source = expressions.topDescriptor();
     int target = literal.typeDescriptor;
     if (!admittedCast(source, target)) {
@@ -122,6 +116,16 @@ final class SqlExpressionPrimaryParser {
     }
     expressions.replaceTopDescriptor(target);
     return StatusCode.OK;
+  }
+
+  private StatusCode parseCastBody(CharSequence sql) {
+    StatusCode status = input.requireCharacter(sql, '(');
+    if (status.isOk()) status = expressions.parseNestedAdditive(sql);
+    if (status.isOk()) status = input.requireKeyword(sql, "AS");
+    if (status.isOk()) status = input.typeDescriptor(sql, literal);
+    if (status.isOk()) status = input.requireCharacter(sql, ')');
+    return status.isOk() && expressions.hasValue()
+        ? StatusCode.OK : status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
   }
 
   private boolean admittedCast(int source, int target) {
@@ -145,16 +149,8 @@ final class SqlExpressionPrimaryParser {
   }
 
   private StatusCode scaleFunction(CharSequence sql, boolean round) {
-    StatusCode status = input.requireCharacter(sql, '(');
-    if (status.isOk()) status = expressions.parseNestedAdditive(sql);
-    if (status.isOk()) status = input.requireCharacter(sql, ',');
-    if (status.isOk()) status = input.number(sql, literal);
-    if (status.isOk()) status = input.requireCharacter(sql, ')');
-    if (!status.isOk() || literal.value < 0
-        || literal.value > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION
-        || !expressions.hasValue()) {
-      return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
-    }
+    StatusCode status = parseScaleBody(sql);
+    if (!status.isOk()) return status;
     int descriptor = expressions.topDescriptor() == 0 ? 0
         : SqlNumericExpressionTypes.quantized(
             expressions.topDescriptor(), literal.value);
@@ -167,6 +163,20 @@ final class SqlExpressionPrimaryParser {
     }
     expressions.replaceTopDescriptor(descriptor);
     return StatusCode.OK;
+  }
+
+  private StatusCode parseScaleBody(CharSequence sql) {
+    StatusCode status = input.requireCharacter(sql, '(');
+    if (status.isOk()) status = expressions.parseNestedAdditive(sql);
+    if (status.isOk()) status = input.requireCharacter(sql, ',');
+    if (status.isOk()) status = input.number(sql, literal);
+    if (status.isOk()) status = input.requireCharacter(sql, ')');
+    if (status.isOk() && (literal.value < 0
+        || literal.value > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION
+        || !expressions.hasValue())) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return status;
   }
 
   private StatusCode appendLiteral(long value, int descriptor) {

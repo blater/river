@@ -16,23 +16,41 @@ final class SqlOrderByParser {
     StatusCode status = input.requireKeyword(sql, "BY");
     int expression = 0;
     do {
-      SqlIdentifier name = status.isOk() ? command.orderBy.append() : null;
-      status = name == null ? StatusCode.RESOURCE_EXHAUSTED : input.identifier(sql, name);
-      if (status.isOk() && input.consumeCharacter(sql, '.')) {
-        SqlIdentifier qualifier = command.orderBy.qualifier(expression);
-        qualifier.copyFrom(name);
-        name.reset();
-        status = input.identifier(sql, name);
-      }
-      if (status.isOk() && !names.valid(
-          command, command.orderBy().qualifier(expression), name)) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      boolean descending = false;
-      if (status.isOk() && input.consumeKeyword(sql, "ASC")) descending = false;
-      else if (status.isOk() && input.consumeKeyword(sql, "DESC")) descending = true;
-      if (status.isOk()) command.setDescendingOrder(expression++, descending);
+      status = parseExpression(sql, command, expression, status);
+      if (status.isOk()) expression++;
     } while (status.isOk() && input.consumeCharacter(sql, ','));
     return status;
+  }
+
+  private StatusCode parseExpression(
+      CharSequence sql, SqlCommand command, int expression, StatusCode prior) {
+    SqlIdentifier name = prior.isOk() ? command.orderBy.append() : null;
+    if (name == null) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode status = parseName(sql, command, name, expression);
+    if (status.isOk()) status = parseDirection(sql, command, expression);
+    return status;
+  }
+
+  private StatusCode parseName(
+      CharSequence sql, SqlCommand command, SqlIdentifier name, int expression) {
+    StatusCode status = input.identifier(sql, name);
+    if (status.isOk() && input.consumeCharacter(sql, '.')) {
+      SqlIdentifier qualifier = command.orderBy.qualifier(expression);
+      qualifier.copyFrom(name);
+      name.reset();
+      status = input.identifier(sql, name);
+    }
+    if (status.isOk() && !names.valid(
+        command, command.orderBy().qualifier(expression), name)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return status;
+  }
+
+  private StatusCode parseDirection(CharSequence sql, SqlCommand command, int expression) {
+    boolean descending = false;
+    if (!input.consumeKeyword(sql, "ASC")) descending = input.consumeKeyword(sql, "DESC");
+    command.setDescendingOrder(expression, descending);
+    return StatusCode.OK;
   }
 }

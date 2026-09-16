@@ -6,6 +6,14 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 /** Detects and parses fixed-point decimal literals. */
 final class SqlDecimalLiteralReader {
   private final SqlParserInput input;
+  private int position;
+  private int digits;
+  private int significantIntegerDigits;
+  private int scale;
+  private long high;
+  private long value;
+  private boolean point;
+  private boolean significantInteger;
 
   SqlDecimalLiteralReader(SqlParserInput parserInput) {
     input = parserInput;
@@ -35,46 +43,18 @@ final class SqlDecimalLiteralReader {
     result.varchar = false;
     result.textScalars = 0;
     input.skipSpaces(sql);
-    int position = input.position();
+    position = input.position();
     boolean negative = position < sql.length() && sql.charAt(position) == '-';
     if (negative) position++;
-    int digits = 0;
-    int significantIntegerDigits = 0;
-    int scale = 0;
-    long high = 0;
-    long value = 0;
-    boolean point = false;
-    boolean significantInteger = false;
-    while (position < sql.length()) {
-      char character = sql.charAt(position);
-      if (SqlParserInput.digit(character)) {
-        digits++;
-        if (point) {
-          scale++;
-        } else if (significantInteger || character != '0') {
-          significantInteger = true;
-          significantIntegerDigits++;
-        }
-        if (significantIntegerDigits + scale
-            > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION) {
-          input.position(position);
-          return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
-        }
-        long multiplied = value * 10;
-        long carry = Math.multiplyHigh(value, 10) + (value < 0 ? 10 : 0);
-        high = high * 10 + carry;
-        value = multiplied + character - '0';
-        if (Long.compareUnsigned(value, multiplied) < 0) high++;
-        position++;
-      } else if (character == '.' && !point) {
-        point = true;
-        position++;
-      } else break;
-    }
-    input.position(position);
-    if (digits == 0
-        || requirePoint && (!point || scale == 0 || digits == scale)
-        || !requirePoint && point) return StatusCode.INVALID_EXTERNAL_INPUT;
+    digits = 0;
+    significantIntegerDigits = 0;
+    scale = 0;
+    high = 0;
+    value = 0;
+    point = false;
+    significantInteger = false;
+    StatusCode status = readDigits(sql, requirePoint);
+    if (!status.isOk()) return status;
     if (negative) {
       result.value = ~value + 1;
       result.high = ~high + (result.value == 0 ? 1 : 0);
@@ -85,5 +65,44 @@ final class SqlDecimalLiteralReader {
     int precision = Math.max(1, significantIntegerDigits + scale);
     result.typeDescriptor = SqlTypeDescriptor.decimal(precision, scale);
     return StatusCode.OK;
+  }
+
+  private StatusCode readDigits(CharSequence sql, boolean requirePoint) {
+    while (position < sql.length()) {
+      char character = sql.charAt(position);
+      if (SqlParserInput.digit(character)) {
+        if (!readDigit(character)) return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
+      } else if (character == '.' && !point) {
+        point = true;
+        position++;
+      } else {
+        break;
+      }
+    }
+    input.position(position);
+    return digits == 0
+        || requirePoint && (!point || scale == 0 || digits == scale)
+        || !requirePoint && point ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.OK;
+  }
+
+  private boolean readDigit(char character) {
+    digits++;
+    if (point) {
+      scale++;
+    } else if (significantInteger || character != '0') {
+      significantInteger = true;
+      significantIntegerDigits++;
+    }
+    if (significantIntegerDigits + scale > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION) {
+      input.position(position);
+      return false;
+    }
+    long multiplied = value * 10;
+    long carry = Math.multiplyHigh(value, 10) + (value < 0 ? 10 : 0);
+    high = high * 10 + carry;
+    value = multiplied + character - '0';
+    if (Long.compareUnsigned(value, multiplied) < 0) high++;
+    position++;
+    return true;
   }
 }

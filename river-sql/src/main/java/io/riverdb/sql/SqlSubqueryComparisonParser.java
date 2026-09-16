@@ -33,19 +33,25 @@ final class SqlSubqueryComparisonParser {
         && subqueries.find(input.position(), SqlQuery.SUBQUERY_SCALAR) >= 0) {
       status = StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    if (status.isOk()) status = expressions.parsePredicateScratch(sql, command, right);
-    int leaf = status.isOk() ? target.appendLeaf(right) : -2;
-    if (status.isOk() && leaf < 0) status = StatusCode.RESOURCE_EXHAUSTED;
-    if (status.isOk() && !target.setSubqueryComparison(
+    if (!status.isOk()) return status;
+    return appendRight(sql, command, target, subqueries, synthetic, right, comparison);
+  }
+
+  private StatusCode appendRight(
+      CharSequence sql, SqlCommand command, SqlBooleanPredicateProgram target,
+      SqlSubqueryLeafRegistry subqueries, int synthetic, SqlScalarExpression right,
+      SqlComparison comparison) {
+    StatusCode status = expressions.parsePredicateScratch(sql, command, right);
+    if (!status.isOk()) return status;
+    int leaf = target.appendLeaf(right);
+    if (leaf < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    if (!target.setSubqueryComparison(
         leaf, reverse(comparison), subqueries.edge(synthetic))) {
-      status = StatusCode.RESOURCE_EXHAUSTED;
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
-    if (status.isOk()) {
-      subqueries.setLeaf(synthetic, leaf);
-      node = target.appendBoolean(SqlBooleanPredicateProgram.BOOLEAN_LEAF, leaf, 0);
-      if (node < 0) status = StatusCode.RESOURCE_EXHAUSTED;
-    }
-    return status;
+    subqueries.setLeaf(synthetic, leaf);
+    node = target.appendBoolean(SqlBooleanPredicateProgram.BOOLEAN_LEAF, leaf, 0);
+    return node < 0 ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.OK;
   }
 
   int node() {

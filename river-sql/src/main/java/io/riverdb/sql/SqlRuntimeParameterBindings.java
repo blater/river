@@ -97,15 +97,28 @@ public final class SqlRuntimeParameterBindings {
     if (status.isOk()) status = materializeMutationParameters(command);
     if (status.isOk()) status = materialize(command, command.mutationExpressions);
     if (status.isOk()) status = materialize(command, command.wherePredicates);
-    for (int group = 0; status.isOk() && group < command.grouping.count(); group++) {
-      status = materialize(command, command.grouping.expression(group));
-    }
+    if (status.isOk()) status = materializeGrouping(command);
     if (status.isOk()) status = materialize(command, command.booleanHavingPredicates);
-    SqlJoinChain joins = command.joinChain;
-    for (int stage = 0; status.isOk() && joins != null && stage < joins.stageCount(); stage++) {
-      status = materialize(command, joins.onPredicates(stage));
-    }
+    if (status.isOk()) status = materializeJoins(command);
     return status;
+  }
+
+  private StatusCode materializeGrouping(SqlCommand command) {
+    for (int group = 0; group < command.grouping.count(); group++) {
+      StatusCode status = materialize(command, command.grouping.expression(group));
+      if (!status.isOk()) return status;
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode materializeJoins(SqlCommand command) {
+    SqlJoinChain joins = command.joinChain;
+    if (joins == null) return StatusCode.OK;
+    for (int stage = 0; stage < joins.stageCount(); stage++) {
+      StatusCode status = materialize(command, joins.onPredicates(stage));
+      if (!status.isOk()) return status;
+    }
+    return StatusCode.OK;
   }
 
   private StatusCode materializeMutationParameters(SqlCommand command) {
