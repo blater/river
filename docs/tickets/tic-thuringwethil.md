@@ -185,3 +185,40 @@ check then passed. Logs: `/private/tmp/river-commit-queue-test.log`,
 `/private/tmp/river-deferred-test-ordering.log`,
 `/private/tmp/river-commit-queue-check-final.log`; metrics:
 `/private/tmp/river-commit-queue-after.json`. No performance claim.
+
+### Periodic performance checkpoint 2 — investigation open
+
+Cumulative runtime `fa6f069a` versus accepted WAL checkpoint `ff6ed6f9` showed
+repeated lower throughput and higher p99 in 30-second and 60-second A/B/B/A
+samples. All runs used READ_COMMITTED with identical workload, durability, JVM,
+and warmup settings; all invariants and outcome accounting passed. The signal
+is retained, not dismissed. SQL-only and old-engine probes did not establish a
+cause. A four-run sizing-only versus full-engine probe favored the full candidate
+throughput in both pairs, providing no support for blaming the coordinator.
+
+Independent Luna/high audit verified artifact hashes, eligibility, accounting,
+and cleanup; all 32 owned checkpoint-2 client/server PIDs had exited. Evidence:
+`/private/tmp/river-complexity-perf-2`,
+`/private/tmp/river-complexity-perf-2-long`,
+`/private/tmp/river-complexity-sql-probe`,
+`/private/tmp/river-complexity-engine-probe`,
+`/private/tmp/river-complexity-prequeue-probe`,
+`/private/tmp/river-complexity-fullcandidate-probe`, and
+`/private/tmp/river-complexity-prequeue-check`. No performance claim. Next
+cumulative diagnostic should inspect mechanism telemetry rather than add more
+timing-only variants. Daemon-specific acceptance must use immediate master as
+its control and cannot clear this cumulative concern.
+
+### Engine catalog, drop, expression, and telemetry checkpoint — 2026-09-16
+
+Four independently reviewed slices separate pending-drop ownership, catalog
+decoding/statistics phases, SQL point/expression execution, and the existing
+saturating telemetry sum. No per-row allocation is introduced. Fourteen touched
+production files now have maximum score 99.7913 and maximum NPATH 96.
+Focused catalog, drop, expression, projection, and telemetry tests passed, then
+the complete engine module check passed. Evidence:
+`/private/tmp/river-engine-complexity-batch-focused.log`,
+`/private/tmp/river-engine-complexity-batch-check.log`, and
+`/private/tmp/river-engine-complexity-batch-after.json`. This is a correctness
+and maintainability checkpoint; it does not resolve or claim improvement in
+the cumulative performance investigation above.
