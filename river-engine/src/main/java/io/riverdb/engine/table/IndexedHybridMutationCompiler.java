@@ -94,22 +94,51 @@ final class IndexedHybridMutationCompiler {
       PendingMutationBuffer pending, IndexedTupleIntentJournal intents,
       IndexedTupleIndexLifecycleBatch batch, IndexedLogicalRowIdFloors floors,
       IndexedHybridLogicalSizing logical) {
+    StatusCode status = preparePublishing(pending, intents, batch, floors, logical);
+    if (status.isOk()) status = compilePublishingOperations(intents, batch, pending.count());
+    return status.isOk() ? compiled[0].seal() : status;
+  }
+
+  private StatusCode preparePublishing(
+      PendingMutationBuffer pending, IndexedTupleIntentJournal intents,
+      IndexedTupleIndexLifecycleBatch batch, IndexedLogicalRowIdFloors floors,
+      IndexedHybridLogicalSizing logical) {
     StatusCode status = intents.prepareLifecycleCompilation(
         logical.mutations(), logical.descriptors(), logical.descriptorParts(),
         logical.payloadBytes(), logical.logicalRowFloors(), compiled);
     if (status.isOk()) status = appendFloors(floors, compiled[0]);
+    if (status.isOk()) status = appendLifecycleDescriptors(batch);
+    if (status.isOk()) status = appendNewDescriptors(intents, batch);
+    if (status.isOk() && pending.count() > 0) status = scalar.compile(pending, compiled[0]);
+    return status;
+  }
+
+  private StatusCode appendLifecycleDescriptors(IndexedTupleIndexLifecycleBatch batch) {
+    StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < batch.count(); index++) {
       status = lifecycle.appendDescriptor(batch, index, compiled[0]);
     }
+    return status;
+  }
+
+  private StatusCode appendNewDescriptors(
+      IndexedTupleIntentJournal intents, IndexedTupleIndexLifecycleBatch batch) {
+    StatusCode status = StatusCode.OK;
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
       if (IndexedHybridLogicalSizing.lifecycleIndex(intents, batch, descriptor) < 0) {
         status = descriptors.append(intents, descriptor, compiled[0]);
       }
     }
-    if (status.isOk() && pending.count() > 0) status = scalar.compile(pending, compiled[0]);
-    int firstMutation = pending.count();
-    int suboperation = pending.count() > 0 ? 1 : 0;
+    return status;
+  }
+
+  private StatusCode compilePublishingOperations(
+      IndexedTupleIntentJournal intents, IndexedTupleIndexLifecycleBatch batch,
+      int pendingCount) {
+    StatusCode status = StatusCode.OK;
+    int firstMutation = pendingCount;
+    int suboperation = pendingCount > 0 ? 1 : 0;
     for (int index = 0; status.isOk() && index < batch.count(); index++) {
       int descriptor = IndexedHybridLogicalSizing.intentDescriptor(
           intents, batch.keyIdAt(index));
@@ -134,7 +163,7 @@ final class IndexedHybridMutationCompiler {
       outputDescriptor++;
       suboperation++;
     }
-    return status.isOk() ? compiled[0].seal() : status;
+    return status;
   }
 
   private StatusCode compileDml(
@@ -156,6 +185,13 @@ final class IndexedHybridMutationCompiler {
       firstMutation = pending.count();
       suboperation = 1;
     }
+    if (status.isOk()) status = compileDmlTuples(intents, firstMutation, suboperation);
+    return status.isOk() ? compiled[0].seal() : status;
+  }
+
+  private StatusCode compileDmlTuples(
+      IndexedTupleIntentJournal intents, int firstMutation, int suboperation) {
+    StatusCode status = StatusCode.OK;
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
       status = tuples.compile(
@@ -164,7 +200,7 @@ final class IndexedHybridMutationCompiler {
       firstMutation += tuples.count(intents, descriptor);
       suboperation++;
     }
-    return status.isOk() ? compiled[0].seal() : status;
+    return status;
   }
 
   private static StatusCode appendFloors(

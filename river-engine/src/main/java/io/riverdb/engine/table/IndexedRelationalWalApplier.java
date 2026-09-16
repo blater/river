@@ -62,15 +62,38 @@ final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
     boolean floorOnly = floorOnly(mutations);
     int requiredVersions = floorOnly ? 0 : IndexedVersionOperation.required(mutations);
     if (requiredVersions < 0) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = pages.reclaimHistorical(oldestVisibleCommitSequence);
-    if (status.isOk()) status = kernel.reserveOperationVersions(requiredVersions);
-    if (status.isOk() && !floorOnly) status = registry.reserve(mutations.descriptorCount());
+    StatusCode status = reserveStage(
+        mutations, oldestVisibleCommitSequence, requiredVersions, floorOnly);
     if (!status.isOk()) return status;
     pages.resetChanges();
     kernel.beginOperationState();
     registry.reset();
     previousRows = kernel.rowCount();
     status = pages.beginPreparedBatch();
+    if (status.isOk()) status = applyOperations(mutations, floorOnly);
+    if (status.isOk() && !floorOnly) status = kernel.admitOperationPublication();
+    if (status.isOk()) status = pages.freezeChangedPages(0, oldestVisibleCommitSequence);
+    if (status.isOk()) {
+      stagedMutations = mutations;
+      staged = true;
+      return StatusCode.OK;
+    }
+    finish(false);
+    return status;
+  }
+
+  private StatusCode reserveStage(
+      IndexedRelationalMutationBuffer mutations,
+      long oldestVisibleCommitSequence, int requiredVersions, boolean floorOnly) {
+    StatusCode status = pages.reclaimHistorical(oldestVisibleCommitSequence);
+    if (status.isOk()) status = kernel.reserveOperationVersions(requiredVersions);
+    if (status.isOk() && !floorOnly) status = registry.reserve(mutations.descriptorCount());
+    return status;
+  }
+
+  private StatusCode applyOperations(
+      IndexedRelationalMutationBuffer mutations, boolean floorOnly) {
+    StatusCode status = StatusCode.OK;
     for (int operation = 0; status.isOk() && !floorOnly
         && operation < mutations.suboperationCount(); operation++) {
       status = evidence.expected(mutations, operation);
@@ -80,14 +103,6 @@ final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
       }
       if (status.isOk()) status = evidence.resulting(mutations, operation);
     }
-    if (status.isOk() && !floorOnly) status = kernel.admitOperationPublication();
-    if (status.isOk()) status = pages.freezeChangedPages(0, oldestVisibleCommitSequence);
-    if (status.isOk()) {
-      stagedMutations = mutations;
-      staged = true;
-      return StatusCode.OK;
-    }
-    finish(false);
     return status;
   }
 

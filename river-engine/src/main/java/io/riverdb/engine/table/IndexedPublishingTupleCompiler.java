@@ -29,20 +29,31 @@ final class IndexedPublishingTupleCompiler {
     StatusCode status = registry.loadBuilding(lifecycle, lifecycleIndex);
     ByteBuffer expected = status.isOk() ? metadata() : null;
     if (status.isOk() && expected == null) status = StatusCode.CORRUPTION;
-    if (!status.isOk()) return status;
+    return status.isOk()
+        ? compileLoaded(
+            intents, descriptor, lifecycle, lifecycleIndex, mutation,
+            suboperation, firstMutation, expected)
+        : status;
+  }
+
+  private StatusCode compileLoaded(
+      IndexedTupleIntentJournal intents, int descriptor,
+      IndexedTupleIndexLifecycleBatch lifecycle, int lifecycleIndex,
+      IndexedRelationalMutation mutation, int suboperation, int firstMutation,
+      ByteBuffer expected) {
     int scalarRoot = BTreeRootPage.rootPageId(expected);
     int nextPage = BTreeRootPage.nextPageId(expected);
     long heap = kernel.operationRowCount();
     int tupleRoot = registry.rootPageId();
     long generation = registry.generation();
-    status = deltas.apply(intents, descriptor, tupleRoot);
+    StatusCode status = deltas.apply(intents, descriptor, tupleRoot);
+    if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
     boolean building = lifecycle.appendsBuilding(lifecycleIndex);
-    if (status.isOk()) status = registry.stage(
-        resultingRoot, building, lifecycle.privateOwnerAt(lifecycleIndex));
-    ByteBuffer resulting = status.isOk() ? metadata() : null;
-    if (status.isOk() && resulting == null) status = StatusCode.CORRUPTION;
+    status = registry.stage(resultingRoot, building, lifecycle.privateOwnerAt(lifecycleIndex));
     if (!status.isOk()) return status;
+    ByteBuffer resulting = metadata();
+    if (resulting == null) return StatusCode.CORRUPTION;
     status = mutation.appendSuboperation(
         intents.ownerAt(descriptor), lifecycleIndex, firstMutation,
         deltas.count(intents, descriptor), tupleRoot, resultingRoot,

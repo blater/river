@@ -113,48 +113,11 @@ final class IndexedHybridCommitGroup {
         || demand == null || path == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = store.availableDurableVersionOperations(versionCapacity);
-    if (!status.isOk()) {
-      demand.rejectHead(status);
-      return status;
-    }
-    status = demand.measure(
-        preparedCommits, transactionCount, versionCapacity.value());
+    StatusCode status = admitPreflight(preparedCommits, transactionCount, demand);
     if (!status.isOk()) return status;
-    if (demand.candidateCount() == 0) {
-      status = store.admitDurableVersionOperations(
-          preparedCommits[0].admittedVersionOperations());
-      if (status.isOk()) status = StatusCode.INVARIANT_BROKEN;
-      demand.rejectHead(status);
-      return status;
-    }
-    status = store.admitDurableVersionOperations(demand.versionOperations());
-    if (!status.isOk()) {
-      if (status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED) {
-        demand.rejectHead(status);
-      } else {
-        demand.rejectAll();
-      }
-      return status;
-    }
-    int candidateCount = demand.candidateCount();
-    if (plans.length < candidateCount) {
-      status = StatusCode.RESOURCE_EXHAUSTED;
-      demand.rejectAll();
-    }
-    if (status.isOk()) status = begin();
-    if (status.isOk()) count = candidateCount;
-    if (status.isOk()) status = assignSequences(candidateCount);
-    boolean preflightStarted = false;
-    if (status.isOk()) {
-      preflightStarted = true;
-      status = preflight.prepare(
-          preparedCommits, plans, mutations, rowEnds, heapPageEnds, sequences,
-          candidateCount, demand.versionOperations(), oldestVisibleCommitSequence,
-          path, demand);
-    }
+    status = prepareGroup(
+        preparedCommits, demand.candidateCount(), oldestVisibleCommitSequence, path, demand);
     if (status.isOk()) return StatusCode.OK;
-    if (!preflightStarted) demand.rejectAll();
     if (demand.memberRollbackSplit() && demand.acceptedCount() > 0) {
       count = demand.acceptedCount();
       long started = System.nanoTime();
@@ -170,6 +133,55 @@ final class IndexedHybridCommitGroup {
     }
     StatusCode cleanup = cancel();
     return cleanup.isOk() ? status : cleanup;
+  }
+
+  private StatusCode admitPreflight(
+      IndexedPreparedLogicalCommit[] preparedCommits, int transactionCount,
+      IndexedPreparedCommitCohortDemand demand) {
+    StatusCode status = store.availableDurableVersionOperations(versionCapacity);
+    if (!status.isOk()) {
+      demand.rejectHead(status);
+      return status;
+    }
+    status = demand.measure(preparedCommits, transactionCount, versionCapacity.value());
+    if (!status.isOk()) return status;
+    if (demand.candidateCount() == 0) {
+      status = store.admitDurableVersionOperations(
+          preparedCommits[0].admittedVersionOperations());
+      if (status.isOk()) status = StatusCode.INVARIANT_BROKEN;
+      demand.rejectHead(status);
+      return status;
+    }
+    status = store.admitDurableVersionOperations(demand.versionOperations());
+    if (!status.isOk()) {
+      if (status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED) {
+        demand.rejectHead(status);
+      } else {
+        demand.rejectAll();
+      }
+    }
+    return status;
+  }
+
+  private StatusCode prepareGroup(
+      IndexedPreparedLogicalCommit[] preparedCommits, int candidateCount,
+      long oldestVisibleCommitSequence, IndexedCommitPath path,
+      IndexedPreparedCommitCohortDemand demand) {
+    if (plans.length < candidateCount) {
+      demand.rejectAll();
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = begin();
+    if (status.isOk()) count = candidateCount;
+    if (status.isOk()) status = assignSequences(candidateCount);
+    if (!status.isOk()) {
+      demand.rejectAll();
+      return status;
+    }
+    return preflight.prepare(
+        preparedCommits, plans, mutations, rowEnds, heapPageEnds, sequences,
+        candidateCount, demand.versionOperations(), oldestVisibleCommitSequence,
+        path, demand);
   }
 
   StatusCode reserveMemberCapacity(int required) {

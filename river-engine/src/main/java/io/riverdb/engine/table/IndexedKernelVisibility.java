@@ -95,18 +95,25 @@ final class IndexedKernelVisibility {
           leafPageId, cursor.visibleCommitSequence(), scanPin);
       if (!status.isOk()) return status;
       ByteBuffer leaf = scanPin.payload();
-      if (scanPin.payloadKind() != io.riverdb.format.page.PageCodec.PAYLOAD_KIND_SCALAR_BTREE
-          || scanPin.ownerKeyId() != io.riverdb.format.page.PageCodec.SCALAR_OWNER_KEY_ID
-          || BTreePage.type(leaf) != BTreePage.TYPE_LEAF) status = StatusCode.CORRUPTION;
-      if (status.isOk()) status = nextEntry(cursor, result, leaf, rowCount);
-      if (status == StatusCode.CONFLICT && cursor.leafPageId() != 0) {
-        cursor.advanceLeaf(BTreePage.rightSiblingPageId(leaf));
-      }
+      status = scanLeaf(cursor, result, leaf, rowCount);
       StatusCode released = pages.unpinPage(scanPin);
       if (status.isOk()) status = released;
       if (status != StatusCode.CONFLICT || cursor.leafPageId() == 0) return status;
     }
     return StatusCode.CONFLICT;
+  }
+
+  private StatusCode scanLeaf(
+      IndexedScanCursor cursor, IndexedScanResult result,
+      ByteBuffer leaf, long rowCount) {
+    if (scanPin.payloadKind() != io.riverdb.format.page.PageCodec.PAYLOAD_KIND_SCALAR_BTREE
+        || scanPin.ownerKeyId() != io.riverdb.format.page.PageCodec.SCALAR_OWNER_KEY_ID
+        || BTreePage.type(leaf) != BTreePage.TYPE_LEAF) return StatusCode.CORRUPTION;
+    StatusCode status = nextEntry(cursor, result, leaf, rowCount);
+    if (status == StatusCode.CONFLICT && cursor.leafPageId() != 0) {
+      cursor.advanceLeaf(BTreePage.rightSiblingPageId(leaf));
+    }
+    return status;
   }
 
   StatusCode prepareMutation(

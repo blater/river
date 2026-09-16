@@ -111,16 +111,28 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
     int admitted = admission.acceptedCount();
     boolean pressure = status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED;
     if (admitted > 0 && (status.isOk() || pressure && admission.memberRollbackSplit())) {
-      recordAttemptedGroup(admitted);
-      attributePaths(admitted, IndexedCommitPath.SHARED_GROUP);
-      completionCount = admitted;
-      return appendAcceptedGroup(admitted);
+      return acceptSharedGroup(admitted);
     }
     if (pressure && admission.capacitySplit() && admitted == 0 && pendingDurability) {
-      completionCount = 0;
-      durabilityBlocked = true;
-      return 0;
+      return deferSharedGroup();
     }
+    return rejectSharedGroup(status, pressure, admitted);
+  }
+
+  private int acceptSharedGroup(int admitted) {
+    recordAttemptedGroup(admitted);
+    attributePaths(admitted, IndexedCommitPath.SHARED_GROUP);
+    completionCount = admitted;
+    return appendAcceptedGroup(admitted);
+  }
+
+  private int deferSharedGroup() {
+    completionCount = 0;
+    durabilityBlocked = true;
+    return 0;
+  }
+
+  private int rejectSharedGroup(StatusCode status, boolean pressure, int admitted) {
     if (pressure && admission.capacitySplit() && admitted == 0) completionCount = 1;
     if (status.isOk()) status = StatusCode.INVARIANT_BROKEN;
     recordAttemptedGroup(completionCount);
