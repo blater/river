@@ -3,7 +3,7 @@ package io.riverdb.jdbc;
 import java.sql.SQLException;
 import java.sql.Savepoint;
 
-/** Connection-owned handle for the one active savepoint supported by River. */
+/** Connection-owned savepoint handle and its external name domain. */
 final class RiverJdbcSavepoint implements Savepoint {
   private final RiverJdbcConnection connection;
   private final int id;
@@ -50,6 +50,19 @@ final class RiverJdbcSavepoint implements Savepoint {
 
   void complete() {
     active = false;
+  }
+
+  static boolean validName(String name) {
+    if (name == null || name.isEmpty()) {
+      return false;
+    }
+    for (int index = 0; index < name.length(); index++) {
+      char character = name.charAt(index);
+      if (character < 0x20 || character == 0x7f) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private void requireActive() throws SQLException {

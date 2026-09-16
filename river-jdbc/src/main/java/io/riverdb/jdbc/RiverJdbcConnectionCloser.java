@@ -12,7 +12,7 @@ final class RiverJdbcConnectionCloser {
     SQLException closeFailure = closeResults(connection);
     StatusCode sessionStatus = connection.session.close();
     StatusCode connectionStatus = connection.client.close();
-    connection.completeSavepointsFrom(0);
+    connection.savepoints.completeFrom(0);
     connection.closed = true;
     if (closeFailure != null) {
       throw closeFailure;
