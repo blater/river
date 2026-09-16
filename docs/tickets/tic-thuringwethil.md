@@ -140,3 +140,19 @@ Independent Luna/high review approved the lifecycle; `:river-jdbc:check` passed.
 Full module scan including tests: maximum score 97.2898 and NPATH 32. Evidence:
 `/private/tmp/river-jdbc-check.log` and
 `/private/tmp/river-jdbc-final-slopmark.json`. No performance claim.
+
+### Hybrid logical/WAL sizing slice — 2026-09-16
+
+Separated logical shape/payload accounting from ordered WAL chunk packing into
+a reusable owner. Independent Luna/high review approved emission order, overflow,
+and reset behavior; no per-measure allocation is introduced. Focused WAL commit,
+recovery, and group tests passed, followed by the affected engine module check.
+An initial full-module run failed the read-only API allocation assertion at
+1576 bytes versus 512. Adjacent accepted-code and candidate runs both passed
+unchanged, then full engine validation passed; the initial failure is retained.
+Evidence: `/private/tmp/river-logical-sizing-test.log`,
+`/private/tmp/river-logical-sizing-check.log`,
+`/private/tmp/river-sizing-allocation-control.log`,
+`/private/tmp/river-sizing-allocation-candidate.log`,
+`/private/tmp/river-logical-sizing-check-final.log`, and
+`/private/tmp/river-logical-sizing-after.json`. No performance claim.
