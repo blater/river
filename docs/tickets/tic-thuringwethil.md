@@ -166,3 +166,22 @@ across right-expression parsing. All 89 SQL module tests passed; full scan
 including tests: 159 files, maximum score 96.9714 and NPATH 96. Evidence:
 `/private/tmp/river-sql-check-final.log` and
 `/private/tmp/river-sql-final-slopmark.json`. No performance claim.
+
+### Commit queue and durability ownership slice — 2026-09-16
+
+The coordinator delegates intrusive queue selection and published-cohort durability
+completion to their own local owners. Admission, rejection, and parking predicates
+have explicit phases under the original monitor boundaries. Independent Luna/high
+review approved wakeup behavior, active-count failures, force ordering/fencing,
+and selection telemetry. Coordinator score 131.93 → 95.15; all three files
+are below 100, maximum NPATH 76.
+Focused fault/force-overlap tests passed. Full engine check exposed a race in
+DeferredSessionCleanupTest: the fake incremented its attempt before reading its
+result, allowing the test thread to change RETRY to OK on the first attempt.
+The fake now captures its result before publishing the attempt; production cleanup
+is unchanged. Focused cleanup tests and the complete 1044-test engine module
+check then passed. Logs: `/private/tmp/river-commit-queue-test.log`,
+`/private/tmp/river-commit-queue-check.log`,
+`/private/tmp/river-deferred-test-ordering.log`,
+`/private/tmp/river-commit-queue-check-final.log`; metrics:
+`/private/tmp/river-commit-queue-after.json`. No performance claim.
