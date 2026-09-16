@@ -75,12 +75,7 @@ final class RelationalDescriptorSession {
       StatusDetail detail,
       boolean stagePublication) {
     if (detail != null) detail.reset();
-    StatusCode status = RelationalDescriptorSuccessorInput.validate(
-        owner.isTransactionActive(), current, proposed);
-    if (status.isOk() && !current.isPublished()) status = StatusCode.CONFLICT;
-    if (status.isOk() && !authorizes(current)) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
+    StatusCode status = validateSuccessor(current, proposed);
     if (!status.isOk()) {
       if (detail != null) detail.set(status);
       return status;
@@ -93,6 +88,14 @@ final class RelationalDescriptorSession {
         : prepared.prepareSuccessorBuild(name, current, proposed, detail);
     finishFailedPreparation(status, acquired);
     return status;
+  }
+
+  private StatusCode validateSuccessor(SchemaPin current, TableDescriptor proposed) {
+    StatusCode status = RelationalDescriptorSuccessorInput.validate(
+        owner.isTransactionActive(), current, proposed);
+    if (!status.isOk()) return status;
+    if (!current.isPublished()) return StatusCode.CONFLICT;
+    return authorizes(current) ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
   StatusCode stagePreparedSuccessor(CharSequence name, StatusDetail detail) {
@@ -126,15 +129,26 @@ final class RelationalDescriptorSession {
     if (status.isOk()) status = rows.checkDrop(current.descriptor());
     int mutationStart = owner.pendingMutationCount();
     boolean published = current.isPublished() || prepared.replacesPublished(name);
-    if (status.isOk()) status = drops.prepare(published);
-    if (status.isOk()) status = owner.preflightDescriptorDrop();
-    if (status.isOk()) status = services.prepareDescriptorDrop(
-        current, owner.indexedSession(), detail);
-    if (status.isOk()) status = names.unregister(name);
-    if (status.isOk()) drops.record(mutationStart, published);
-    if (status.isOk()) prepared.hide(name, mutationStart);
+    if (status.isOk()) {
+      status = prepareDrop(name, current, published, detail);
+    }
+    if (status.isOk()) {
+      drops.record(mutationStart, published);
+      prepared.hide(name, mutationStart);
+    }
     finishFailedPreparation(status, acquired);
     return status;
+  }
+
+  private StatusCode prepareDrop(
+      CharSequence name, SchemaPin current, boolean published, StatusDetail detail) {
+    StatusCode status = drops.prepare(published);
+    if (!status.isOk()) return status;
+    status = owner.preflightDescriptorDrop();
+    if (!status.isOk()) return status;
+    status = services.prepareDescriptorDrop(current, owner.indexedSession(), detail);
+    if (!status.isOk()) return status;
+    return names.unregister(name);
   }
 
   StatusCode rename(

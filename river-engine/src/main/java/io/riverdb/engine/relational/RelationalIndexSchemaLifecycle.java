@@ -48,12 +48,10 @@ final class RelationalIndexSchemaLifecycle {
       CharSequence columnName,
       boolean unique) {
     StatusCode status = session.resolveTable(tableName, indexedTable);
-    int indexColumn = status.isOk() ? indexedTable.findColumn(columnName) : -1;
-    if (status.isOk() && indexColumn <= 0) status = StatusCode.INVALID_EXTERNAL_INPUT;
-    if (status.isOk() && !indexedTable.supportsSecondaryIndex(indexColumn)) {
-      status = StatusCode.DATATYPE_MISMATCH;
-    }
     if (!status.isOk()) return status;
+    int indexColumn = indexedTable.findColumn(columnName);
+    if (indexColumn <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!indexedTable.supportsSecondaryIndex(indexColumn)) return StatusCode.DATATYPE_MISMATCH;
     if (indexedTable.hasIndexOn(indexColumn)) return StatusCode.CONFLICT;
     if (indexedTable.uniqueIndexCount() >= SqlShapeLimits.MAX_SECONDARY_INDEXES
         && !indexedTable.hasBuildingUniqueValueIndex()) {
@@ -70,11 +68,9 @@ final class RelationalIndexSchemaLifecycle {
     } else {
       return status;
     }
-    int indexTableId = status.isOk() ? indexedTable.uniqueValueIndexTableId() : 0;
-    if (status.isOk()) {
-      indexStorageTable.set(
-          schemaGate, indexTableId, 0, TableDefinition.INDEX_NONE);
-    }
+    if (!status.isOk()) return status;
+    int indexTableId = indexedTable.uniqueValueIndexTableId();
+    indexStorageTable.set(schemaGate, indexTableId, 0, TableDefinition.INDEX_NONE);
     return status;
   }
 
@@ -85,40 +81,50 @@ final class RelationalIndexSchemaLifecycle {
       TransactionOutcome outcome) {
     StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
     if (status.isOk()) status = session.resolveTable(tableName, indexedTable);
-    if (status.isOk()
-        && (!indexedTable.hasBuildingUniqueValueIndex()
-            || indexedTable.uniqueValueIndexTableId() != indexStorageTable.tableId())) {
+    if (status.isOk() && (!indexedTable.hasBuildingUniqueValueIndex()
+        || indexedTable.uniqueValueIndexTableId() != indexStorageTable.tableId())) {
       status = StatusCode.CORRUPTION;
     }
-    if (status.isOk()) status = RelationalKey.catalogTableKey(tableName, catalogKey);
-    if (status.isOk()) {
-      int buildingSlot = indexedTable.buildingIndexSlot();
-      CatalogRecord.encodeTable(
-          catalogOutput,
-          indexedTable.tableId(),
-          indexStorageTable.tableId(),
-          TableDefinition.INDEX_READY,
-          indexedTable.uniqueValueIndexColumn(),
-          tableName,
-          indexedTable,
-          indexedTable.indexIsUnique(buildingSlot));
-      status = session.indexedSession().update(
-          catalogKey.space(), catalogKey.key(), catalogOutput);
-    }
-    if (status.isOk()) status = RelationalKey.catalogTableKey(indexName, catalogKey);
-    if (status.isOk()) {
-      int buildingSlot = indexedTable.buildingIndexSlot();
-      CatalogIndexCodec.encode(
-          catalogOutput,
-          indexedTable.tableId(),
-          indexStorageTable.tableId(),
-          TableDefinition.INDEX_READY,
-          indexName,
-          indexedTable.indexIsUnique(buildingSlot));
-      status = session.indexedSession().update(
-          catalogKey.space(), catalogKey.key(), catalogOutput);
-    }
+    if (status.isOk()) status = publishTableCatalog(session, tableName);
+    if (status.isOk()) status = publishIndexCatalog(session, indexName);
     if (status.isOk()) return session.commit(outcome);
+    return finishPublish(session, outcome, status);
+  }
+
+  private StatusCode publishTableCatalog(
+      RelationalSession session, CharSequence tableName) {
+    StatusCode status = RelationalKey.catalogTableKey(tableName, catalogKey);
+    if (!status.isOk()) return status;
+    int buildingSlot = indexedTable.buildingIndexSlot();
+    CatalogRecord.encodeTable(
+        catalogOutput,
+        indexedTable.tableId(),
+        indexStorageTable.tableId(),
+        TableDefinition.INDEX_READY,
+        indexedTable.uniqueValueIndexColumn(),
+        tableName,
+        indexedTable,
+        indexedTable.indexIsUnique(buildingSlot));
+    return session.indexedSession().update(catalogKey.space(), catalogKey.key(), catalogOutput);
+  }
+
+  private StatusCode publishIndexCatalog(
+      RelationalSession session, CharSequence indexName) {
+    StatusCode status = RelationalKey.catalogTableKey(indexName, catalogKey);
+    if (!status.isOk()) return status;
+    int buildingSlot = indexedTable.buildingIndexSlot();
+    CatalogIndexCodec.encode(
+        catalogOutput,
+        indexedTable.tableId(),
+        indexStorageTable.tableId(),
+        TableDefinition.INDEX_READY,
+        indexName,
+        indexedTable.indexIsUnique(buildingSlot));
+    return session.indexedSession().update(catalogKey.space(), catalogKey.key(), catalogOutput);
+  }
+
+  private StatusCode finishPublish(
+      RelationalSession session, TransactionOutcome outcome, StatusCode status) {
     if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
       StatusCode abort = session.abort(outcome);
       if (!abort.isOk()) return abort;

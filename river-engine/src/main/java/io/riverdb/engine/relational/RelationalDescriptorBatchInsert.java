@@ -51,27 +51,35 @@ public final class RelationalDescriptorBatchInsert {
     int row = batch.nextRow();
     long logicalRowId = batch.logicalRowId(row);
     result.reset();
-    StatusCode status = rowBuffer.reserve(table.encodedMaximumRowBytes());
-    if (status.isOk()) status = rowBuffer.encode(table, logicalRowId, values);
-    if (status.isOk()) status = checks.validate(table, values);
-    if (status.isOk()) status = tupleMutations.planInsert(table, values, logicalRowId);
-    if (status.isOk()) status = tupleMutations.preflightSingleRow(
-        session, table, rowBuffer.length());
-    if (status.isOk()) status = tupleMutations.validateInsert(
-        session, table, logicalRowId);
-    if (status.isOk() && batch.rowCount() == 1 && table.foreignKeyCount() > 0) {
+    StatusCode status = prepareRow(table, values, logicalRowId);
+    if (!status.isOk()) return status;
+    if (batch.rowCount() == 1 && table.foreignKeyCount() > 0) {
       status = tupleMutations.validateForeign(session, table, values);
+      if (!status.isOk()) return status;
     }
-    if (status.isOk()) status = session.insert(
-        RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId,
-        rowBuffer.bytes());
+    status = session.insert(
+        RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId, rowBuffer.bytes());
     if (status.isOk()) status = tupleMutations.stage(session, table, logicalRowId);
-    if (status.isOk()) {
-      status = batch.admit(table);
-      if (status.isOk()) result.set(logicalRowId);
-    }
+    if (status.isOk()) status = batch.admit(table);
+    if (status.isOk()) result.set(logicalRowId);
     return status;
   }
+
+  private StatusCode prepareRow(
+      TableDescriptor table, SqlValueBuffer values, long logicalRowId) {
+    StatusCode status = rowBuffer.reserve(table.encodedMaximumRowBytes());
+    if (!status.isOk()) return status;
+    status = rowBuffer.encode(table, logicalRowId, values);
+    if (!status.isOk()) return status;
+    status = checks.validate(table, values);
+    if (!status.isOk()) return status;
+    status = tupleMutations.planInsert(table, values, logicalRowId);
+    if (!status.isOk()) return status;
+    status = tupleMutations.preflightSingleRow(session, table, rowBuffer.length());
+    if (!status.isOk()) return status;
+    return tupleMutations.validateInsert(session, table, logicalRowId);
+  }
+
 
   public StatusCode validateForeignKeys(
       RelationalDescriptorInsertBatch batch, SchemaPin pin, int row,

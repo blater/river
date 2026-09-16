@@ -57,29 +57,45 @@ final class RelationalForeignTupleProtection {
   }
 
   private StatusCode selectNext(
-      TableDescriptor table, SqlValueBuffer values, RelationalForeignKeyDelta changes,
+        TableDescriptor table, SqlValueBuffer values, RelationalForeignKeyDelta changes,
       long keyId, int previous) {
     nextIndex = -1;
     StatusCode status = previous < 0 ? StatusCode.OK
         : floor.encodeUser(table.foreignKeyAt(previous), values);
     if (!status.isOk()) return status;
     for (int index = 0; index < table.foreignKeyCount(); index++) {
-      if (changes != null && !changes.changedAt(index)) continue;
-      KeyDescriptor foreign = table.foreignKeyAt(index);
-      if (foreign.referencedKeyId() != keyId) continue;
-      status = encoder.encodeUser(foreign, values);
+      status = considerCandidate(table, values, changes, keyId, previous, index);
       if (!status.isOk()) return status;
-      if (encoder.containsNull() || candidate.matches(table, foreign, values, encoder)) continue;
-      int compared = previous < 0 ? 1 : compare(encoder, floor);
-      if (compared < 0 || compared == 0 && index <= previous) continue;
-      if (nextIndex >= 0) {
-        status = best.encodeUser(table.foreignKeyAt(nextIndex), values);
-        if (!status.isOk()) return status;
-        compared = compare(encoder, best);
-      }
-      if (nextIndex < 0 || compared < 0
-          || compared == 0 && index < nextIndex) nextIndex = index;
     }
+    return StatusCode.OK;
+  }
+
+  private StatusCode considerCandidate(
+      TableDescriptor table, SqlValueBuffer values, RelationalForeignKeyDelta changes,
+      long keyId, int previous, int index) {
+    if (changes != null && !changes.changedAt(index)) return StatusCode.OK;
+    KeyDescriptor foreign = table.foreignKeyAt(index);
+    if (foreign.referencedKeyId() != keyId) return StatusCode.OK;
+    StatusCode status = encoder.encodeUser(foreign, values);
+    if (!status.isOk()) return status;
+    if (encoder.containsNull() || candidate.matches(table, foreign, values, encoder)) {
+      return StatusCode.OK;
+    }
+    int compared = previous < 0 ? 1 : compare(encoder, floor);
+    if (compared < 0 || compared == 0 && index <= previous) return StatusCode.OK;
+    if (nextIndex >= 0) {
+      return chooseCandidate(table, values, index);
+    }
+    nextIndex = index;
+    return StatusCode.OK;
+  }
+
+  private StatusCode chooseCandidate(
+      TableDescriptor table, SqlValueBuffer values, int index) {
+    StatusCode status = best.encodeUser(table.foreignKeyAt(nextIndex), values);
+    if (!status.isOk()) return status;
+    int compared = compare(encoder, best);
+    if (compared < 0 || compared == 0 && index < nextIndex) nextIndex = index;
     return StatusCode.OK;
   }
 
