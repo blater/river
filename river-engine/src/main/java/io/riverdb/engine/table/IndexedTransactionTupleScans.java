@@ -23,14 +23,7 @@ final class IndexedTransactionTupleScans {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (!session.activeTransaction()) return StatusCode.CONFLICT;
-    StatusCode status = session.reserveTupleScan();
-    if (status.isOk()) status = session.protectKey(
-        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
-    if (status.isOk()
-        && session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE) {
-      status = protectRange(keyId, bounds, serializableSourceMode);
-    }
-    if (status.isOk()) status = session.selectScanSnapshot();
+    StatusCode status = admit(keyId, bounds, serializableSourceMode);
     long privateOwner = session.tupleLifecycle().publishingPrivateOwner(
         ownerObjectId, keyId, schemaId, shape);
     if (status.isOk()) status = session.table().beginTupleScanAt(
@@ -44,6 +37,19 @@ final class IndexedTransactionTupleScans {
       session.registerTupleScan(cursor);
     }
     else if (cursor.active()) session.table().closeTupleScan(cursor);
+    return status;
+  }
+
+  private StatusCode admit(
+      long keyId, TupleBTreeScanBounds bounds, LockMode serializableSourceMode) {
+    StatusCode status = session.reserveTupleScan();
+    if (status.isOk()) status = session.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
+    if (status.isOk()
+        && session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE) {
+      status = protectRange(keyId, bounds, serializableSourceMode);
+    }
+    if (status.isOk()) status = session.selectScanSnapshot();
     return status;
   }
 

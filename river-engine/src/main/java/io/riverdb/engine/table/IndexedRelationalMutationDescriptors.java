@@ -38,14 +38,29 @@ final class IndexedRelationalMutationDescriptors {
   StatusCode reserve(int additional, int additionalParts) {
     if (!canReserve(additional, additionalParts)) return StatusCode.RESOURCE_EXHAUSTED;
     StatusCode status = keyIds.reserve(count + additional);
-    if (status.isOk()) status = ownerObjectIds.reserve(count + additional);
-    if (status.isOk()) status = schemaIds.reserve(count + additional);
-    if (status.isOk()) status = hashes.reserve(count + additional);
-    if (status.isOk()) status = partOffsets.reserve(count + additional);
-    if (status.isOk()) status = partCounts.reserve(count + additional);
-    if (status.isOk()) status = parts.reserve(usedParts + additionalParts);
-    if (status.isOk()) status = shapes.reserve(count + additional);
-    if (status.isOk()) status = ordinalByKey.reserve(count + additional);
+    if (status.isOk()) status = reserveColumns(count + additional, usedParts + additionalParts);
+    return status;
+  }
+
+  private StatusCode reserveColumns(int required, int requiredParts) {
+    StatusCode status = reserveDescriptorColumns(required);
+    if (status.isOk()) status = reservePartColumns(required, requiredParts);
+    return status;
+  }
+
+  private StatusCode reserveDescriptorColumns(int required) {
+    StatusCode status = ownerObjectIds.reserve(required);
+    if (status.isOk()) status = schemaIds.reserve(required);
+    if (status.isOk()) status = hashes.reserve(required);
+    if (status.isOk()) status = partOffsets.reserve(required);
+    if (status.isOk()) status = partCounts.reserve(required);
+    return status;
+  }
+
+  private StatusCode reservePartColumns(int required, int requiredParts) {
+    StatusCode status = parts.reserve(requiredParts);
+    if (status.isOk()) status = shapes.reserve(required);
+    if (status.isOk()) status = ordinalByKey.reserve(required);
     return status;
   }
 

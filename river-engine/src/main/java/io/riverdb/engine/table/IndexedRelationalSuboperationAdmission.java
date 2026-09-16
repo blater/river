@@ -48,16 +48,37 @@ final class IndexedRelationalSuboperationAdmission {
         || mutations == 0
         || expectedRegistryState == IndexedRelationalSuboperations.REGISTRY_BUILDING
             && resultingRegistryState == IndexedRelationalSuboperations.REGISTRY_READY;
-    return ownerValid && count < columns.capacity() && count < columns.allocatedCapacity()
+    return validAdmissionBounds(
+            columns, count, descriptor, firstMutation, coveredMutations, mutations)
+        && ownerValid && registryValid
+        && validAdmissionRoots(
+            expectedScalarRoot, resultingScalarRoot, expectedNextPage, resultingNextPage)
+        && validAdmissionTail(columns, count, expectedScalarRoot, expectedNextPage);
+  }
+
+  private static boolean validAdmissionBounds(
+      IndexedRelationalSuboperationColumns columns, int count, int descriptor,
+      int firstMutation, int coveredMutations, int mutations) {
+    return count < columns.capacity() && count < columns.allocatedCapacity()
         && descriptor >= IndexedRelationalMutationBuffer.SCALAR_SUBOPERATION
-        && firstMutation == coveredMutations && mutations >= 0 && registryValid
-        && expectedScalarRoot > 0 && resultingScalarRoot > 0
-        && expectedNextPage > 0 && resultingNextPage >= expectedNextPage
-        && (count == 0
-            || columns.getInt(IndexedRelationalSuboperationColumns.RESULTING_SCALAR_ROOT, count - 1)
-                == expectedScalarRoot
-            && columns.getInt(IndexedRelationalSuboperationColumns.RESULTING_NEXT_PAGE, count - 1)
-                == expectedNextPage);
+        && firstMutation == coveredMutations && mutations >= 0;
+  }
+
+  private static boolean validAdmissionRoots(
+      int expectedScalarRoot, int resultingScalarRoot,
+      int expectedNextPage, int resultingNextPage) {
+    return expectedScalarRoot > 0 && resultingScalarRoot > 0
+        && expectedNextPage > 0 && resultingNextPage >= expectedNextPage;
+  }
+
+  private static boolean validAdmissionTail(
+      IndexedRelationalSuboperationColumns columns, int count,
+      int expectedScalarRoot, int expectedNextPage) {
+    return count == 0
+        || columns.getInt(IndexedRelationalSuboperationColumns.RESULTING_SCALAR_ROOT, count - 1)
+            == expectedScalarRoot
+        && columns.getInt(IndexedRelationalSuboperationColumns.RESULTING_NEXT_PAGE, count - 1)
+            == expectedNextPage;
   }
 
   private static boolean validHeap(

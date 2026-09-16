@@ -23,12 +23,22 @@ final class IndexedRelationalLiveCommit {
         || !mutations.sealed() || oldestVisibleCommitSequence < 0
         || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    StatusCode status = store.admission();
-    if (status.isOk() && !store.phase.beginStaged()) status = StatusCode.CONFLICT;
+    StatusCode status = admitStore();
     long sequence = status.isOk() ? store.nextCommitSequence() : 0;
     if (status.isOk()) status = commit.commit(
         transactionId, sequence, sequence, oldestVisibleCommitSequence,
         mutations.buffer());
+    return finish(status, sequence, result);
+  }
+
+  private StatusCode admitStore() {
+    StatusCode status = store.admission();
+    if (status.isOk() && !store.phase.beginStaged()) status = StatusCode.CONFLICT;
+    return status;
+  }
+
+  private StatusCode finish(
+      StatusCode status, long sequence, IndexedCommitResult result) {
     if (commit.failureFences()) store.failed = true;
     if (!store.failed && store.phase.operationActive()) store.phase.reset();
     if (status.isOk()) {

@@ -35,10 +35,24 @@ final class IndexedCheckpointPageLoader {
     StatusCode admitted = pages.ensureBuffers(pageId);
     if (!admitted.isOk()) return new PageLoad(admitted, false);
     long pageOffset = (long) (pageId - 1) * PageCodec.PAGE_BYTES;
+    PageLoad result = new PageLoad(StatusCode.OK, false);
+    StatusCode status = readCheckpoint(
+        checkpoint, pageId, pageOffset, checkpointBytes, generation, result);
+    if (status.isOk()) status = pages.writeCurrent(primaryFile, pageId, pageOffset, io);
+    if (status.isOk() && io.bytesTransferred() != PageCodec.PAGE_BYTES) {
+      status = StatusCode.IO_FAILURE;
+    }
+    if (status.isOk()) status = pages.installPresent(pageId);
+    result.status = status;
+    return result;
+  }
+
+  private StatusCode readCheckpoint(
+      DurableFile checkpoint, int pageId, long pageOffset,
+      long checkpointBytes, WalGeneration generation, PageLoad result) {
     boolean loaded = false;
-    StatusCode status = StatusCode.OK;
     if (pageOffset + PageCodec.PAGE_BYTES <= checkpointBytes) {
-      status = pages.readCurrent(checkpoint, pageId, pageOffset, io);
+      StatusCode status = pages.readCurrent(checkpoint, pageId, pageOffset, io);
       if (status.isOk()) {
         loaded = io.bytesTransferred() == PageCodec.PAGE_BYTES
             && validatePage(pageId, generation.value(), generation).isOk();
@@ -47,20 +61,12 @@ final class IndexedCheckpointPageLoader {
         // pre-rotation primary base. Provider I/O and pressure statuses remain fatal.
         status = StatusCode.OK;
       }
+      if (!status.isOk()) return status;
     }
-    boolean repaired = false;
-    if (status.isOk() && !loaded) {
-      status = repairPage(checkpoint, pageId, pageOffset, generation);
-      repaired = status.isOk();
-    }
-    if (status.isOk()) {
-      status = pages.writeCurrent(primaryFile, pageId, pageOffset, io);
-      if (status.isOk() && io.bytesTransferred() != PageCodec.PAGE_BYTES) {
-        status = StatusCode.IO_FAILURE;
-      }
-    }
-    if (status.isOk()) status = pages.installPresent(pageId);
-    return new PageLoad(status, repaired);
+    if (loaded) return StatusCode.OK;
+    StatusCode status = repairPage(checkpoint, pageId, pageOffset, generation);
+    result.repaired = status.isOk();
+    return status;
   }
 
   private StatusCode repairPage(
@@ -98,8 +104,8 @@ final class IndexedCheckpointPageLoader {
   }
 
   static final class PageLoad {
-    final StatusCode status;
-    final boolean repaired;
+    StatusCode status;
+    boolean repaired;
 
     PageLoad(StatusCode pageStatus, boolean wasRepaired) {
       status = pageStatus;
