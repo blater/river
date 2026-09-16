@@ -195,43 +195,68 @@ public final class VacuumProgressCodec {
       long progressGeneration,
       long sourceCommitSequence,
       long appliedCommitSequence) {
-    return (state == STATE_BUILDING || state == STATE_COMPLETE)
-        && sourceStorage > 0
-        && replacementStorage > sourceStorage
-        && sourceMaximumLogical >= 0
-        && lastCopiedLogical >= 0
-        && lastCopiedLogical <= sourceMaximumLogical
-        && (state != STATE_COMPLETE || lastCopiedLogical == sourceMaximumLogical)
-        && sourceRoot > 0
-        && replacementRoot > 0
-        && replacementLogical > 0
-        && replacementVersion > 0
-        && replacementFree > 0
-        && nextPage > 1
-        && sourceRoot < nextPage
-        && replacementRoot < nextPage
-        && replacementLogical < nextPage
-        && replacementVersion < nextPage
-        && replacementFree < nextPage
-        && distinct(
-            sourceRoot,
-            replacementRoot,
-            replacementLogical,
-            replacementVersion,
-            replacementFree)
-        && sourceRootGeneration > 0
+    if (state != STATE_BUILDING && state != STATE_COMPLETE) return false;
+    if (sourceStorage <= 0 || replacementStorage <= sourceStorage) return false;
+    if (sourceMaximumLogical < 0 || lastCopiedLogical < 0) return false;
+    if (lastCopiedLogical > sourceMaximumLogical) return false;
+    if (state == STATE_COMPLETE && lastCopiedLogical != sourceMaximumLogical) return false;
+    if (!validRoots(
+        sourceRoot,
+        replacementRoot,
+        replacementLogical,
+        replacementVersion,
+        replacementFree,
+        nextPage)) return false;
+    if (!validGenerations(
+        sourceRootGeneration,
+        replacementRootGeneration,
+        replacementLogicalGeneration,
+        replacementVersionGeneration,
+        replacementFreeGeneration)) return false;
+    if (rowsCopied < 0 || rowsCopied > lastCopiedLogical) return false;
+    if (versionsReclaimed < 0 || progressGeneration <= 0) return false;
+    if (sourceCommitSequence <= 0 || appliedCommitSequence <= 0) return false;
+    return appliedCommitSequence <= sourceCommitSequence
+        && (state != STATE_COMPLETE || appliedCommitSequence == sourceCommitSequence);
+  }
+
+  private static boolean validRoots(
+      int sourceRoot,
+      int replacementRoot,
+      int replacementLogical,
+      int replacementVersion,
+      int replacementFree,
+      int nextPage) {
+    if (sourceRoot <= 0
+        || replacementRoot <= 0
+        || replacementLogical <= 0
+        || replacementVersion <= 0
+        || replacementFree <= 0
+        || nextPage <= 1) return false;
+    if (sourceRoot >= nextPage
+        || replacementRoot >= nextPage
+        || replacementLogical >= nextPage
+        || replacementVersion >= nextPage
+        || replacementFree >= nextPage) return false;
+    return distinct(
+        sourceRoot,
+        replacementRoot,
+        replacementLogical,
+        replacementVersion,
+        replacementFree);
+  }
+
+  private static boolean validGenerations(
+      long sourceRootGeneration,
+      long replacementRootGeneration,
+      long replacementLogicalGeneration,
+      long replacementVersionGeneration,
+      long replacementFreeGeneration) {
+    return sourceRootGeneration > 0
         && replacementRootGeneration > 0
         && replacementLogicalGeneration > 0
         && replacementVersionGeneration > 0
-        && replacementFreeGeneration > 0
-        && rowsCopied >= 0
-        && rowsCopied <= lastCopiedLogical
-        && versionsReclaimed >= 0
-        && progressGeneration > 0
-        && sourceCommitSequence > 0
-        && appliedCommitSequence > 0
-        && appliedCommitSequence <= sourceCommitSequence
-        && (state != STATE_COMPLETE || appliedCommitSequence == sourceCommitSequence);
+        && replacementFreeGeneration > 0;
   }
 
   private static boolean distinct(int first, int second, int third, int fourth, int fifth) {

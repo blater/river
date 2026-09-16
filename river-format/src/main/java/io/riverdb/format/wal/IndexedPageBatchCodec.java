@@ -209,12 +209,23 @@ public final class IndexedPageBatchCodec {
 
   private static boolean validRoot(
       int kind, int ownerId, int pageId, long pageGeneration) {
-    boolean tableRoot = kind == ROOT_HEAP || kind == ROOT_PRIMARY || kind == ROOT_SECONDARY;
-    boolean globalRoot = kind == ROOT_LOGICAL_DIRECTORY
-        || kind == ROOT_VERSION_DIRECTORY || kind == ROOT_CATALOG;
-    return (tableRoot && ownerId > 0 && ownerId <= MAXIMUM_OWNER_ID
-            || globalRoot && ownerId == 0)
-        && pageId > 0
-        && pageGeneration > 0;
+    if (isTableRoot(kind)) {
+      if (ownerId <= 0 || ownerId > MAXIMUM_OWNER_ID) return false;
+    } else if (isGlobalRoot(kind)) {
+      if (ownerId != 0) return false;
+    } else {
+      return false;
+    }
+    return pageId > 0 && pageGeneration > 0;
+  }
+
+  private static boolean isTableRoot(int kind) {
+    return kind == ROOT_HEAP || kind == ROOT_PRIMARY || kind == ROOT_SECONDARY;
+  }
+
+  private static boolean isGlobalRoot(int kind) {
+    return kind == ROOT_LOGICAL_DIRECTORY
+        || kind == ROOT_VERSION_DIRECTORY
+        || kind == ROOT_CATALOG;
   }
 }
