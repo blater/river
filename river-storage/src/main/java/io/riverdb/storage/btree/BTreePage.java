@@ -124,12 +124,14 @@ public final class BTreePage {
   public static int childForKey(ByteBuffer page, long space, long key) {
     int low = 0;
     int high = getInt(page, 16);
+    // Search namespaces and admitted separators are finite; infinity is a page fence.
     // Upper bound: an equal separator belongs to its right child.
     while (low < high) {
       int middle = (low + high) >>> 1;
       int offset = entryOffset(middle);
-      if (OrderedKey.lessThan(
-          space, key, getLong(page, offset + 16), getLong(page, offset))) {
+      long separatorSpace = getLong(page, offset + 16);
+      if (space < separatorSpace
+          || space == separatorSpace && key < getLong(page, offset)) {
         high = middle;
       } else {
         low = middle + 1;
