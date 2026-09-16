@@ -75,3 +75,14 @@ publication remain unchanged; independent Luna/high review approved these paths.
 with no failures/errors/skips. Scan including tests: 14 files, maximum score
 62.3839 and NPATH 65. Evidence: `/private/tmp/river-backup-inspect-check.log`
 and `/private/tmp/river-offline-final-slopmark.json`. No performance claim.
+
+### Durable format validation slice — 2026-09-16
+
+Simplified build-intent key validation, vacuum progress validation, and indexed
+page root classification. Existing ranges, state constraints, short-circuit
+ordering, and format/status behavior remain unchanged. Independent Luna/high
+review and integrator review approved the predicates.
+`:river-format:check` passed 83 tests, no failures/errors/skips. Full module
+scan including tests: 108 files, maximum score 45.1567 and NPATH 92.
+Evidence: `/private/tmp/river-format-check.log` and
+`/private/tmp/river-format-final-slopmark.json`. No performance claim.
