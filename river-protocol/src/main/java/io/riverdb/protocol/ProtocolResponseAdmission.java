@@ -9,7 +9,7 @@ final class ProtocolResponseAdmission {
   private static final int VALID_FLAGS = ProtocolFrameCodec.FLAG_ROW_AVAILABLE
       | ProtocolFrameCodec.FLAG_TRANSACTION_ACTIVE | ProtocolFrameCodec.FLAG_QUERY_ACTIVE
       | ProtocolFrameCodec.FLAG_COLUMN_METADATA | ProtocolFrameCodec.FLAG_PREPARED_QUERY
-      | ProtocolFrameCodec.FLAG_END_OF_STREAM;
+      | ProtocolFrameCodec.FLAG_END_OF_STREAM | ProtocolFrameCodec.FLAG_BATCH_MORE;
 
   private ProtocolResponseAdmission() { }
 
@@ -21,6 +21,7 @@ final class ProtocolResponseAdmission {
     }
     boolean metadata = (flags & ProtocolFrameCodec.FLAG_COLUMN_METADATA) != 0;
     boolean preparedQuery = (flags & ProtocolFrameCodec.FLAG_PREPARED_QUERY) != 0;
+    if (!ProtocolRowBatch.validFlags(frame.type(), status, flags)) return false;
     if (frame.type() == ProtocolMessageType.PREPARE) {
       return validPrepare(status, flags, rows, columns, commitSequence, key, returned);
     }

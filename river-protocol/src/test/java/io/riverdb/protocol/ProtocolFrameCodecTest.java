@@ -447,6 +447,25 @@ final class ProtocolFrameCodecTest {
   }
 
   @Test
+  void batchMoreRequiresAnActiveRowAndCannotMarkEndOfStream() {
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    ProtocolResponse response = new ProtocolResponse();
+    assertEquals(StatusCode.OK, codec.encodeRowResponse(
+        bytes, ProtocolMessageType.FETCH, 19, StatusCode.OK,
+        row(1, 0, 1, 0, 1), 1, null, true));
+    ProtocolRowBatch.markMore(bytes, 0);
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertTrue(response.batchMore());
+
+    assertEquals(StatusCode.OK, codec.encodeRowResponse(
+        bytes, ProtocolMessageType.FETCH, 20, StatusCode.OK,
+        row(1, 0, 1, 0, 1), 1, completion(0, 0, false), false));
+    ProtocolRowBatch.markMore(bytes, 0);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
+  }
+
+  @Test
   void roundTripsMultiwordNullsThroughMaximumResultShape() {
     int columns = 1_664;
     long[] values = new long[columns];

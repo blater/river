@@ -90,7 +90,7 @@ final class LoopbackRiverServerTest {
       assertRow(finalRow, 3, 3, 300, false);
       assertTrue(finalRow.endOfStream());
       assertEquals(3, finalRow.rowsReturned());
-      assertEquals(beforeQuery + 3, client.completedRequests());
+      assertEquals(beforeQuery + 1, client.completedRequests());
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_SESSION));
     }
     assertEquals(StatusCode.OK, server.close());
@@ -164,11 +164,30 @@ final class LoopbackRiverServerTest {
           ProtocolMessageType.BEGIN_QUERY,
           "SELECT id, value FROM stream_rows ORDER BY id");
       assertRow(first, 1, 1, 10, true);
+      assertTrue(first.batchMore());
+      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_QUERY));
+      assertEquals(before + 1, client.completedRequests());
+      assertStatus(StatusCode.OK, client.send(
+          ProtocolMessageType.EXECUTE,
+          "INSERT INTO stream_rows VALUES (3, 30)"));
+
+      StringBuilder manyRows = new StringBuilder("INSERT INTO stream_rows VALUES ");
+      for (int id = 4; id <= 200; id++) {
+        if (id > 4) manyRows.append(',');
+        manyRows.append('(').append(id).append(',').append(id * 10).append(')');
+      }
+      assertStatus(StatusCode.OK, client.send(
+          ProtocolMessageType.EXECUTE, manyRows.toString()));
+      before = client.completedRequests();
+      first = client.send(ProtocolMessageType.BEGIN_QUERY,
+          "SELECT id, value FROM stream_rows ORDER BY id");
+      assertRow(first, 1, 1, 10, true);
+      assertTrue(first.batchMore());
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_QUERY));
       assertEquals(before + 2, client.completedRequests());
       assertStatus(StatusCode.OK, client.send(
           ProtocolMessageType.EXECUTE,
-          "INSERT INTO stream_rows VALUES (3, 30)"));
+          "INSERT INTO stream_rows VALUES (201, 2010)"));
 
       assertStatus(StatusCode.INVALID_EXTERNAL_INPUT, client.send(
           ProtocolMessageType.BEGIN_QUERY,
@@ -502,6 +521,7 @@ final class LoopbackRiverServerTest {
     private final InputStream input;
     private final OutputStream output;
     private long requestId = 1;
+    private boolean batchMore;
 
     private TestClient(int port) throws IOException {
       this(connect(port));
@@ -518,6 +538,11 @@ final class LoopbackRiverServerTest {
     }
 
     private ProtocolResponse send(ProtocolMessageType type) throws IOException {
+      if (type == ProtocolMessageType.FETCH && batchMore) return readResponse();
+      if (type == ProtocolMessageType.CLOSE_QUERY && batchMore) {
+        while (batchMore) readResponse();
+        if (response.endOfStream()) return response;
+      }
       assertEquals(StatusCode.OK, codec.encodeRequest(request, type, requestId++));
       ProtocolResponse exchanged = exchange();
       if (type == ProtocolMessageType.HELLO && exchanged.status() == StatusCode.OK) {
@@ -584,6 +609,10 @@ final class LoopbackRiverServerTest {
     private ProtocolResponse exchange() throws IOException {
       output.write(request.array(), 0, request.remaining());
       output.flush();
+      return readResponse();
+    }
+
+    private ProtocolResponse readResponse() throws IOException {
       readExact(input, responseBytes, 0, ProtocolFrameCodec.HEADER_BYTES);
       responseBuffer.position(0);
       responseBuffer.limit(ProtocolFrameCodec.HEADER_BYTES);
@@ -595,6 +624,7 @@ final class LoopbackRiverServerTest {
       responseBuffer.position(0);
       responseBuffer.limit(ProtocolFrameCodec.HEADER_BYTES + payload);
       assertEquals(StatusCode.OK, codec.decodeResponse(responseBuffer, frame, response));
+      batchMore = response.batchMore();
       return response;
     }
 

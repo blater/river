@@ -16,6 +16,8 @@ final class RiverClientRemoteQuery implements RiverQuery {
   private boolean active;
   private boolean serverActive;
   private boolean prefetched;
+  private boolean batchMore;
+  private long batchRequestId;
   private int completionRows;
   private long completionSequence;
   private boolean completionTransactionActive;
@@ -32,6 +34,8 @@ final class RiverClientRemoteQuery implements RiverQuery {
       active = true;
       rowsReturned = 0;
       prefetched = connection.response.rowAvailable();
+      batchMore = connection.response.batchMore();
+      batchRequestId = connection.nextRequestId - 1;
       if (connection.response.endOfStream()) captureCompletion();
       status = result.complete(this);
     }
@@ -52,9 +56,16 @@ final class RiverClientRemoteQuery implements RiverQuery {
       return copyStagedRow(result);
     }
     if (!serverActive) return StatusCode.OK;
-    status = connection.exchange(ProtocolMessageType.FETCH, null);
+    status = batchMore
+        ? connection.receiveBatchRow(batchRequestId)
+        : connection.exchange(ProtocolMessageType.FETCH, null);
     if (status.isOk()) {
       status = connection.response.status();
+      batchMore = connection.response.batchMore();
+      if (!batchMore) batchRequestId = 0;
+      else if (connection.frame.requestId() > 0) {
+        batchRequestId = connection.frame.requestId();
+      }
       serverActive = connection.response.queryActive();
       if (connection.response.endOfStream()) captureCompletion();
     }
@@ -85,7 +96,8 @@ final class RiverClientRemoteQuery implements RiverQuery {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (!connection.sessionActive() || !active) return StatusCode.CLOSED;
-    StatusCode status = closeServerQuery();
+    StatusCode status = drainBatch();
+    if (status.isOk()) status = closeServerQuery();
     status = serverActive || !status.isOk() ? status : completeLocally(result);
     if (status.isOk()) clear();
     return status;
@@ -101,6 +113,20 @@ final class RiverClientRemoteQuery implements RiverQuery {
     }
     if (status.isOk()) captureCompletion();
     return status;
+  }
+
+  private StatusCode drainBatch() {
+    while (batchMore) {
+      StatusCode status = connection.receiveBatchRow(batchRequestId);
+      if (!status.isOk()) return status;
+      batchMore = connection.response.batchMore();
+      serverActive = connection.response.queryActive();
+      if (connection.response.endOfStream()) captureCompletion();
+      status = connection.response.status();
+      if (!status.isOk()) return status;
+    }
+    batchRequestId = 0;
+    return StatusCode.OK;
   }
 
   @Override
@@ -132,6 +158,8 @@ final class RiverClientRemoteQuery implements RiverQuery {
     active = false;
     serverActive = false;
     prefetched = false;
+    batchMore = false;
+    batchRequestId = 0;
     rowsReturned = 0;
     completionRows = 0;
     completionSequence = 0;

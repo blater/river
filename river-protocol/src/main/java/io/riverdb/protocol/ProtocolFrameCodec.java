@@ -15,7 +15,7 @@ import java.nio.ByteBuffer;
 
 /** Bounded framing over caller-owned buffers. */
 public final class ProtocolFrameCodec {
-  public static final int VERSION = 5;
+  public static final int VERSION = 6;
   public static final int HEADER_BYTES = 32;
   public static final int MAXIMUM_PAYLOAD_BYTES = 16 * 1024;
   public static final int MAXIMUM_FRAME_BYTES = HEADER_BYTES + MAXIMUM_PAYLOAD_BYTES;
@@ -35,6 +35,7 @@ public final class ProtocolFrameCodec {
   public static final int FLAG_COLUMN_METADATA = 1 << 3;
   public static final int FLAG_PREPARED_QUERY = 1 << 4;
   public static final int FLAG_END_OF_STREAM = 1 << 5;
+  public static final int FLAG_BATCH_MORE = 1 << 6;
 
   private final ProtocolResponseEncoder responses = new ProtocolResponseEncoder();
   private final ProtocolResponseDecoder responseDecoder =

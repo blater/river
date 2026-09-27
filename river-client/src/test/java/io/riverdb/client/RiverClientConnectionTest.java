@@ -497,9 +497,11 @@ final class RiverClientConnectionTest {
     assertEquals(2, query.columnCount());
     assertEquals("id", query.columnName(0));
     assertEquals("balance", query.columnName(1));
+    long batchedRequests = client.completedRequests();
     assertRow(query, row, 1, 1, 100);
     assertRow(query, row, 2, 2, 200);
     assertRow(query, row, 3, 3, 300);
+    assertEquals(batchedRequests, client.completedRequests());
     assertEquals(StatusCode.OK, query.next(row));
     assertFalse(row.isAvailable());
     assertEquals(3, query.rowsReturned());
