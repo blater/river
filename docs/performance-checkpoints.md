@@ -290,3 +290,35 @@ Order Status fetch request/reply cost and passes the correctness and cleanup
 gates. The remaining roughly 1.8-fold JVM gap to MariaDB is a separate
 request/statement execution investigation; this checkpoint does not claim
 overall parity.
+
+## 2026-09-28 — residual Order Status request timing
+
+Temporary counters on the accepted JVM server and Go adapter split each
+protocol request into client send, client receive, server processing, and
+server response write. The final `sample order-status` run used one worker and
+warehouse, seed 42, READ COMMITTED, a 2-second warmup and 10-second measured
+window. It passed validation and cleanup with 3,492.84 committed TPS, zero
+retries, failed outcomes and unknown commits. Its immutable artifact is
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_001505_e13ba4fd`.
+The temporary source patches and counter logs are under
+`/private/tmp/river-order-status-evidence/`; neither instrumentation patch is
+in production source.
+
+| Request type | Calls | Client send mean | Client receive mean | Header read mean | Body read mean | Decode mean | Server process mean | Server write mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| EXECUTE (including transaction control and setup) | 81,093 | 2.991 µs | 41.359 µs | 40.754 µs | 0.175 µs | 0.059 µs | 11.205 µs | 3.574 µs |
+| BEGIN_PREPARED_QUERY | 164,689 | 3.200 µs | 46.590 µs | 45.614 µs | 0.201 µs | 0.415 µs | 16.318 µs | 3.705 µs |
+
+These counters span setup, warmup and measurement, so they are mechanism
+timings, not measured-window latency decomposition. Client receive time is
+dominated by waiting for the response header; body reading and decoding are
+small. About 26 µs per request lies between the start of server processing
+and completion of the client's header read after subtracting measured server
+processing and response writing. That interval includes socket/TLS handling,
+thread scheduling and any unmeasured dispatch work. The current counters do
+not separate those components or establish how much each contributes to the
+MariaDB comparison, which also uses a different transport. The next candidate
+must reduce dependent request/reply exchanges, using River's existing
+transaction-program protocol if it can preserve the full Order Status result
+and failure semantics; a same-transport control is needed before assigning the
+remaining cross-database difference to the engine.
