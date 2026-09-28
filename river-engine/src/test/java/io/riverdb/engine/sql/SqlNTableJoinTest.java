@@ -38,6 +38,7 @@ final class SqlNTableJoinTest {
     createFixture(session, result);
 
     assertIndexedAndTableStagesAgree(session, result);
+    assertRootFilterBeforeProbe(session, result);
     assertMixedLeftNullPropagation(session, result);
     assertEightRolesPreserveOwnedText(session, result);
     assertDirectOrderUsesProjectedJoinTuples(session, result);
@@ -140,6 +141,31 @@ final class SqlNTableJoinTest {
             + "JOIN chain1 b ON a.k+0=b.k "
             + "JOIN chain2 c ON b.k+0=c.k AND c.v<100 WHERE a.id=1",
         new long[][] {{1, 11, 21}});
+  }
+
+  private static void assertRootFilterBeforeProbe(
+      SqlSession session, SqlExecutionResult result) {
+    String source = " FROM chain0 a JOIN chain1 b ON a.k=b.k "
+        + "WHERE a.k>150";
+    assertRows(session, result,
+        "SELECT a.id,b.id" + source, new long[][] {{2, 2}});
+    assertRows(session, result,
+        "SELECT a.id,b.id FROM chain0 a JOIN chain1 b ON a.k=b.k "
+            + "WHERE a.k>150 AND (a.id=2 OR b.v=11)",
+        new long[][] {{2, 2}});
+    assertRows(session, result,
+        "SELECT a.id,b.id FROM chain0 a JOIN chain1 b ON a.k=b.k "
+            + "WHERE a.k>150 OR b.v=11",
+        new long[][] {{1, 1}, {2, 2}});
+    assertRows(session, result,
+        "SELECT COUNT(DISTINCT b.id)" + source, new long[][] {{1}});
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK,
+        session.beginScan("EXPLAIN ANALYZE SELECT a.id,b.id" + source, cursor));
+    assertPlanRow(session, cursor, row, "table", -1, 2);
+    assertPlanRow(session, cursor, row, "index", 1, 1);
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
 
   private static void assertMixedLeftNullPropagation(
@@ -319,7 +345,8 @@ final class SqlNTableJoinTest {
         session.beginScan(
             "SELECT a.id,b.id,c.id FROM gap0 a "
                 + "JOIN gap1 b ON a.id=b.id "
-                + "JOIN gap2 c ON b.observed AT TIME ZONE 'Europe/London'=c.observed",
+                + "JOIN gap2 c ON b.observed AT TIME ZONE 'Europe/London'=c.observed "
+                + "WHERE a.observed<TIMESTAMP '2024-03-31 01:00:00'",
             cursor));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(1, row.valueAt(0));

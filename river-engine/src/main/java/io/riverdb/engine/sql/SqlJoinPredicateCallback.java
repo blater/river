@@ -11,6 +11,7 @@ abstract class SqlJoinPredicateCallback {
       SqlBoundBooleanPredicateProgram where);
 
   abstract boolean matchesJoinOn(int stage, SqlJoinRoleRows rows);
+  abstract boolean matchesRootWhere(SqlJoinRoleRows rows);
   abstract boolean matchesJoinWhere(SqlJoinRoleRows rows);
   abstract StatusCode joinStatus();
 }

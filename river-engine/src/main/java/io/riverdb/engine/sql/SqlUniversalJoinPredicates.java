@@ -8,6 +8,7 @@ final class SqlUniversalJoinPredicates {
   private final SqlBooleanPredicateWorkspace workspace;
   private final SqlBooleanPredicateEvaluator where;
   private final SqlJoinPredicateEvaluators on;
+  private final SqlJoinRootFilter rootFilter = new SqlJoinRootFilter();
   private final SqlBooleanPredicateEvaluator.Match match =
       new SqlBooleanPredicateEvaluator.Match();
   private final SqlUniversalJoinedRowProvider nestedRows;
@@ -65,7 +66,28 @@ final class SqlUniversalJoinPredicates {
     for (int stage = 0; status.isOk() && stage < stages; stage++) {
       status = on.get(stage).prepare(source, joinContext.onBoolean(stage));
     }
-    return status.isOk() ? where.prepare(source, whereProgram) : status;
+    if (status.isOk()) status = where.prepare(source, whereProgram);
+    return status.isOk()
+        ? rootFilter.configure(source, joinContext, whereProgram) : status;
+  }
+
+  StatusCode matchesRootWhere(
+      SqlBoundBooleanPredicateProgram program, SqlUniversalJoinRows rows) {
+    if (rootFilter.count() == 0) {
+      return where.matchesUniversalJoinLeaves(
+          command, program, rows, null, rootFilter.leaves(), 0, match);
+    }
+    if (nestedRows == null) {
+      return where.matchesUniversalJoinLeaves(
+          command, program, rows, null,
+          rootFilter.leaves(), rootFilter.count(), match);
+    }
+    nestedRows.activate(rows);
+    StatusCode status = where.matchesUniversalJoinLeaves(
+        command, program, rows, nestedRows,
+        rootFilter.leaves(), rootFilter.count(), match);
+    nestedRows.clear();
+    return status;
   }
 
   StatusCode matchesOn(int stage, SqlUniversalJoinRows rows) {

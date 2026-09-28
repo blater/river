@@ -8,6 +8,7 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
   private final SqlBooleanPredicateWorkspace workspace;
   private final SqlBooleanPredicateEvaluator where;
   private final SqlJoinPredicateEvaluators on;
+  private final SqlJoinRootFilter rootFilter = new SqlJoinRootFilter();
   private final SqlBooleanPredicateEvaluator.Match match =
       new SqlBooleanPredicateEvaluator.Match();
   private final SqlJoinedRowProvider rows;
@@ -56,7 +57,8 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
       status = on.get(stage).prepare(command, context.onBoolean(stage));
     }
     if (status.isOk()) status = where.prepare(command, whereProgram);
-    return status;
+    return status.isOk()
+        ? rootFilter.configure(command, context, whereProgram) : status;
   }
 
   @Override
@@ -71,6 +73,17 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
         subqueries,
         rows,
         match);
+    rows.clear();
+    return status.isOk() && match.matched();
+  }
+
+  @Override
+  boolean matchesRootWhere(SqlJoinRoleRows localRows) {
+    if (rootFilter.count() == 0) return true;
+    rows.activate(localRows);
+    status = where.matchesJoinLeaves(
+        command, whereProgram, localRows, rows,
+        rootFilter.leaves(), rootFilter.count(), match);
     rows.clear();
     return status.isOk() && match.matched();
   }

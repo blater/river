@@ -19,6 +19,7 @@ and runtime configuration.
 | 2026-09-27 16:52:11 | `master` source snapshot | None | `c9c216d3` | `sample stock-level`; 1 worker, 1 warehouse; GraalVM 25.0.4 JVM, macOS/arm64; 20s warmup, 30s measured | 1,064.832 | 1.082 | `river_harness_20260927_165149_3ea012e9`; [read-only comparison](#2026-09-27--one-worker-read-only-comparison) |
 | 2026-09-27 23:57:22 | `ticket/tic-a29fc0d0ece668f5aa0a5fd8ba576f15-order-status-batches` | `tic-a29fc0d0ece668f5aa0a5fd8ba576f15` | River `e128e066`; harness `4a2c185`, version `e128e066-jvm-batched-b` | `sample order-status`; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 20s measured | 3,763.695 | 0.428 | `river_harness_20260927_235714_cce57930`; [checkpoint](#2026-09-27--order-status-row-batching) |
 | 2026-09-28 00:57:54 | `ticket/tic-celegorm-order-status-program` | `tic-celegorm` | River `8a37147f`; harness `f8e615a`, version `tic-celegorm-clean-jvm` | `sample order-status`; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 20s measured | 12,913.782 | 0.122 | `river_harness_20260928_005746_33a8ee5a`; [checkpoint](#2026-09-28--one-request-order-status-program) |
+| 2026-09-28 02:05:19 | `feature/stock-level-root-filter` | `tic-72e5` | River `40470245`; harness `2ab18c9`, version `40470245-stock-first-candidate` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 30s measured | 1,957.795 | 0.618 | `river_harness_20260928_020507_3d0d57eb`; [checkpoint](#2026-09-28--stock-level-root-filter-checkpoint) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -384,3 +385,52 @@ surface a newly broadened high-scoring production owner in this slice.
 Decision: accept the generic ordered-row program capability and its Order
 Status consumer. The remaining performance investigation concerns other
 transaction families and concurrency profiles.
+
+## 2026-09-28 — Stock Level root-filter checkpoint
+
+Ticket [`tic-72e5`](tickets/tic-72e5.md) remains open. The accepted River
+`master` at `db8b3146` evaluated root-only stock quantity conditions after
+joining. A representative `EXPLAIN ANALYZE` with stock first showed 100 stock
+rows and 207 indexed join rows before the filter. On feature branch
+`feature/stock-level-root-filter`, commit `40470245`, a generic filter tests
+mandatory, root-local, total `WHERE` comparisons before probing either JOIN
+executor. The full `WHERE` still runs on joined rows. The standalone harness
+branch `diagnostic/stock-root`, commit `2ab18c9`, orders the equivalent Stock
+Level SQL from `stock` and labels its transaction catalogue v2.
+
+The same representative input on the candidate had 100 root stock rows and
+8 indexed lookup rows. SQL results and the harness invariants passed. The
+number of lookup rows varies with the input threshold; 8 is one plan sample,
+not an average across the measured workload. Focused JOIN tests covered
+`AND`/`OR`, scalar aggregation and an `ON` expression-error boundary. The
+affected engine suite passed, followed by a clean
+`./gradlew --no-daemon clean test` in 3m12s (116 tasks). Harness `go test ./...`
+passed. The only binary difference in the matched River runs was the engine
+JAR. The candidate distribution is retained at
+`/private/tmp/river-stock-evidence/root-filter-program/`.
+
+Interleaved old–new–new–old samples used the committed stock-first harness
+catalogue, sample data, one worker and warehouse, seed 42, READ COMMITTED,
+retry limit 3, durable local WAL, loopback TCP/TLS, GraalVM 25.0.4 JVM with
+`-Xmx1g`, 10-second warmup and 30-second measurement. All four artifacts were
+eligible with comparison key
+`51420951377fa60dc58b255012cbb5b7d9c9a51a83f377137da80a61803f7bf5`,
+passed validation and owned cleanup, with zero retries, failed outcomes and
+unknown commits. Some runs cancelled one in-flight attempt at the measurement
+cutoff; those attempts were excluded from committed TPS.
+
+| Order | River engine | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| A1 | `db8b3146` control | 1,288.116 | 0.884 | `/private/tmp/river-harness-stock-root/runs/river_harness_20260928_020328_d0795856` |
+| B1 | `40470245` root filter | 1,984.908 | 0.616 | `/private/tmp/river-harness-stock-root/runs/river_harness_20260928_020419_8fe96df6` |
+| B2 | `40470245` root filter | 1,957.795 | 0.618 | `/private/tmp/river-harness-stock-root/runs/river_harness_20260928_020507_3d0d57eb` |
+| A2 | `db8b3146` control | 1,263.782 | 0.937 | `/private/tmp/river-harness-stock-root/runs/river_harness_20260928_020556_db284cf2` |
+
+The mean candidate/control throughput ratio was 1.545. Slopmark's scores for
+`SqlBooleanPredicateEvaluator`, `SqlJoinChainSource` and
+`SqlUniversalJoinSource` moved from 90.29/59.87/53.43 to 94.62/65.10/57.72;
+the added filter owner scored 14.75. No benchmark semantics entered the
+engine. The root-filter mechanism is accepted, but the Stock Level gap to
+MariaDB remains open. A separate 10-second MariaDB diagnostic using the prior
+catalogue reached 9,311.55 TPS; it is not a paired comparison with this
+checkpoint.

@@ -100,14 +100,20 @@ final class SqlJoinChainSource {
   }
 
   private StatusCode nextRoot() {
-    StatusCode status = cursors.nextRoot();
-    if (!status.isOk()) return status;
-    rootCandidates++;
-    rows.clearFrom(0);
-    rows.borrow(0, cursors.key(0), cursors.row(0));
-    resetStages();
-    stage = 0;
-    return StatusCode.OK;
+    while (true) {
+      StatusCode status = cursors.nextRoot();
+      if (!status.isOk()) return status;
+      rootCandidates++;
+      rows.clearFrom(0);
+      rows.borrow(0, cursors.key(0), cursors.row(0));
+      if (!predicates.matchesRootWhere(rows)) {
+        if (!predicates.joinStatus().isOk()) return predicates.joinStatus();
+        continue;
+      }
+      resetStages();
+      stage = 0;
+      return StatusCode.OK;
+    }
   }
 
   private StatusCode nextStage() {
