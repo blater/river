@@ -6,6 +6,8 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 
 final class ControlFileCodecTest {
@@ -41,10 +43,16 @@ final class ControlFileCodecTest {
         ControlFileCodec.encode(
             new ControlFile(DatabaseIncarnation.of(1, 2), WalGeneration.of(1)),
             encoded));
-    encoded.putInt(8, 2);
-
     ControlFileDecodeResult result = new ControlFileDecodeResult();
-    assertEquals(StatusCode.CORRUPTION, ControlFileCodec.decode(encoded.clear(), result));
+    encoded.order(ByteOrder.LITTLE_ENDIAN);
+    for (int version : new int[] {1, ControlFileCodec.MAJOR_VERSION + 1}) {
+      encoded.putInt(8, version);
+      CRC32C checksum = new CRC32C();
+      checksum.update(encoded.array(), 0, 56);
+      encoded.putInt(56, (int) checksum.getValue());
+      encoded.putInt(60, ~(int) checksum.getValue());
+      assertEquals(StatusCode.CORRUPTION, ControlFileCodec.decode(encoded.clear(), result));
+    }
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         ControlFileCodec.decode(ByteBuffer.allocate(63), result));

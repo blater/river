@@ -1785,3 +1785,105 @@ The final combined source passed `./gradlew --no-daemon clean check` in 54s
 (156 tasks); `git diff --check` passed. The directory work is closed by
 [tic-base-row-head-directory](tickets/tic-base-row-head-directory.md), while
 the parent epic remains open for full-workload copy/decode counters.
+
+## 2026-09-28 — headerless descriptor rows
+
+[tic-celeborn](tickets/tic-celeborn.md) removes the entire 32-byte descriptor-row
+header and unused historical-layout resolution. Implementation `f3b0573e` on
+`ticket/tic-celeborn-compact-row-header` starts from accepted `e3225ffd`
+(`perf-checkpoint-20260928-indexed-read-head-directory`). The null bitmap is now
+at byte zero. Logical identity remains in the index/head/scan owners, and layout
+comes from the admitted table descriptor. The database control major version
+advances to 2; earlier databases must be recreated. There is no legacy reader.
+
+The [implementation review](delivery/evidence/2026-09-28-tic-celeborn-headerless-rows.md)
+records exact-size fixtures, lifetime boundaries, allocation tests and an
+independent durable-format review with no blocking findings. The clean check
+on the candidate used GraalVM 25 and isolated Gradle home/project caches:
+
+```sh
+JAVA_HOME=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Contents/Home \
+GRADLE_USER_HOME=/private/tmp/river-celeborn-gradle \
+./gradlew --no-daemon --offline \
+  --project-cache-dir /private/tmp/river-celeborn-project-cache \
+  clean check :river-bench:installTps
+```
+
+It passed in 54s (158 tasks); JUnit reports contain 2,072 tests, zero failures or
+errors and 19 skips. Log: `/private/tmp/river-celeborn-clean-check.log`.
+The candidate engine and storage JAR SHA-256 values are
+`481ee4ffc193c12316761f518802d81774e33abdea8b2f7041a49c7e4674b661`
+and `cd26d9d6dfca77b6239406fef9758de18206d2945f81ea09e9d7c9623b8b352c`.
+The control distribution is the preceding accepted `699e3c9b` build (production
+source unchanged through `e3225ffd`), with engine and storage hashes
+`e6997988921477315d1980fffc31d690e17a0f98b3cd693be21c20c71ce90069`
+and `3d4c42bbe914ae2886569018edf477458ae562d0c0767c391a8435c746af4c5c`.
+
+The standalone harness was run from `/Users/blater/src/ingres/river-harness`
+at `5082670` (same source tree as previously used `eba8ab0`). Its pre-existing
+`bin/river-harness` executable was stale: the first control artifact,
+`river_harness_20260928_224228_b55d2042`, passed at 32.765 TPS using binding
+`tpcc-full-river-v3`. It is excluded from the feature comparison. `make build`
+rebuilt the executable, SHA-256
+`9d90e020ae212f920ea4927fa0304b3f262502f9364d4210adc4505d2ae9ec63`.
+The corrected full-profile runs use `tpcc-full-river-v4`, including the existing
+one-request Stock Level program and table analysis. Their binding hash is
+`439dbe159c27bbcb8256a6374afb8153edb24e54f9180bea3b29f72948d26726`.
+The stale and current binding share a comparison key, so key equality alone did
+not establish equivalent execution for that excluded run.
+
+All compared runs use one worker and warehouse, seed 42, retry limit 3,
+READ COMMITTED, durable local WAL, GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64
+and loopback TCP/TLS. SQL, schema and indexes are unchanged. Builds, tests and
+workloads were serialized. Commands use this form:
+
+```sh
+~/src/ingres/river-harness/benchmark run river tpcc PROFILE CATEGORY \
+  --river-executable=BUILD/river --river-version=LABEL \
+  --warmup=5s --duration=DURATION --workers=1 --warehouses=1 \
+  --seed=42 --max-retries=3
+```
+
+Control `BUILD` is `/private/tmp/river-isildur-filter-dist`; candidate `BUILD`
+is `/private/tmp/river-celeborn-dist`. Each uses the same Java launcher. Artifact
+IDs below are under `/Users/blater/src/ingres/river-harness/runs/`.
+
+| Workload; warmup/measured | Version label; order | TPS | p99 (ms) | Artifact ID |
+| --- | --- | ---: | ---: | --- |
+| `full stock-level`; 5/30s | `celeborn-control-e3225ffd-stock-a1-v4`; A1 | 1,533.389 | 0.815 | `river_harness_20260928_224732_f63d5917` |
+| same | `celeborn-f3b0573e-stock-b1`; B1 | 1,556.054 | 0.815 | `river_harness_20260928_224949_75c8e7fe` |
+| same | `celeborn-f3b0573e-stock-b2`; B2 | 1,435.625 | 1.040 | `river_harness_20260928_225132_f9310983` |
+| same | `celeborn-control-e3225ffd-stock-a2`; A2 | 1,413.057 | 1.110 | `river_harness_20260928_225325_183ef480` |
+| `sample new-order`; 5/20s | `celeborn-control-e3225ffd-new-a1`; A1 | 375.697 | 5.046 | `river_harness_20260928_225608_0b97cb67` |
+| same | `celeborn-f3b0573e-new-b1`; B1 | 364.845 | 5.251 | `river_harness_20260928_225637_626f145f` |
+| same | `celeborn-f3b0573e-new-b2`; B2 | 300.748 | 6.767 | `river_harness_20260928_225706_a6fba2b9` |
+| same | `celeborn-control-e3225ffd-new-a2`; A2 | 277.495 | 7.844 | `river_harness_20260928_225735_8a22c2a8` |
+
+All eight compared reports passed with eligible metadata and matching comparison
+keys within each workload: Stock Level
+`1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`,
+New Order `fd1585b927399c30def2890e256d24f0b885d3c580519fc4f00a29204faa9a30`.
+All invariants passed. Retries, failed transactions and unknown commits were
+zero. Each run accounted for one cancellation at the measured-window boundary;
+New Order's expected rollback counts were 65, 59, 50 and 47 respectively.
+Attempt totals reconcile with the reported outcomes. Each environment records
+graceful `river-stop` shutdown; each owned database directory was confirmed
+removed after completion. No JFR capture was used.
+
+Stock Level control throughput spans 1,413.057–1,533.389 TPS and candidate
+throughput spans 1,435.625–1,556.054 TPS, with overlapping p99 ranges. New Order
+declines through the A-B-B-A sequence, with control throughput spanning
+277.495–375.697 TPS and candidate throughput spanning 300.748–364.845 TPS.
+The candidate is below the first control but above the final control; the
+sequence does not show a repeated feature-specific regression. These short
+runs do not establish a speedup or a replacement throughput baseline.
+
+**Decision:** accept the requested format and architectural removal, with its
+exact saving of 32 payload bytes per descriptor row and no observed repeated
+regression in either workload. A one-BIGINT row occupies nine bytes instead of
+41. This checkpoint does not resolve the MariaDB gap or establish a generally
+zero-copy read path. The wider ticket remains in progress for borrowed access,
+remaining representation transfers and full-workload copy/decode counts.
+Integration uses a merge commit and annotated tag
+`perf-checkpoint-20260928-headerless-rows`; retain the preceding checkpoint for
+reproduction and rollback. The Baseline stats table is unchanged.

@@ -247,7 +247,10 @@ final class SchemaDescriptorTest {
     assertEquals(1, table.fixedWidthAt(0));
     assertEquals(4, table.fixedWidthAt(1));
     assertEquals(8, table.fixedWidthAt(2));
-    assertTrue(table.fixedOffsetAt(1) > table.fixedOffsetAt(0));
+    assertEquals(1, table.fixedOffsetAt(0));
+    assertEquals(2, table.fixedOffsetAt(1));
+    assertEquals(6, table.fixedOffsetAt(2));
+    assertEquals(62, table.encodedMaximumRowBytes());
     assertTrue(table.encodedMaximumRowBytes() <= HeapPage.MAXIMUM_ROW_BYTES);
     assertEquals(7, table.tableId());
     assertEquals(3, table.rowLayoutId());
@@ -266,13 +269,13 @@ final class SchemaDescriptorTest {
     TableDescriptor.Result wideTable = new TableDescriptor.Result();
     assertEquals(StatusCode.OK, TableDescriptor.createProposedSuccessor(1, 1, 1,
         wideColumns.value(), null, null, null, wideTable, null));
-    assertEquals(8_352, wideTable.value().encodedMaximumRowBytes());
+    assertEquals(8_320, wideTable.value().encodedMaximumRowBytes());
   }
 
   @Test
   void checksCompleteWorstCaseRowAtSingleHeapRowBoundary() {
     int[] exactTypes = {
-      SqlTypeDescriptor.varchar(4_043),
+      SqlTypeDescriptor.varchar(4_051),
       SqlTypeDescriptor.BOOLEAN,
       SqlTypeDescriptor.BOOLEAN,
       SqlTypeDescriptor.BOOLEAN
@@ -288,7 +291,7 @@ final class SchemaDescriptorTest {
     assertEquals(HeapPage.MAXIMUM_ROW_BYTES, exactTable.value().encodedMaximumRowBytes());
 
     int[] overTypes = {
-      SqlTypeDescriptor.varchar(4_043),
+      SqlTypeDescriptor.varchar(4_051),
       SqlTypeDescriptor.BOOLEAN,
       SqlTypeDescriptor.BOOLEAN,
       SqlTypeDescriptor.BOOLEAN,

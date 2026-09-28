@@ -1,7 +1,6 @@
 package io.riverdb.storage.heap;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.format.row.StoredTableRowHeaderCodec;
 
 /** Reusable byte positions needed before a heap page pin can be released. */
 public final class HeapRowProjection {
@@ -15,7 +14,7 @@ public final class HeapRowProjection {
   private int count;
 
   public StatusCode prepare(int metadataEnd, int fixedEnd, int selectedCount) {
-    if (metadataEnd < StoredTableRowHeaderCodec.HEADER_BYTES || fixedEnd < metadataEnd
+    if (metadataEnd < 0 || fixedEnd < metadataEnd
         || fixedEnd > HeapPage.MAXIMUM_ROW_BYTES || selectedCount < 0
         || selectedCount > HeapPage.MAXIMUM_ROW_BYTES) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -47,7 +46,7 @@ public final class HeapRowProjection {
 
   public StatusCode add(int column, int offset, int width, boolean text) {
     if (count >= expectedCount || column < 0
-        || column >= (metadataBytes - StoredTableRowHeaderCodec.HEADER_BYTES) * 8
+        || column >= metadataBytes * 8
         || offset < metadataBytes || width <= 0 || width > fixedBytes - offset
         || text && width != 8) return StatusCode.INVALID_EXTERNAL_INPUT;
     columns[count] = column;

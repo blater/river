@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.FormatBytes;
-import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
@@ -15,14 +14,13 @@ final class StoredTableRowEncoder {
 
   static StatusCode encode(
       TableDescriptor table,
-      long logicalRowId,
       SqlValueBuffer values,
       ByteBuffer target,
       int start,
       StoredTableRowEncodeResult result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    if (!validArguments(table, logicalRowId, values, target, start)) {
+    if (!validArguments(table, values, target, start)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int length = checkedLength(table, values);
@@ -30,7 +28,6 @@ final class StoredTableRowEncoder {
     if (length > HeapPage.MAXIMUM_ROW_BYTES) return StatusCode.RESOURCE_EXHAUSTED;
     if (start > target.limit() - length) return StatusCode.RESOURCE_EXHAUSTED;
 
-    StoredTableRowHeaderCodec.encode(target, start, table.rowLayoutId(), logicalRowId);
     writeBitmap(table, values, target, start);
     writeSlots(table, values, target, start);
     result.setLength(length);
@@ -38,9 +35,9 @@ final class StoredTableRowEncoder {
   }
 
   private static boolean validArguments(
-      TableDescriptor table, long logicalRowId, SqlValueBuffer values,
+      TableDescriptor table, SqlValueBuffer values,
       ByteBuffer target, int start) {
-    return table != null && table.rowLayoutId() > 0 && logicalRowId > 0
+    return table != null
         && values != null && values.count() == table.columnCount()
         && target != null && !target.isReadOnly() && start >= 0 && start <= target.limit();
   }
@@ -66,7 +63,7 @@ final class StoredTableRowEncoder {
       TableDescriptor table, SqlValueBuffer values, ByteBuffer target, int start) {
     for (int index = 0; index < table.nullBitmapBytes(); index++) {
       long word = values.nullWord(index >>> 3);
-      target.put(start + StoredTableRowHeaderCodec.HEADER_BYTES + index,
+      target.put(start + index,
           (byte) (word >>> ((index & 7) * Byte.SIZE)));
     }
   }

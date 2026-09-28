@@ -22,7 +22,7 @@ final class RelationalDescriptorStorageValidation {
       RelationalDatabaseServices databaseServices) {
     session = indexedSession;
     scan = new RelationalDescriptorStorageValidationScan(indexedSession, this);
-    rows = new RelationalDescriptorRowValidation(databaseServices);
+    rows = new RelationalDescriptorRowValidation();
     foreignKeys = new RelationalDescriptorForeignKeyStorageValidation(
         indexedSession, databaseServices);
   }
@@ -40,7 +40,7 @@ final class RelationalDescriptorStorageValidation {
       status = StatusCode.RESOURCE_EXHAUSTED;
     }
     status = finish(status, scan.close());
-    status = finish(status, rows.complete());
+    rows.complete();
     table = null;
     objectId = 0;
     return status;
@@ -48,7 +48,7 @@ final class RelationalDescriptorStorageValidation {
 
   StatusCode validateBase(long logicalRowId, HeapRowResult row) {
     if (logicalRowId <= 0) return StatusCode.CORRUPTION;
-    StatusCode status = rows.decode(logicalRowId, row);
+    StatusCode status = rows.decode(row);
     if (!status.isOk()) return status;
     if (table.primaryKey() == null) return StatusCode.OK;
     status = encoder.encodeUser(table.primaryKey(), rows.values());

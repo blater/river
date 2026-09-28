@@ -3,7 +3,6 @@ package io.riverdb.storage.heap;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.BoundedByteSource;
 import io.riverdb.format.FormatBytes;
-import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
@@ -160,8 +159,7 @@ public final class HeapRowResult implements BoundedByteSource {
   }
 
   private static boolean nullAt(ByteBuffer source, int start, int column) {
-    int flag = source.get(start + StoredTableRowHeaderCodec.HEADER_BYTES
-        + (column >>> 3)) & 0xff;
+    int flag = source.get(start + (column >>> 3)) & 0xff;
     return (flag & (1 << (column & 7))) != 0;
   }
 

@@ -14,11 +14,8 @@ import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedRelationalMutation;
-import io.riverdb.format.FormatBytes;
-import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -38,31 +35,6 @@ final class RelationalDescriptorStorageValidationTest {
     close(database, table.pin);
 
     assertCorruptReopen(root);
-  }
-
-  @Test
-  void missingHistoricalLayoutAndCorruptBaseHeaderFailReopen(@TempDir Path root) {
-    Path layoutRoot = root.resolve("layout");
-    RelationalDatabase layoutDatabase = create(layoutRoot);
-    NamedTable layoutTable = createNamed(layoutDatabase, "missing_layout");
-    long layoutRow = insert(layoutDatabase, layoutTable.pin, 81);
-    ByteBuffer bytes = baseRow(layoutDatabase, layoutTable.objectId, layoutRow);
-    FormatBytes.putLong(bytes, 16, layoutTable.pin.rowLayoutId() + 10_000);
-    mutate(layoutDatabase, RelationalDescriptorKeyspace.baseRows(layoutTable.objectId),
-        layoutRow, bytes);
-    close(layoutDatabase, layoutTable.pin);
-    assertCorruptReopen(layoutRoot);
-
-    Path headerRoot = root.resolve("header");
-    RelationalDatabase headerDatabase = create(headerRoot);
-    NamedTable headerTable = createNamed(headerDatabase, "bad_header");
-    long headerRow = insert(headerDatabase, headerTable.pin, 82);
-    bytes = baseRow(headerDatabase, headerTable.objectId, headerRow);
-    bytes.put(0, (byte) (bytes.get(0) ^ 1));
-    mutate(headerDatabase, RelationalDescriptorKeyspace.baseRows(headerTable.objectId),
-        headerRow, bytes);
-    close(headerDatabase, headerTable.pin);
-    assertCorruptReopen(headerRoot);
   }
 
   private static RelationalDatabase create(Path root) {
@@ -102,33 +74,6 @@ final class RelationalDescriptorStorageValidationTest {
     assertEquals(StatusCode.OK, session.descriptorRows().insert(pin, values, result));
     assertEquals(StatusCode.OK, session.commit(outcome));
     return result.logicalRowId();
-  }
-
-  private static ByteBuffer baseRow(
-      RelationalDatabase database, long objectId, long logicalRowId) {
-    RelationalSession session = session(database);
-    TransactionOutcome outcome = new TransactionOutcome();
-    HeapRowResult row = new HeapRowResult();
-    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.indexedSession().fetchByKey(
-        RelationalDescriptorKeyspace.baseRows(objectId), logicalRowId, row));
-    ByteBuffer bytes = ByteBuffer.allocate(row.length());
-    assertEquals(StatusCode.OK, row.copyTo(bytes));
-    bytes.flip();
-    assertEquals(StatusCode.OK, session.commit(outcome));
-    return bytes;
-  }
-
-  private static void mutate(
-      RelationalDatabase database, long space, long key, ByteBuffer row) {
-    RelationalSession session = session(database);
-    TransactionOutcome outcome = new TransactionOutcome();
-    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
-    StatusCode status = row == null
-        ? session.indexedSession().delete(space, key)
-        : session.indexedSession().update(space, key, row);
-    assertEquals(StatusCode.OK, status);
-    assertEquals(StatusCode.OK, session.commit(outcome));
   }
 
   private static void deletePrimaryTuple(

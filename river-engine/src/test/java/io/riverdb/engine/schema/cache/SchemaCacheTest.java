@@ -52,7 +52,7 @@ final class SchemaCacheTest {
     assertSame(old, oldPin.descriptor());
 
     SchemaPin lookup = new SchemaPin();
-    assertEquals(StatusCode.OK, cache.lookup(10, 4, lookup));
+    assertEquals(StatusCode.OK, cache.lookupCurrent(10, 4, 2, lookup));
     assertSame(current, lookup.descriptor());
     assertEquals(StatusCode.OK, lookup.release());
     assertEquals(StatusCode.OK, currentPin.release());
@@ -107,7 +107,7 @@ final class SchemaCacheTest {
     assertEquals(StatusCode.CONFLICT, cache.reserveCurrent(current, 4, admission));
     assertEquals(StatusCode.CONFLICT, cache.reserveCurrent(stale, 4, admission));
     assertEquals(0, cache.reservedSlots());
-    assertEquals(StatusCode.CONFLICT, cache.lookup(11, 99, new SchemaPin()));
+    assertEquals(StatusCode.CONFLICT, cache.lookupCurrent(11, 99, 4, new SchemaPin()));
   }
 
   @Test
@@ -141,28 +141,6 @@ final class SchemaCacheTest {
   }
 
   @Test
-  void retainedHistoricalLayoutLoadsAfterCurrentGeneration() {
-    TableDescriptor current = descriptor(22, 40, 10);
-    TableDescriptor historical = descriptor(22, 39, 5);
-    SchemaCache cache = new SchemaCache(2, current.byteCharge() * 2);
-    SchemaAdmission admission = new SchemaAdmission();
-    assertEquals(StatusCode.OK, cache.reserveSuccessor(current, 0, admission));
-    assertEquals(StatusCode.OK, admission.publish(current));
-    assertEquals(StatusCode.CONFLICT, cache.reserveCurrent(historical, 10, admission));
-    assertEquals(StatusCode.OK, cache.reserveRetained(historical, admission));
-    assertEquals(StatusCode.OK, admission.publish(historical));
-
-    SchemaPin currentPin = new SchemaPin();
-    SchemaPin historicalPin = new SchemaPin();
-    assertEquals(StatusCode.OK, cache.lookup(22, 40, currentPin));
-    assertEquals(StatusCode.OK, cache.lookup(22, 39, historicalPin));
-    assertSame(current, currentPin.descriptor());
-    assertSame(historical, historicalPin.descriptor());
-    assertEquals(StatusCode.OK, currentPin.release());
-    assertEquals(StatusCode.OK, historicalPin.release());
-  }
-
-  @Test
   void catalogHeadPreventsStaleCurrentAdmissionAfterEviction() {
     TableDescriptor current = descriptor(27, 60, 10);
     TableDescriptor other = descriptor(28, 61, 1);
@@ -173,13 +151,11 @@ final class SchemaCacheTest {
     assertEquals(StatusCode.OK, admission.publish(current));
     assertEquals(StatusCode.OK, cache.reserveSuccessor(other, 0, admission));
     assertEquals(StatusCode.OK, admission.publish(other));
-    assertEquals(StatusCode.CONFLICT, cache.lookup(27, 60, new SchemaPin()));
+    assertEquals(StatusCode.CONFLICT, cache.lookupCurrent(27, 60, 10, new SchemaPin()));
 
     assertEquals(StatusCode.CONFLICT, cache.reserveSuccessor(stale, 10, admission));
     assertEquals(StatusCode.CONFLICT, cache.reserveCurrent(stale, 10, admission));
     assertEquals(0, cache.reservedSlots());
-    assertEquals(StatusCode.OK, cache.reserveRetained(stale, admission));
-    assertEquals(StatusCode.OK, admission.cancel());
   }
 
   @Test
@@ -205,7 +181,7 @@ final class SchemaCacheTest {
     assertEquals(StatusCode.OK, cache.reserveSuccessor(first, 0, admission));
     assertEquals(StatusCode.OK, admission.cancel());
     assertFalse(admission.isActive());
-    assertEquals(StatusCode.CONFLICT, cache.lookup(12, 6, new SchemaPin()));
+    assertEquals(StatusCode.CONFLICT, cache.lookupCurrent(12, 6, 1, new SchemaPin()));
     assertEquals(StatusCode.OK, cache.reserveSuccessor(second, 0, admission));
     assertEquals(StatusCode.OK, admission.cancel());
     assertEquals(0, cache.usedBytes());
@@ -242,8 +218,8 @@ final class SchemaCacheTest {
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, admission.publish(wrong));
     assertTrue(admission.isActive());
     assertEquals(StatusCode.OK, admission.cancel());
-    assertEquals(StatusCode.CONFLICT, cache.lookup(19, 12, new SchemaPin()));
-    assertEquals(StatusCode.CONFLICT, cache.lookup(20, 13, new SchemaPin()));
+    assertEquals(StatusCode.CONFLICT, cache.lookupCurrent(19, 12, 1, new SchemaPin()));
+    assertEquals(StatusCode.CONFLICT, cache.lookupCurrent(20, 13, 1, new SchemaPin()));
   }
 
   @Test
@@ -262,9 +238,9 @@ final class SchemaCacheTest {
     assertEquals(StatusCode.OK, admission.publish(replacement));
 
     SchemaPin stillThere = new SchemaPin();
-    assertEquals(StatusCode.OK, cache.lookup(14, 8, stillThere));
+    assertEquals(StatusCode.OK, cache.lookupCurrent(14, 8, 1, stillThere));
     assertSame(old, stillThere.descriptor());
-    assertEquals(StatusCode.CONFLICT, cache.lookup(15, 9, new SchemaPin()));
+    assertEquals(StatusCode.CONFLICT, cache.lookupCurrent(15, 9, 1, new SchemaPin()));
     assertEquals(StatusCode.OK, stillThere.release());
     assertEquals(StatusCode.OK, oldPin.release());
   }
@@ -286,11 +262,7 @@ final class SchemaCacheTest {
 
     assertEquals(StatusCode.CONFLICT,
         cache.lookupCurrent(31, 70, 2, new SchemaPin()));
-    SchemaPin retained = new SchemaPin();
-    assertEquals(StatusCode.OK, cache.lookupRetained(31, 70, retained));
-    assertSame(old, retained.descriptor());
     assertSame(old, oldPin.descriptor());
-    assertEquals(StatusCode.OK, retained.release());
     assertEquals(StatusCode.OK, oldPin.release());
   }
 
@@ -327,7 +299,7 @@ final class SchemaCacheTest {
     Thread reader = new Thread(() -> {
       try {
         SchemaPin pin = new SchemaPin();
-        assertEquals(StatusCode.OK, cache.lookup(24, 42, pin));
+        assertEquals(StatusCode.OK, cache.lookupCurrent(24, 42, 1, pin));
         pinned.countDown();
         release.await();
         assertSame(first, pin.descriptor());

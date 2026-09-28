@@ -199,7 +199,7 @@ final class CatalogSchemaPayloadFixture {
     int[] types = new int[count];
     CharSequence[] names = new CharSequence[count];
     boolean[] nullable = new boolean[count];
-    types[0] = SqlTypeDescriptor.varchar(4_043);
+    types[0] = SqlTypeDescriptor.varchar(4_051);
     names[0] = "v0";
     for (int index = 1; index < count; index++) {
       types[index] = SqlTypeDescriptor.BOOLEAN;

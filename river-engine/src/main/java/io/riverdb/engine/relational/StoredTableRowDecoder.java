@@ -2,35 +2,27 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.TableDescriptor;
-import io.riverdb.format.row.StoredTableRowHeader;
-import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
-/** Checks stored-row identity and bounds before publishing trusted values. */
+/** Checks stored-row bounds before publishing trusted values using the table layout. */
 final class StoredTableRowDecoder {
-  private final StoredTableRowHeader header = new StoredTableRowHeader();
+  private StoredTableRowDecoder() {
+  }
 
-  StatusCode decode(
+  static StatusCode decode(
       TableDescriptor table,
-      long expectedLogicalRowId,
       ByteBuffer source,
       int start,
       int length,
       SqlValueBuffer destination,
       StoredTableRowIntegerFilter filter,
       StoredTableColumnSelection selection) {
-    if (!validArguments(table, expectedLogicalRowId, source, start, length, destination)) {
+    if (!validArguments(table, source, start, length, destination)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (length < StoredTableRowHeaderCodec.HEADER_BYTES
-        || length > HeapPage.MAXIMUM_ROW_BYTES
+    if (length > HeapPage.MAXIMUM_ROW_BYTES
         || start > source.limit() - length) {
-      return StatusCode.CORRUPTION;
-    }
-    StatusCode status = StoredTableRowHeaderCodec.decode(
-        source, start, expectedLogicalRowId, header);
-    if (!status.isOk() || header.rowLayoutId() != table.rowLayoutId()) {
       return StatusCode.CORRUPTION;
     }
     if (!StoredTableRowBounds.fixedPrefix(table, length)) return StatusCode.CORRUPTION;
@@ -38,7 +30,7 @@ final class StoredTableRowDecoder {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (filter != null) {
-      status = filter.test(table, source, start);
+      StatusCode status = filter.test(table, source, start);
       if (!status.isOk()) return status;
     }
     int textBytes = StoredTableRowBounds.publishedTextBytes(
@@ -52,9 +44,9 @@ final class StoredTableRowDecoder {
   }
 
   private static boolean validArguments(
-      TableDescriptor table, long rowId, ByteBuffer source, int start, int length,
+      TableDescriptor table, ByteBuffer source, int start, int length,
       SqlValueBuffer destination) {
-    return table != null && table.rowLayoutId() > 0 && rowId > 0 && source != null
+    return table != null && source != null
         && destination != null && start >= 0 && start <= source.limit() && length >= 0;
   }
 }

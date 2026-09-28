@@ -7,8 +7,6 @@ import io.riverdb.storage.heap.HeapPage;
 
 /** Recomputes physical slots and exact admitted maximum row bytes. */
 final class TableLayout {
-  private static final int ROW_HEADER_BYTES = 32;
-
   private TableLayout() {
   }
 
@@ -43,7 +41,7 @@ final class TableLayout {
     } catch (OutOfMemoryError error) {
       return fail(detail, StatusCode.RESOURCE_EXHAUSTED, "layout capacity unavailable");
     }
-    long offset = ROW_HEADER_BYTES + nullBytes;
+    long offset = nullBytes;
     long maximum = offset;
     for (int index = 0; index < count; index++) {
       int descriptor = columns.typeDescriptorAt(index);

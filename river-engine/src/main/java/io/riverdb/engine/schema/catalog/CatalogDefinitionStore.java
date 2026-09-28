@@ -3,8 +3,6 @@ package io.riverdb.engine.schema.catalog;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.schema.TableDescriptor;
-import io.riverdb.engine.table.IndexedScanCursor;
-import io.riverdb.engine.table.IndexedScanResult;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.format.catalog.CatalogBuildIntent;
 import io.riverdb.format.catalog.CatalogDefinitionManifest;
@@ -27,8 +25,6 @@ final class CatalogDefinitionStore {
   private final CatalogDefinitionRecord child = new CatalogDefinitionRecord();
   private final CatalogObjectHead head = new CatalogObjectHead();
   private final HeapRowResult row = new HeapRowResult();
-  private final IndexedScanCursor cursor = new IndexedScanCursor();
-  private final IndexedScanResult scanned = new IndexedScanResult();
   private final ByteBuffer record = ByteBuffer.allocateDirect(
       CatalogDefinitionRecordCodec.MAX_RECORD_BYTES);
   private final CRC32C recordChecksum = new CRC32C();
@@ -146,18 +142,6 @@ final class CatalogDefinitionStore {
         && head.manifestRecordId() == intent.predecessorManifestRecordId();
   }
 
-  StatusCode loadHistorical(
-      IndexedTransactionSession session, long objectId, long rowLayoutId,
-      long catalogGeneration, TableDescriptor.Result result, StatusDetail detail) {
-    if (session == null || !io.riverdb.format.catalog.CatalogKeyspace.validObjectHead(objectId)
-        || rowLayoutId <= 0 || catalogGeneration < 0 || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = findManifest(session, objectId, rowLayoutId, catalogGeneration);
-    return status.isOk() ? assembleLoaded(session, result, detail) : status;
-  }
-
   StatusCode assembleCurrent(
       IndexedTransactionSession session,
       long objectId,
@@ -184,59 +168,6 @@ final class CatalogDefinitionStore {
       }
     }
     return assembly.finish(result, detail);
-  }
-
-  private StatusCode findManifest(
-      IndexedTransactionSession session, long objectId, long rowLayoutId, long generation) {
-    StatusCode status = cursor.reset();
-    if (status.isOk()) status = session.beginScan(CatalogKeyspace.DEFINITION_SPACE,
-        Long.MIN_VALUE, CatalogKeyspace.DEFINITION_SPACE, Long.MAX_VALUE, cursor);
-    long selectedId = 0;
-    long selectedGeneration = 0;
-    while (status.isOk()) {
-      status = session.nextScan(cursor, scanned);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      if (!status.isOk()) break;
-      if (scanned.keySpace() != CatalogKeyspace.DEFINITION_SPACE) {
-        status = StatusCode.CORRUPTION;
-        break;
-      }
-      StatusCode inspected = inspectManifest(scanned.row(), scanned.key());
-      if (!inspected.isOk()) {
-        status = inspected;
-        break;
-      }
-      if (newerMatchingManifest(objectId, rowLayoutId, generation, selectedGeneration)) {
-        selectedId = manifest.catalogRecordId();
-        selectedGeneration = manifest.catalogGeneration();
-      }
-    }
-    status = closeManifestScan(session, status);
-    if (!status.isOk() || selectedId == 0) {
-      return status.isOk() ? StatusCode.CONFLICT : status;
-    }
-    status = readManifestRecord(session, selectedId);
-    if (!status.isOk()) return referenced(status);
-    return installHead();
-  }
-
-  private StatusCode closeManifestScan(IndexedTransactionSession session, StatusCode status) {
-    if (cursor.isActive()) {
-      StatusCode closed = session.closeScan(cursor);
-      if (status.isOk()) status = closed;
-    }
-    return status;
-  }
-
-  private boolean newerMatchingManifest(
-      long objectId, long rowLayoutId, long generation, long selectedGeneration) {
-    return manifest.catalogRecordId() != 0 && manifest.objectId() == objectId
-        && manifest.rowLayoutId() == rowLayoutId
-        && (generation == 0 || manifest.catalogGeneration() == generation)
-        && manifest.catalogGeneration() > selectedGeneration;
   }
 
   StatusCode inspectManifest(HeapRowResult source, long key) {
