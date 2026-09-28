@@ -3,7 +3,6 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.FormatBytes;
-import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import java.nio.ByteBuffer;
 
 /** Absolute primitive access for a structurally bounded stored row. */
@@ -12,7 +11,7 @@ final class StoredTableRowAccess {
   }
 
   static boolean nullAt(ByteBuffer source, int start, int index) {
-    int bitmap = start + StoredTableRowHeaderCodec.HEADER_BYTES + (index >>> 3);
+    int bitmap = start + (index >>> 3);
     return (source.get(bitmap) & 1 << (index & 7)) != 0;
   }
 

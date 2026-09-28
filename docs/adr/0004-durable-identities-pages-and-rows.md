@@ -23,8 +23,9 @@ process/storage-node lifetime and is not encoded into logical row identity.
 Phase 0 freezes both incarnation semantics; Phase 1 first persists them.
 
 Use one 16 KiB canonical v4 page size with no mixed page sizes inside a
-database. Every durable file/page/row carries format version and database/file
-identity where applicable. Pages use a canonical byte order, page type,
+database. Durable file and page formats carry their owning format version and
+database/file identity where applicable; table-row payloads carry neither.
+Pages use a canonical byte order, page type,
 `PageId`, generation, free-space/slot bounds, header checksum, and a
 `PageWalToken(DatabaseIncarnation, WalGeneration, recordStartLsn,
 recordEndLsn)`. The end is exclusive. A bare offset is not a durable page
@@ -33,6 +34,20 @@ comparison value.
 Heap pages are slotted; rows have bounded null/variable-offset metadata,
 creator and deleter transaction fields, and an optional durable
 `VersionPointer`. Oversized values use an explicit overflow representation.
+
+Stored descriptor-table rows start with the null bitmap, followed by fixed
+column slots and variable bytes. There is no row magic, format version, reserved
+flags, layout ID or duplicate logical row ID. The admitted table descriptor owns
+physical layout; current metadata successors preserve that layout. Mixed physical
+layouts within a table are unsupported, and the historical-layout resolver and
+its unused admission APIs are removed. The index/logical-head/scan owner supplies
+logical identity independently of the row payload. MVCC identity, visibility and
+version chains remain in their existing storage metadata.
+
+Database control format v2 admits this headerless layout and rejects v1 at open.
+This replaces the former 32-byte row header without an old-format reader,
+migration or replacement per-row marker. Explicit future layout-changing DDL
+must establish its table storage contract when that feature is implemented.
 
 V1 durable fixtures cover same-version read/write and explicit rejection of
 unknown/incompatible versions. Cross-version reading or upgrade is not implied

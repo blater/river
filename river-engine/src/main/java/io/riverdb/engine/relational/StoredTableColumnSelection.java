@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
-import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import io.riverdb.storage.heap.HeapRowProjection;
 import java.util.Arrays;
 
@@ -71,7 +70,7 @@ public final class StoredTableColumnSelection {
     if (filter != null && filter.active()) select(filter.column());
     if (!projectionDirty && projectionLayoutId == table.rowLayoutId()) return StatusCode.OK;
     StatusCode status = projection.prepare(
-        StoredTableRowHeaderCodec.HEADER_BYTES + table.nullBitmapBytes(),
+        table.nullBitmapBytes(),
         StoredTableRowEncoder.fixedEnd(table), count);
     for (int index = 0; status.isOk() && index < count; index++) {
       int column = ordinals[index];

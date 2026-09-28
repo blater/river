@@ -317,7 +317,7 @@ public final class RelationalDescriptorTableAccess {
 
   private StatusCode prepareUpdate(
       TableDescriptor table, long logicalRowId, SqlValueBuffer values) {
-    StatusCode status = rowAccess.encode(table, logicalRowId, values);
+    StatusCode status = rowAccess.encode(table, values);
     if (!status.isOk()) return status;
     status = checks.validate(table, values);
     if (!status.isOk()) return status;

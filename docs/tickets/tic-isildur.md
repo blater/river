@@ -35,7 +35,8 @@ work in [tic-72e5](tic-72e5.md).
    before selecting. Implement the chosen format and remove the superseded
    path, including its writes and recovery. No permanent fallback or second
    implementation path remains.
-3. Simplify row transfer under explicit buffer ownership. Remove intermediate
+3. [Admit row access once, shrink headers and remove redundant copies](tic-celeborn.md).
+   Simplify row transfer under explicit buffer ownership. Remove intermediate
    full-row materialization where a pin or bounded borrowed view permits it;
    otherwise copy only the required values before releasing the pin.
 

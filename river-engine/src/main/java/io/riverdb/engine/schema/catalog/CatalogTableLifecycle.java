@@ -22,7 +22,6 @@ public final class CatalogTableLifecycle {
   private CatalogSuccessorLifecycle successorLifecycle;
   private CatalogTableDrop drop;
   private CatalogTableOpener opener;
-  private CatalogHistoricalTableOpener historicalOpener;
   private CatalogStartupValidator startup;
 
   public CatalogTableLifecycle(EmbeddedDatabase database, SchemaCache schemaCache) {
@@ -154,24 +153,6 @@ public final class CatalogTableLifecycle {
     return status.isOk() ? opener.openInTransaction(session, objectId, pin, detail) : status;
   }
 
-  /** Resolves the newest durable generation carrying one historical physical row layout. */
-  public synchronized StatusCode openRetained(
-      long objectId, long rowLayoutId, SchemaPin pin, StatusDetail detail) {
-    StatusCode status = ensureInitialized();
-    return status.isOk()
-        ? historicalOpener.open(objectId, rowLayoutId, 0, pin, detail) : status;
-  }
-
-  /** Resolves one exact durable historical catalog generation and physical row layout. */
-  public synchronized StatusCode openHistorical(
-      long objectId, long rowLayoutId, long catalogGeneration,
-      SchemaPin pin, StatusDetail detail) {
-    StatusCode status = ensureInitialized();
-    return status.isOk()
-        ? historicalOpener.open(
-            objectId, rowLayoutId, catalogGeneration, pin, detail) : status;
-  }
-
   /** Authoritative object-ID ceiling shared with relational physical namespace allocation. */
   public static long maximumObjectId() {
     return CatalogKeyspace.MAXIMUM_RELATIONAL_OBJECT_ID;
@@ -207,7 +188,6 @@ public final class CatalogTableLifecycle {
       successorLifecycle = new CatalogSuccessorLifecycle(embedded, cache, successor);
       drop = new CatalogTableDrop(cache, heads, definitions);
       opener = new CatalogTableOpener(cache, transactions, definitions);
-      historicalOpener = new CatalogHistoricalTableOpener(cache, transactions, definitions);
       startup = new CatalogStartupValidator(
           transactions, cleaner, definitions);
       return StatusCode.OK;
@@ -220,7 +200,6 @@ public final class CatalogTableLifecycle {
       successorLifecycle = null;
       drop = null;
       opener = null;
-      historicalOpener = null;
       startup = null;
       return StatusCode.RESOURCE_EXHAUSTED;
     }

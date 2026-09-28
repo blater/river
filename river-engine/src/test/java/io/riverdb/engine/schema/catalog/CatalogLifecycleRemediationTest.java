@@ -367,37 +367,6 @@ final class CatalogLifecycleRemediationTest {
   }
 
   @Test
-  void historicalDescriptorLoadsDurablyAfterReopen(@TempDir Path root) {
-    Opened opened = create(root);
-    SchemaPin created = new SchemaPin();
-    assertEquals(StatusCode.OK,
-        opened.lifecycle().create(descriptor(), created, new StatusDetail(64)));
-    long objectId = created.tableId();
-    long rowLayoutId = created.rowLayoutId();
-    long generation = created.catalogGeneration();
-    assertEquals(StatusCode.OK, created.release());
-    assertEquals(StatusCode.OK, opened.database().close());
-
-    EmbeddedDatabaseOpenResult result = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK,
-        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6,
-            EmbeddedLockDiagnosticsConfig.disabled(), result));
-    SchemaCache.Result cache = new SchemaCache.Result();
-    assertEquals(StatusCode.OK,
-        SchemaCache.createBudgeted(8_000_000, cache, new StatusDetail(64)));
-    CatalogTableLifecycle reopened = new CatalogTableLifecycle(result.database(), cache.value());
-    assertEquals(StatusCode.OK, reopened.validate());
-    SchemaPin historical = new SchemaPin();
-    StatusDetail detail = new StatusDetail(64);
-    assertEquals(StatusCode.OK, reopened.openHistorical(
-        objectId, rowLayoutId, generation, historical, detail), detail.toString());
-    assertEquals(generation, historical.catalogGeneration());
-    assertEquals(rowLayoutId, historical.rowLayoutId());
-    assertEquals(StatusCode.OK, historical.release());
-    assertEquals(StatusCode.OK, result.database().close());
-  }
-
-  @Test
   void reopenCompletesReadyHeadWithResidualBuildingIntent(@TempDir Path root) {
     Opened opened = create(root);
     SchemaPin created = new SchemaPin();
@@ -576,9 +545,6 @@ final class CatalogLifecycleRemediationTest {
     StatusDetail detail = new StatusDetail(64);
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
         reopened.open(CatalogKeyspace.OBJECT_ID_EXHAUSTED, pin, detail));
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
-        reopened.openHistorical(
-            CatalogKeyspace.OBJECT_ID_EXHAUSTED, 1, 1, pin, detail));
     assertEquals(StatusCode.OK, result.database().close());
   }
 

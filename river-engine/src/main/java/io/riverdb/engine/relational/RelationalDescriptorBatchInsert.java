@@ -68,7 +68,7 @@ public final class RelationalDescriptorBatchInsert {
       TableDescriptor table, SqlValueBuffer values, long logicalRowId) {
     StatusCode status = rowBuffer.reserve(table.encodedMaximumRowBytes());
     if (!status.isOk()) return status;
-    status = rowBuffer.encode(table, logicalRowId, values);
+    status = rowBuffer.encode(table, values);
     if (!status.isOk()) return status;
     status = checks.validate(table, values);
     if (!status.isOk()) return status;

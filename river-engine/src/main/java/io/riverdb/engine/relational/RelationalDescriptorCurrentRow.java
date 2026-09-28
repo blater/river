@@ -76,7 +76,7 @@ final class RelationalDescriptorCurrentRow {
   StatusCode decodeTo(
       TableDescriptor table, long rowId, SqlValueBuffer destination) {
     return logicalRowId == rowId && locked.isAvailable()
-        ? rows.decode(table, rowId, locked.row(), destination)
+        ? rows.decode(table, locked.row(), destination)
         : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
@@ -102,7 +102,7 @@ final class RelationalDescriptorCurrentRow {
   private StatusCode finish(
       TableDescriptor table, long rowId, SqlValueBuffer destination, StatusCode status) {
     if (!status.isOk()) return status;
-    status = rows.decode(table, rowId, locked.row(), destination);
+    status = rows.decode(table, locked.row(), destination);
     if (status.isOk()) logicalRowId = rowId;
     if (status.isOk()) return status;
     StatusCode released = session.releaseLocked(locked);

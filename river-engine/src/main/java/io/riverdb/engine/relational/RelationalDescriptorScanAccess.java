@@ -104,7 +104,7 @@ final class RelationalDescriptorScanAccess {
           ? rowAccess.fetch(
               session, table, logicalRowId, destination, filter, selection)
           : rowAccess.decode(
-              table, logicalRowId, cursor.row().row(), destination, filter, selection);
+              table, cursor.row().row(), destination, filter, selection);
       if (status == StatusCode.CONFLICT && cursor.isTuplePhysical()) continue;
       if (status == StatusCode.CONFLICT && filter != null) continue;
       if (!status.isOk()) return status;

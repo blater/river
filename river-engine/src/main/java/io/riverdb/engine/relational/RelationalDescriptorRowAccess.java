@@ -15,8 +15,8 @@ final class RelationalDescriptorRowAccess {
     return buffer.reserve(table.encodedMaximumRowBytes());
   }
 
-  StatusCode encode(TableDescriptor table, long logicalRowId, SqlValueBuffer values) {
-    return buffer.encode(table, logicalRowId, values);
+  StatusCode encode(TableDescriptor table, SqlValueBuffer values) {
+    return buffer.encode(table, values);
   }
 
   StatusCode fetch(
@@ -43,23 +43,23 @@ final class RelationalDescriptorRowAccess {
     status = session.fetchByKey(
         RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId, fetched);
     return status.isOk()
-        ? decode(table, logicalRowId, fetched, destination, filter, selection) : status;
+        ? decode(table, fetched, destination, filter, selection) : status;
   }
 
   StatusCode decode(
-      TableDescriptor table, long logicalRowId,
+      TableDescriptor table,
       HeapRowResult source, SqlValueBuffer destination) {
-    return decode(table, logicalRowId, source, destination, null);
+    return decode(table, source, destination, null);
   }
 
   StatusCode decode(
-      TableDescriptor table, long logicalRowId,
+      TableDescriptor table,
       HeapRowResult source, SqlValueBuffer destination, StoredTableRowIntegerFilter filter) {
-    return decode(table, logicalRowId, source, destination, filter, null);
+    return decode(table, source, destination, filter, null);
   }
 
   StatusCode decode(
-      TableDescriptor table, long logicalRowId,
+      TableDescriptor table,
       HeapRowResult source, SqlValueBuffer destination, StoredTableRowIntegerFilter filter,
       StoredTableColumnSelection selection) {
     if (selection != null) {
@@ -73,7 +73,7 @@ final class RelationalDescriptorRowAccess {
         }
       }
     }
-    return buffer.decode(table, logicalRowId, source, destination, filter, selection);
+    return buffer.decode(table, source, destination, filter, selection);
   }
 
   ByteBuffer bytes() { return buffer.bytes(); }

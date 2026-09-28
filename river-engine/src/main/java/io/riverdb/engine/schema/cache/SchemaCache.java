@@ -98,18 +98,6 @@ public final class SchemaCache {
     return pin != null && pin.owner() == this && pin.entry() != null;
   }
 
-  public synchronized StatusCode lookup(long tableId, long rowLayoutId, SchemaPin pin) {
-    return lookupRetained(tableId, rowLayoutId, pin);
-  }
-
-  /** Looks up the newest retained descriptor for historical rows of one exact layout. */
-  public synchronized StatusCode lookupRetained(
-      long tableId, long rowLayoutId, SchemaPin pin) {
-    if (!validConfiguration || tableId <= 0 || rowLayoutId <= 0 || pin == null
-        || pin.isActive()) return StatusCode.INVALID_EXTERNAL_INPUT;
-    return slots.lookupRetained(tableId, rowLayoutId, pin, this);
-  }
-
   /** Looks up only the exact descriptor named by the current durable catalog head. */
   public synchronized StatusCode lookupCurrent(
       long tableId, long rowLayoutId, long catalogGeneration, SchemaPin pin) {
@@ -126,14 +114,6 @@ public final class SchemaCache {
     }
     return slots.lookupCurrent(
         tableId, schemaId, rowLayoutId, catalogGeneration, pin, this);
-  }
-
-  public synchronized StatusCode lookup(long tableId, long rowLayoutId, SchemaPin pin,
-      StatusDetail detail) {
-    if (detail != null) detail.reset();
-    StatusCode status = lookup(tableId, rowLayoutId, pin);
-    if (detail != null && !status.isOk()) detail.set(status);
-    return status;
   }
 
   /** Reserves an unpublished successor after checking the authoritative durable head. */
@@ -164,17 +144,6 @@ public final class SchemaCache {
     }
     if (descriptor.catalogGeneration() != currentCatalogGeneration) return StatusCode.CONFLICT;
     return slots.reserveLoadedCurrent(descriptor, admission, this);
-  }
-
-  /** Reserves an exact retained generation loaded for historical-row decoding. */
-  public synchronized StatusCode reserveRetained(
-      TableDescriptor descriptor, SchemaAdmission admission) {
-    if (!validConfiguration || descriptor == null || admission == null || admission.isActive()
-        || descriptor.tableId() <= 0 || descriptor.rowLayoutId() <= 0
-        || descriptor.catalogGeneration() <= 0 || descriptor.byteCharge() <= 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    return slots.reserveRetained(descriptor, admission, this);
   }
 
   public synchronized StatusCode publish(SchemaAdmission admission, TableDescriptor descriptor,

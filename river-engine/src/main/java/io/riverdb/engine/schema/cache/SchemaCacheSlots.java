@@ -33,12 +33,6 @@ final class SchemaCacheSlots {
 
   int reservedSlots() { return reservedSlots; }
 
-  StatusCode lookupRetained(
-      long tableId, long rowLayoutId, SchemaPin pin, SchemaCache owner) {
-    SchemaCacheEntry found = scan.findRetained(tableId, rowLayoutId);
-    return pin(found, pin, owner);
-  }
-
   StatusCode lookupCurrent(
       long tableId, long schemaId, long rowLayoutId, long generation,
       SchemaPin pin, SchemaCache owner) {
@@ -68,13 +62,6 @@ final class SchemaCacheSlots {
     if (scan.hasExact(descriptor) || scan.hasPending(descriptor.tableId())) {
       return StatusCode.CONFLICT;
     }
-    return reserveAvailable(descriptor, admission, owner);
-  }
-
-  StatusCode reserveRetained(
-      TableDescriptor descriptor, SchemaAdmission admission, SchemaCache owner) {
-    if (descriptor.byteCharge() > maximumBytes) return StatusCode.RESOURCE_EXHAUSTED;
-    if (scan.hasExact(descriptor)) return StatusCode.CONFLICT;
     return reserveAvailable(descriptor, admission, owner);
   }
 

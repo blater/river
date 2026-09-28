@@ -13,44 +13,44 @@ final class HeapPageTest {
   void projectedRetentionCopiesSelectedValuesAndOwnsThemAfterSourceReuse() {
     ByteBuffer source = ByteBuffer.allocate(256);
     int start = 17;
-    FormatBytes.putLong(source, start + 40, 1234);
-    FormatBytes.putInt(source, start + 48, 64);
-    FormatBytes.putInt(source, start + 52, 2);
-    FormatBytes.putInt(source, start + 56, 66);
-    FormatBytes.putInt(source, start + 60, 100);
-    source.put(start + 64, (byte) 'o');
-    source.put(start + 65, (byte) 'k');
-    for (int index = 66; index < 166; index++) {
+    FormatBytes.putLong(source, start + 1, 1234);
+    FormatBytes.putInt(source, start + 9, 25);
+    FormatBytes.putInt(source, start + 13, 2);
+    FormatBytes.putInt(source, start + 17, 27);
+    FormatBytes.putInt(source, start + 21, 100);
+    source.put(start + 25, (byte) 'o');
+    source.put(start + 26, (byte) 'k');
+    for (int index = 27; index < 127; index++) {
       source.put(start + index, (byte) 0x55);
     }
     HeapRowProjection plan = new HeapRowProjection();
-    assertEquals(StatusCode.OK, plan.prepare(33, 64, 2));
-    assertEquals(StatusCode.OK, plan.add(0, 40, 8, false));
-    assertEquals(StatusCode.OK, plan.add(1, 48, 8, true));
+    assertEquals(StatusCode.OK, plan.prepare(1, 25, 2));
+    assertEquals(StatusCode.OK, plan.add(0, 1, 8, false));
+    assertEquals(StatusCode.OK, plan.add(1, 9, 8, true));
     HeapRowResult result = new HeapRowResult();
     result.retentionProjection(plan);
-    result.set(source, 1, start, 166);
+    result.set(source, 1, start, 127);
     assertEquals(StatusCode.OK, result.retainBytes());
-    assertEquals(66, result.length());
+    assertEquals(27, result.length());
     ByteBuffer retained = result.retainedReadOnlyBytes();
-    assertEquals(1234, FormatBytes.getLong(retained, 40));
-    assertEquals(64, FormatBytes.getInt(retained, 48));
-    assertEquals(0, FormatBytes.getInt(retained, 56));
-    assertEquals('o', retained.get(64));
-    source.put(start + 64, (byte) 'x');
-    assertEquals('o', result.retainedReadOnlyBytes().get(64));
+    assertEquals(1234, FormatBytes.getLong(retained, 1));
+    assertEquals(25, FormatBytes.getInt(retained, 9));
+    assertEquals(0, FormatBytes.getInt(retained, 17));
+    assertEquals('o', retained.get(25));
+    source.put(start + 25, (byte) 'x');
+    assertEquals('o', result.retainedReadOnlyBytes().get(25));
 
-    FormatBytes.putInt(source, start + 56, 10_000);
+    FormatBytes.putInt(source, start + 17, 10_000);
     HeapRowResult unusedDamaged = new HeapRowResult();
     unusedDamaged.retentionProjection(plan);
-    unusedDamaged.set(source, 1, start, 166);
+    unusedDamaged.set(source, 1, start, 127);
     assertEquals(StatusCode.OK, unusedDamaged.retainBytes());
-    assertEquals(66, unusedDamaged.length());
+    assertEquals(27, unusedDamaged.length());
 
-    FormatBytes.putInt(source, start + 48, 200);
+    FormatBytes.putInt(source, start + 9, 200);
     HeapRowResult damaged = new HeapRowResult();
     damaged.retentionProjection(plan);
-    damaged.set(source, 1, start, 166);
+    damaged.set(source, 1, start, 127);
     assertEquals(StatusCode.CORRUPTION, damaged.retainBytes());
   }
 

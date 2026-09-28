@@ -70,12 +70,6 @@ public final class RelationalDatabaseServices {
         : catalog.openInTransaction(session, objectId, pin, detail);
   }
 
-  synchronized StatusCode openRetained(
-      long objectId, long rowLayoutId, SchemaPin pin, StatusDetail detail) {
-    return closePrepared
-        ? StatusCode.CLOSED : catalog.openRetained(objectId, rowLayoutId, pin, detail);
-  }
-
   synchronized StatusCode prepareDescriptor(
       TableDescriptor table,
       IndexedTransactionSession session,

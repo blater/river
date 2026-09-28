@@ -11,15 +11,6 @@ final class SchemaCacheSlotScan {
     entries = slots;
   }
 
-  SchemaCacheEntry findRetained(long tableId, long rowLayoutId) {
-    SchemaCacheEntry found = null;
-    for (SchemaCacheEntry entry : entries) {
-      if (entry.occupied && entry.tableId == tableId && entry.rowLayoutId == rowLayoutId
-          && (found == null || newer(entry, found))) found = entry;
-    }
-    return found;
-  }
-
   SchemaCacheEntry findExact(
       long tableId, long schemaId, long rowLayoutId, long generation) {
     for (SchemaCacheEntry entry : entries) {
@@ -82,11 +73,5 @@ final class SchemaCacheSlotScan {
 
   void clear(SchemaCacheEntry entry) {
     entry.clear();
-  }
-
-  private static boolean newer(SchemaCacheEntry candidate, SchemaCacheEntry current) {
-    return candidate.catalogGeneration > current.catalogGeneration
-        || (candidate.catalogGeneration == current.catalogGeneration
-        && candidate.sequence > current.sequence);
   }
 }
