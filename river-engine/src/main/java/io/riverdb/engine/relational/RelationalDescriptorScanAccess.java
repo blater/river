@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.row.StoredTableRowFilter;
 import io.riverdb.engine.schema.cache.SchemaPin;
@@ -79,11 +80,19 @@ final class RelationalDescriptorScanAccess {
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination, RelationalRowIdentityResult result,
       StoredTableRowFilter filter) {
+    return next(owner, cursor, destination, result, filter, true);
+  }
+
+  StatusCode next(
+      RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
+      SqlValueBuffer destination, RelationalRowIdentityResult result,
+      StoredTableRowFilter filter, boolean publishText) {
     if (cursor == null || destination == null || result == null || !cursor.matches(owner)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
     TableDescriptor table = cursor.descriptor();
+    boolean decodeText = publishText || indexNeedsText(cursor);
     StatusCode status = reserveRow(table, destination);
     if (!status.isOk()) return status;
     while (true) {
@@ -91,8 +100,9 @@ final class RelationalDescriptorScanAccess {
       if (!status.isOk()) return status;
       long logicalRowId = cursor.logicalRowId();
       status = cursor.isTuplePhysical()
-          ? rowAccess.fetch(session, table, logicalRowId, destination, filter)
-          : rowAccess.decode(table, logicalRowId, cursor.row().row(), destination, filter);
+          ? rowAccess.fetch(session, table, logicalRowId, destination, filter, decodeText)
+          : rowAccess.decode(
+              table, logicalRowId, cursor.row().row(), destination, filter, decodeText);
       if (status == StatusCode.CONFLICT && cursor.isTuplePhysical()) continue;
       if (status == StatusCode.CONFLICT && filter != null) continue;
       if (!status.isOk()) return status;
@@ -104,6 +114,16 @@ final class RelationalDescriptorScanAccess {
       result.set(logicalRowId);
       return StatusCode.OK;
     }
+  }
+
+  private static boolean indexNeedsText(RelationalDescriptorScanCursor cursor) {
+    if (!cursor.isTuplePhysical()) return false;
+    KeyDescriptor key = cursor.tupleBounds().key();
+    for (int part = 0; part < key.partCount(); part++) {
+      if (SqlTypeDescriptor.typeId(key.typeDescriptorAt(part))
+          == SqlTypeDescriptor.TYPE_ID_VARCHAR) return true;
+    }
+    return false;
   }
 
   private StatusCode reserveRow(TableDescriptor table, SqlValueBuffer destination) {

@@ -12,10 +12,12 @@ final class StoredTableRowPublisher {
   }
 
   static StatusCode publish(
-      TableDescriptor table, ByteBuffer source, int start, SqlValueBuffer destination) {
+      TableDescriptor table, ByteBuffer source, int start, SqlValueBuffer destination,
+      boolean publishText) {
     StatusCode status = destination.clearForSize(table.columnCount());
     if (!status.isOk()) return status;
     for (int index = 0; index < table.columnCount(); index++) {
+      if (!publishText && StoredTableRowEncoder.isText(table.typeDescriptorAt(index))) continue;
       status = publishSlot(table, source, start, index, destination);
       if (!status.isOk()) return StatusCode.INVARIANT_BROKEN;
     }

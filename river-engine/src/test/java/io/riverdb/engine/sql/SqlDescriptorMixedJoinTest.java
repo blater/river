@@ -136,6 +136,28 @@ final class SqlDescriptorMixedJoinTest {
   }
 
   @Test
+  void numericJoinRechecksACompositeIndexWithTextSuffix(@TempDir Path root) {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE numeric_roots (id INTEGER PRIMARY KEY,bucket INTEGER)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE text_suffix_rows (bucket INTEGER,label VARCHAR(16),"
+            + "quantity INTEGER,PRIMARY KEY(bucket,label))", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO numeric_roots VALUES (1,7)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO text_suffix_rows VALUES (7,'one',10),(7,'two',20),(8,'other',5)", result));
+    assertEquals(1, scalarCount(
+        session, result,
+        "SELECT COUNT(*) FROM numeric_roots r JOIN text_suffix_rows s "
+            + "ON r.bucket=s.bucket WHERE r.id=1 AND s.quantity<15"));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void rangeAccessFallsBackWithoutLosingCrossTypeMatches(@TempDir Path root) {
     RelationalDatabase database = create(root);
     SqlSession session = session(database);

@@ -55,11 +55,22 @@ final class RelationalDescriptorRowBuffer {
       HeapRowResult source,
       SqlValueBuffer destination,
       StoredTableRowFilter filter) {
+    return decode(table, logicalRowId, source, destination, filter, true);
+  }
+
+  StatusCode decode(
+      TableDescriptor table,
+      long logicalRowId,
+      HeapRowResult source,
+      SqlValueBuffer destination,
+      StoredTableRowFilter filter,
+      boolean publishText) {
     bytes.clear();
     StatusCode status = source.copyTo(bytes);
     if (!status.isOk()) return StatusCode.CORRUPTION;
     bytes.flip();
-    return codec.decode(table, logicalRowId, bytes, 0, source.length(), destination, filter);
+    return codec.decode(
+        table, logicalRowId, bytes, 0, source.length(), destination, filter, publishText);
   }
 
   ByteBuffer bytes() { return bytes; }

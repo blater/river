@@ -60,6 +60,38 @@ final class StoredTableRowCodecTest {
   }
 
   @Test
+  void omittedTextRemainsValidatedAndNumericColumnsRemainAvailable() {
+    int text = SqlTypeDescriptor.varchar(4);
+    TableDescriptor table = table(
+        new int[] {SqlTypeDescriptor.SMALLINT, text, SqlTypeDescriptor.BOOLEAN},
+        new boolean[] {false, false, false});
+    SqlValueBuffer input = values(3, 16);
+    assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.SMALLINT, 40));
+    assertEquals(StatusCode.OK, input.setText(1, text, "yes"));
+    assertEquals(StatusCode.OK, input.setFixed(2, SqlTypeDescriptor.BOOLEAN, 1));
+    Encoded encoded = encode(table, input);
+    SqlValueBuffer output = values(3, 16);
+    StoredTableRowCodec codec = new StoredTableRowCodec();
+
+    assertEquals(StatusCode.OK, codec.decode(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length,
+        output, null, false));
+    assertEquals(40, output.valueAt(0));
+    assertEquals(0, output.descriptorAt(1));
+    assertEquals(0, output.textBytesUsed());
+    assertEquals(1, output.valueAt(2));
+
+    byte[] corrupt = encoded.bytes.clone();
+    int slot = START + table.fixedOffsetAt(1);
+    corrupt[START + FormatBytes.getInt(ByteBuffer.wrap(corrupt), slot)] = (byte) 0xc0;
+    assertEquals(StatusCode.CORRUPTION, codec.decode(
+        table, 71, ByteBuffer.wrap(corrupt), START, encoded.length,
+        output, null, false));
+    assertEquals(40, output.valueAt(0));
+    assertEquals(0, output.descriptorAt(1));
+  }
+
+  @Test
   void roundTripsMixedValuesWithoutChangingBufferState() {
     TableDescriptor table = table(
         new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BOOLEAN,

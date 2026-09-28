@@ -245,6 +245,17 @@ public final class RelationalDescriptorTableAccess {
         : scanAccess.next(this, cursor, destination, result, filter);
   }
 
+  /** The caller must prove it will not read text from a partially published row. */
+  public StatusCode nextScan(
+      RelationalDescriptorScanCursor cursor,
+      SqlValueBuffer destination,
+      RelationalRowIdentityResult result,
+      io.riverdb.engine.row.StoredTableRowFilter filter,
+      boolean publishText) {
+    return !active() ? StatusCode.INVALID_EXTERNAL_INPUT
+        : scanAccess.next(this, cursor, destination, result, filter, publishText);
+  }
+
   public StatusCode closeScan(RelationalDescriptorScanCursor cursor) {
     return scanAccess.close(this, cursor);
   }
