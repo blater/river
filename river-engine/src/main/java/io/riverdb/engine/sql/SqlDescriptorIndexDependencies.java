@@ -5,6 +5,7 @@ import io.riverdb.engine.relational.CatalogObjectCursor;
 import io.riverdb.engine.relational.CatalogObjectResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.schema.KeyDescriptor;
+import io.riverdb.engine.schema.ForeignKeySupport;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 
@@ -61,24 +62,9 @@ final class SqlDescriptorIndexDependencies {
 
   static boolean supportsLocalForeignKeys(TableDescriptor table) {
     for (int foreignIndex = 0; foreignIndex < table.foreignKeyCount(); foreignIndex++) {
-      KeyDescriptor foreign = table.foreignKeyAt(foreignIndex);
-      boolean supported = false;
-      for (int keyIndex = 0; keyIndex < table.secondaryKeyCount(); keyIndex++) {
-        if (sameParts(table.secondaryKeyAt(keyIndex), foreign)) {
-          supported = true;
-          break;
-        }
+      if (ForeignKeySupport.find(table, table.foreignKeyAt(foreignIndex)) == null) {
+        return false;
       }
-      if (!supported) return false;
-    }
-    return true;
-  }
-
-  private static boolean sameParts(KeyDescriptor left, KeyDescriptor right) {
-    if (left.partCount() != right.partCount()) return false;
-    for (int part = 0; part < left.partCount(); part++) {
-      if (left.columnOrdinalAt(part) != right.columnOrdinalAt(part)
-          || left.typeDescriptorAt(part) != right.typeDescriptorAt(part)) return false;
     }
     return true;
   }

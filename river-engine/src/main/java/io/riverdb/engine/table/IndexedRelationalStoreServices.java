@@ -119,20 +119,23 @@ final class IndexedRelationalStoreServices {
         shape, key, offset, length, result);
   }
 
-  StatusCode probeAfter(
+  StatusCode probeMatching(
       long visibleCommitSequence,
       long ownerObjectId,
       long keyId,
       long schemaId,
-      TupleShape shape,
+      TupleShape indexShape,
+      TupleShape prefixShape,
       ByteBuffer key,
       int offset,
       int length,
-      long afterLogicalRowId,
+      IndexedTupleIntentJournal intents,
+      long excludedRowId,
       IndexedTupleProbeResult result) {
-    return probes.probeAfter(
+    return probes.probeMatching(
         visibleCommitSequence, ownerObjectId, keyId, schemaId,
-        shape, key, offset, length, afterLogicalRowId, result);
+        indexShape, prefixShape, key, offset, length,
+        intents, excludedRowId, result);
   }
 
   StatusCode probeBuilding(
@@ -144,13 +147,16 @@ final class IndexedRelationalStoreServices {
         shape, key, offset, length, result);
   }
 
-  StatusCode probeBuildingAfter(
+  StatusCode probeBuildingMatching(
       long current, long ownerObjectId, long keyId, long schemaId, long privateOwner,
-      TupleShape shape, ByteBuffer key, int offset, int length,
-      long afterLogicalRowId, IndexedTupleProbeResult result) {
-    return probes.probeBuildingAfter(
+      TupleShape indexShape, TupleShape prefixShape,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
+      IndexedTupleProbeResult result) {
+    return probes.probeBuildingMatching(
         current, ownerObjectId, keyId, schemaId, privateOwner,
-        shape, key, offset, length, afterLogicalRowId, result);
+        indexShape, prefixShape, key, offset, length,
+        intents, excludedRowId, result);
   }
 
   StatusCode beginTupleScan(

@@ -256,14 +256,17 @@ public final class IndexedTable extends IndexedRelationalTableAccess
         shape, key, offset, length, result);
   }
 
-  synchronized StatusCode probeTuplePrefixAfterAt(
+  synchronized StatusCode probeTuplePrefixMatchingAt(
       long visibleCommitSequence, long ownerObjectId, long keyId, long schemaId,
-      io.riverdb.base.tuple.TupleShape shape,
-      ByteBuffer key, int offset, int length, long afterLogicalRowId,
+      io.riverdb.base.tuple.TupleShape indexShape,
+      io.riverdb.base.tuple.TupleShape prefixShape,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
       IndexedTupleProbeResult result) {
-    return store.probeTuplePrefixAfterAt(
+    return store.probeTuplePrefixMatchingAt(
         visibleCommitSequence, ownerObjectId, keyId, schemaId,
-        shape, key, offset, length, afterLogicalRowId, result);
+        indexShape, prefixShape, key, offset, length,
+        intents, excludedRowId, result);
   }
 
   synchronized StatusCode probeTuplePrefixCurrent(
@@ -274,14 +277,16 @@ public final class IndexedTable extends IndexedRelationalTableAccess
         ownerObjectId, keyId, schemaId, shape, key, offset, length, result);
   }
 
-  synchronized StatusCode probeTuplePrefixAfterCurrent(
+  synchronized StatusCode probeTuplePrefixMatchingCurrent(
       long ownerObjectId, long keyId, long schemaId,
-      io.riverdb.base.tuple.TupleShape shape,
-      ByteBuffer key, int offset, int length, long afterLogicalRowId,
+      io.riverdb.base.tuple.TupleShape indexShape,
+      io.riverdb.base.tuple.TupleShape prefixShape,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
       IndexedTupleProbeResult result) {
-    return store.probeTuplePrefixAfterCurrent(
-        ownerObjectId, keyId, schemaId, shape,
-        key, offset, length, afterLogicalRowId, result);
+    return store.probeTuplePrefixMatchingCurrent(
+        ownerObjectId, keyId, schemaId, indexShape, prefixShape,
+        key, offset, length, intents, excludedRowId, result);
   }
 
   synchronized StatusCode probeTupleBuildingPrefixCurrent(
@@ -293,14 +298,17 @@ public final class IndexedTable extends IndexedRelationalTableAccess
         shape, key, offset, length, result);
   }
 
-  synchronized StatusCode probeTupleBuildingPrefixAfterCurrent(
+  synchronized StatusCode probeTupleBuildingPrefixMatchingCurrent(
       long ownerObjectId, long keyId, long schemaId, long privateOwner,
-      io.riverdb.base.tuple.TupleShape shape,
-      ByteBuffer key, int offset, int length, long afterLogicalRowId,
+      io.riverdb.base.tuple.TupleShape indexShape,
+      io.riverdb.base.tuple.TupleShape prefixShape,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
       IndexedTupleProbeResult result) {
-    return store.probeTupleBuildingPrefixAfterCurrent(
+    return store.probeTupleBuildingPrefixMatchingCurrent(
         ownerObjectId, keyId, schemaId, privateOwner,
-        shape, key, offset, length, afterLogicalRowId, result);
+        indexShape, prefixShape, key, offset, length,
+        intents, excludedRowId, result);
   }
 
   synchronized StatusCode beginTupleScanAt(

@@ -3,6 +3,7 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.schema.KeyDescriptor;
+import io.riverdb.engine.schema.ForeignKeySupport;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.engine.table.IndexedTupleProbeResult;
@@ -29,8 +30,8 @@ final class RelationalDescriptorReferenceCheck {
       StatusCode status = changed(target, before, after);
       if (status == StatusCode.CONFLICT) continue;
       if (!status.isOk()) return status;
-      KeyDescriptor support = supportingKey(child, foreign);
-      if (support == null || !sameShape(target, support)) return StatusCode.CORRUPTION;
+      KeyDescriptor support = ForeignKeySupport.find(child, foreign);
+      if (support == null || !samePrefixShape(target, support)) return StatusCode.CORRUPTION;
       if (child.tableId() == parent.tableId() && after != null) {
         status = afterKey.encodeUser(foreign, after);
         if (!status.isOk()) return status;
@@ -42,10 +43,12 @@ final class RelationalDescriptorReferenceCheck {
           target.keyId(), beforeKey.bytes(), 0, beforeKey.length());
       if (status.isOk()) status = child.tableId() == parent.tableId()
           ? session.resolveTupleAnyPrefixCurrentExcept(
-              child.tableId(), support.keyId(), support.keyId(), support.shape(),
+              child.tableId(), support.keyId(), support.keyId(),
+              support.shape(), target.shape(),
               beforeKey.bytes(), 0, beforeKey.length(), changedRowId, probe)
           : session.resolveTupleAnyPrefixCurrent(
-              child.tableId(), support.keyId(), support.keyId(), support.shape(),
+              child.tableId(), support.keyId(), support.keyId(),
+              support.shape(), target.shape(),
               beforeKey.bytes(), 0, beforeKey.length(), probe);
       if (!status.isOk()) return status;
       if (probe.found()) return StatusCode.FOREIGN_KEY_VIOLATION;
@@ -83,25 +86,8 @@ final class RelationalDescriptorReferenceCheck {
     return null;
   }
 
-  private static KeyDescriptor supportingKey(
-      TableDescriptor child, KeyDescriptor foreign) {
-    for (int index = 0; index < child.secondaryKeyCount(); index++) {
-      KeyDescriptor candidate = child.secondaryKeyAt(index);
-      if (sameColumns(candidate, foreign)) return candidate;
-    }
-    return null;
-  }
-
-  private static boolean sameColumns(KeyDescriptor left, KeyDescriptor right) {
-    if (left.partCount() != right.partCount()) return false;
-    for (int part = 0; part < left.partCount(); part++) {
-      if (left.columnOrdinalAt(part) != right.columnOrdinalAt(part)) return false;
-    }
-    return true;
-  }
-
-  private static boolean sameShape(KeyDescriptor left, KeyDescriptor right) {
-    if (left.partCount() != right.partCount()) return false;
+  private static boolean samePrefixShape(KeyDescriptor left, KeyDescriptor right) {
+    if (left.partCount() > right.partCount()) return false;
     for (int part = 0; part < left.partCount(); part++) {
       if (left.typeDescriptorAt(part) != right.typeDescriptorAt(part)) return false;
     }

@@ -152,16 +152,9 @@ final class IndexedSessionTupleAccess {
       result.set(pending);
       return StatusCode.OK;
     }
-    long after = 0;
-    do {
-      status = published.snapshotAfter(
-          ownerId, keyId, schemaId, shape, key, offset, length, after, probe);
-      if (!status.isOk() || !probe.found()) return status;
-      after = probe.logicalRowId();
-    } while (after == excludedRowId || session.tupleIntents().deletesPrefixRow(
-        keyId, shape, key, offset, length, after));
-    result.set(after);
-    return StatusCode.OK;
+    return published.snapshotMatching(
+        ownerId, keyId, schemaId, shape, key, offset, length,
+        session.tupleIntents(), excludedRowId, result);
   }
 
   StatusCode validateUnique(

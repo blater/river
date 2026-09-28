@@ -57,22 +57,25 @@ abstract class IndexedRelationalStoreAccess {
         shape, key, offset, length, result) : status;
   }
 
-  StatusCode probeTuplePrefixAfterAt(
+  StatusCode probeTuplePrefixMatchingAt(
       long visibleCommitSequence,
       long ownerObjectId,
       long keyId,
       long schemaId,
-      TupleShape shape,
+      TupleShape indexShape,
+      TupleShape prefixShape,
       ByteBuffer key,
       int offset,
       int length,
-      long afterLogicalRowId,
+      IndexedTupleIntentJournal intents,
+      long excludedRowId,
       IndexedTupleProbeResult result) {
     result.reset();
     StatusCode status = relationalAdmission();
-    return status.isOk() ? relationalServices().probeAfter(
+    return status.isOk() ? relationalServices().probeMatching(
         visibleCommitSequence, ownerObjectId, keyId, schemaId,
-        shape, key, offset, length, afterLogicalRowId, result) : status;
+        indexShape, prefixShape, key, offset, length,
+        intents, excludedRowId, result) : status;
   }
 
   StatusCode probeTuplePrefixCurrent(
@@ -92,16 +95,19 @@ abstract class IndexedRelationalStoreAccess {
         shape, key, offset, length, result) : status;
   }
 
-  StatusCode probeTuplePrefixAfterCurrent(
-      long ownerObjectId, long keyId, long schemaId, TupleShape shape,
-      ByteBuffer key, int offset, int length, long afterLogicalRowId,
+  StatusCode probeTuplePrefixMatchingCurrent(
+      long ownerObjectId, long keyId, long schemaId,
+      TupleShape indexShape, TupleShape prefixShape,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
       IndexedTupleProbeResult result) {
     result.reset();
     StatusCode status = relationalAdmission();
     long current = currentCommitSequence();
-    return status.isOk() ? relationalServices().probeAfter(
+    return status.isOk() ? relationalServices().probeMatching(
         current, ownerObjectId, keyId, schemaId,
-        shape, key, offset, length, afterLogicalRowId, result) : status;
+        indexShape, prefixShape, key, offset, length,
+        intents, excludedRowId, result) : status;
   }
 
   StatusCode probeTupleBuildingPrefixCurrent(
@@ -116,16 +122,19 @@ abstract class IndexedRelationalStoreAccess {
         shape, key, offset, length, result) : status;
   }
 
-  StatusCode probeTupleBuildingPrefixAfterCurrent(
+  StatusCode probeTupleBuildingPrefixMatchingCurrent(
       long ownerObjectId, long keyId, long schemaId, long privateOwner,
-      TupleShape shape, ByteBuffer key, int offset, int length,
-      long afterLogicalRowId, IndexedTupleProbeResult result) {
+      TupleShape indexShape, TupleShape prefixShape,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
+      IndexedTupleProbeResult result) {
     result.reset();
     StatusCode status = relationalAdmission();
     long current = currentCommitSequence();
-    return status.isOk() ? relationalServices().probeBuildingAfter(
+    return status.isOk() ? relationalServices().probeBuildingMatching(
         current, ownerObjectId, keyId, schemaId, privateOwner,
-        shape, key, offset, length, afterLogicalRowId, result) : status;
+        indexShape, prefixShape, key, offset, length,
+        intents, excludedRowId, result) : status;
   }
 
   StatusCode beginTupleScanAt(

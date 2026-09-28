@@ -353,21 +353,24 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   /** Resolves any current tuple sharing a user prefix after its integrity lock is retained. */
   public StatusCode resolveTupleAnyPrefixCurrent(
       long ownerObjectId, long keyId, long schemaId,
-      io.riverdb.base.tuple.TupleShape shape,
+      io.riverdb.base.tuple.TupleShape indexShape,
+      io.riverdb.base.tuple.TupleShape prefixShape,
       ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
     return resolveTupleAnyPrefixCurrentExcept(
-        ownerObjectId, keyId, schemaId, shape,
+        ownerObjectId, keyId, schemaId, indexShape, prefixShape,
         key, offset, length, 0, result);
   }
 
   /** Resolves any current matching tuple except one caller-owned logical row. */
   public StatusCode resolveTupleAnyPrefixCurrentExcept(
       long ownerObjectId, long keyId, long schemaId,
-      io.riverdb.base.tuple.TupleShape shape,
+      io.riverdb.base.tuple.TupleShape indexShape,
+      io.riverdb.base.tuple.TupleShape prefixShape,
       ByteBuffer key, int offset, int length, long excludedRowId,
       IndexedTupleProbeResult result) {
     return deliverRead(state.tupleAccess.current.any(
-        ownerObjectId, keyId, schemaId, shape, key, offset, length,
+        ownerObjectId, keyId, schemaId, indexShape, prefixShape,
+        key, offset, length,
         excludedRowId, result));
   }
 

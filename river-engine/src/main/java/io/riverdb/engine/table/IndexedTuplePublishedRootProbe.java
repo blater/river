@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.tuple.TupleShape;
 import java.nio.ByteBuffer;
 
-/** Selects the transaction-private BUILDING root or the ordinary READY root for exact probes. */
+/** Selects the transaction-private BUILDING root or the ordinary READY root for tuple probes. */
 final class IndexedTuplePublishedRootProbe {
   private final IndexedTransactionSession session;
 
@@ -13,22 +13,24 @@ final class IndexedTuplePublishedRootProbe {
   StatusCode snapshot(
       long ownerId, long keyId, long schemaId, TupleShape shape,
       ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
-    return snapshotAfter(
-        ownerId, keyId, schemaId, shape, key, offset, length, 0, result);
+    return snapshotMatching(
+        ownerId, keyId, schemaId, shape, key, offset, length,
+        null, 0, result);
   }
 
-  StatusCode snapshotAfter(
+  StatusCode snapshotMatching(
       long ownerId, long keyId, long schemaId, TupleShape shape,
-      ByteBuffer key, int offset, int length, long afterRowId,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
       IndexedTupleProbeResult result) {
     long privateOwner = privateOwner(ownerId, keyId, schemaId, shape);
     StatusCode status = privateOwner > 0
-        ? buildingAfter(
+        ? buildingMatching(
             ownerId, keyId, schemaId, privateOwner,
-            shape, key, offset, length, afterRowId, result)
-        : session.table().probeTuplePrefixAfterAt(
+            shape, shape, key, offset, length, intents, excludedRowId, result)
+        : session.table().probeTuplePrefixMatchingAt(
             session.visibleCommitSequence(), ownerId, keyId, schemaId,
-            shape, key, offset, length, afterRowId, result);
+            shape, shape, key, offset, length, intents, excludedRowId, result);
     session.observeCommit(result.observedCommitSequence());
     return status;
   }
@@ -36,33 +38,40 @@ final class IndexedTuplePublishedRootProbe {
   StatusCode current(
       long ownerId, long keyId, long schemaId, TupleShape shape,
       ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
-    return currentAfter(
-        ownerId, keyId, schemaId, shape, key, offset, length, 0, result);
+    return currentMatching(
+        ownerId, keyId, schemaId, shape, shape,
+        key, offset, length, null, 0, result);
   }
 
-  StatusCode currentAfter(
-      long ownerId, long keyId, long schemaId, TupleShape shape,
-      ByteBuffer key, int offset, int length, long afterRowId,
+  StatusCode currentMatching(
+      long ownerId, long keyId, long schemaId,
+      TupleShape indexShape, TupleShape prefixShape,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
       IndexedTupleProbeResult result) {
-    long privateOwner = privateOwner(ownerId, keyId, schemaId, shape);
+    long privateOwner = privateOwner(ownerId, keyId, schemaId, indexShape);
     StatusCode status = privateOwner > 0
-        ? buildingAfter(
+        ? buildingMatching(
             ownerId, keyId, schemaId, privateOwner,
-            shape, key, offset, length, afterRowId, result)
-        : session.table().probeTuplePrefixAfterCurrent(
-            ownerId, keyId, schemaId, shape,
-            key, offset, length, afterRowId, result);
+            indexShape, prefixShape, key, offset, length,
+            intents, excludedRowId, result)
+        : session.table().probeTuplePrefixMatchingCurrent(
+            ownerId, keyId, schemaId, indexShape, prefixShape,
+            key, offset, length, intents, excludedRowId, result);
     session.observeCommit(result.observedCommitSequence());
     return status;
   }
 
-  private StatusCode buildingAfter(
-      long ownerId, long keyId, long schemaId, long privateOwner, TupleShape shape,
-      ByteBuffer key, int offset, int length, long afterRowId,
+  private StatusCode buildingMatching(
+      long ownerId, long keyId, long schemaId, long privateOwner,
+      TupleShape indexShape, TupleShape prefixShape,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
       IndexedTupleProbeResult result) {
-    return session.table().probeTupleBuildingPrefixAfterCurrent(
+    return session.table().probeTupleBuildingPrefixMatchingCurrent(
         ownerId, keyId, schemaId, privateOwner,
-        shape, key, offset, length, afterRowId, result);
+        indexShape, prefixShape, key, offset, length,
+        intents, excludedRowId, result);
   }
 
   private long privateOwner(

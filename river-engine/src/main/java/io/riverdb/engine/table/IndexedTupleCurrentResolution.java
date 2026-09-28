@@ -50,7 +50,8 @@ final class IndexedTupleCurrentResolution {
   }
 
   StatusCode any(
-      long ownerId, long keyId, long schemaId, TupleShape shape,
+      long ownerId, long keyId, long schemaId,
+      TupleShape indexShape, TupleShape prefixShape,
       ByteBuffer key, int offset, int length, long excludedRowId,
       IndexedTupleProbeResult result) {
     if (result == null || !session.activeTransaction()) {
@@ -61,20 +62,13 @@ final class IndexedTupleCurrentResolution {
         CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
     if (!status.isOk()) return status;
     long pending = session.tupleIntents().anyInsertPrefixRowId(
-        keyId, shape, key, offset, length, excludedRowId);
+        keyId, prefixShape, key, offset, length, excludedRowId);
     if (pending > 0) {
       result.set(pending);
       return StatusCode.OK;
     }
-    long after = 0;
-    do {
-      status = published.currentAfter(
-          ownerId, keyId, schemaId, shape, key, offset, length, after, probe);
-      if (!status.isOk() || !probe.found()) return status;
-      after = probe.logicalRowId();
-    } while (after == excludedRowId || session.tupleIntents().deletesPrefixRow(
-        keyId, shape, key, offset, length, after));
-    result.set(after);
-    return StatusCode.OK;
+    return published.currentMatching(
+        ownerId, keyId, schemaId, indexShape, prefixShape,
+        key, offset, length, session.tupleIntents(), excludedRowId, result);
   }
 }
