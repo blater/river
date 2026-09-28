@@ -142,6 +142,49 @@ Raw reports: `/private/tmp/river-celeborn-slopmark-before.txt` and
 `/private/tmp/river-celeborn-slopmark-after.txt`. The tool reports incomplete
 boundary-analysis coverage for some classes; the scores are not approval.
 
+The clean integration checkpoint also passed on implementation `f3b0573e`:
+
+```sh
+JAVA_HOME=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Contents/Home \
+GRADLE_USER_HOME=/private/tmp/river-celeborn-gradle \
+./gradlew --no-daemon --offline \
+  --project-cache-dir /private/tmp/river-celeborn-project-cache \
+  clean check :river-bench:installTps
+```
+
+Result: `BUILD SUCCESSFUL in 54s`, 158 tasks; JUnit reports contain 2,072 tests,
+zero failures/errors and 19 skips. This includes repository policy checks and
+the benchmark recovery/transaction smokes. Log:
+`/private/tmp/river-celeborn-clean-check.log`.
+
+## Independent review for integration
+
+A separate read-only reviewer inspected `e3225ffd..f3b0573e` and approved the
+header-removal mechanism for integration, subject to the clean build and
+performance checkpoint. No blocking correctness or architectural findings were
+reported. The review checked matching headerless offsets, successor-layout
+invariants, authoritative scan/lookup identity, control-file v2 admission before
+WAL/table opening, retained schema pins, unchanged MVCC/page ownership, and the
+absence of callers of deleted APIs. The reviewer did not rerun workloads and
+did not approve a TPS claim or completion of the broader zero-copy ticket.
+
+## Integration decision
+
+Accept this header-removal slice after the clean build, independent review and
+two control/two candidate samples for each of full Stock Level and sample New
+Order. All eight compared runs passed invariants with zero retries, failures or
+unknown commits, reconciled outcomes and successful owned-server/database
+cleanup. Throughput ranges overlap; these checks establish no repeated
+feature-specific regression, not a demonstrated speedup. The first attempted
+control used a stale harness executable and is excluded, with its cause and
+artifact retained in the evidence.
+
+The [performance checkpoint](../../performance-checkpoints.md#2026-09-28--headerless-descriptor-rows)
+records exact source/build identifiers, workload versions, commands, individual
+results and the decision. The integration tag is
+`perf-checkpoint-20260928-headerless-rows`. No new throughput baseline or
+MariaDB comparison is claimed.
+
 ## Remaining work and recommendations
 
 1. Keep layout interpretation in the table descriptor and logical identity in
@@ -154,13 +197,7 @@ boundary-analysis coverage for some classes; the scores are not approval.
 3. Measure the remaining copies and decoding on full Stock Level before choosing
    the next mechanism. The 32-byte reduction alone does not establish that the
    MariaDB performance gap is resolved.
-4. Before promoting a performance checkpoint, obtain the independent durable-
-   format review required by AGENTS.md, run the clean integration checkpoint and
-   capture matched control/candidate samples under the repository's existing
-   performance process. This document records author review and working-tree
-   validation; it is not independent approval or a benchmark acceptance claim.
 
-The wider ticket remains in progress. Header removal and its affected-module
-checks are complete in this worktree. Borrowed access and the remaining copy work
-have not been implemented by this slice. Integration and performance-checkpoint
-promotion remain pending.
+The wider ticket remains in progress. Header removal, its affected-module
+checks and the integration acceptance checks are complete. Borrowed access and
+the remaining copy work have not been implemented by this slice.

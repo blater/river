@@ -34,6 +34,12 @@ The header-removal implementation and validation are recorded in
 [the headerless-row review](../delivery/evidence/2026-09-28-tic-celeborn-headerless-rows.md).
 The wider read-lifetime/copy work remains outstanding.
 
+The header-removal slice passed independent durable-format review, the clean
+integration build and matched Stock Level/New Order regression checks on
+`f3b0573e`. The [performance checkpoint](../performance-checkpoints.md#2026-09-28--headerless-descriptor-rows)
+records the accepted slice and tag `perf-checkpoint-20260928-headerless-rows`.
+These checks do not close the wider ticket or claim a measured speedup.
+
 ## Baseline evidence and scope
 
 Source inspected: integrated `e3225ffd` on 2026-09-28. Start implementation from
