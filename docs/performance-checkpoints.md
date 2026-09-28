@@ -491,3 +491,14 @@ build timed 4,001 steady-state Stock Level calls per target. River averaged
 averaged 19.3 and 42.2 µs respectively. The MariaDB timing window fell near
 the warmup/measurement boundary, so these per-statement figures identify the
 large remaining count-query cost but are not a precise paired latency claim.
+
+A subsequent local probe `851090a8` replaced `HeapRowResult.copyTo`'s byte loop
+with an allocation-free bulk `ByteBuffer` copy. Focused heap tests passed, but
+the 2-second warmup/10-second measured control–probe–probe–control sequence
+did not establish a Stock Level gain: 2,094.97, 2,007.46, 2,068.78 and
+1,939.98 TPS. All four runs passed; artifacts are respectively
+`river_harness_20260928_023053_fe96bbb7`,
+`river_harness_20260928_023112_c0d09af6`,
+`river_harness_20260928_023132_906692c2` and
+`river_harness_20260928_023153_f693ba26` under the harness `runs` directory.
+The probe remains unmerged and is not a new baseline.
