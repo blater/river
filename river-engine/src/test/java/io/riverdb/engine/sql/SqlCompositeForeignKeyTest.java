@@ -24,6 +24,208 @@ final class SqlCompositeForeignKeyTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void exactPrimaryForeignKeyReusesPrimaryIndexAcrossReopen(@TempDir Path root) {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE p (tenant INTEGER,id INTEGER,PRIMARY KEY(tenant,id))", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE c (tenant INTEGER,id INTEGER,PRIMARY KEY(tenant,id),"
+            + "FOREIGN KEY(tenant,id) REFERENCES p(tenant,id))", result));
+    SqlScanCursor indexes = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan("SHOW INDEXES FROM c", indexes));
+    assertEquals(StatusCode.OK, session.nextScan(indexes, row));
+    assertEquals(true, row.isAvailable());
+    assertEquals(1, row.valueAt(3));
+    assertEquals(StatusCode.OK, session.nextScan(indexes, row));
+    assertEquals(true, row.isAvailable());
+    assertEquals(1, row.valueAt(3));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(indexes, row));
+    assertEquals(false, row.isAvailable());
+    assertEquals(StatusCode.OK, session.closeScan(indexes, result));
+
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO p VALUES (7,3)", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO c VALUES (7,3)", result));
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE tenant=7 AND id=3", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+
+    database = open(root);
+    session = session(database);
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE tenant=7 AND id=3", result));
+    assertEquals(StatusCode.OK, session.execute("DELETE FROM c WHERE tenant=7 AND id=3", result));
+    assertEquals(StatusCode.OK, session.execute("DELETE FROM p WHERE tenant=7 AND id=3", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void exactSecondaryForeignKeyReusesUniqueConstraintIndex(@TempDir Path root) {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK,
+        session.execute("CREATE TABLE p (id INTEGER PRIMARY KEY)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE c (id INTEGER PRIMARY KEY,parent_id INTEGER,"
+            + "CONSTRAINT uq_parent UNIQUE(parent_id),"
+            + "FOREIGN KEY(parent_id) REFERENCES p(id))", result));
+    SqlScanCursor indexes = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan("SHOW INDEXES FROM c", indexes));
+    for (int index = 0; index < 2; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(indexes, row));
+      assertEquals(true, row.isAvailable());
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(indexes, row));
+    assertEquals(StatusCode.OK, session.closeScan(indexes, result));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("DROP INDEX uq_parent ON c", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO p VALUES (1)", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO c VALUES (11,1)", result));
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE id=1", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void primaryPrefixSupportsMultipleChildrenAndPendingChanges(@TempDir Path root) {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK,
+        session.execute("CREATE TABLE p (tenant INTEGER PRIMARY KEY)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE c (tenant INTEGER,id INTEGER,PRIMARY KEY(tenant,id),"
+            + "FOREIGN KEY(tenant) REFERENCES p(tenant))", result));
+    SqlScanCursor indexes = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan("SHOW INDEXES FROM c", indexes));
+    for (int index = 0; index < 2; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(indexes, row));
+      assertEquals(1, row.valueAt(3));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(indexes, row));
+    assertEquals(StatusCode.OK, session.closeScan(indexes, result));
+
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO p VALUES (7),(8)", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO c VALUES (7,2),(7,1)", result));
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE tenant=7", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+
+    database = open(root);
+    session = session(database);
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE tenant=7", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK,
+        session.execute("DELETE FROM c WHERE tenant=7 AND id=1", result));
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE tenant=7", result));
+    assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "UPDATE c SET tenant=8 WHERE tenant=7 AND id=1", result));
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE tenant=7", result));
+    assertEquals(StatusCode.OK,
+        session.execute("DELETE FROM c WHERE tenant=7 AND id=2", result));
+    assertEquals(StatusCode.OK,
+        session.execute("DELETE FROM p WHERE tenant=7", result));
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE tenant=8", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void laterNamedIndexReplacesAutomaticForeignKeySupport(@TempDir Path root) {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK,
+        session.execute("CREATE TABLE p (id INTEGER PRIMARY KEY)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE c (id INTEGER PRIMARY KEY,parent_id INTEGER,"
+            + "FOREIGN KEY(parent_id) REFERENCES p(id))", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO p VALUES (7)", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO c VALUES (1,7),(2,7)", result));
+    assertEquals(StatusCode.UNIQUE_VIOLATION,
+        session.execute("CREATE UNIQUE INDEX c_parent_unique ON c(parent_id)", result));
+    assertEquals(StatusCode.OK,
+        session.execute("CREATE INDEX c_parent ON c(parent_id,id)", result));
+    SqlScanCursor indexes = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan("SHOW INDEXES FROM c", indexes));
+    for (int index = 0; index < 3; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(indexes, row));
+      assertEquals(true, row.isAvailable());
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(indexes, row));
+    assertEquals(StatusCode.OK, session.closeScan(indexes, result));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("DROP INDEX c_parent ON c", result));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("CREATE INDEX _river_fake ON c(id)", result));
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE id=7", result));
+    assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+
+    database = open(root);
+    session = session(database);
+    assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("DELETE FROM p WHERE id=7", result));
+    assertEquals(StatusCode.OK, session.execute("DELETE FROM c WHERE id=1 OR id=2", result));
+    assertEquals(StatusCode.OK, session.execute("DELETE FROM p WHERE id=7", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void laterIndexPreservesUserUniqueConstraintWithInternalLookingName(@TempDir Path root) {
+    RelationalDatabase database = create(root);
+    SqlSession session = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK,
+        session.execute("CREATE TABLE p (id INTEGER PRIMARY KEY)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE c (id INTEGER PRIMARY KEY,parent_id INTEGER,"
+            + "CONSTRAINT _river_fk_user UNIQUE(parent_id),"
+            + "FOREIGN KEY(parent_id) REFERENCES p(id))", result));
+    assertEquals(StatusCode.OK,
+        session.execute("CREATE INDEX c_parent ON c(parent_id,id)", result));
+    SqlScanCursor indexes = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan("SHOW INDEXES FROM c", indexes));
+    for (int index = 0; index < 4; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(indexes, row));
+      assertEquals(true, row.isAvailable());
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(indexes, row));
+    assertEquals(StatusCode.OK, session.closeScan(indexes, result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO p VALUES (7)", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO c VALUES (1,7)", result));
+    assertEquals(StatusCode.UNIQUE_VIOLATION,
+        session.execute("INSERT INTO c VALUES (2,7)", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void compositeForeignKeyUsesReferencedTupleIndexAcrossReopen(@TempDir Path root) {
     RelationalDatabase database = create(root);
     SqlSession session = session(database);
@@ -208,6 +410,39 @@ final class SqlCompositeForeignKeyTest {
       assertEquals(StatusCode.OK, child.execute("ROLLBACK", result));
       assertEquals(StatusCode.FOREIGN_KEY_VIOLATION,
           child.execute("INSERT INTO c VALUES (3,2)", result));
+    } finally {
+      executor.shutdownNow();
+    }
+    assertEquals(StatusCode.OK, child.close());
+    assertEquals(StatusCode.OK, parent.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void reusedPrimaryPrefixSerializesChildInsertWithParentDelete(@TempDir Path root)
+      throws Exception {
+    RelationalDatabase database = create(root);
+    SqlSession child = session(database);
+    SqlSession parent = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, parent.execute("CREATE TABLE p (id INTEGER PRIMARY KEY)", result));
+    assertEquals(StatusCode.OK, parent.execute(
+        "CREATE TABLE c (parent_id INTEGER,id INTEGER,PRIMARY KEY(parent_id,id),"
+            + "FOREIGN KEY(parent_id) REFERENCES p(id))", result));
+    assertEquals(StatusCode.OK, parent.execute("INSERT INTO p VALUES (7)", result));
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    AtomicReference<Thread> worker = new AtomicReference<>();
+    try {
+      assertEquals(StatusCode.OK, child.execute("BEGIN", result));
+      assertEquals(StatusCode.OK, child.execute("INSERT INTO c VALUES (7,1)", result));
+      assertEquals(StatusCode.OK, parent.execute("BEGIN", result));
+      Future<StatusCode> delete = submit(executor, worker, parent,
+          "DELETE FROM p WHERE id=7");
+      awaitParked(worker, delete);
+      assertFalse(delete.isDone());
+      assertEquals(StatusCode.OK, child.execute("COMMIT", result));
+      assertEquals(StatusCode.FOREIGN_KEY_VIOLATION, delete.get());
+      assertEquals(StatusCode.OK, parent.execute("ROLLBACK", result));
     } finally {
       executor.shutdownNow();
     }

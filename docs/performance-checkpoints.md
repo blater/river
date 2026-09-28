@@ -1068,3 +1068,72 @@ the feature decision. Accept this generic cache as a recoverable feature
 checkpoint. Keep `tic-72e5` open: repeated tuple cursor descent and base-row
 fetch still dominate the inner probe, and the prior MariaDB control remains
 substantially faster on full cardinality.
+
+## 2026-09-28 — Foreign-key support index reuse and schema parity
+
+Branch `feature/fk-exact-index-reuse`, commit `fb9c0a0b`, reuses an existing
+primary or secondary index when its leading ordered columns support a foreign
+key. A later named index can replace a redundant automatic support index in
+the same catalog successor. Reference checks use the full physical index key
+with the foreign-key prefix, including pending inserts and deletes. This is a
+comparison-correctness feature for [`tic-72e5`](tickets/tic-72e5.md), not an
+accepted Stock Level speedup. The standalone harness schema and workload were
+unchanged.
+
+The clean `./gradlew --no-daemon clean test` build passed in 3m 10s. Focused
+tests cover exact primary and secondary reuse, prefix checks with multiple
+children and pending deletes, restart, concurrent parent deletion, later named
+index replacement, failed unique backfill, and preservation of a user-named
+unique constraint. An independent correctness review found two issues in the
+first candidate; both were fixed before the clean build. `slopmark` raised
+`RelationalDescriptorIndexChange` from 36.992 to 107.91. Its index-add/remove
+responsibility remains local, and automatic support replacement policy was
+extracted to `RelationalForeignKeyIndexReplacement`; the score was treated as
+a review trigger rather than a performance result.
+
+A temporary read-only harness callback inspected River `SHOW INDEXES` and
+MariaDB `information_schema.STATISTICS` after loading `sample stock-level`.
+The diagnostic logs are `/private/tmp/river-fk-index-inventory.log` and
+`/private/tmp/mariadb-index-inventory.log`. Excluding MariaDB's harness
+ownership table, both targets had 15 physical indexes with identical table,
+uniqueness and ordered-column shapes. Automatically assigned names differ.
+The callback was removed and the clean harness `eba8ab0` rebuilt before the
+performance runs. This manual inventory check is not yet an automatic
+comparison eligibility rule.
+
+The interleaved `full stock-level` run used one worker and warehouse, seed 42,
+retry limit 3, READ COMMITTED, durable local WAL, GraalVM 25.0.4 JVM `-Xmx1g`,
+5s warmup and 30s measured. The candidate engine JAR checksum
+`3881882459d673565f208ce6dd98d2c18c5d4baf07d289b68c6f1271a72a923e`
+matched the JAR rebuilt after the clean test. The command was:
+
+```sh
+./benchmark run river tpcc full stock-level \
+  --river-executable=BUILD/river --river-version=BUILD-LABEL \
+  --warmup=5s --duration=30s --workers=1 --warehouses=1 \
+  --seed=42 --max-retries=3
+```
+
+| Order | Build/version | TPS | p99 (ms) | Artifact under `/private/tmp/river-harness-stock-analyze/runs/` |
+| --- | --- | ---: | ---: | --- |
+| B1 | `fk-exact-reuse-long-b1` | 1,317.219 | 0.959 | `river_harness_20260928_101648_1d4fc4f9` |
+| A1 | `root-cache-long-a1` | 1,186.621 | 1.134 | `river_harness_20260928_101844_58af9c59` |
+| A2 | `root-cache-long-a2` | 1,205.187 | 1.084 | `river_harness_20260928_102100_08639445` |
+| B2 | `fk-exact-reuse-long-b2` | 1,146.651 | 1.537 | `river_harness_20260928_102315_a022c613` |
+
+All four artifacts passed invariants and cleanup, had zero failures, unknown
+commits and retries, and shared eligible comparison key
+`1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`.
+The candidate did not show a repeated directional improvement; no new
+performance baseline is designated. Two earlier 1s/3s samples per build were
+also inconclusive because one control fell to 441.614 TPS while the other
+reached 1,186.223 TPS.
+
+A 2s/10s, four-worker `sample all` candidate run failed with two New Order
+deadlock retry exhaustions (`river_harness_20260928_102632_fbad33a5`). The
+adjacent control failed with the same count and cause
+(`river_harness_20260928_102715_87924b24`), so this is not evidence of a new
+feature regression. A one-worker candidate `sample all` run passed every
+invariant with zero failures, unknown commits and retries at 553.865 TPS
+(`river_harness_20260928_102754_ad56a5ad`). Keep the feature for schema
+comparison correctness; keep the Stock Level performance ticket open.

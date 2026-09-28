@@ -19,8 +19,7 @@ final class SqlDescriptorForeignKeyBuilder {
       RelationalSession session, SqlCommand command,
       TableDescriptor source, StatusDetail detail) {
     int count = foreignCount(command);
-    if (source.secondaryKeyCount() > TableDescriptor.MAXIMUM_SECONDARY_KEYS - count
-        || count > TableDescriptor.MAXIMUM_FOREIGN_KEYS) {
+    if (count > TableDescriptor.MAXIMUM_FOREIGN_KEYS) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = assembly.begin(source, count);

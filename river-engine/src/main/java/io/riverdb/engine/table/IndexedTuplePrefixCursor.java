@@ -31,14 +31,16 @@ final class IndexedTuplePrefixCursor {
 
   StatusCode probe(
       long visibleCommitSequence,
-      int rootPageId, int nextPageId, long keyId, long schemaId, TupleShape shape,
-      ByteBuffer key, int offset, int length, long afterLogicalRowId,
+      int rootPageId, int nextPageId, long keyId, long schemaId,
+      TupleShape indexShape, TupleShape prefixShape,
+      ByteBuffer key, int offset, int length,
+      IndexedTupleIntentJournal intents, long excludedRowId,
       IndexedTupleProbeResult result) {
     StatusCode status = provider.configure(
         rootPageId, keyId, nextPageId, 1, visibleCommitSequence);
-    if (status.isOk()) status = tree.configure(provider, schemaId, shape);
+    if (status.isOk()) status = tree.configure(provider, schemaId, indexShape);
     if (status.isOk()) {
-      status = cursor.openPrefix(tree, key, offset, length, shape, workspace);
+      status = cursor.openPrefix(tree, key, offset, length, prefixShape, workspace);
     }
     while (status.isOk()) {
       status = cursor.next(entry);
@@ -47,8 +49,10 @@ final class IndexedTuplePrefixCursor {
         break;
       }
       if (!status.isOk()) break;
-      if (entry.logicalRowId() > afterLogicalRowId) {
-        result.set(entry.logicalRowId());
+      long rowId = entry.logicalRowId();
+      if (rowId != excludedRowId && (intents == null || !intents.deletesPrefixRow(
+          keyId, prefixShape, key, offset, length, rowId))) {
+        result.set(rowId);
         break;
       }
     }

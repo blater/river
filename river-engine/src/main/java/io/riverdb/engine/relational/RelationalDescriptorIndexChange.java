@@ -31,13 +31,12 @@ public final class RelationalDescriptorIndexChange {
         || offset < 0 || count <= 0 || offset > columnOrdinals.length - count) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (internal(name)) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (current.findSecondaryKey(name) >= 0) return StatusCode.CONFLICT;
     int[] parts;
-    KeyDescriptor[] secondary;
     try {
       parts = allocator.integers(count);
       System.arraycopy(columnOrdinals, offset, parts, 0, count);
-      secondary = allocator.keys(current.secondaryKeyCount() + 1);
     } catch (OutOfMemoryError error) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -45,7 +44,18 @@ public final class RelationalDescriptorIndexChange {
         KeyDescriptor.KIND_SECONDARY, unique, current.columns(), parts, 0,
         name, key, detail);
     if (!status.isOk()) return status;
-    copySecondary(current, secondary, -1);
+    int removed = RelationalForeignKeyIndexReplacement.count(current, key.value());
+    int nextCount = current.secondaryKeyCount() + 1 - removed;
+    if (nextCount > TableDescriptor.MAXIMUM_SECONDARY_KEYS) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    KeyDescriptor[] secondary;
+    try {
+      secondary = allocator.keys(nextCount);
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    RelationalForeignKeyIndexReplacement.copyRetained(current, key.value(), secondary);
     secondary[secondary.length - 1] = key.value();
     return successor(current, secondary, result, detail, allocator);
   }

@@ -2,6 +2,7 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.KeyDescriptor;
+import io.riverdb.engine.schema.ForeignKeySupport;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedTransactionSession;
@@ -27,7 +28,7 @@ final class RelationalDescriptorForeignKeyStorageValidation {
   StatusCode validate(TableDescriptor table) {
     for (int index = 0; index < table.foreignKeyCount(); index++) {
       KeyDescriptor foreign = table.foreignKeyAt(index);
-      KeyDescriptor support = support(table, foreign);
+      KeyDescriptor support = ForeignKeySupport.find(table, foreign);
       if (support == null) return StatusCode.CORRUPTION;
       StatusCode status = validateRoot(
           foreign.referencedKeyId(), 0, foreign);
@@ -67,19 +68,6 @@ final class RelationalDescriptorForeignKeyStorageValidation {
       }
     }
     return StatusCode.OK;
-  }
-
-  private static KeyDescriptor support(
-      TableDescriptor table, KeyDescriptor foreign) {
-    for (int index = 0; index < table.secondaryKeyCount(); index++) {
-      KeyDescriptor candidate = table.secondaryKeyAt(index);
-      if (candidate.partCount() != foreign.partCount()) continue;
-      int part = 0;
-      while (part < foreign.partCount()
-          && candidate.columnOrdinalAt(part) == foreign.columnOrdinalAt(part)) part++;
-      if (part == foreign.partCount()) return candidate;
-    }
-    return null;
   }
 
   private static KeyDescriptor physicalKey(TableDescriptor table, long keyId) {
