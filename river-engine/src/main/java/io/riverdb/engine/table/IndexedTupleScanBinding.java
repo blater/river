@@ -42,7 +42,7 @@ final class IndexedTupleScanBinding {
       IndexedTableKernel kernel, long visible, long current, long owner,
       long keyId, long schemaId, long privateOwner, TupleShape shape) {
     long snapshot = privateOwner > 0 ? current : visible;
-    StatusCode status = root.load(snapshot, keyId);
+    StatusCode status = root.load(snapshot, keyId, privateOwner == 0);
     boolean matches = privateOwner > 0
         ? root.matchesBuilding(owner, keyId, schemaId, privateOwner, shape)
         : root.matches(owner, keyId, schemaId, shape);
