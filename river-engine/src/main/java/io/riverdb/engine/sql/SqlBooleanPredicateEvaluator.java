@@ -185,6 +185,58 @@ final class SqlBooleanPredicateEvaluator {
     return status;
   }
 
+  StatusCode matchesJoinLeaves(
+      SqlCommand source,
+      SqlBoundBooleanPredicateProgram bound,
+      SqlJoinRoleRows rows,
+      SqlNestedRowProvider nested,
+      int[] leaves,
+      int count,
+      Match result) {
+    result.matched = true;
+    if (count == 0) return StatusCode.OK;
+    command = source;
+    programs = bound;
+    join = nested == null;
+    joinRows = rows;
+    nestedRows = nested;
+    blockRow = null;
+    block = false;
+    return evaluateLeaves(leaves, count, result);
+  }
+
+  StatusCode matchesUniversalJoinLeaves(
+      SqlCommand source,
+      SqlBoundBooleanPredicateProgram bound,
+      SqlUniversalJoinRows rows,
+      SqlNestedRowProvider nested,
+      int[] leaves,
+      int count,
+      Match result) {
+    result.matched = true;
+    if (count == 0) return StatusCode.OK;
+    command = source;
+    programs = bound;
+    universalRows = rows;
+    nestedRows = nested;
+    blockRow = null;
+    block = false;
+    return evaluateLeaves(leaves, count, result);
+  }
+
+  private StatusCode evaluateLeaves(int[] leaves, int count, Match result) {
+    StatusCode status = StatusCode.OK;
+    for (int current = 0; current < count; current++) {
+      status = evaluateLeaf(leaves[current]);
+      if (!status.isOk() || truth != TRUE) {
+        result.matched = false;
+        break;
+      }
+    }
+    clearEvaluation();
+    return status;
+  }
+
   StatusCode matchesUniversalJoin(
       SqlCommand source,
       SqlBoundBooleanPredicateProgram bound,

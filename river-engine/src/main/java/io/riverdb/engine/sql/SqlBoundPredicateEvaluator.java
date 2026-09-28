@@ -13,6 +13,7 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
   private final SqlSubqueryGraphExecution subqueries;
   private final SqlBooleanPredicateEvaluator booleans;
   private final SqlJoinPredicateEvaluators joinOn;
+  private final SqlJoinRootFilter rootFilter = new SqlJoinRootFilter();
   private final SqlTemporalContext temporal;
   private SqlCommand joinCommand;
   private SqlBoundJoinContext joinContext;
@@ -57,8 +58,8 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
           ? joinOn.get(stage).prepare(command, context.onBoolean(stage))
           : StatusCode.OK;
     }
-    return status.isOk()
-        ? booleans.prepare(command, where) : status;
+    if (status.isOk()) status = booleans.prepare(command, where);
+    return status.isOk() ? rootFilter.configure(command, context, where) : status;
   }
 
   void reset() {
@@ -111,6 +112,14 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
         joinContext.onBoolean(stage),
         rows,
         booleanMatch);
+    return joinStatus.isOk() && booleanMatch.matched();
+  }
+
+  boolean matchesRootWhere(SqlJoinRoleRows rows) {
+    if (rootFilter.count() == 0) return true;
+    joinStatus = booleans.matchesJoinLeaves(
+        joinCommand, joinWhere, rows, null,
+        rootFilter.leaves(), rootFilter.count(), booleanMatch);
     return joinStatus.isOk() && booleanMatch.matched();
   }
 

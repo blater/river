@@ -26,6 +26,24 @@ final class SqlJoinPredicateClassifier {
     return true;
   }
 
+  static boolean total(SqlBoundBooleanPredicateProgram source) {
+    if (source == null) return false;
+    for (int leaf = 0; leaf < source.leafCount(); leaf++) {
+      int test = source.leafTest(leaf);
+      if (!simple(source, leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT)) return false;
+      if (test == SqlBooleanPredicateProgram.TEST_COMPARISON
+          && !simple(source, leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT)
+          || test == SqlBooleanPredicateProgram.TEST_BETWEEN
+              && (!simple(source, leaf, SqlBooleanPredicateProgram.PROGRAM_LOWER)
+                  || !simple(source, leaf, SqlBooleanPredicateProgram.PROGRAM_UPPER))) {
+        return false;
+      }
+      if (test < SqlBooleanPredicateProgram.TEST_COMPARISON
+          || test > SqlBooleanPredicateProgram.TEST_BOOLEAN) return false;
+    }
+    return true;
+  }
+
   static boolean totalJoinOrder(SqlCommand command) {
     if (!total(command.wherePredicates())) return false;
     for (int stage = 0; stage < command.joinChain().stageCount(); stage++) {
@@ -41,6 +59,12 @@ final class SqlJoinPredicateClassifier {
       SqlBooleanPredicateProgram source, int leaf, int program) {
     if (source.programNodeCount(leaf, program) != 1) return false;
     return simple(source.programOperator(leaf, program, 0));
+  }
+
+  private static boolean simple(
+      SqlBoundBooleanPredicateProgram source, int leaf, int program) {
+    return source.nodeCount(leaf, program) == 1
+        && simple(source.operator(leaf, program, 0));
   }
 
   private static boolean simple(SqlScalarExpression expression) {

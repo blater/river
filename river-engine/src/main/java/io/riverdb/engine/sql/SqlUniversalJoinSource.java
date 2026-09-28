@@ -70,10 +70,15 @@ final class SqlUniversalJoinSource {
   StatusCode next() {
     while (true) {
       if (stage < 0) {
-        StatusCode status = orderedRoot.active()
-            ? orderedRoot.next(rows) : rows.next(0);
-        if (!status.isOk()) return status;
-        metrics.root();
+        StatusCode status;
+        do {
+          status = orderedRoot.active()
+              ? orderedRoot.next(rows) : rows.next(0);
+          if (!status.isOk()) return status;
+          metrics.root();
+          status = predicates.matchesRootWhere(where, rows);
+          if (!status.isOk()) return status;
+        } while (!predicates.matched());
         resetStages();
         stage = 0;
       }
