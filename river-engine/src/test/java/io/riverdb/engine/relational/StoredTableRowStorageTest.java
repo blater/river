@@ -39,7 +39,7 @@ final class StoredTableRowStorageTest {
     SqlValueBuffer output = values(2, 16);
     assertEquals(StatusCode.OK, output.setFixed(0, SqlTypeDescriptor.SMALLINT, 7));
     StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
-    filter.configure(0, SqlComparison.LESS_THAN, 30);
+    assertEquals(StatusCode.OK, filter.configure(0, SqlComparison.LESS_THAN, 30));
     assertEquals(StatusCode.CONFLICT, decodeTrusted(
         table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
     assertEquals(7, output.valueAt(0));
@@ -52,11 +52,45 @@ final class StoredTableRowStorageTest {
         table, 71, ByteBuffer.wrap(corrupt), START, encoded.length, output, filter));
     assertEquals(7, output.valueAt(0));
 
-    filter.configure(0, SqlComparison.LESS_OR_EQUAL, 40);
+    assertEquals(StatusCode.OK, filter.configure(0, SqlComparison.LESS_OR_EQUAL, 40));
     assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, encoded.length, output, filter));
     assertEquals(40, output.valueAt(0));
     assertEquals(0xc0, output.textByteAt(1, 0));
+  }
+
+  @Test
+  void invalidIntegerFilterNeverReadsOutsideTheFixedPrefix() {
+    int text = SqlTypeDescriptor.varchar(4);
+    TableDescriptor table = table(
+        new int[] {SqlTypeDescriptor.BIGINT, text}, new boolean[] {false, false});
+    SqlValueBuffer input = values(2, 16);
+    assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.BIGINT, 4));
+    assertEquals(StatusCode.OK, input.setText(1, text, "safe"));
+    Encoded encoded = encode(table, input);
+    SqlValueBuffer output = values(2, 16);
+    assertEquals(StatusCode.OK, output.setFixed(0, SqlTypeDescriptor.BIGINT, 9));
+    StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
+
+    assertEquals(StatusCode.OK, filter.configure(2, SqlComparison.EQUAL, 4));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(9, output.valueAt(0));
+
+    assertEquals(StatusCode.OK, filter.configure(1, SqlComparison.EQUAL, 4));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(9, output.valueAt(0));
+
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        filter.configure(0, SqlComparison.IN, 4));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        filter.configure(-1, SqlComparison.EQUAL, 4));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(9, output.valueAt(0));
   }
 
   @Test
@@ -440,13 +474,13 @@ final class StoredTableRowStorageTest {
 
   private static StatusCode decodeTrusted(
       TableDescriptor table, long rowId, ByteBuffer source, int start, int length,
-      SqlValueBuffer output, StoredTableRowFilter filter) {
+      SqlValueBuffer output, StoredTableRowIntegerFilter filter) {
     return decodeTrusted(table, rowId, source, start, length, output, filter, true);
   }
 
   private static StatusCode decodeTrusted(
       TableDescriptor table, long rowId, ByteBuffer source, int start, int length,
-      SqlValueBuffer output, StoredTableRowFilter filter, boolean publishText) {
+      SqlValueBuffer output, StoredTableRowIntegerFilter filter, boolean publishText) {
     return new StoredTableRowDecoder().decode(
         table, rowId, source, start, length, output, filter, publishText);
   }

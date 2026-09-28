@@ -77,14 +77,14 @@ final class RelationalDescriptorScanAccess {
   StatusCode next(
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination, RelationalRowIdentityResult result,
-      StoredTableRowFilter filter) {
+      StoredTableRowIntegerFilter filter) {
     return next(owner, cursor, destination, result, filter, true);
   }
 
   StatusCode next(
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination, RelationalRowIdentityResult result,
-      StoredTableRowFilter filter, boolean publishText) {
+      StoredTableRowIntegerFilter filter, boolean publishText) {
     if (cursor == null || destination == null || result == null || !cursor.matches(owner)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

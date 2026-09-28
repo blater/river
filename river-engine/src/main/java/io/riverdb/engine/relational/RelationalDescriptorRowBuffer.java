@@ -50,7 +50,7 @@ final class RelationalDescriptorRowBuffer {
       long logicalRowId,
       HeapRowResult source,
       SqlValueBuffer destination,
-      StoredTableRowFilter filter) {
+      StoredTableRowIntegerFilter filter) {
     return decode(table, logicalRowId, source, destination, filter, true);
   }
 
@@ -59,7 +59,7 @@ final class RelationalDescriptorRowBuffer {
       long logicalRowId,
       HeapRowResult source,
       SqlValueBuffer destination,
-      StoredTableRowFilter filter,
+      StoredTableRowIntegerFilter filter,
       boolean publishText) {
     bytes.clear();
     StatusCode status = source.copyTo(bytes);

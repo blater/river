@@ -18,7 +18,7 @@ final class StoredTableRowDecoder {
       int start,
       int length,
       SqlValueBuffer destination,
-      StoredTableRowFilter filter,
+      StoredTableRowIntegerFilter filter,
       boolean publishText) {
     if (!validArguments(table, expectedLogicalRowId, source, start, length, destination)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -37,8 +37,9 @@ final class StoredTableRowDecoder {
     if (destination.capacity() < table.columnCount()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    if (filter != null && !filter.matches(table, source, start)) {
-      return StatusCode.CONFLICT;
+    if (filter != null) {
+      status = filter.test(table, source, start);
+      if (!status.isOk()) return status;
     }
     int textBytes = publishText
         ? StoredTableRowBounds.publishedTextBytes(table, source, start, length) : 0;

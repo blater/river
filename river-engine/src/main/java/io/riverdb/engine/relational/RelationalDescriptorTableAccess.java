@@ -239,7 +239,7 @@ public final class RelationalDescriptorTableAccess {
       RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination,
       RelationalRowIdentityResult result,
-      StoredTableRowFilter filter) {
+      StoredTableRowIntegerFilter filter) {
     return !active() ? StatusCode.INVALID_EXTERNAL_INPUT
         : scanAccess.next(this, cursor, destination, result, filter);
   }
@@ -249,7 +249,7 @@ public final class RelationalDescriptorTableAccess {
       RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination,
       RelationalRowIdentityResult result,
-      StoredTableRowFilter filter,
+      StoredTableRowIntegerFilter filter,
       boolean publishText) {
     return !active() ? StatusCode.INVALID_EXTERNAL_INPUT
         : scanAccess.next(this, cursor, destination, result, filter, publishText);
