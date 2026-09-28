@@ -121,10 +121,12 @@ final class SqlBlockProjectionLiveness {
       SqlCommand command, SqlBlockSchema schema, boolean[] live) {
     if (command == null) return;
     for (int order = 0; order < command.orderBy().count(); order++) {
-      int column = command.orderBy().qualifier(order).length() > 0
-          ? SqlProjectionBinder.resolveOrderProjection(command, order)
-          : schema.find(command.orderBy().name(order));
-      if (column >= 0) live[column] = true;
+      int column = SqlBlockOutputOrder.projection(command, schema, order);
+      if (column < 0) {
+        Arrays.fill(live, 0, schema.count(), true);
+        return;
+      }
+      live[column] = true;
     }
   }
 

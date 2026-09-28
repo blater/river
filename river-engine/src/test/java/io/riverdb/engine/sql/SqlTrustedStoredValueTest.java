@@ -185,6 +185,8 @@ final class SqlTrustedStoredValueTest {
           + "(SELECT quantity FROM block_values WHERE label='多🙂') block_source",
       "SELECT quantity FROM "
           + "(SELECT quantity,label FROM block_values ORDER BY label) block_source",
+      "SELECT q FROM "
+          + "(SELECT quantity AS q,label AS l FROM block_values ORDER BY label) block_source",
       "SELECT n FROM "
           + "(SELECT label,COUNT(*) AS n FROM block_values GROUP BY label) block_source",
       "SELECT n FROM "
@@ -221,6 +223,30 @@ final class SqlTrustedStoredValueTest {
     SqlBlockProjectionLiveness liveness = new SqlBlockProjectionLiveness();
     liveness.prepare(new SqlCommand[] {selectAll}, new SqlBlockSchema[] {output}, base, 1);
     assertEquals(true, liveness.physicalLive(2));
+  }
+
+  @Test
+  void aliasedInnerOrderColumnRemainsLive(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSession sql = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    execute(sql, result, "CREATE TABLE block_values ("
+        + "id BIGINT PRIMARY KEY,quantity INTEGER,label VARCHAR(8),CHECK(1=1))");
+    execute(sql, result, "INSERT INTO block_values VALUES (1,5,'z'),(2,7,'a')");
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult selected = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, sql.beginScan(
+        "SELECT q FROM (SELECT quantity AS q,label AS l "
+            + "FROM block_values ORDER BY label LIMIT 1) s", cursor));
+    assertEquals(StatusCode.OK, sql.nextScan(cursor, selected));
+    assertEquals(7, selected.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, sql.nextScan(cursor, selected));
+    assertEquals(StatusCode.OK, sql.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, sql.close());
+    assertEquals(StatusCode.OK, database.close());
   }
 
   private static SqlBoundBlockPlans blockPlans(RelationalSession session, String sql) {
