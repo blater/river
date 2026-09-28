@@ -27,6 +27,7 @@ and runtime configuration.
 | 2026-09-28 04:25:36 | River `feature/stock-validated-root-filter`; harness `feature/stock-level-program` | `tic-72e5` | River `e029efdc` (merged `2d21b5e5`); harness `4c16840` (merged `dae4786`), version `validated-filter-e029efdc` | `sample stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 10,328.801 | 0.130 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_042529_a09ebfaa`; [checkpoint](#2026-09-28--stock-level-read-program-checkpoint) |
 | 2026-09-28 07:02:16 UTC | `feature/inner-join-order-cost` | `tic-72e5` | River `34ee0800`, version `join-cost-34ee0800`; harness `7c4b90d` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,131.222 | 1.109 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_070044_7e89c8f0`; [checkpoint](#2026-09-28--full-stock-level-costed-inner-join-order) |
 | 2026-09-28 08:41:56 UTC | `feature/index-root-snapshot-cache` | `tic-72e5` | River `b17e0450`, version `b17e0450-jvm-clean`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,334.778 | 0.914 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_084035_50a125d8`; [checkpoint](#2026-09-28--cache-versioned-index-roots-across-join-probes) |
+| 2026-09-28 11:18:40 UTC | `feature/join-skip-unused-text-values` | `tic-72e5` | River code later committed as `9fcd3007`, engine JAR SHA-256 `9511f692e45653b2557ed39a53f3a829db8a45ae50744cea085813a7e4e2fc2a`, version `join-skip-unused-text-long-b2`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,234.227 | 1.064 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_111715_048cab5f`; [checkpoint](#2026-09-28--omit-unused-text-publication-during-joins) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -1171,3 +1172,64 @@ did not establish a Stock Level gain, so its source was reverted and no new
 baseline or performance checkpoint tag was created. The next investigation
 remains a projected lookup or removal of wide-row work that is actually
 measurable on the full-profile join.
+
+## 2026-09-28 — Omit unused text publication during JOINs
+
+`feature/join-skip-unused-text-values` at `9fcd3007` threads the existing
+SQL proof that a JOIN never reads base-row text through descriptor scan and
+row decoding. The codec still validates every stored field, including UTF-8,
+and still publishes all key parts needed for tuple-index recheck. It omits
+copying unused VARCHAR bytes into the reusable intermediate value buffer.
+The benchmark schema and SQL were unchanged. An isolated fail-fast diagnostic
+confirmed that the exact `full stock-level` query reaches this path; the
+diagnostic was removed before the final clean build. The clean-built engine
+JAR SHA-256 was
+`9511f692e45653b2557ed39a53f3a829db8a45ae50744cea085813a7e4e2fc2a`,
+identical to the measured candidate JAR. The stable index-parity control was
+the published `fb9c0a0b` engine build. Both used harness `eba8ab0`,
+GraalVM 25.0.4 JVM `-Xmx1g`, READ COMMITTED, durable WAL, one worker and
+warehouse, seed 42 and retry limit 3. The command was:
+
+```sh
+./benchmark run river tpcc full stock-level \
+  --river-executable=BUILD/river --river-version=BUILD-LABEL \
+  --warmup=5s --duration=30s --workers=1 --warehouses=1 \
+  --seed=42 --max-retries=3
+```
+
+Two earlier 1s/3s samples per build varied substantially. The longer
+interleaved sequence was:
+
+| Order | Build | TPS | p99 (ms) | Artifact under `/private/tmp/river-harness-stock-analyze/runs/` |
+| --- | --- | ---: | ---: | --- |
+| B1 | skip unused text | 1,260.952 | 1.041 | `river_harness_20260928_111039_3a95dad2` |
+| A1 | index-parity control | 1,201.825 | 1.097 | `river_harness_20260928_111252_6bb490b2` |
+| A2 | index-parity control | 1,208.394 | 1.097 | `river_harness_20260928_111502_dcddd8c2` |
+| B2 | skip unused text | 1,234.227 | 1.064 | `river_harness_20260928_111715_048cab5f` |
+
+The candidate mean was 1,247.589 TPS against 1,205.110 for adjacent controls,
+a 3.5% gain in this local diagnostic. All four artifacts had eligible
+comparison key
+`1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`,
+passed invariants and shutdown, and had zero failures, unknown commits and
+retries. The latest candidate B2 is the new table baseline; its absolute
+1,234.227 TPS is below an earlier isolated 1,334.778 TPS run, which shows
+why adjacent controls are required. Neither number is a cross-database claim.
+
+The adjacent `sample stock-level` check passed at 10,185.875 TPS for control
+and 10,537.974 for candidate (`river_harness_20260928_112719_4c6c48da`,
+`river_harness_20260928_112745_7f34ab71`), with the same eligible key,
+invariants and zero failed/unknown/retry outcomes. A one-worker `sample all`
+candidate run passed at 523.549 TPS
+(`river_harness_20260928_112648_cb4540e6`). Focused codec and JOIN tests
+covered omitted text validation and recheck of a composite index with a text
+suffix. `./gradlew --no-daemon clean test` passed (116 tasks), followed by a
+focused test rerun after an additional text-buffer assertion. Slopmark scores
+for touched `RelationalDescriptorScanAccess` rose 58.690 to 64.405 and
+`RelationalDescriptorTableAccess` rose 92.831 to 93.885; the scan addition
+owns the tuple-key recheck requirement and introduces no new execution path.
+
+Accept this generic row-publication reduction. Keep `tic-72e5` open: the
+measured full-profile gap to the earlier MariaDB diagnostic is much larger,
+and no new cross-database comparison or automatic physical-index eligibility
+check was completed here.
