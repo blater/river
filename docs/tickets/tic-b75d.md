@@ -1,6 +1,6 @@
 ---
 id: tic-b75d
-status: in_progress
+status: parked
 type: story
 priority: 2
 assignee: blater

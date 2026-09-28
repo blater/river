@@ -108,7 +108,7 @@ Logs: `/private/tmp/river-wal-clean-check-final.log`,
 Four interleaved control/candidate performance samples passed with no regression
 signal: candidate throughput, server CPU per commit, and p99 all fall within
 the two controls' ranges. Independent review agrees; no speedup is claimed.
-Configuration and individual results are in `docs/performance-checkpoints.md`;
+Configuration and individual results are in `docs/performance-checkpoints-archive-2026-09-16.md`;
 captures are under `/private/tmp/river-complexity-perf/`.
 Promote with `perf-checkpoint-20260916-localwal-complexity`; ticket remains open.
 
@@ -360,7 +360,7 @@ Final independent lifecycle review approved identity, stage ownership, cleanup,
 and failure precedence against the original source. The complete integration check and isolated daemon comparisons are recorded
 in the completion section below.
 The cumulative adverse samples and component probes remain retained in
-`docs/performance-checkpoints.md`; they have not been dismissed or attributed.
+`docs/performance-checkpoints-archive-2026-09-16.md`; they have not been dismissed or attributed.
 
 ### Completion — 2026-09-16
 
@@ -393,6 +393,6 @@ The code is accepted as behavior-preserving maintainability work, not an
 optimization. [tic-voronwe](tic-voronwe.md) stays open for both the earlier
 cumulative signal and final daemon-only observations. Full individual samples,
 configuration, profile limits, and analysis caveats are in
-[performance-checkpoints.md](../performance-checkpoints.md), section
+[the checkpoint archive](../performance-checkpoints-archive-2026-09-16.md), section
 "Complexity completion and periodic performance checkpoint 3". Closing this
 complexity ticket does not close or dismiss that investigation.

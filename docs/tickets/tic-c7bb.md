@@ -1,6 +1,6 @@
 ---
 id: tic-c7bb
-status: open
+status: parked
 type: epic
 assignee: blater
 parent: tic-30c3

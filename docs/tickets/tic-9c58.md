@@ -1,6 +1,6 @@
 ---
 id: tic-9c58
-status: open
+status: parked
 type: epic
 priority: 1
 assignee: blater

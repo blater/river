@@ -1,6 +1,6 @@
 ---
 id: tic-4d14
-status: open
+status: parked
 priority: 3
 type: investigation
 assignee: blater

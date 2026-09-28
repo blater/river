@@ -26,7 +26,7 @@ No production or test source was changed for capture.
 | Open-file inventory is not active-call attribution | lsof listed pages FD 44, rows FD 45, versions FD 46, and WAL FD 41. | Do not assign FD 44 or its displayed offset to the held invocation without an independent association. Positional writes need their explicit argument. |
 | JFR events arrive after operations complete | During-hold JFR: 27 FileWrite and 64 ThreadPark events; final: 45 and 112. Neither contained the checkpoint latch park. After release, FileWrite events on virtual thread 48 showed the test wrapper, `river.indexed.pages`, and 16,384 bytes. | The later completed writes corroborate the fixture path, not the missing during-hold offset. The roughly 30-second carrier park is unrelated and must not be substituted for the virtual-thread latch. |
 | Native write arguments are still missing | FileWrite fields were startTime, duration, eventThread, stackTrace, path, bytesWritten; no positional offset. The virtual event had osThreadId 0. | We cannot yet associate the held Java invocation with a native thread/descriptor/offset/count before completion. |
-| Filesystem tracing was unavailable | `sudo -n fs_usage ...` returned `sudo: a password is required`. | This was an OS authentication limit, not a negative trace result or an automatic approval rejection. Validate tracing on the isolated host before running its workload. |
+| Filesystem tracing was unavailable | The historical administrator-dependent filesystem trace was denied for missing authentication. | Historical evidence only, not a negative trace result. Privileged tracing is excluded from the current procedure and is not an execution prerequisite. |
 | Capture did not break cleanup | Both controlled tests passed. Attempt 2 reported IO_FAILURE after 30,004 ms, with the test asserting zero completed responses before release, normal child exit, and recovered data. | These are controlled-capture results, not evidence that native stuck I/O can be terminated. |
 
 Raw evidence, exact collector commands/timestamps, scripts, Java/native dumps,
@@ -177,13 +177,15 @@ the same panic signature already occurred before the admission feature.
 
 ## Start observation before the workload
 
-In a second terminal, start filesystem tracing before Java starts. This command
-requires the isolated host's administrator access. Confirm it actually records
-Java activity; a denied or empty trace is a capture failure, not negative evidence.
+Privileged filesystem tracing is not part of the current procedure. The denied
+historical `fs_usage` rehearsal remains recorded above as an evidence limit; do
+not invoke `sudo`, request administrator authentication or change host security
+settings for this plan.
 
-```sh
-sudo /usr/bin/fs_usage -w -f filesys -t 180 java > "$incident_dir/filesystem.txt" 2>&1
-```
+The synchronous in-thread write logger requires no administrator access. Any
+future proposal requiring it must explain the essential reason, the precise
+access needed and why ordinary access is insufficient, and obtain the user's
+explicit agreement before proceeding.
 
 Run the following in the workload terminal after the build has completed. It
 retains the incident workload configuration and adds server JFR; tracing changes

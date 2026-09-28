@@ -1,6 +1,6 @@
 ---
 id: tic-ae17
-status: open
+status: parked
 type: bug
 priority: 1
 delivery: code

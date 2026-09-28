@@ -1,6 +1,6 @@
 ---
 id: tic-30c3
-status: open
+status: parked
 type: epic
 assignee: blater
 delivery: none

@@ -1,6 +1,6 @@
 ---
 id: tic-845d
-status: open
+status: parked
 priority: 3
 type: story
 assignee: blater

@@ -1,6 +1,6 @@
 ---
 id: tic-701f
-status: open
+status: parked
 type: investigation
 priority: 1
 assignee: blater

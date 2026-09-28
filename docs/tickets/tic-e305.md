@@ -1,6 +1,6 @@
 ---
 id: tic-e305
-status: open
+status: parked
 type: investigation
 priority: 1
 assignee: blater

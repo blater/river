@@ -1,6 +1,6 @@
 ---
 id: tic-45a7
-status: open
+status: parked
 type: investigation
 assignee: blater
 parent: tic-761e

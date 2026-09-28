@@ -1,6 +1,6 @@
 ---
 id: tic-c8d1
-status: in_progress
+status: parked
 type: epic
 priority: 1
 created: 2026-09-11

@@ -1,6 +1,6 @@
 ---
 id: tic-ef07
-status: open
+status: parked
 type: epic
 priority: 1
 assignee: blater

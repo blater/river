@@ -1,6 +1,6 @@
 ---
 id: tic-4ec3
-status: open
+status: parked
 type: story
 priority: 1
 assignee: blater

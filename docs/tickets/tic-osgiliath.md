@@ -1,18 +1,19 @@
 ---
 id: tic-osgiliath
-status: in_progress
-branch: ticket/tic-osgiliath-pending-write
+status: parked
 type: bug
 priority: 1
 assignee: blater
 parent: tic-rowlie
 delivery: code
+branch: ticket/tic-osgiliath-pending-write
 tags:
     - performance
     - recovery
     - platform
 links:
     - tic-emeldir
+    - tic-dorlas
 created: 2026-09-13T12:15:36.613653Z
 ---
 # Diagnose current-master TPS checkpoint disconnect and unreaped server exit
@@ -373,7 +374,9 @@ The final checkpoint then exceeded its 30-second client wait with no completed
 request and reported SQL state `08006` / `IO_FAILURE`; the runner subsequently
 killed its owned server PID 22462 and reported
 `cleanup_failed` / `SERVER_FORCED_TERMINATION`. The failure became visible only
-after that kill, so no live native sample was possible.
+through the completed API command after that kill. The runner had already written
+the failure to redirected stderr before cleanup, but no live collector consumed
+it before the server was stopped, so no native sample was taken.
 
 The 101,857,226-byte durable log contains 14,165 BEGIN and 14,165 matching
 RETURN records, no THROW or unmatched operation, one process ID and nine
@@ -395,6 +398,125 @@ September 14 table above:
 | Outcome | Current disposition |
 | --- | --- |
 | Same-write native identity and full Java request chain | Proven by the controlled virtual-thread write and independently accepted |
-| Single bounded incident workload | Executed once; final checkpoint timed out and the runner killed its owned server after retaining paired records |
+| Current-source bounded diagnostic workloads | Executed twice; both final checkpoints timed out and the runner killed its owned server after retaining paired records |
 | Hanging write and kernel cause | Unresolved; all instrumented entries in this attempt returned and no live sample was available at timeout |
 | Wider workload or host-security changes | Not performed |
+
+### User-directed current-source incident attempt, 2026-09-15
+
+The user subsequently directed one immediate attempt with the already built and
+published diagnostic rather than waiting for the proposed exact-79c4 backport.
+The runner labelled the actual source
+`persisted-native-incident-02-live-current`; this is current diagnostic source,
+not an exact replay of `79c4da2e`. It used the same tiny/standard, four-terminal,
+no-wait-stress, fresh-load, one-warehouse, batch-32, maximum-attempts-32,
+two-second warmup, 60-second measurement, seed-42 and serializable settings.
+
+The first durable record identified owned server PID 26697. An ordinary
+same-user `/usr/bin/sample` attempt against that live PID exited 255 with
+`sample cannot examine process 26697 (java) because you do not have appropriate
+privileges to examine it`. This is an execution-context denial: the earlier
+same-user controlled sample succeeded, so it does not establish an intrinsic
+administrator requirement. No elevation, authentication request or retry was
+made.
+
+Load, preflight, warmup, measurement and drain completed. The final checkpoint
+again waited 30,002,297,750 ns with no completed response and reported SQL state
+`08006` / `IO_FAILURE`. The runner then killed its owned server and reported
+`cleanup_failed` / `SERVER_FORCED_TERMINATION`; metadata records start epoch
+1789438554, finish epoch 1789438707 and exit status 1. The 103,994,670-byte
+durable log contains 14,436 BEGIN and 14,436 matching RETURN records, no THROW
+or unmatched operation, one process ID and nine concrete native thread IDs.
+The longest BEGIN-to-RETURN interval was 13.513 ms. Every instrumented target
+write therefore returned before its durable RETURN in this attempt. The denied
+live sample leaves no native or kernel join, and the
+uncovered-operation and persistence limits above still apply. This attempt is
+inconclusive for the historical kernel cause and is not performance evidence.
+No repeat was run.
+
+Private raw evidence is under
+`benchmark-results/checkpoint-persisted-write-20260915/native-incident-02-live/`,
+including the write log, copied runner evidence, retained owned temporary logs,
+and the exact native-sampler denial in `native-samples/collector.log`.
+
+### User-directed current-source incident attempt, 2026-09-15: persisted-native-incident-03-current
+
+The next already-authorized bounded diagnostic used the same tiny/standard,
+four-terminal, no-wait-stress, fresh-load, one-warehouse, batch-32,
+maximum-attempts-32, two-second warmup, 60-second measurement, seed-42 and
+serializable configuration. Load, preflight, warmup, measurement and drain
+completed. The final checkpoint waited 30,001,400,417 ns with zero completed
+requests and reported SQL state `08006` / `IO_FAILURE`; metadata records
+`run.result=cleanup_failed`, `run.status=SERVER_FORCED_TERMINATION`,
+`run.exit_status=1`, start epoch `1789439665`, and finish epoch `1789439818`.
+
+The retained 104,464,062-byte write log contains 14,500 BEGIN and 14,500
+matching RETURN records, no THROW, zero malformed records, and zero unmatched
+operation IDs. The first and last write-boundary timestamps are
+`1789439666110` and `1789439818110` ms. No native sample was taken. Every
+instrumented target write represented in this attempt returned; this does not
+identify a hanging target write or establish a cause for the checkpoint
+timeout, and does not cover work outside the instrumented write boundary.
+
+Private raw evidence is under
+`benchmark-results/checkpoint-persisted-write-20260915/native-incident-03/`.
+
+### User-directed current-source incident attempt, 2026-09-15: persisted-native-incident-04-current
+
+Two startup-only attempts preceded the measured run. The first used the
+requested invocation with the runner-created output parent; it exited during
+startup with `SERVER_NOT_READY` / `IO_FAILURE` before a workload began. The
+second used a mode-0700 output parent and private temporary directory; it also
+exited during startup with `SERVER_NOT_READY` / `IO_FAILURE`, while its logger
+retained 17 BEGIN and 17 matching RETURN records (34 records total). These
+different execution contexts establish the observed outcomes only; they do
+not establish the cause of either startup failure.
+
+The measured attempt used the same tiny/standard, four-terminal,
+no-wait-stress, fresh-load, one-warehouse, batch-32, maximum-attempts-32,
+two-second warmup, 60-second measurement, seed-42 and serializable settings.
+It ran with the localhost server and persisted-write instrumentation enabled.
+Load, preflight, warmup, measurement and drain completed. The final checkpoint
+waited 30,002,007,292 ns with zero completed requests and reported SQL state
+`08006` / `IO_FAILURE`; the owned server was then force-terminated. Metadata
+records `run.result=cleanup_failed`, `run.status=SERVER_FORCED_TERMINATION`,
+`run.exit_status=1`, start epoch `1789440630`, and finish epoch `1789440781`.
+
+The measured attempt's 103,193,447-byte write log contains 14,305 BEGIN and
+14,304 RETURN records, no THROW, zero malformed records, and one unmatched
+operation ID: the final BEGIN (operation 14305). Among matched pairs,
+BEGIN-to-RETURN durations were p50 3.84 ms, p99 4.24433 ms, and maximum
+63.4946 ms. The first and last write-boundary timestamps were
+`1789440630714` and `1789440781116` ms. No native sample or administrator
+action was taken. The unmatched final BEGIN and the completed pairs do not by
+themselves identify the checkpoint timeout's cause; the log does not cover
+work outside the instrumented write boundary or the missing RETURN persistence
+after a target call. The final unmatched BEGIN timestamp and the recorded
+run-finish second fall within the same one-second wall-clock interval; this is
+a narrow timing correlation only and cannot distinguish a killed target call
+from a missing RETURN-log completion.
+
+Private raw evidence is under
+`benchmark-results/checkpoint-persisted-write-20260915/native-incident-04/`.
+
+### User-directed current-source incident attempt, 2026-09-15: persisted-native-incident-05-current
+
+One further bounded diagnostic used the successful localhost execution context
+with the same tiny/standard, four-terminal, no-wait-stress, fresh-load,
+one-warehouse, batch-32, maximum-attempts-32, two-second warmup, 60-second
+measurement, seed-42 and serializable settings. Both persisted-write logger
+properties were enabled with the retained native library. Load, preflight,
+warmup, measurement and drain completed. The final checkpoint waited
+30,002,203,417 ns with zero completed requests and reported SQL state `08006`
+/ `IO_FAILURE`; the owned server was then force-terminated. Metadata records
+`run.result=cleanup_failed`, `run.status=SERVER_FORCED_TERMINATION`,
+`run.exit_status=1`, start epoch `1789441071`, and finish epoch `1789441223`.
+
+The retained write log contains 14,447 BEGIN and 14,447 matching RETURN
+records, no THROW, zero malformed records, and zero unmatched operation IDs.
+This attempt took no native sample and no administrator action. The complete
+instrumented write pairs do not identify the checkpoint timeout's cause and do
+not cover work outside the instrumented write boundary.
+
+Private raw evidence is under
+`benchmark-results/checkpoint-persisted-write-20260915/native-incident-05/`.

@@ -1,6 +1,6 @@
 ---
 id: tic-25cf
-status: open
+status: parked
 type: story
 priority: 2
 delivery: code

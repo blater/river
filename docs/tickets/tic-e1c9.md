@@ -1,6 +1,6 @@
 ---
 id: tic-e1c9
-status: open
+status: parked
 type: epic
 assignee: blater
 delivery: none

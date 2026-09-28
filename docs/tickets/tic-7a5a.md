@@ -1,6 +1,6 @@
 ---
 id: tic-7a5a
-status: open
+status: parked
 type: investigation
 assignee: blater
 parent: tic-rowlie

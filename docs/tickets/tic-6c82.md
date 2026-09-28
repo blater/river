@@ -1,6 +1,6 @@
 ---
 id: tic-6c82
-status: open
+status: parked
 type: story
 priority: 2
 delivery: code

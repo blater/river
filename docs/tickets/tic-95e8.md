@@ -1,6 +1,6 @@
 ---
 id: tic-95e8
-status: open
+status: parked
 type: investigation
 assignee: blater
 parent: tic-bf0b

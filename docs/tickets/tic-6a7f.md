@@ -1,6 +1,6 @@
 ---
 id: tic-6a7f
-status: in_progress
+status: parked
 type: story
 priority: 2
 delivery: code

@@ -1,6 +1,6 @@
 ---
 id: tic-3c7d
-status: open
+status: parked
 type: story
 priority: 2
 delivery: code

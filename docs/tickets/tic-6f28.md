@@ -1,6 +1,6 @@
 ---
 id: tic-6f28
-status: in_progress
+status: parked
 type: story
 priority: 1
 delivery: code
@@ -55,7 +55,7 @@ worktree /private/tmp/river-harness-one-way-close.
 
 Implementation: River `05c0f7e4`; Go adapter `793e80d`, locally integrated on
 harness `main` at `aba7c43`. Full evidence and commands are in
-[performance checkpoints](../performance-checkpoints.md#2026-09-10--one-way-prepared-release-tic-6f28)
+[performance checkpoints](../performance-checkpoints-archive-2026-09-16.md#2026-09-10--one-way-prepared-release-tic-6f28)
 and `/private/tmp/river-tic-6f28`.
 
 - Focused ownership/transport tests and clean River check passed (4m13s).

@@ -1,6 +1,6 @@
 ---
 id: tic-bd79
-status: open
+status: parked
 type: investigation
 assignee: blater
 parent: tic-c7bb

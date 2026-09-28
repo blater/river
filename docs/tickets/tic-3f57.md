@@ -1,6 +1,6 @@
 ---
 id: tic-3f57
-status: open
+status: parked
 type: story
 assignee: blater
 parent: tic-761e

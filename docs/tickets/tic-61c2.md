@@ -1,6 +1,6 @@
 ---
 id: tic-61c2
-status: open
+status: parked
 type: investigation
 priority: 1
 assignee: blater

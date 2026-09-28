@@ -10,10 +10,75 @@ import io.riverdb.base.tuple.TupleOrder;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 final class TupleKeyCodecTest {
+  private static final int COMPARE_OFFSET = 9;
+  private static final int COMPARE_LENGTH = 80;
+
+  @Test
+  void wordComparisonMatchesByteLoopAcrossBufferKindsAndOrders() {
+    byte[] original = new byte[COMPARE_LENGTH];
+    for (int index = 0; index < original.length; index++) {
+      original[index] = (byte) ((index * 73 + 11) ^ (index >>> 1));
+    }
+    ByteOrder[] orders = {ByteOrder.BIG_ENDIAN, ByteOrder.LITTLE_ENDIAN};
+    for (int leftKind = 0; leftKind < 6; leftKind++) {
+      int rightKind = (leftKind + 3) % 6;
+      for (ByteOrder leftOrder : orders) {
+        for (ByteOrder rightOrder : orders) {
+          ByteBuffer left = comparisonView(original, leftKind, leftOrder, COMPARE_OFFSET);
+          ByteBuffer equalRight = comparisonView(original, rightKind, rightOrder, COMPARE_OFFSET);
+          for (int length = 0; length <= COMPARE_LENGTH; length++) {
+            assertComparisonMatchesByteLoop(
+                left, length, equalRight, length, COMPARE_OFFSET);
+            if (length < COMPARE_LENGTH) {
+              assertComparisonMatchesByteLoop(
+                  left, length, equalRight, length + 1, COMPARE_OFFSET);
+              assertComparisonMatchesByteLoop(
+                  left, length + 1, equalRight, length, COMPARE_OFFSET);
+            }
+          }
+          for (int mismatch = 0; mismatch < COMPARE_LENGTH; mismatch++) {
+            byte[] changed = original.clone();
+            changed[mismatch] ^= (byte) 0xff;
+            ByteBuffer right = comparisonView(changed, rightKind, rightOrder, COMPARE_OFFSET);
+            assertComparisonMatchesByteLoop(
+                left, COMPARE_LENGTH, right, COMPARE_LENGTH, COMPARE_OFFSET);
+            assertComparisonMatchesByteLoop(
+                right, COMPARE_LENGTH, left, COMPARE_LENGTH, COMPARE_OFFSET);
+          }
+        }
+      }
+    }
+  }
+
+  @Test
+  void wordComparisonSupportsEveryByteAlignment() {
+    byte[] original = new byte[32];
+    for (int index = 0; index < original.length; index++) {
+      original[index] = (byte) (index * 41 + 3);
+    }
+    int[] mismatches = {0, 7, 8, 15, 16, 23, 31};
+    ByteOrder[] orders = {ByteOrder.BIG_ENDIAN, ByteOrder.LITTLE_ENDIAN};
+    for (int offset = 8; offset < 16; offset++) {
+      for (int kind = 0; kind < 6; kind++) {
+        for (ByteOrder order : orders) {
+          ByteBuffer left = comparisonView(original, kind, order, offset);
+          for (int mismatch : mismatches) {
+            byte[] changed = original.clone();
+            changed[mismatch] ^= (byte) 0xff;
+            ByteBuffer right = comparisonView(changed, kind, order, offset);
+            assertComparisonMatchesByteLoop(
+                left, original.length, right, changed.length, offset);
+          }
+        }
+      }
+    }
+  }
+
   @Test
   void physicalMixedTupleOrdersByUserValuesThenLogicalIdentity() {
     int[] descriptors = {
@@ -134,6 +199,61 @@ final class TupleKeyCodecTest {
     int valueOffset = TupleKeyCodec.headerBytes(1) + 2;
     TupleKeyCodec.putBigEndianLong(bytes, valueOffset, 2 ^ Long.MIN_VALUE);
     assertFalse(TupleKeyCodec.validate(bytes, 0, length));
+  }
+
+  private static ByteBuffer comparisonView(
+      byte[] source, int kind, ByteOrder order, int offset) {
+    boolean direct = kind == 1 || kind == 4 || kind == 5;
+    boolean sliced = kind >= 3;
+    ByteBuffer backing = direct
+        ? ByteBuffer.allocateDirect(source.length + offset + 16)
+        : ByteBuffer.allocate(source.length + offset + 16);
+    int payloadOffset = offset + (sliced ? 4 : 0);
+    for (int index = 0; index < source.length; index++) {
+      backing.put(payloadOffset + index, source[index]);
+    }
+    ByteBuffer view = backing;
+    if (sliced) {
+      backing.position(4);
+      backing.limit(backing.capacity() - 2);
+      view = backing.slice();
+    }
+    if (kind == 2 || kind == 5) view = view.asReadOnlyBuffer();
+    view.order(order);
+    view.position(2);
+    view.limit(view.capacity() - 1);
+    return view;
+  }
+
+  private static void assertComparisonMatchesByteLoop(
+      ByteBuffer left, int leftLength, ByteBuffer right, int rightLength, int offset) {
+    int leftPosition = left.position();
+    int leftLimit = left.limit();
+    ByteOrder leftOrder = left.order();
+    int rightPosition = right.position();
+    int rightLimit = right.limit();
+    ByteOrder rightOrder = right.order();
+    int expected = compareByByte(left, leftLength, right, rightLength, offset);
+    assertEquals(expected, TupleKeyCodec.compare(
+        left, offset, leftLength, right, offset, rightLength));
+    assertEquals(leftPosition, left.position());
+    assertEquals(leftLimit, left.limit());
+    assertEquals(leftOrder, left.order());
+    assertEquals(rightPosition, right.position());
+    assertEquals(rightLimit, right.limit());
+    assertEquals(rightOrder, right.order());
+  }
+
+  private static int compareByByte(
+      ByteBuffer left, int leftLength, ByteBuffer right, int rightLength, int offset) {
+    int shared = Math.min(leftLength, rightLength);
+    for (int index = 0; index < shared; index++) {
+      int comparison = Integer.compare(
+          Byte.toUnsignedInt(left.get(offset + index)),
+          Byte.toUnsignedInt(right.get(offset + index)));
+      if (comparison != 0) return comparison;
+    }
+    return Integer.compare(leftLength, rightLength);
   }
 
   private static int mixedKey(

@@ -1,6 +1,6 @@
 ---
 id: tic-69c5
-status: open
+status: parked
 type: story
 priority: 2
 delivery: code

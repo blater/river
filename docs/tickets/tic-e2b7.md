@@ -1,6 +1,6 @@
 ---
 id: tic-e2b7
-status: open
+status: parked
 type: epic
 assignee: blater
 parent: tic-e1c9

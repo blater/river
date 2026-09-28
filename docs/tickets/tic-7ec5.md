@@ -1,6 +1,6 @@
 ---
 id: tic-7ec5
-status: open
+status: parked
 type: investigation
 priority: 1
 assignee: blater

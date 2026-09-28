@@ -1,6 +1,6 @@
 ---
 id: tic-615d
-status: in_progress
+status: parked
 type: story
 assignee: blater
 parent: tic-bf0b

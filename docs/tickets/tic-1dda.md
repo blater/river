@@ -1,6 +1,6 @@
 ---
 id: tic-1dda
-status: open
+status: parked
 priority: 3
 type: investigation
 assignee: blater
@@ -27,37 +27,6 @@ links:
 created: 2026-09-04T15:10:06.990273Z
 ---
 # Revalidate the P0 promotion matrix on stable master
-
-Run the required serializable 50/50 discriminator and standard-mix terminal sweeps from a pushed clean source checkpoint.
-
-## Outcome
-
-One stable-master evidence bundle either passes every P0 correctness, cleanup,
-and scaling criterion or records the first failed criterion without making a
-performance claim.
-
-## In Scope / Owning Mechanism
-
-This investigation owns only the predeclared workload execution,
-reconciliation, statistical evaluation, and evidence record. It consumes the
-workload diagnostics delivered by `tic-af29` and `tic-8e74`.
-
-## Non-goals
-
-- Implement instrumentation, transaction cleanup, lock policy, or any database
-  optimization.
-- Change workload mix, isolation, durability, terminal counts, retry policy, or
-  the statistical rule after observing results.
-- Discard anomalous samples, repair a failed run in place, or issue a checkpoint
-  tag from partial or incomparable evidence.
-
-## Stop Conditions
-
-Do not start until every declared prerequisite closes. Stop the promotion run
-and preserve the evidence on source/configuration drift, unreconciled output,
-cleanup residue, a correctness failure, or an invalid comparison cell. A
-discovered database defect becomes a separate blocking ticket; it is never
-fixed inside this investigation.
 
 ## Maximum Change Shape
 
@@ -88,57 +57,16 @@ statistically stated scaling conclusion. The evidence records the source
 branch, variation label, effective workload configuration, and the retained
 run metadata and acceptance artifacts needed to reproduce the comparison.
 
-## Notes
+### User-authorized reproducer prerequisite, 2026-09-14
 
-### 2026-09-04 P0 revalidation blocked
-
-The independently reviewed 40-run evidence records internally correct
-serializable runs but a detected standard-mix 10:2 scaling regression. The
-then-declared P0 prerequisites `tic-af29`, `tic-8e74`, `tic-0636`, and
-`tic-d7c2` blocked the full rerun. Keep this ticket `in_progress`; no clean
-gate, P0 certification, or performance checkpoint tag is accepted.
-
-### 2026-09-05 scope-lock split
-
-The prior combined prerequisites were narrowed without adding behavior to this
-investigation. `tic-af29` now owns only scheduler-derived successful-block
-classification and `tic-8e74` owns the independent terminal snapshot gauge.
-The historical `tic-0636` delivery also contained built-byte and cooperative
-host observations; those facts remain historical evidence, while this ticket
-consumes only the two workload diagnostics and remains prohibited from
-implementing or repairing them.
-
-### 2026-09-07 evidence-scope simplification
-
-The historical `tic-ed12` and `tic-d7c2` path is no longer an active dependency.
-This investigation's workload, statistical rules, cleanup, and other P0 stop
-conditions are unchanged; branch and variation labels identify the tested
-scenario, and no correctness or scaling gate is waived.
-
-### Readiness audit, 2026-09-14
-
-Independent execution_admission_review reconfirmed the first unmet prerequisite
-at current stable integration3cfe00e7: the correlated mixed-isolation reproducer
-required by docs/perf_review.md (Deterministic reproducer and P0 acceptance gate)
-is absent. This is the same gap retained in the 2026-09-04 evidence, not a new
-requirement. The old in-progress claim remains authoritative; this read-only
-audit does not claim a new campaign or overwrite its failed scaling evidence.
-
-Current MIXED_DIAGNOSTIC selects isolation levels but cannot control lock-boundary
-interleavings. TerminalRunner barriers synchronize phase startup only.
-TpccConflictProbe uses opposing district locks with tags; it does not execute
-real Payment/New Order transactions, both isolation combinations, the required
-three-terminal case or deterministic victim identity. TpccPaymentOrderTest uses
-mocked JDBC ordering. The delivered af29/8e74 diagnostics classify blocks and
-count retained snapshots; neither supplies this missing reproducer.
-
-No additional ordinary mixed/standard runs can fill the missing deterministic
-criterion. This ticket prohibits source, fixture, harness and tooling changes;
-the user explicitly prohibits increasing scope. Therefore the P0 gate remains
-unpassed, ca05/4d14/f1bb remain blocked by their existing dependency, and no WAL
-implementation or P1 promotion starts. No new ticket, diagnostic framework,
-workload family, timeout policy or relaxed criterion is introduced. This is a
-readiness blocker, not a fresh failed workload or permission to close P0.
+The user approved a general SQL concurrency refinement after the readiness audit.
+[tic-b1b7](tic-b1b7.md) now owns the deterministic fixture and causal proofs for
+lock paths, deadlocks, Repeatable Read and Serializable, with Payment/New Order
+retained as an integration regression case. It is an explicit prerequisite here.
+That ticket owns test implementation; this ticket remains evidence-only and keeps
+its existing claim, historical failures and unchanged promotion criteria.
+Completion of the fixture permits P0 revalidation; it does not certify P0 or
+admit WAL overlap before the remaining gate passes.
 
 ### Accepted general concurrency fixture, 2026-09-14
 

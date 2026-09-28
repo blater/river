@@ -3,7 +3,10 @@ package io.riverdb.format.btree;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.tuple.TupleEncodingSize;
 import io.riverdb.base.tuple.TupleShape;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /** Canonical order-preserving generic tuples and physical index keys. */
 public final class TupleKeyCodec {
@@ -19,6 +22,8 @@ public final class TupleKeyCodec {
       SqlShapeLimits.MAX_PHYSICAL_INDEX_KEY_BYTES;
   static final int NULL_VALUE = 0;
   static final int PRESENT_VALUE = 1;
+  private static final VarHandle BIG_ENDIAN_LONG =
+      MethodHandles.byteBufferViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
 
   private TupleKeyCodec() { }
 
@@ -100,7 +105,17 @@ public final class TupleKeyCodec {
       ByteBuffer left, int leftOffset, int leftLength,
       ByteBuffer right, int rightOffset, int rightLength) {
     int shared = Math.min(leftLength, rightLength);
-    for (int index = 0; index < shared; index++) {
+    int index = 0;
+    if (shared >= Long.BYTES) {
+      int wordBytes = shared & -Long.BYTES;
+      for (; index < wordBytes; index += Long.BYTES) {
+        long leftWord = (long) BIG_ENDIAN_LONG.get(left, leftOffset + index);
+        long rightWord = (long) BIG_ENDIAN_LONG.get(right, rightOffset + index);
+        int comparison = Long.compareUnsigned(leftWord, rightWord);
+        if (comparison != 0) return comparison;
+      }
+    }
+    for (; index < shared; index++) {
       int comparison = Integer.compare(
           Byte.toUnsignedInt(left.get(leftOffset + index)),
           Byte.toUnsignedInt(right.get(rightOffset + index)));

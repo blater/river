@@ -16,8 +16,8 @@ semantic authorities:
 
 - [`docs/plans/`](../plans/) contains implementation and performance plans;
 - [`docs/adr/`](../adr/) contains accepted durable decisions;
-- [`docs/performance-checkpoints.md`](../performance-checkpoints.md) contains
-  accepted performance checkpoint history; and
+- [`docs/performance-checkpoints.md`](../performance-checkpoints.md) tracks current
+  baselines and links to archived checkpoint history; and
 - [`manifesto.md`](../../manifesto.md) and [`AGENTS.md`](../../AGENTS.md) define
   the working principles and operational contract.
 

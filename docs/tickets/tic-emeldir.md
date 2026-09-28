@@ -1,6 +1,6 @@
 ---
 id: tic-emeldir
-status: open
+status: parked
 type: bug
 priority: 1
 assignee: blater
@@ -13,6 +13,7 @@ tags:
     - wal
 links:
     - tic-osgiliath
+    - tic-dorlas
 created: 2026-09-14T15:00:56.498699Z
 ---
 

@@ -1,5 +1,7 @@
 tickets-directory: docs/tickets
 strategy: tolkien
+status:
+  parked: true
 delivery:
   require-commit-links: true
   commit-trailer: Ticket

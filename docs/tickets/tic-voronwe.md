@@ -21,7 +21,7 @@ A bounded same-workload investigation identifies a supported mechanism or explic
 ## Evidence and boundaries
 
 - Completion source runtime: `deb8da4c`; full complexity checkpoint evidence is
-  in [performance-checkpoints.md](../performance-checkpoints.md), section
+  in [the checkpoint archive](../performance-checkpoints-archive-2026-09-16.md), section
   "Complexity completion and periodic performance checkpoint 3".
 - Earlier cumulative signal: `ff6ed6f9` versus `fa6f069a`, retained at
   `/private/tmp/river-complexity-perf-2` and `...-2-long`; SQL/engine/prequeue
@@ -53,3 +53,10 @@ identical durability, heap, JDK, seed, and harness mechanics. No cross-database,
 warehouse/worker sweep, new observability framework, or unrelated optimization
 is required. A supported cause or an explicit inconclusive boundary with one
 next decision is a valid investigation outcome.
+
+The [2026-09-27 current-build probes](../performance-checkpoints.md#2026-09-27--current-hot-path-investigation)
+add an unchanged-binary control decline from 384.13 to 332.00 committed TPS
+within one 30-second interleaved sequence, while both code probes crossed
+favorable or adverse controls. These observations do not identify the runtime
+or host mechanism. Resolve that variation before promoting a small CPU-path
+optimization from throughput samples.

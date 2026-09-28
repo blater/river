@@ -1,5 +1,12 @@
 # River delivery Kanban and priority queue
 
+## Reassessment reset — 2026-09-15
+
+At the user's direction, every unfinished ticket is parked pending a fresh
+reassessment. There is no active delivery priority. All queues and priority
+statements below are historical context until the reassessment establishes a
+new delivery frontier.
+
 ## Current performance frontier — 2026-09-15
 
 Two of the three bounded performance epics are complete:

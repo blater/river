@@ -1,6 +1,6 @@
 ---
 id: tic-630d
-status: open
+status: parked
 type: investigation
 assignee: blater
 parent: tic-c7bb

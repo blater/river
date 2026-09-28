@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.runtime.DatabasePageCachePlan;
-import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.btree.TupleBTreePageValidationProof;
 import io.riverdb.format.page.PageHeader;
 import io.riverdb.platform.file.DurableFile;
@@ -12,987 +11,232 @@ import io.riverdb.platform.file.IoResult;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32C;
 
-/** Bounded current/staging frame cache with pin-aware eviction. */
+/** Stable package surface coordinating bounded current and staging frame owners. */
 final class IndexedPageFrameCache {
-  private static final IndexedPageFrame[] DETACHED_FRAMES = new IndexedPageFrame[0];
   final IndexedPageState state;
-  private final IndexedPageFrameIo io;
   IndexedPageFrame[] currentFrames;
   IndexedPageFrame[] stagingFrames;
-  private long[] durabilityOwnerTokens;
-  private int[] durabilityNextSlots;
   IndexedPageFrameMap currentMap;
   IndexedPageFrameMap stagingMap;
   IndexedPreparedPageBatch prepared;
-  private final IndexedOperationPagePins operationPins;
-  private long accessClock;
+  private final IndexedPageFrameCacheOperations operations;
   private long pageGenerationClock;
-  private int currentProbeCursor;
-  // Empty reclaimed frames use previousVersionSlot as an intrusive free link.
-  // Only reclaimHistorical offers them; selection consumes them before probing.
-  private int reclaimedFrameHead = -1;
   private StatusCode lastStatus = StatusCode.OK;
-  private IndexedPreparedLogicalCommit memberAdmission;
-  private boolean memberCapacityPressure;
-  private final IoResult cacheIo = new IoResult();
 
   IndexedPageFrameCache(
-      DurableFile backingFile,
-      DurableFile stagingFile,
-      DatabaseIncarnation database,
-      WalGeneration generation,
-      IndexedPageState pageState,
-      DatabasePageCachePlan config) {
+      DurableFile backingFile, DurableFile stagingFile,
+      DatabaseIncarnation database, WalGeneration generation,
+      IndexedPageState pageState, DatabasePageCachePlan config) {
     state = pageState;
-    io = new IndexedPageFrameIo(backingFile, stagingFile, database, generation, state);
-    currentFrames = new IndexedPageFrame[config.currentFrames()];
-    durabilityOwnerTokens = new long[config.currentFrames()];
-    durabilityNextSlots = new int[config.currentFrames()];
-    java.util.Arrays.fill(durabilityNextSlots, -1);
-    stagingFrames = new IndexedPageFrame[config.stagingFrames()];
-    currentMap = new IndexedPageFrameMap(config.currentMapCapacity());
-    stagingMap = new IndexedPageFrameMap(config.stagingMapCapacity());
-    prepared = new IndexedPreparedPageBatch(config);
-    operationPins = new IndexedOperationPagePins(this);
+    operations = new IndexedPageFrameCacheOperations(
+        this, backingFile, stagingFile, database, generation, state, config);
+    prepared = operations.prepared();
+    syncFrameViews();
   }
 
-  void setGeneration(WalGeneration generation) { io.setGeneration(generation); }
-
-  StatusCode detach() {
-    if (prepared.active()) return StatusCode.CONFLICT;
-    for (IndexedPageFrame frame : currentFrames) {
-      if (frame != null && (frame.pinCount != 0 || frame.publicationReserved)) {
-        return StatusCode.CONFLICT;
-      }
-    }
-    for (IndexedPageFrame frame : stagingFrames) {
-      if (frame != null && frame.pinCount != 0) return StatusCode.CONFLICT;
-    }
-    StatusCode status = prepared.detach();
-    if (!status.isOk()) return status;
-    detachFrames();
-    return StatusCode.OK;
-  }
-
-  void abandon() {
-    prepared.abandon();
-    detachFrames();
-  }
-
-  private void detachFrames() {
-    for (IndexedPageFrame frame : currentFrames) {
-      if (frame != null) frame.invalidatePageValidation();
-    }
-    for (IndexedPageFrame frame : stagingFrames) {
-      if (frame != null) frame.invalidatePageValidation();
-    }
-    currentMap.detach();
-    stagingMap.detach();
-    currentFrames = stagingFrames = DETACHED_FRAMES;
-    durabilityOwnerTokens = new long[0];
-    durabilityNextSlots = new int[0];
-    reclaimedFrameHead = -1;
-  }
+  void setGeneration(WalGeneration generation) { operations.io().setGeneration(generation); }
+  StatusCode detach() { return operations.lifecycle().detach(); }
+  void abandon() { operations.lifecycle().abandon(); }
+  void syncFrameViews() { operations.syncFrameViews(this); }
 
   ByteBuffer currentPayloadUnchecked(int pageId) {
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    return frame == null ? null : frame.payload;
+    return operations.metadata().currentPayloadUnchecked(pageId);
   }
-
-  StatusCode pinCurrentPage(int pageId) {
-    if (!validPageId(pageId) || !state.present(pageId)) {
-      lastStatus = StatusCode.CORRUPTION;
-      return lastStatus;
-    }
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    if (frame == null) return lastStatus;
-    frame.pinCount++;
-    lastStatus = StatusCode.OK;
-    return StatusCode.OK;
-  }
-
+  StatusCode pinCurrentPage(int pageId) { return operations.pinning().pinCurrentPage(pageId); }
+  void unpinCurrentPage(int pageId) { operations.current().unpin(pageId); }
   StatusCode pinPageAt(
       int pageId, long visibleCommitSequence, IndexedPageGenerationPin result) {
-    if (!validPageId(pageId) || visibleCommitSequence < 0 || result == null
-        || result.active() || !state.present(pageId)) {
-      return setStatus(StatusCode.INVALID_EXTERNAL_INPUT);
-    }
-    IndexedPageFrame current = currentFrame(pageId, true);
-    if (current == null) return lastStatus;
-    int slot = currentMap.find(pageId);
-    while (slot >= 0) {
-      IndexedPageFrame frame = currentFrames[slot];
-      if (frame.validFromCommitSequence <= visibleCommitSequence
-          && visibleCommitSequence < frame.validUntilCommitSequence) {
-        frame.pinCount++;
-        frame.access = ++accessClock;
-        result.set(
-            slot, pageId, frame.validFromCommitSequence, frame.pageGeneration,
-            frame.payload, frame.payloadKind, frame.ownerKeyId);
-        return setStatus(StatusCode.OK);
-      }
-      slot = frame.previousVersionSlot;
-    }
-    return setStatus(StatusCode.CORRUPTION);
+    return operations.pinning().pinPageAt(pageId, visibleCommitSequence, result);
   }
-
-  StatusCode unpinPage(IndexedPageGenerationPin pin) {
-    if (pin == null || !pin.active() || pin.slot() >= currentFrames.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    IndexedPageFrame frame = currentFrames[pin.slot()];
-    if (frame == null || frame.pageId != pin.pageId()
-        || frame.validFromCommitSequence != pin.validFromCommitSequence()
-        || frame.pinCount <= 0 || frame.payload != pin.payload()) {
-      return StatusCode.INVARIANT_BROKEN;
-    }
-    frame.pinCount--;
-    pin.reset();
-    return StatusCode.OK;
-  }
+  StatusCode unpinPage(IndexedPageGenerationPin pin) { return operations.pinning().unpinPage(pin); }
 
   StatusCode restorePageValidation(
       int pageId, long pageGeneration, long schemaId,
-      long descriptorHash, int expectedType,
-      TupleBTreePageValidationProof target) {
-    IndexedPageFrame frame = frameForGeneration(pageId, pageGeneration);
-    return frame == null ? StatusCode.CONFLICT : frame.restorePageValidation(
-        pageGeneration, schemaId, descriptorHash, expectedType, target);
+      long descriptorHash, int expectedType, TupleBTreePageValidationProof target) {
+    return operations.validation().restore(
+        pageId, pageGeneration, schemaId, descriptorHash, expectedType, target);
   }
-
   StatusCode rememberPageValidation(
       int pageId, long pageGeneration, long schemaId,
-      long descriptorHash, int pageType,
-      TupleBTreePageValidationProof source) {
-    IndexedPageFrame frame = frameForGeneration(pageId, pageGeneration);
-    return frame == null ? StatusCode.CONFLICT
-        : frame.rememberPageValidation(schemaId, descriptorHash, pageType, source);
+      long descriptorHash, int pageType, TupleBTreePageValidationProof source) {
+    return operations.validation().remember(
+        pageId, pageGeneration, schemaId, descriptorHash, pageType, source);
   }
-
   StatusCode consumeTupleMutationInputValidation(
       int pageId, long pageGeneration, long ownerKeyId,
       long schemaId, long descriptorHash, int pageType,
       TupleBTreePageValidationProof target) {
-    IndexedPageFrame frame = stagingFrame(pageId);
-    return frame != null && frame.payloadKind == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
-        && frame.ownerKeyId == ownerKeyId
-        ? frame.consumeMutationInputValidation(
-            pageGeneration, schemaId, descriptorHash, pageType, target)
-        : StatusCode.CONFLICT;
+    return operations.validation().consumeTupleMutationInput(
+        pageId, pageGeneration, ownerKeyId,
+        schemaId, descriptorHash, pageType, target);
   }
-
   StatusCode sealTupleMutationValidation(
       int pageId, long pageGeneration, long ownerKeyId,
       long schemaId, long descriptorHash, int pageType,
       TupleBTreePageValidationProof source) {
-    IndexedPageFrame frame = stagingFrame(pageId);
-    return frame != null && frame.payloadKind == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
-        && frame.ownerKeyId == ownerKeyId
-        ? frame.sealMutationValidation(
-            pageGeneration, schemaId, descriptorHash, pageType, source)
-        : StatusCode.INVARIANT_BROKEN;
+    return operations.validation().sealTupleMutation(
+        pageId, pageGeneration, ownerKeyId,
+        schemaId, descriptorHash, pageType, source);
   }
-
 
   StatusCode pinOperationPage(
       int pageId, boolean writable, IndexedOperationPage result) {
-    return operationPins.pin(
+    return operations.operationPins().pin(
         pageId, writable, IndexedTableLimits.MAX_CHANGED_PAGES, result);
   }
-
   StatusCode pinTupleOperationPage(
       int pageId, boolean writable, long ownerKeyId, IndexedOperationPage result) {
-    if (ownerKeyId <= 0 || !identityMatches(
-        pageId, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId)) {
-      lastStatus = StatusCode.CORRUPTION;
-      return lastStatus;
+    if (ownerKeyId <= 0 || !operations.mutationStager().identityMatches(
+        pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId)) {
+      return setStatus(StatusCode.CORRUPTION);
     }
-    return operationPins.pin(
+    return operations.operationPins().pin(
         pageId, writable, state.changedPageCapacity(), result);
   }
-
   StatusCode pinScalarOperationPage(
       int pageId, boolean writable, IndexedOperationPage result) {
-    if (!identityMatches(
-        pageId, PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
-        PageCodec.SCALAR_OWNER_KEY_ID)) {
-      lastStatus = StatusCode.CORRUPTION;
-      return lastStatus;
+    if (!operations.mutationStager().identityMatches(
+        pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+        io.riverdb.format.page.PageCodec.SCALAR_OWNER_KEY_ID)) {
+      return setStatus(StatusCode.CORRUPTION);
     }
-    return operationPins.pin(
+    return operations.operationPins().pin(
         pageId, writable, state.changedPageCapacity(), result);
   }
-
   StatusCode pinNewOperationPage(int pageId, IndexedOperationPage result) {
-    return operationPins.pinNew(
+    return operations.operationPins().pinNew(
         pageId, IndexedTableLimits.MAX_CHANGED_PAGES,
-        PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
-        PageCodec.SCALAR_OWNER_KEY_ID, result);
+        io.riverdb.format.page.PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+        io.riverdb.format.page.PageCodec.SCALAR_OWNER_KEY_ID, result);
   }
-
   StatusCode pinNewOperationPage(
       int pageId, int payloadKind, long ownerKeyId, IndexedOperationPage result) {
-    return operationPins.pinNew(
-        pageId, state.changedPageCapacity(),
-        payloadKind, ownerKeyId, result);
+    return operations.operationPins().pinNew(
+        pageId, state.changedPageCapacity(), payloadKind, ownerKeyId, result);
   }
-
   StatusCode releaseOperationPage(IndexedOperationPage page) {
-    return operationPins.release(page);
-  }
-
-  void unpinCurrentPage(int pageId) {
-    int slot = currentMap.find(pageId);
-    if (slot < 0) return;
-    IndexedPageFrame frame = currentFrames[slot];
-    if (frame.pinCount > 0) frame.pinCount--;
+    return operations.operationPins().release(page);
   }
 
   StatusCode markCurrentChanged(int pageId, long start, long end) {
-    IndexedPageFrame frame = currentFrame(pageId, false);
-    if (frame == null) {
-      lastStatus = StatusCode.RESOURCE_EXHAUSTED;
-      return lastStatus;
-    }
-    StatusCode status = state.markChanged(pageId, start, end);
-    if (!status.isOk()) return setStatus(status);
-    frame.dirty = true;
-    frame.recordStart = start;
-    frame.recordEnd = end;
-    lastStatus = StatusCode.OK;
-    return StatusCode.OK;
+    return operations.metadata().markCurrentChanged(pageId, start, end);
   }
-
   StatusCode reidentifyCurrent(int pageId, int payloadKind, long ownerKeyId) {
-    if (!state.present(pageId)
-        || payloadKind(pageId) != PageCodec.PAYLOAD_KIND_FREE
-        || !IndexedPageIdentity.valid(payloadKind, ownerKeyId)) {
-      return setStatus(StatusCode.CORRUPTION);
-    }
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    if (frame == null) return lastStatus;
-    frame.identity(payloadKind, ownerKeyId);
-    return setStatus(StatusCode.OK);
+    return operations.metadata().reidentifyCurrent(pageId, payloadKind, ownerKeyId);
   }
-
-  void markClean(int pageId) {
-    state.markClean(pageId);
-    IndexedPageFrame frame = currentFrame(pageId, false);
-    if (frame != null) {
-      frame.dirty = false;
-      frame.recordStart = 0;
-      frame.recordEnd = 0;
-    }
-  }
-
-  void markRebased(int pageId) {
-    state.markRebased(pageId);
-    IndexedPageFrame frame = currentFrame(pageId, false);
-    if (frame != null) {
-      frame.dirty = false;
-      frame.recordStart = 0;
-      frame.recordEnd = 0;
-    }
-  }
+  void markClean(int pageId) { operations.metadata().markClean(pageId); }
+  void markRebased(int pageId) { operations.metadata().markRebased(pageId); }
 
   StatusCode encodeCurrent(
       int pageId, DatabaseIncarnation database, WalGeneration generation,
       long start, long end, CRC32C checksum) {
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    return frame == null ? lastStatus : io.encode(frame, database, generation, start, end, checksum);
+    return operations.codec().encodeCurrent(pageId, database, generation, start, end, checksum);
   }
-
   StatusCode encodeStaged(
       int pageId, DatabaseIncarnation database, WalGeneration generation,
       long start, long end, CRC32C checksum) {
-    IndexedPageFrame frame = stagingFrame(pageId);
-    return frame == null ? lastStatus : io.encode(frame, database, generation, start, end, checksum);
+    return operations.codec().encodeStaged(pageId, database, generation, start, end, checksum);
   }
-
   StatusCode readCurrent(DurableFile file, int pageId, long offset, IoResult result) {
-    IndexedPageFrame frame = currentFrameForRead(pageId);
-    if (frame == null) return lastStatus;
-    StatusCode status = io.read(file, frame, offset, result);
-    if (!status.isOk()) releaseCurrentFrame(pageId);
-    return status;
+    return operations.codec().readCurrent(file, pageId, offset, result);
   }
-
   StatusCode writeCurrent(DurableFile file, int pageId, long offset, IoResult result) {
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    return frame == null ? lastStatus : io.write(file, frame, offset, result);
+    return operations.codec().writeCurrent(file, pageId, offset, result);
   }
-
   StatusCode validateCurrent(int pageId, PageHeader header, CRC32C checksum) {
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    return frame == null ? lastStatus : io.validate(frame, header, checksum);
+    return operations.codec().validateCurrent(pageId, header, checksum);
   }
-
   StatusCode validateRecord(ByteBuffer source, int offset, PageHeader header, CRC32C checksum) {
-    return io.validateRecord(source, offset, header, checksum);
+    return operations.codec().validateRecord(source, offset, header, checksum);
   }
-
   void copyStagedToRecord(int pageId, ByteBuffer target, int targetOffset) {
-    IndexedPageFrame frame = stagingFrame(pageId);
-    if (frame == null) return;
-    copyPage(frame.page, target, targetOffset);
+    operations.codec().copyStagedToRecord(pageId, target, targetOffset);
   }
-
   StatusCode installFromRecord(
       ByteBuffer source, int sourceOffset, int pageId, long start, long end) {
-    StatusCode status = state.reservePublication(pageId);
-    if (!status.isOk()) return setStatus(status);
-    IndexedPageFrame frame = currentFrameForRead(pageId);
-    if (frame == null) {
-      state.cancelReservation(pageId);
-      return lastStatus;
-    }
-    copyFromRecord(source, sourceOffset, frame.page);
-    frame.invalidatePageValidation();
-    status = io.captureIdentity(frame);
-    if (!status.isOk()) {
-      releaseCurrentFrame(pageId);
-      state.cancelReservation(pageId);
-      return status;
-    }
-    state.installPresent(pageId);
-    return markCurrentChanged(pageId, start, end);
+    return operations.codec().installFromRecord(source, sourceOffset, pageId, start, end);
   }
 
-  ByteBuffer currentPayload(int pageId) {
-    return state.present(pageId) ? currentPayloadUnchecked(pageId) : null;
-  }
-
+  ByteBuffer currentPayload(int pageId) { return operations.metadata().currentPayload(pageId); }
   ByteBuffer stageExisting(int pageId, int maximumChangedPages) {
-    if (!validPageId(pageId)) return null;
-    int existingSlot = stagingMap.find(pageId);
-    if (existingSlot >= 0) return stagingFrames[existingSlot].payload;
-    boolean alreadyStaged = state.staged(pageId);
-    if (!admitExistingStaging(pageId, maximumChangedPages, alreadyStaged)) return null;
-    IndexedPageFrame staging = acquireStagingFrame(pageId);
-    if (staging == null) {
-      markCapacityPressure(lastStatus);
-      rollbackAdmission(pageId, alreadyStaged);
-      return null;
-    }
-    StatusCode status = populateExistingStaging(pageId, staging, alreadyStaged);
-    if (!status.isOk()) {
-      releaseStagingFrame(pageId);
-      markCapacityPressure(status);
-      rollbackAdmission(pageId, alreadyStaged);
-      return null;
-    }
-    state.addCopyBytes(PageCodec.PAGE_BYTES);
-    lastStatus = StatusCode.OK;
-    return staging.payload;
+    return operations.mutationStager().stageExisting(pageId, maximumChangedPages);
   }
-
-  ByteBuffer operationPayload(int pageId) {
-    if (!validPageId(pageId)) return null;
-    IndexedPageFrame staging = stagingFrame(pageId);
-    if (staging != null) return staging.payload;
-    IndexedPageFrame prepared = preparedFrame(pageId);
-    if (prepared != null) return prepared.payload;
-    return state.present(pageId) ? currentPayloadUnchecked(pageId) : null;
-  }
-
+  ByteBuffer operationPayload(int pageId) { return operations.metadata().operationPayload(pageId); }
   ByteBuffer stageNew(int pageId, int maximumChangedPages) {
-    return stageNew(
+    return operations.mutationStager().stageNew(
         pageId, maximumChangedPages,
-        PageCodec.PAYLOAD_KIND_SCALAR_BTREE, PageCodec.SCALAR_OWNER_KEY_ID);
+        io.riverdb.format.page.PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+        io.riverdb.format.page.PageCodec.SCALAR_OWNER_KEY_ID);
   }
-
   ByteBuffer stageNew(
       int pageId, int maximumChangedPages, int payloadKind, long ownerKeyId) {
-    boolean recycled = state.present(pageId)
-        && payloadKind(pageId) == PageCodec.PAYLOAD_KIND_FREE
-        && ownerKeyId(pageId) == PageCodec.SCALAR_OWNER_KEY_ID;
-    if (!validPageId(pageId) || state.present(pageId) && !recycled
-        || !IndexedPageIdentity.valid(payloadKind, ownerKeyId)) {
-      lastStatus = StatusCode.INVALID_EXTERNAL_INPUT;
-      return null;
-    }
-    int existingSlot = stagingMap.find(pageId);
-    if (existingSlot >= 0) {
-      IndexedPageFrame existing = stagingFrames[existingSlot];
-      if (existing.payloadKind != payloadKind || existing.ownerKeyId != ownerKeyId) {
-        lastStatus = StatusCode.CORRUPTION;
-        return null;
-      }
-      return existing.payload;
-    }
-    boolean alreadyStaged = state.staged(pageId);
-    if (!matchingStagedIdentity(pageId, payloadKind, ownerKeyId, alreadyStaged)) {
-      lastStatus = StatusCode.CORRUPTION;
-      return null;
-    }
-    if (!admitNewStaging(pageId, maximumChangedPages, alreadyStaged)) return null;
-    IndexedPageFrame staging = acquireStagingFrame(pageId);
-    if (staging == null) {
-      markCapacityPressure(lastStatus);
-      rollbackAdmission(pageId, alreadyStaged);
-      return null;
-    }
-    return prepareNewStaging(
-        pageId, payloadKind, ownerKeyId, staging, alreadyStaged);
+    return operations.mutationStager().stageNew(pageId, maximumChangedPages, payloadKind, ownerKeyId);
   }
-
   ByteBuffer stageFreeTuple(int pageId, long ownerKeyId, int maximumChangedPages) {
-    if (!identityMatches(pageId, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId)) {
-      lastStatus = StatusCode.CORRUPTION;
-      return null;
-    }
-    ByteBuffer payload = stageExisting(pageId, maximumChangedPages);
-    IndexedPageFrame staging = stagingFrame(pageId);
-    if (payload == null || staging == null) return null;
-    staging.rememberIdentity(
-        PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId);
-    staging.invalidatePageValidation();
-    for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
-      staging.page.put(index, (byte) 0);
-    }
-    staging.payload.clear();
-    staging.identity(PageCodec.PAYLOAD_KIND_FREE, PageCodec.SCALAR_OWNER_KEY_ID);
-    state.setIdentity(pageId, PageCodec.PAYLOAD_KIND_FREE, PageCodec.SCALAR_OWNER_KEY_ID);
-    lastStatus = StatusCode.OK;
-    return staging.payload;
+    return operations.mutationStager().stageFreeTuple(pageId, ownerKeyId, maximumChangedPages);
   }
 
-  private boolean admitExistingStaging(
-      int pageId, int maximumChangedPages, boolean alreadyStaged) {
-    if (alreadyStaged) return true;
-    if (!state.present(pageId) && !prepared.contains(pageId)) {
-      lastStatus = StatusCode.CORRUPTION;
-      return false;
-    }
-    return admitNewStaging(pageId, maximumChangedPages, false);
-  }
-
-  private boolean admitNewStaging(
-      int pageId, int maximumChangedPages, boolean alreadyStaged) {
-    if (alreadyStaged) return true;
-    if (memberAdmission != null) {
-      int memberChangedPages = state.changedPageCount() + 1;
-      StatusCode status = prepared.admitMemberPage(memberChangedPages);
-      if (status.isOk()) status = memberAdmission.admitStagedPages(memberChangedPages);
-      if (!status.isOk()) {
-        setStatus(status);
-        markCapacityPressure(status);
-        return false;
-      }
-    }
-    StatusCode status = state.addChangedPage(pageId, maximumChangedPages);
-    lastStatus = status;
-    markCapacityPressure(status);
-    return status.isOk();
-  }
-
-  private StatusCode populateExistingStaging(
-      int pageId, IndexedPageFrame staging, boolean alreadyStaged) {
-    if (alreadyStaged) return io.loadStaged(staging);
-    IndexedPageFrame current = preparedFrame(pageId);
-    if (current == null) current = currentFrame(pageId, true);
-    if (current == null) return lastStatus;
-    staging.copyPageFrom(current);
-    staging.identity(current.payloadKind, current.ownerKeyId);
-    staging.rememberIdentity(current.payloadKind, current.ownerKeyId);
-    return state.setIdentity(pageId, current.payloadKind, current.ownerKeyId);
-  }
-
-  private ByteBuffer prepareNewStaging(
-      int pageId,
-      int payloadKind,
-      long ownerKeyId,
-    IndexedPageFrame staging,
-      boolean alreadyStaged) {
-    if (alreadyStaged) return loadNewStaging(pageId, staging);
-    IndexedPageFrame current = state.present(pageId) ? currentFrame(pageId, true) : null;
-    if (state.present(pageId) && current == null) {
-      releaseStagingFrame(pageId);
-      rollbackAdmission(pageId, false);
-      markCapacityPressure(lastStatus);
-      return null;
-    }
-    staging.rememberIdentity(
-        current == null ? PageCodec.PAYLOAD_KIND_SCALAR_BTREE : current.payloadKind,
-        current == null ? PageCodec.SCALAR_OWNER_KEY_ID : current.ownerKeyId);
-    staging.invalidatePageValidation();
-    for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
-      staging.page.put(index, (byte) 0);
-    }
-    staging.payload.clear();
-    staging.identity(payloadKind, ownerKeyId);
-    StatusCode identity = state.setIdentity(pageId, payloadKind, ownerKeyId);
-    if (!identity.isOk()) {
-      releaseStagingFrame(pageId);
-      rollbackAdmission(pageId, false);
-      lastStatus = identity;
-      markCapacityPressure(identity);
-      return null;
-    }
-    lastStatus = StatusCode.OK;
-    return staging.payload;
-  }
-
-  private ByteBuffer loadNewStaging(int pageId, IndexedPageFrame staging) {
-    StatusCode status = io.loadStaged(staging);
-    staging.identity(state.payloadKind(pageId), state.ownerKeyId(pageId));
-    if (status.isOk()) {
-      lastStatus = StatusCode.OK;
-      return staging.payload;
-    }
-    releaseStagingFrame(pageId);
-    lastStatus = status;
-    return null;
-  }
-
-  private boolean matchingStagedIdentity(
-      int pageId, int payloadKind, long ownerKeyId, boolean alreadyStaged) {
-    return !alreadyStaged || state.payloadKind(pageId) == payloadKind
-        && state.ownerKeyId(pageId) == ownerKeyId;
-  }
-
-  private void rollbackAdmission(int pageId, boolean alreadyStaged) {
-    if (alreadyStaged) return;
-    state.markStaged(pageId, false);
-    state.removeChangedPage(pageId);
-  }
-
-  StatusCode ensureBuffers(int pageId) {
-    if (!validPageId(pageId)) {
-      lastStatus = StatusCode.INVALID_EXTERNAL_INPUT;
-      return lastStatus;
-    }
-    IndexedPageFrame frame = currentFrame(pageId, state.present(pageId));
-    if (frame == null && !state.present(pageId)) frame = acquireCurrentFrame(pageId, true);
-    if (frame == null) return lastStatus;
-    lastStatus = StatusCode.OK;
-    return StatusCode.OK;
-  }
-
-  StatusCode retainBuffer(int pageId) {
-    StatusCode status = ensureBuffers(pageId);
-    if (!status.isOk()) return status;
-    int slot = currentMap.find(pageId);
-    if (slot < 0) {
-      lastStatus = StatusCode.INVARIANT_BROKEN;
-      return lastStatus;
-    }
-    currentFrames[slot].pinCount++;
-    return StatusCode.OK;
-  }
-
-  void releaseBuffer(int pageId) {
-    int slot = currentMap.find(pageId);
-    if (slot >= 0 && currentFrames[slot].pinCount > 0) {
-      currentFrames[slot].pinCount--;
-    }
-  }
-
+  StatusCode ensureBuffers(int pageId) { return operations.pinning().ensureBuffers(pageId); }
+  StatusCode retainBuffer(int pageId) { return operations.pinning().retainBuffer(pageId); }
+  void releaseBuffer(int pageId) { operations.pinning().releaseBuffer(pageId); }
   StatusCode reclaimHistorical(long oldestVisibleCommitSequence) {
-    if (oldestVisibleCommitSequence < 0) return setStatus(StatusCode.INVALID_EXTERNAL_INPUT);
-    for (int slot = 0; slot < currentFrames.length; slot++) {
-      IndexedPageFrame frame = currentFrames[slot];
-      if (frame == null || frame.pageId == 0 || frame.pinCount != 0
-          || frame.publicationReserved || frame.nextVersionSlot < 0
-          || frame.validUntilCommitSequence > oldestVisibleCommitSequence) continue;
-      StatusCode status = prepareCurrentSlotForReuse(slot);
-      if (!status.isOk()) return setStatus(status);
-      frame.previousVersionSlot = reclaimedFrameHead;
-      reclaimedFrameHead = slot;
-    }
-    return setStatus(StatusCode.OK);
+    return setStatus(operations.current().reclaimHistorical(oldestVisibleCommitSequence));
   }
 
-  StatusCode beginPreparedBatch() {
-    return setStatus(prepared.begin());
-  }
-
+  StatusCode beginPreparedBatch() { return setStatus(prepared.begin()); }
   StatusCode beginMemberStagingAdmission(IndexedPreparedLogicalCommit member) {
-    if (member == null || memberAdmission != null || state.changedPageCount() != 0) {
-      return setStatus(StatusCode.INVARIANT_BROKEN);
-    }
-    memberAdmission = member;
-    memberCapacityPressure = false;
-    return setStatus(StatusCode.OK);
+    return operations.mutationStager().beginMemberAdmission(member);
   }
-
-  boolean memberCapacityPressure() { return memberCapacityPressure; }
-
-  void endMemberStagingAdmission() { memberAdmission = null; }
-
-  void rollbackStagedMember() {
-    clearStagedFlags();
-    state.resetChanges();
-  }
-
+  boolean memberCapacityPressure() { return operations.mutationStager().memberCapacityPressure(); }
+  void endMemberStagingAdmission() { operations.mutationStager().endMemberAdmission(); }
+  void rollbackStagedMember() { operations.mutationStager().rollbackStagedMember(); }
   void markCapacityPressure(StatusCode status) {
-    if (memberAdmission != null
-        && (status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED)) {
-      memberCapacityPressure = true;
-    }
+    operations.mutationStager().markCapacityPressure(status);
   }
-
   StatusCode freezeChangedPages(int member, long oldestVisibleCommitSequence) {
     StatusCode status = prepared.freeze(this, state, member, oldestVisibleCommitSequence);
-    markCapacityPressure(status);
+    operations.mutationStager().markCapacityPressure(status);
     return setStatus(status);
   }
-
   StatusCode installPreparedPages(
       long[] commitSequences, int memberCount, long start, long end) {
     return setStatus(prepared.install(this, state, commitSequences, memberCount, start, end));
   }
-
-  StatusCode releasePreparedBatch() {
-    return setStatus(prepared.release(this));
-  }
-
+  StatusCode releasePreparedBatch() { return setStatus(prepared.release(this)); }
   StatusCode transferPreparedBatch(long ownerToken, IndexedCountResult result) {
     return setStatus(prepared.transfer(this, ownerToken, result));
   }
-
   StatusCode releaseDurabilityChain(long ownerToken, int head) {
-    if (ownerToken <= 0 || head < -1 || head >= currentFrames.length) {
-      return setStatus(StatusCode.INVALID_EXTERNAL_INPUT);
-    }
-    int slot = head;
-    int visited = 0;
-    while (slot >= 0) {
-      if (slot >= currentFrames.length || durabilityOwnerTokens[slot] != ownerToken
-          || ++visited > currentFrames.length) {
-        return setStatus(StatusCode.INVARIANT_BROKEN);
-      }
-      slot = durabilityNextSlots[slot];
-    }
-    slot = head;
-    while (slot >= 0) {
-      int next = durabilityNextSlots[slot];
-      durabilityOwnerTokens[slot] = 0;
-      durabilityNextSlots[slot] = -1;
-      IndexedPreparedPageBatch.releaseTransferredFrame(this, slot);
-      slot = next;
-    }
-    return setStatus(StatusCode.OK);
+    return operations.durability().release(ownerToken, head);
   }
-
-  boolean durabilityFrameAvailable(int slot) {
-    return slot >= 0 && slot < currentFrames.length
-        && durabilityOwnerTokens[slot] == 0 && durabilityNextSlots[slot] == -1;
-  }
-
+  boolean durabilityFrameAvailable(int slot) { return operations.durability().available(slot); }
   void claimDurabilityFrame(int slot, long ownerToken, int nextSlot) {
-    durabilityOwnerTokens[slot] = ownerToken;
-    durabilityNextSlots[slot] = nextSlot;
+    operations.durability().claim(slot, ownerToken, nextSlot);
   }
+  void cancelPreparedBatch() { prepared.cancel(this); }
 
-  void cancelPreparedBatch() {
-    prepared.cancel(this);
-  }
-
-  boolean validPresentPage(int pageId) { return state.present(pageId); }
-  boolean operationPresentPage(int pageId) {
-    return state.present(pageId) || prepared.contains(pageId);
-  }
-  boolean hasDirtyPages() { return state.hasDirtyPages(); }
+  boolean validPresentPage(int pageId) { return operations.metadata().validPresentPage(pageId); }
+  boolean operationPresentPage(int pageId) { return operations.metadata().operationPresentPage(pageId); }
+  boolean hasDirtyPages() { return operations.metadata().hasDirtyPages(); }
   boolean addChangedPage(int pageId, int maximum) {
-    StatusCode status = state.addChangedPage(pageId, maximum);
-    lastStatus = status;
-    return status.isOk();
+    return operations.metadata().addChangedPage(pageId, maximum);
   }
+  void clearStagedFlags() { operations.mutationStager().clearStagedFlags(); }
 
-  void clearStagedFlags() {
-    for (int index = 0; index < state.changedPageCount(); index++) {
-      int pageId = state.changedPageId(index);
-      IndexedPageFrame frame = stagingFrame(pageId);
-      if (frame != null) {
-        state.setIdentity(pageId, frame.previousPayloadKind, frame.previousOwnerKeyId);
-      }
-      state.markStaged(pageId, false);
-      releaseStagingFrame(pageId);
-    }
-  }
-
-  ByteBuffer beginVacuumPage(int pageId) {
-    if (!validPageId(pageId) || !state.present(pageId) || state.staged(pageId)) {
-      lastStatus = StatusCode.CORRUPTION;
-      return null;
-    }
-    IndexedPageFrame current = currentFrame(pageId, true);
-    if (current == null) return null;
-    IndexedPageFrame staging = acquireStagingFrame(pageId);
-    if (staging == null) return null;
-    copyPage(current.page, staging.page);
-    staging.identity(current.payloadKind, current.ownerKeyId);
-    state.addCopyBytes(PageCodec.PAGE_BYTES);
-    lastStatus = StatusCode.OK;
-    return staging.payload;
-  }
-
-  ByteBuffer vacuumPayload(int pageId) {
-    if (!validPageId(pageId) || !state.present(pageId) || state.staged(pageId)) {
-      lastStatus = StatusCode.CORRUPTION;
-      return null;
-    }
-    int slot = stagingMap.find(pageId);
-    if (slot >= 0) return stagingFrames[slot].payload;
-    IndexedPageFrame current = currentFrame(pageId, true);
-    if (current == null) return null;
-    IndexedPageFrame staging = acquireStagingFrame(pageId);
-    if (staging == null) return null;
-    StatusCode status = io.loadStaged(staging);
-    if (!status.isOk()) {
-      releaseStagingFrame(pageId);
-      lastStatus = status;
-      return null;
-    }
-    staging.identity(current.payloadKind, current.ownerKeyId);
-    lastStatus = StatusCode.OK;
-    return staging.payload;
-  }
-
-  StatusCode sealVacuumPage(int pageId) {
-    int slot = stagingMap.find(pageId);
-    if (slot < 0) return setStatus(StatusCode.CORRUPTION);
-    StatusCode status = io.writeStaged(stagingFrames[slot]);
-    if (status.isOk()) releaseStagingFrame(pageId);
-    return setStatus(status);
-  }
-
+  ByteBuffer beginVacuumPage(int pageId) { return operations.vacuum().beginPage(pageId); }
+  ByteBuffer vacuumPayload(int pageId) { return operations.vacuum().payload(pageId); }
+  StatusCode sealVacuumPage(int pageId) { return operations.vacuum().sealPage(pageId); }
   StatusCode publishVacuumPage(int pageId, long start, long end) {
-    ByteBuffer shadow = vacuumPayload(pageId);
-    if (shadow == null) return lastStatus;
-    IndexedPageFrame staging = stagingFrames[stagingMap.find(pageId)];
-    IndexedPageFrame current = currentFrame(pageId, true);
-    if (current == null) return lastStatus;
-    long pageGeneration = nextPageGeneration();
-    if (pageGeneration == 0) return lastStatus;
-    current.beginPageGeneration(pageGeneration);
-    current.copyPageFrom(staging);
-    current.identity(staging.payloadKind, staging.ownerKeyId);
-    StatusCode status = state.markChanged(pageId, start, end);
-    if (status.isOk()) {
-      current.dirty = true;
-      current.recordStart = start;
-      current.recordEnd = end;
-      status = io.writeBack(current);
-    }
-    if (status.isOk()) releaseStagingFrame(pageId);
-    return setStatus(status);
+    return operations.vacuum().publishPage(pageId, start, end);
   }
-
-  StatusCode forceVacuumPublication() {
-    return setStatus(io.forceBacking());
-  }
-
-  void discardVacuumPages() {
-    for (IndexedPageFrame frame : stagingFrames) {
-      if (frame == null || frame.pageId == 0) continue;
-      stagingMap.remove(frame.pageId);
-      frame.pageId = 0;
-      frame.invalidatePageValidation();
-    }
-    lastStatus = StatusCode.OK;
-  }
+  StatusCode forceVacuumPublication() { return operations.vacuum().forcePublication(); }
+  void discardVacuumPages() { operations.vacuum().discardPages(); }
 
   StatusCode lastStatus() { return lastStatus; }
-  int changedPageCount() { return state.changedPageCount(); }
-  int changedPageCapacity() { return state.changedPageCapacity(); }
-  int changedPageId(int index) { return state.changedPageId(index); }
-  int highestPageId() { return state.highestPageId(); }
-  long stagedCopyBytes() { return state.stagedCopyBytes(); }
-  long recordStart(int pageId) {
-    if (state.dirty(pageId)) return state.recordStart(pageId);
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    return frame == null ? 0 : frame.recordStart;
-  }
-  long recordEnd(int pageId) {
-    if (state.dirty(pageId)) return state.recordEnd(pageId);
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    return frame == null ? 0 : frame.recordEnd;
-  }
-  int payloadKind(int pageId) {
-    if (state.staged(pageId)) return state.payloadKind(pageId);
-    IndexedPageFrame prepared = preparedFrame(pageId);
-    if (prepared != null) return prepared.payloadKind;
-    int slot = currentMap.find(pageId);
-    if (slot >= 0) return currentFrames[slot].payloadKind;
-    if (!state.present(pageId)) return PageCodec.PAYLOAD_KIND_SCALAR_BTREE;
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    return frame == null ? PageCodec.PAYLOAD_KIND_SCALAR_BTREE : frame.payloadKind;
-  }
-  long ownerKeyId(int pageId) {
-    if (state.staged(pageId)) return state.ownerKeyId(pageId);
-    IndexedPageFrame prepared = preparedFrame(pageId);
-    if (prepared != null) return prepared.ownerKeyId;
-    int slot = currentMap.find(pageId);
-    if (slot >= 0) return currentFrames[slot].ownerKeyId;
-    if (!state.present(pageId)) return PageCodec.SCALAR_OWNER_KEY_ID;
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    return frame == null ? PageCodec.SCALAR_OWNER_KEY_ID : frame.ownerKeyId;
-  }
-
-  IndexedPageFrame currentFrame(int pageId, boolean load) {
-    int slot = currentMap.find(pageId);
-    if (slot >= 0) {
-      IndexedPageFrame frame = currentFrames[slot];
-      frame.access = ++accessClock;
-      return frame;
-    }
-    return load && state.present(pageId) ? loadCurrentFrame(pageId) : null;
-  }
-
-  private IndexedPageFrame currentFrameForRead(int pageId) {
-    IndexedPageFrame frame = currentFrame(pageId, false);
-    return frame == null ? acquireCurrentFrame(pageId, true) : frame;
-  }
-
-  private IndexedPageFrame loadCurrentFrame(int pageId) {
-    IndexedPageFrame frame = acquireCurrentFrame(pageId, true);
-    if (frame == null) return null;
-    StatusCode status = io.readCurrent(frame, cacheIo);
-    if (!status.isOk()) {
-      releaseCurrentFrame(pageId);
-      lastStatus = status;
-      return null;
-    }
-    return frame;
-  }
-
   StatusCode setStatus(StatusCode status) {
     lastStatus = status;
     return status;
   }
-
-  private boolean identityMatches(int pageId, int payloadKind, long ownerKeyId) {
-    if (!validPageId(pageId)) return false;
-    if (state.staged(pageId)) {
-      return state.payloadKind(pageId) == payloadKind
-          && state.ownerKeyId(pageId) == ownerKeyId;
-    }
-    IndexedPageFrame prepared = preparedFrame(pageId);
-    if (prepared != null) {
-      return prepared.payloadKind == payloadKind && prepared.ownerKeyId == ownerKeyId;
-    }
-    if (!state.present(pageId)) return false;
-    IndexedPageFrame frame = currentFrame(pageId, true);
-    if (frame == null) return false;
-    return frame.payloadKind == payloadKind && frame.ownerKeyId == ownerKeyId;
-  }
-
-  private IndexedPageFrame acquireCurrentFrame(int pageId, boolean allowEviction) {
-    int existing = currentMap.find(pageId);
-    if (existing >= 0) return currentFrames[existing];
-    int slot = reusableCurrentSlot(allowEviction, Long.MIN_VALUE);
-    if (slot < 0) return fail(StatusCode.RESOURCE_EXHAUSTED);
-    IndexedPageFrame frame = frameAt(currentFrames, slot);
-    if (frame == null) return null;
-    if (frame.pageId != 0) {
-      StatusCode status = prepareCurrentSlotForReuse(slot);
-      if (!status.isOk()) return fail(status);
-    }
-    long pageGeneration = nextPageGeneration();
-    if (pageGeneration == 0) return fail(lastStatus);
-    frame.pageId = pageId;
-    frame.beginPageGeneration(pageGeneration);
-    frame.identity(PageCodec.PAYLOAD_KIND_SCALAR_BTREE, PageCodec.SCALAR_OWNER_KEY_ID);
-    frame.recordStart = 0;
-    frame.recordEnd = 0;
-    frame.dirty = false;
-    frame.clearGeneration();
-    frame.access = ++accessClock;
-    currentMap.put(pageId, slot);
-    return frame;
-  }
-
-  int reusableCurrentSlot(boolean allowEviction, long oldestVisibleCommitSequence) {
-    if (reclaimedFrameHead >= 0) {
-      int slot = reclaimedFrameHead;
-      IndexedPageFrame frame = currentFrames[slot];
-      reclaimedFrameHead = frame.previousVersionSlot;
-      frame.previousVersionSlot = -1;
-      return slot;
-    }
-    for (int probe = 0; probe < currentFrames.length; probe++) {
-      int index = currentProbeCursor;
-      currentProbeCursor = (currentProbeCursor + 1) % currentFrames.length;
-      IndexedPageFrame frame = currentFrames[index];
-      if (frame == null || frame.pageId == 0 && !frame.publicationReserved) return index;
-      if (frame.publicationReserved || frame.pinCount != 0) continue;
-      if (frame.nextVersionSlot >= 0
-          && frame.validUntilCommitSequence <= oldestVisibleCommitSequence) {
-        return index;
-      }
-      if (allowEviction && !state.staged(frame.pageId)
-          && frame.nextVersionSlot < 0 && frame.previousVersionSlot < 0) return index;
-    }
-    return -1;
-  }
-
-  StatusCode prepareCurrentSlotForReuse(int slot) {
-    IndexedPageFrame frame = currentFrames[slot];
-    if (frame == null || frame.pinCount != 0 || frame.publicationReserved) {
-      return StatusCode.INVARIANT_BROKEN;
-    }
-    if (frame.nextVersionSlot >= 0) {
-      IndexedPageFrame newer = currentFrames[frame.nextVersionSlot];
-      if (newer == null || newer.previousVersionSlot != slot) {
-        return StatusCode.INVARIANT_BROKEN;
-      }
-      newer.previousVersionSlot = frame.previousVersionSlot;
-      if (frame.previousVersionSlot >= 0) {
-        IndexedPageFrame older = currentFrames[frame.previousVersionSlot];
-        if (older == null || older.nextVersionSlot != slot) {
-          return StatusCode.INVARIANT_BROKEN;
-        }
-        older.nextVersionSlot = frame.nextVersionSlot;
-      }
-    } else {
-      if (frame.previousVersionSlot >= 0 || currentMap.find(frame.pageId) != slot) {
-        return StatusCode.INVARIANT_BROKEN;
-      }
-      StatusCode status = io.writeBack(frame);
-      if (!status.isOk()) return status;
-      currentMap.remove(frame.pageId);
-    }
-    frame.pageId = 0;
-    frame.dirty = false;
-    frame.recordStart = 0;
-    frame.recordEnd = 0;
-    frame.clearGeneration();
-    return StatusCode.OK;
-  }
-
-  private IndexedPageFrame acquireStagingFrame(int pageId) {
-    int existing = stagingMap.find(pageId);
-    if (existing >= 0) return stagingFrames[existing];
-    int slot = IndexedPageFrameSelection.reusable(stagingFrames, true);
-    if (slot < 0) return fail(null);
-    IndexedPageFrame frame = frameAt(stagingFrames, slot);
-    if (frame == null) return null;
-    if (frame.pageId != 0) {
-      StatusCode status = io.writeStaged(frame);
-      if (!status.isOk()) return fail(status);
-      stagingMap.remove(frame.pageId);
-    }
-    long pageGeneration = nextPageGeneration();
-    if (pageGeneration == 0) return fail(lastStatus);
-    frame.pageId = pageId;
-    frame.beginPageGeneration(pageGeneration);
-    IndexedPageFrame prepared = preparedFrame(pageId);
-    frame.identity(
-        prepared == null ? state.payloadKind(pageId) : prepared.payloadKind,
-        prepared == null ? state.ownerKeyId(pageId) : prepared.ownerKeyId);
-    frame.dirty = false;
-    frame.access = ++accessClock;
-    stagingMap.put(pageId, slot);
-    return frame;
-  }
-
-  private IndexedPageFrame fail(StatusCode status) {
-    lastStatus = status == null ? StatusCode.RESOURCE_EXHAUSTED : status;
-    return null;
-  }
-
   long nextPageGeneration() {
     if (pageGenerationClock == Long.MAX_VALUE) {
       lastStatus = StatusCode.FENCED;
@@ -1001,100 +245,40 @@ final class IndexedPageFrameCache {
     return ++pageGenerationClock;
   }
 
+  int changedPageCount() { return operations.metadata().changedPageCount(); }
+  int changedPageCapacity() { return operations.metadata().changedPageCapacity(); }
+  int changedPageId(int index) { return operations.metadata().changedPageId(index); }
+  int highestPageId() { return operations.metadata().highestPageId(); }
+  long stagedCopyBytes() { return operations.metadata().stagedCopyBytes(); }
+  long recordStart(int pageId) { return operations.metadata().recordStart(pageId); }
+  long recordEnd(int pageId) { return operations.metadata().recordEnd(pageId); }
+  int payloadKind(int pageId) { return operations.metadata().payloadKind(pageId); }
+  long ownerKeyId(int pageId) { return operations.metadata().ownerKeyId(pageId); }
+
+  IndexedPageFrame currentFrame(int pageId, boolean load) {
+    return operations.current().currentFrame(pageId, load);
+  }
+  int reusableCurrentSlot(boolean allowEviction, long oldestVisibleCommitSequence) {
+    return operations.current().reusableCurrentSlot(allowEviction, oldestVisibleCommitSequence);
+  }
+  StatusCode prepareCurrentSlotForReuse(int slot) {
+    return operations.current().prepareForReuse(slot);
+  }
   IndexedPageFrame frameAt(IndexedPageFrame[] frames, int slot) {
-    IndexedPageFrame frame = frames[slot];
-    if (frame != null) return frame;
-    try {
-      frame = new IndexedPageFrame();
-      frames[slot] = frame;
-      return frame;
-    } catch (OutOfMemoryError error) {
-      return fail(StatusCode.RESOURCE_EXHAUSTED);
-    }
-  }
-
-  IndexedPageFrame stagingFrame(int pageId) {
-    int slot = stagingMap.find(pageId);
-    if (slot < 0) {
-      if (!state.staged(pageId)) return null;
-      IndexedPageFrame frame = acquireStagingFrame(pageId);
-      if (frame == null) return null;
-      StatusCode status = io.loadStaged(frame);
-      frame.identity(state.payloadKind(pageId), state.ownerKeyId(pageId));
-      if (status.isOk()) return frame;
-      releaseStagingFrame(pageId);
-      lastStatus = status;
-      return null;
-    }
-    IndexedPageFrame frame = stagingFrames[slot];
-    frame.access = ++accessClock;
-    return frame;
-  }
-
-  private void releaseCurrentFrame(int pageId) {
-    int slot = currentMap.find(pageId);
-    if (slot < 0) return;
-    currentMap.remove(pageId);
-    currentFrames[slot].pageId = 0;
-    currentFrames[slot].clearGeneration();
-  }
-
-  void releaseStagingFrame(int pageId) {
-    int slot = stagingMap.find(pageId);
-    if (slot < 0) return;
-    stagingMap.remove(pageId);
-    stagingFrames[slot].pageId = 0;
-    stagingFrames[slot].invalidatePageValidation();
-  }
-
-  private IndexedPageFrame frameForGeneration(int pageId, long pageGeneration) {
-    if (!validPageId(pageId) || pageGeneration <= 0) return null;
-    int slot = stagingMap.find(pageId);
-    if (slot >= 0) {
-      IndexedPageFrame frame = stagingFrames[slot];
-      if (frame != null && frame.pageGeneration == pageGeneration) return frame;
-    }
-    IndexedPageFrame preparedGeneration = preparedFrame(pageId);
-    if (preparedGeneration != null
-        && preparedGeneration.pageGeneration == pageGeneration) return preparedGeneration;
-    slot = currentMap.find(pageId);
-    while (slot >= 0) {
-      IndexedPageFrame frame = currentFrames[slot];
-      if (frame == null) return null;
-      if (frame.pageGeneration == pageGeneration) return frame;
-      slot = frame.previousVersionSlot;
-    }
+    if (frames == currentFrames) return operations.current().frameAt(slot);
+    if (frames == stagingFrames) return operations.staging().frameAt(slot);
+    setStatus(StatusCode.INVARIANT_BROKEN);
     return null;
   }
-
+  IndexedPageFrame stagingFrame(int pageId) { return operations.staging().frame(pageId); }
+  void releaseStagingFrame(int pageId) { operations.staging().release(pageId); }
   IndexedPageFrame preparedFrame(int pageId) {
     IndexedPageFrame frame = prepared.frame(pageId, currentFrames);
-    if (frame != null) frame.access = ++accessClock;
+    if (frame != null) operations.current().touch(frame);
     return frame;
-  }
-
-  private static void copyPage(ByteBuffer source, ByteBuffer target) {
-    target.put(0, source, 0, PageCodec.PAGE_BYTES);
-    target.position(0);
-    target.limit(PageCodec.PAGE_BYTES);
-  }
-
-  private static void copyPage(ByteBuffer source, ByteBuffer target, int offset) {
-    for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
-      target.put(offset + index, source.get(index));
-    }
-  }
-
-  private static void copyFromRecord(ByteBuffer source, int offset, ByteBuffer target) {
-    for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
-      target.put(index, source.get(offset + index));
-    }
-    target.position(0);
-    target.limit(PageCodec.PAGE_BYTES);
   }
 
   static boolean validPageId(int pageId) {
     return pageId > 0 && pageId <= IndexedTableLimits.MAX_PAGES;
   }
-
 }

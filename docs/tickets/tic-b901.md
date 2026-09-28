@@ -1,6 +1,6 @@
 ---
 id: tic-b901
-status: open
+status: parked
 type: story
 priority: 1
 assignee: blater

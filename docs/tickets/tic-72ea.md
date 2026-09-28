@@ -1,6 +1,6 @@
 ---
 id: tic-72ea
-status: open
+status: parked
 type: story
 priority: 4
 assignee: blater

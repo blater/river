@@ -1,6 +1,6 @@
 ---
 id: tic-f737
-status: open
+status: parked
 type: bug
 priority: 2
 delivery: code
