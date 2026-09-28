@@ -5,7 +5,7 @@ import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.runtime.materialized.SqlMaterializedPagedByteStream;
 import io.riverdb.engine.runtime.materialized.SqlMaterializedScratchFileKind;
 
-/** Statement-owned paged row store with stable external ordering. */
+/** Statement-owned row store with one inline row and paged external ordering. */
 final class SqlBlockRowStore {
   private final SqlBlockRowCodec codec;
   private final SqlBlockRowSortKeyCodec sortKey;
@@ -19,6 +19,7 @@ final class SqlBlockRowStore {
       new SqlMaterializedPagedByteStream.Result();
   private final StatusDetail detail = new StatusDetail(160);
   private final SqlMaterializedStatement materialized;
+  private final SqlBlockRow inline;
   private SqlMaterializedPagedByteStream rows;
   private SqlMaterializedPagedByteStream index;
   private SqlMaterializedPagedByteStream keys;
@@ -32,6 +33,7 @@ final class SqlBlockRowStore {
 
   SqlBlockRowStore(SqlSessionShapeBudget shapeBudget) {
     materialized = shapeBudget == null ? null : shapeBudget.materialized();
+    inline = new SqlBlockRow(shapeBudget);
     codec = new SqlBlockRowCodec(shapeBudget);
     sortKey = new SqlBlockRowSortKeyCodec(shapeBudget);
     order = new SqlBlockRowExternalOrder(shapeBudget);
@@ -49,7 +51,7 @@ final class SqlBlockRowStore {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     schema = rowSchema;
-    return openStreams();
+    return admitMaterialized();
   }
 
   StatusCode begin(
@@ -62,7 +64,7 @@ final class SqlBlockRowStore {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     schema = rowSchema;
-    return openStreams();
+    return admitMaterialized();
   }
 
   StatusCode append(SqlBlockRow source) {
@@ -72,6 +74,25 @@ final class SqlBlockRowStore {
     if (rowCount >= Long.MAX_VALUE / SqlBlockRowPagedIndexRecord.BYTES) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+    if (rows == null) {
+      if (rowCount == 0) {
+        StatusCode status = codec.encode(source, schema, 0);
+        if (status.isOk() && sortKey.sorted()) status = sortKey.encode(source);
+        if (status.isOk()) status = inline.copyFrom(source);
+        if (status.isOk()) rowCount = 1;
+        return status;
+      }
+      StatusCode status = openStreams();
+      if (!status.isOk()) return status;
+      rowCount = 0;
+      status = appendPaged(inline);
+      if (!status.isOk()) return status;
+      inline.reset(0);
+    }
+    return appendPaged(source);
+  }
+
+  private StatusCode appendPaged(SqlBlockRow source) {
     StatusCode status = codec.encode(source, schema, rowCount);
     if (status.isOk() && sortKey.sorted()) status = sortKey.encode(source);
     if (!status.isOk()) return status;
@@ -99,7 +120,7 @@ final class SqlBlockRowStore {
 
   StatusCode finish() {
     if (!usable()) return terminal.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : terminal;
-    StatusCode status = sortKey.sorted()
+    StatusCode status = rows != null && sortKey.sorted()
         ? order.build(materialized, index, keys, sortKey, rowCount)
         : StatusCode.OK;
     if (!status.isOk()) return fail(status);
@@ -126,6 +147,7 @@ final class SqlBlockRowStore {
     if (!usable() || destination == null || position < 0 || position >= rowCount()) {
       return terminal.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : terminal;
     }
+    if (rows == null) return destination.copyFrom(inline);
     StatusCode status = storedPosition(position, storedResult);
     if (!status.isOk()) return status;
     long ordinal = storedResult.value();
@@ -156,17 +178,19 @@ final class SqlBlockRowStore {
     if (!status.isOk()) return status;
     codec.reset();
     sortKey.reset();
+    inline.reset(0);
     rowCount = 0;
     next = 0;
     readLimit = Long.MAX_VALUE;
     terminal = StatusCode.OK;
-    return openStreams();
+    return StatusCode.OK;
   }
 
   StatusCode close() {
     StatusCode status = closeStreams(true);
     codec.close();
     sortKey.close();
+    inline.reset(0);
     schema = null;
     rowCount = 0;
     next = 0;
@@ -195,11 +219,14 @@ final class SqlBlockRowStore {
       schema = null;
       return status;
     }
-    rowCount = 0;
-    next = 0;
-    readLimit = Long.MAX_VALUE;
     terminal = StatusCode.OK;
     return StatusCode.OK;
+  }
+
+  private StatusCode admitMaterialized() {
+    if (materialized != null) return StatusCode.OK;
+    schema = null;
+    return StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
   private StatusCode open(SqlMaterializedScratchFileKind kind, int fixedBytes) {
@@ -223,7 +250,7 @@ final class SqlBlockRowStore {
 
   StatusCode storedPosition(
       long position, SqlBlockRowOrdinalStream.Result target) {
-    if (!sortKey.sorted()) {
+    if (rows == null || !sortKey.sorted()) {
       target.value = position;
       return StatusCode.OK;
     }
@@ -248,6 +275,7 @@ final class SqlBlockRowStore {
     if (!status.isOk()) return status;
     codec.reset();
     sortKey.reset();
+    inline.reset(0);
     schema = null;
     rowCount = 0;
     next = 0;
@@ -269,7 +297,7 @@ final class SqlBlockRowStore {
   }
 
   private boolean usable() {
-    return schema != null && rows != null && index != null && terminal.isOk();
+    return schema != null && (rows == null || index != null) && terminal.isOk();
   }
 
   private static StatusCode validateSchema(SqlBlockSchema schema) {
