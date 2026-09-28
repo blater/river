@@ -83,6 +83,18 @@ final class TransactionProgramValidationTest {
   }
 
   @Test
+  void admitsSelectedOrderedRowAsLaterParameter() {
+    TransactionProgram program = new TransactionProgram();
+    assertEquals(StatusCode.OK, program.beginStep(1, TransactionProgramAction.ROW_AT));
+    beginParameter(program, 0, SqlTypeDescriptor.BIGINT);
+    assertEquals(StatusCode.OK, program.endStep());
+    beginResultParameterStep(program, 2, TransactionProgramAction.EXACT_ONE, 0,
+        SqlTypeDescriptor.INTEGER);
+
+    assertEquals(StatusCode.OK, program.freeze());
+  }
+
+  @Test
   void rejectsZeroOrOneResultConsumerWithoutEmptyBranch() {
     TransactionProgram program = new TransactionProgram();
     beginStep(program, 1, TransactionProgramAction.ZERO_OR_ONE);

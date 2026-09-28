@@ -18,12 +18,16 @@ public final class TransactionProgram {
     builder.attach(this);
   }
 
+  /** ROW_AT uses its final parameter expression as a zero-based row ordinal. */
   public StatusCode beginStep(long preparedHandle, int action) {
     return builder.beginStep(preparedHandle, action);
   }
   public StatusCode beginParameter() { return builder.beginParameter(); }
   public StatusCode requireAffectedRows(long minimum, long maximum) {
     return builder.requireAffectedRows(minimum, maximum);
+  }
+  public StatusCode requireResultRows(long minimum, long maximum) {
+    return builder.requireResultRows(minimum, maximum);
   }
   public StatusCode beginGuard(int falseTarget) { return builder.beginGuard(falseTarget); }
   public StatusCode argument(int slot, int descriptor) { return builder.argument(slot, descriptor); }

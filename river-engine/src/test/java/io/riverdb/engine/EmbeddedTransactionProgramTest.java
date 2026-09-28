@@ -28,6 +28,107 @@ final class EmbeddedTransactionProgramTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void selectsOrderedRowFromPriorCountWithinOneTransaction(@TempDir Path root) {
+    Fixture fixture = open(root);
+    for (int id = 1; id <= 3; id++) {
+      assertEquals(StatusCode.OK, fixture.session.execute(
+          "INSERT INTO account VALUES (" + id + "," + id * 10 + ")", new CommandResult()));
+    }
+    long count = fixture.prepare("SELECT COUNT(*) FROM account");
+    long ordered = fixture.prepare("SELECT id FROM account ORDER BY id");
+    TransactionProgram program = new TransactionProgram();
+    assertEquals(StatusCode.OK, program.beginStep(count, TransactionProgramAction.EXACT_ONE));
+    assertEquals(StatusCode.OK, program.captureColumn(0));
+    assertEquals(StatusCode.OK, program.endStep());
+    assertEquals(StatusCode.OK, program.beginStep(ordered, TransactionProgramAction.ROW_AT));
+    assertEquals(StatusCode.OK, program.beginParameter());
+    assertEquals(StatusCode.OK, program.priorResult(0, 0, SqlTypeDescriptor.BIGINT));
+    assertEquals(StatusCode.OK, program.argument(0, SqlTypeDescriptor.BIGINT));
+    assertEquals(StatusCode.OK,
+        program.operator(io.riverdb.engine.api.TransactionScalarOperator.SUBTRACT,
+            SqlTypeDescriptor.BIGINT));
+    assertEquals(StatusCode.OK, program.argument(1, SqlTypeDescriptor.BIGINT));
+    assertEquals(StatusCode.OK,
+        program.operator(io.riverdb.engine.api.TransactionScalarOperator.DIVIDE,
+            SqlTypeDescriptor.BIGINT));
+    assertEquals(StatusCode.OK, program.endExpression());
+    assertEquals(StatusCode.OK, program.captureColumn(0));
+    assertEquals(StatusCode.OK, program.endStep());
+    assertEquals(StatusCode.OK, program.freeze());
+    TransactionProgramArguments arguments = new TransactionProgramArguments();
+    assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.BIGINT, 1));
+    assertEquals(StatusCode.OK, arguments.setFixed(1, SqlTypeDescriptor.BIGINT, 2));
+    TransactionProgramResult result = new TransactionProgramResult();
+
+    assertEquals(StatusCode.OK, fixture.session.executeProgram(
+        fixture.prepareProgram(program), IsolationLevel.READ_COMMITTED, arguments, result));
+    assertEquals(2, result.stepCount());
+    assertEquals(1, result.rowCount(1));
+    assertEquals(2, result.valueAt(result.firstRow(1), 0));
+    fixture.close();
+  }
+
+  @Test
+  void rejectsMissingOrderedRowBeforeCommit(@TempDir Path root) {
+    Fixture fixture = open(root);
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "INSERT INTO account VALUES (1,10)", new CommandResult()));
+    long ordered = fixture.prepare("SELECT id FROM account ORDER BY id");
+    TransactionProgram program = new TransactionProgram();
+    assertEquals(StatusCode.OK, program.beginStep(ordered, TransactionProgramAction.ROW_AT));
+    parameter(program, 0, SqlTypeDescriptor.BIGINT);
+    assertEquals(StatusCode.OK, program.captureColumn(0));
+    assertEquals(StatusCode.OK, program.endStep());
+    assertEquals(StatusCode.OK, program.freeze());
+    long handle = fixture.prepareProgram(program);
+    TransactionProgramArguments arguments = new TransactionProgramArguments();
+    assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.BIGINT, 1));
+    TransactionProgramResult result = new TransactionProgramResult();
+
+    assertEquals(StatusCode.CARDINALITY_VIOLATION, fixture.session.executeProgram(
+        handle, IsolationLevel.READ_COMMITTED, arguments, result));
+    assertEquals(StatusCode.CARDINALITY_VIOLATION, result.primaryStatus());
+    assertEquals(StatusCode.OK, result.rollbackStatus());
+    arguments.reset();
+    assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.BIGINT, -1));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, fixture.session.executeProgram(
+        handle, IsolationLevel.READ_COMMITTED, arguments, result));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, result.primaryStatus());
+    assertEquals(StatusCode.OK, result.rollbackStatus());
+    fixture.close();
+  }
+
+  @Test
+  void rejectsRowSetOutsideRequiredCountBeforeCommit(@TempDir Path root) {
+    Fixture fixture = open(root);
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "INSERT INTO account VALUES (1,10)", new CommandResult()));
+    long insert = fixture.prepare("INSERT INTO account VALUES (?,?)");
+    long ordered = fixture.prepare("SELECT id FROM account ORDER BY id");
+    TransactionProgram program = new TransactionProgram();
+    command(program, insert, 0, SqlTypeDescriptor.INTEGER, 1, SqlTypeDescriptor.BIGINT);
+    assertEquals(StatusCode.OK, program.beginStep(ordered, TransactionProgramAction.ROW_SET));
+    assertEquals(StatusCode.OK, program.requireResultRows(3, 3));
+    assertEquals(StatusCode.OK, program.captureColumn(0));
+    assertEquals(StatusCode.OK, program.endStep());
+    assertEquals(StatusCode.OK, program.freeze());
+    TransactionProgramArguments arguments = new TransactionProgramArguments();
+    assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.INTEGER, 2));
+    assertEquals(StatusCode.OK, arguments.setFixed(1, SqlTypeDescriptor.BIGINT, 20));
+    TransactionProgramResult result = new TransactionProgramResult();
+
+    assertEquals(StatusCode.CARDINALITY_VIOLATION, fixture.session.executeProgram(
+        fixture.prepareProgram(program), IsolationLevel.READ_COMMITTED, arguments, result));
+    assertEquals(StatusCode.CARDINALITY_VIOLATION, result.primaryStatus());
+    assertEquals(StatusCode.OK, result.rollbackStatus());
+    CommandResult count = new CommandResult();
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "SELECT COUNT(*) FROM account", count));
+    assertEquals(1, count.valueAt(0));
+    fixture.close();
+  }
+
+  @Test
   void executesPreparedDataflowAndCommitsOnce(@TempDir Path root) {
     Fixture fixture = open(root);
     long insert = fixture.prepare("INSERT INTO account VALUES (?,?)");

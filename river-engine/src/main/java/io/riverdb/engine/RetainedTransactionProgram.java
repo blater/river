@@ -3,6 +3,7 @@ package io.riverdb.engine;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.RetainedMemoryLease;
 import io.riverdb.engine.api.TransactionProgram;
+import io.riverdb.engine.api.TransactionProgramAction;
 import io.riverdb.engine.sql.SqlPreparedPlan;
 import io.riverdb.engine.sql.SqlProgramMemoryLease;
 import io.riverdb.engine.sql.SqlRetainedBudget;
@@ -55,7 +56,9 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
       if (!plan.acceptsProgramAction(source.action(step))) {
         return failed(StatusCode.INVALID_EXTERNAL_INPUT);
       }
-      if (plan.parameterCount() != source.parameterCount(step)) {
+      int sqlParameters = source.parameterCount(step)
+          - (source.action(step) == TransactionProgramAction.ROW_AT ? 1 : 0);
+      if (plan.parameterCount() != sqlParameters) {
         return failed(StatusCode.PARAMETER_COUNT_MISMATCH);
       }
     }

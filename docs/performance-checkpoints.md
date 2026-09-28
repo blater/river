@@ -18,6 +18,7 @@ and runtime configuration.
 | 2026-09-27 16:47:52 | `master` source snapshot | None | `c9c216d3` | `sample order-status`; 1 worker, 1 warehouse; GraalVM 25.0.4 JVM, macOS/arm64; 20s warmup, 30s measured | 1,920.906 | 0.839 | `river_harness_20260927_164729_f61ceff9`; [read-only comparison](#2026-09-27--one-worker-read-only-comparison) |
 | 2026-09-27 16:52:11 | `master` source snapshot | None | `c9c216d3` | `sample stock-level`; 1 worker, 1 warehouse; GraalVM 25.0.4 JVM, macOS/arm64; 20s warmup, 30s measured | 1,064.832 | 1.082 | `river_harness_20260927_165149_3ea012e9`; [read-only comparison](#2026-09-27--one-worker-read-only-comparison) |
 | 2026-09-27 23:57:22 | `ticket/tic-a29fc0d0ece668f5aa0a5fd8ba576f15-order-status-batches` | `tic-a29fc0d0ece668f5aa0a5fd8ba576f15` | River `e128e066`; harness `4a2c185`, version `e128e066-jvm-batched-b` | `sample order-status`; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 20s measured | 3,763.695 | 0.428 | `river_harness_20260927_235714_cce57930`; [checkpoint](#2026-09-27--order-status-row-batching) |
+| 2026-09-28 00:57:54 | `ticket/tic-celegorm-order-status-program` | `tic-celegorm` | River `8a37147f`; harness `f8e615a`, version `tic-celegorm-clean-jvm` | `sample order-status`; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 20s measured | 12,913.782 | 0.122 | `river_harness_20260928_005746_33a8ee5a`; [checkpoint](#2026-09-28--one-request-order-status-program) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -322,3 +323,64 @@ must reduce dependent request/reply exchanges, using River's existing
 transaction-program protocol if it can preserve the full Order Status result
 and failure semantics; a same-transport control is needed before assigning the
 remaining cross-database difference to the engine.
+
+## 2026-09-28 — one-request Order Status program
+
+Ticket [`tic-celegorm`](tickets/tic-celegorm.md) extends the generic transaction
+program with ordered row selection and a pre-commit row-set count requirement.
+The Go binding executes either customer-ID or median-by-last-name Order Status
+as one prepared program request. The selected customer and latest order ID feed
+later steps in the same READ COMMITTED transaction. The 5–15 order-line count
+is checked before commit. River engine and protocol contain no TPC-C-specific
+logic. River source was `8a37147f` and the harness candidate was `f8e615a`.
+
+The A–B–B–A diagnostic used the same River JVM build for both paths: the
+accepted batched SQL binding at harness `f018ab1` versus the program binding
+at `f8e615a`. It used `sample order-status`, one worker and warehouse, seed 42,
+retry limit 3, 2-second warmup and 10-second measurement. All listed runs
+passed invariants and cleanup with zero retries, failed outcomes and unknown
+commits. Their comparison key was
+`2862b245c7074f4c41c53dc0bd0508f154b239fab64bb8bf626ee9872a42232d`.
+
+| Order | Binding | Committed TPS | Mean (µs) | p99 (µs) | Immutable artifact |
+| --- | --- | ---: | ---: | ---: | --- |
+| A1 | batched SQL | 3,604.042 | 277.146 | 492.543 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_004819_8bfce9b5` |
+| B1 | one program request | 12,826.193 | 77.702 | 140.799 | `/private/tmp/river-harness-order-status/runs/river_harness_20260928_004835_00a2d8bb` |
+| B2 | one program request | 12,798.516 | 77.859 | 143.231 | `/private/tmp/river-harness-order-status/runs/river_harness_20260928_004850_95a5f9f8` |
+| A2 | batched SQL | 3,485.051 | 286.608 | 551.423 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_004952_4044f7c5` |
+
+The mean program/batched throughput ratio was 3.61 for this same-server
+diagnostic. An earlier A2 attempt completed its workload but failed server
+shutdown (`river_harness_20260928_004905_dbe994b4`); it is excluded. No River
+server remained, the harness-owned temporary instance was removed, and the
+replacement A2 passed.
+
+The matched MariaDB–River–River–MariaDB pair used the program harness,
+5-second warmup and 20-second measurement with the same profile, seed,
+warehouse, worker and retry limit. River used loopback TCP/TLS; MariaDB used
+its harness-owned Unix socket. All four runs were eligible with comparison key
+`7ac8391ed14cc60edb4fb4f8c6636eb9416bf5d1af3a11ada7cd40664bceecb8`,
+passed validation and cleanup, and had zero retries, failed outcomes or
+unknown commits.
+
+| Order | Target | Committed TPS | Mean (µs) | p99 (µs) | Immutable artifact |
+| --- | --- | ---: | ---: | ---: | --- |
+| M1 | MariaDB | 6,777.341 | 147.263 | 213.887 | `/private/tmp/river-harness-order-status/runs/river_harness_20260928_005649_6362fe61` |
+| R1 | River | 12,881.292 | 77.373 | 117.631 | `/private/tmp/river-harness-order-status/runs/river_harness_20260928_005718_8a235427` |
+| R2 | River | 12,913.782 | 77.183 | 122.303 | `/private/tmp/river-harness-order-status/runs/river_harness_20260928_005746_33a8ee5a` |
+| M2 | MariaDB | 6,701.492 | 148.946 | 226.431 | `/private/tmp/river-harness-order-status/runs/river_harness_20260928_005814_dec351d3` |
+
+The mean River/MariaDB ratio was 1.91 for this one-worker Order Status
+diagnostic. The result resolves the measured single-worker Order Status gap;
+it does not establish full-mix parity or transport-normalized engine speed.
+
+Focused engine API, engine and protocol tests passed. A clean
+`./gradlew --no-daemon clean test` passed in 3m17s (116 tasks). The Go harness
+passed `go test ./...`, affected-package `go test -race`, and affected-package
+`go vet`. The JVM candidate distribution is retained at
+`/private/tmp/river-order-status-evidence/jvm-program/`. Slopmark did not
+surface a newly broadened high-scoring production owner in this slice.
+
+Decision: accept the generic ordered-row program capability and its Order
+Status consumer. The remaining performance investigation concerns other
+transaction families and concurrency profiles.

@@ -47,6 +47,7 @@ final class ProtocolProgramGraphValidation {
     if (program.minimumAffectedRows(step) < 0
         || program.maximumAffectedRows(step) < program.minimumAffectedRows(step)
         || action != TransactionProgramAction.COMMAND
+            && action != TransactionProgramAction.ROW_SET
             && (program.minimumAffectedRows(step) != 0
                 || program.maximumAffectedRows(step) != Long.MAX_VALUE)) return false;
     int empty = program.emptyTarget(step);
