@@ -17,6 +17,7 @@ and runtime configuration.
 | 2026-09-27 07:09:58 | `master` source snapshot | None | `c9c216d3` | `sample new-order`; 1 worker, 1 warehouse; GraalVM 25.0.4 JVM, macOS/arm64; 20s warmup, 30s measured | 346.265 | 4.944 | `river_harness_20260927_070936_84c40fe8`; [investigation](plans/river-current-hotpath-probes.md) |
 | 2026-09-27 16:47:52 | `master` source snapshot | None | `c9c216d3` | `sample order-status`; 1 worker, 1 warehouse; GraalVM 25.0.4 JVM, macOS/arm64; 20s warmup, 30s measured | 1,920.906 | 0.839 | `river_harness_20260927_164729_f61ceff9`; [read-only comparison](#2026-09-27--one-worker-read-only-comparison) |
 | 2026-09-27 16:52:11 | `master` source snapshot | None | `c9c216d3` | `sample stock-level`; 1 worker, 1 warehouse; GraalVM 25.0.4 JVM, macOS/arm64; 20s warmup, 30s measured | 1,064.832 | 1.082 | `river_harness_20260927_165149_3ea012e9`; [read-only comparison](#2026-09-27--one-worker-read-only-comparison) |
+| 2026-09-27 23:57:22 | `ticket/tic-a29fc0d0ece668f5aa0a5fd8ba576f15-order-status-batches` | `tic-a29fc0d0ece668f5aa0a5fd8ba576f15` | River `e128e066`; harness `4a2c185`, version `e128e066-jvm-batched-b` | `sample order-status`; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 20s measured | 3,763.695 | 0.428 | `river_harness_20260927_235714_cce57930`; [checkpoint](#2026-09-27--order-status-row-batching) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -210,7 +211,82 @@ Java execution samples spread across those paths; no single method dominated.
 
 The read-only gaps exclude retries and contended write locks as their cause.
 They do not measure the separate write, WAL, and commit costs in New Order or
-Payment. A focused next change for Order Status is batched result delivery;
-for Stock Level, compare the current join plan with a stock-filter-first plan
+Payment. The Order Status batching result is recorded below. For Stock Level,
+compare the current join plan with a stock-filter-first plan
 and measure its indexed lookup count and transaction time before accepting an
 optimizer change.
+
+## 2026-09-27 — Order Status row batching
+
+Ticket [`tic-a29fc0d0ece668f5aa0a5fd8ba576f15`](tickets/tic-a29fc0d0ece668f5aa0a5fd8ba576f15.md)
+starts from `c9c216d3` and adds byte-bounded v6 query response batches in
+`e128e066`. The external Go adapter is `4a2c185`. Query open and `FETCH` can
+return complete row frames in one server write; clients consume marked queued
+frames before another request. Wide rows retain continuation framing. The
+protocol, Java client/JDBC, server, and Go adapter use one row representation.
+
+All comparison samples used `sample order-status`, one worker and warehouse,
+seed 42, READ COMMITTED, retry limit 3, five seconds warmup and 20 seconds
+measured. River used loopback TCP/TLS and MariaDB used its harness-owned Unix
+socket. Every listed run passed validation and shutdown with zero retries,
+failed outcomes and unknown commits. The comparison metadata was eligible and
+had the same key,
+`7ac8391ed14cc60edb4fb4f8c6636eb9416bf5d1af3a11ada7cd40664bceecb8`.
+The short local samples support a directional result for this mechanism, not
+an audited TPC-C or general platform claim.
+
+| JVM run order | Base/candidate | Committed TPS | Mean latency (µs) | p99 (µs) | Immutable artifact |
+| --- | --- | ---: | ---: | ---: | --- |
+| 1 | base `c9c216d3` | 1,939.323 | 515.286 | 840.191 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260927_235557_6c7dc3b8` |
+| 2 | candidate `e128e066` | 3,747.390 | 266.536 | 446.463 | `/private/tmp/river-harness-order-status/runs/river_harness_20260927_235635_adb52cc2` |
+| 3 | candidate `e128e066` | 3,763.695 | 265.378 | 428.031 | `/private/tmp/river-harness-order-status/runs/river_harness_20260927_235714_cce57930` |
+| 4 | base `c9c216d3` | 1,915.505 | 521.568 | 843.775 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260927_235752_964a2955` |
+
+The mean candidate/control throughput ratio was 1.95. The JVM control was the
+recorded GraalVM 25.0.4 `-Xmx1g` distribution; its protocol jar hash matches
+the `c9c216d3` checkout. The candidate distribution is retained at
+`/private/tmp/river-order-status-evidence/jvm-candidate/`.
+
+A separate ABBA native check used the same GraalVM 25.0.4 and `-O2` for both
+builds: controls 1,436.747/1,451.529 TPS and candidates
+2,541.691/2,558.694 TPS, a 1.77 mean ratio. Artifacts in run order are
+`river_harness_20260927_234049_5e5eba49`,
+`river_harness_20260927_234126_91870b9f`,
+`river_harness_20260927_234203_0795277f`, and
+`river_harness_20260927_234235_723187a1` under the two harness checkouts
+above. Native binaries and SHA-256 hashes are retained in
+`/private/tmp/river-order-status-evidence/`. Standard `-O3` native compilation
+failed in GraalVM while compiling unchanged
+`IndexedKernelVisibility.nextEntry`; the O2 pair is labelled separately and
+does not establish O3 performance.
+
+The matching MariaDB diagnostic was 6,752.629 TPS, 147.807 µs mean and
+222.847 µs p99, artifact
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260927_234318_82fe58e2`.
+Temporary phase timing over a 2-second warmup plus 10-second measurement
+showed River's order-line `Rows.Next()` at 0.343 µs per call versus MariaDB's
+0.131 µs, while the whole transaction was 395.992 versus 148.016 µs. River
+versus MariaDB phase means were begin 38.742/23.922, commit 40.163/13.501,
+customer identity 81.362/31.318, customer read 65.830/22.149, latest order
+59.466/25.284 and line query 110.059/31.550 µs. The line query's opening
+and batch delivery cost 103.975/27.896 µs. These timed totals include warmup
+and are diagnostic phase attribution, not the measured-window latency.
+The remaining gap is spread across request and query stages; this read-only
+one-worker workload had no retry or lock-contention signal.
+
+Clean `./gradlew --no-daemon --project-cache-dir
+/private/tmp/river-order-status-project-cache clean test` passed in 3m20s
+across 116 tasks. Focused protocol/client/server tests passed after the final
+batch-policy refactor. The Go harness passed `go test ./...`,
+`go test -race ./internal/dbms/river` and `go vet ./...`.
+Slopmark review moved `ProtocolFrameCodec` from 35.3925 to 35.3925 and
+`ProtocolResponseAdmission` from 27.2088 to 27.5988 after keeping batch policy
+in `ProtocolRowBatch`; `SessionEndpoint` moved 144.519 to 147.877 and
+`ServerResponseBuffer` 26.2288 to 43.3863 within its response storage and
+publication responsibility.
+
+Decision: accept the bounded row-batch feature. It removes the repeated
+Order Status fetch request/reply cost and passes the correctness and cleanup
+gates. The remaining roughly 1.8-fold JVM gap to MariaDB is a separate
+request/statement execution investigation; this checkpoint does not claim
+overall parity.

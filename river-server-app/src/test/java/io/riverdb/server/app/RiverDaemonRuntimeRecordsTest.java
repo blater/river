@@ -434,7 +434,7 @@ final class RiverDaemonRuntimeRecordsTest {
         "listen-address=localhost",
         "listen-port=4321",
         "pid=" + currentPid(),
-        "protocol=river-v5",
+        "protocol=river-v6",
         "transport=tls-v1.3",
         "client-config=" + datadir.resolve("other-client.properties"),
         "server-certificate-sha256=" + "a".repeat(64),

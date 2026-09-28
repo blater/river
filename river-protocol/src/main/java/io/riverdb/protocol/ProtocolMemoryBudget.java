@@ -35,7 +35,7 @@ public final class ProtocolMemoryBudget {
     sqlFloor = add(sqlFloor, multiply(RowResult.retainedFloorBytes(), 3));
     long programFloor = multiply(ProtocolWorkspaceRetention.warmCeilingBytes(), 2);
     long workspaceFloor = add(sqlFloor, programFloor);
-    long fixedPerConnection = multiply(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES, 2);
+    long fixedPerConnection = multiply(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES, 3);
     long base = multiply(connections, add(fixedPerConnection, workspaceFloor));
     long requestAssembly = add(ProtocolFrameCodec.HEADER_BYTES,
         ProtocolFrameCodec.MAXIMUM_LOGICAL_REQUEST_PAYLOAD_BYTES);

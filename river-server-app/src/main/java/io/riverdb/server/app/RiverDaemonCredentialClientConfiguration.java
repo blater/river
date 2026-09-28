@@ -50,7 +50,7 @@ final class RiverDaemonCredentialClientConfiguration {
           "credential-generation=" + material.generation(),
           "principal-id=1",
           "transport=tls-v1.3",
-          "protocol=river-v5",
+          "protocol=river-v" + io.riverdb.protocol.ProtocolFrameCodec.VERSION,
           "host=" + host,
           "port=" + port,
           "server-certificate-file=" + certificatePath,

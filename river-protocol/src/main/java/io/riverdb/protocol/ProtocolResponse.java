@@ -93,6 +93,7 @@ public final class ProtocolResponse implements ProtocolResponseValuesView {
 
   public StatusCode status() { return status; }
   public int flags() { return flags; }
+  public boolean batchMore() { return (flags & ProtocolFrameCodec.FLAG_BATCH_MORE) != 0; }
   public int affectedRows() { return affectedRows; }
   public int columnCount() { return columnCount; }
   public long commitSequence() { return commitSequence; }

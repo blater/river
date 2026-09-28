@@ -25,8 +25,8 @@ final class ServerRequestDispatch {
     }
     try {
       if (!status.isOk()) return status;
-      if (responses.buffer().hasRemaining()) {
-        output.write(responses.bytes(), 0, responses.buffer().remaining());
+      if (responses.publishedBytes() > 0) {
+        output.write(responses.bytes(), 0, responses.publishedBytes());
         output.flush();
       }
       return StatusCode.OK;

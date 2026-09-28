@@ -201,6 +201,17 @@ public final class RiverClientConnection implements RiverDatabase {
         this, type, null, parameters, null, 0, handle);
   }
 
+  synchronized StatusCode receiveBatchRow(long requestId) {
+    if (closed || requestId <= 0) return StatusCode.CLOSED;
+    try {
+      StatusCode status = RiverClientResponseReader.read(
+          this, ProtocolMessageType.FETCH, requestId);
+      return status.isOk() ? status : fail(status);
+    } catch (IOException failure) {
+      return fail(cancelled ? StatusCode.CANCELLED : StatusCode.IO_FAILURE);
+    }
+  }
+
   StatusCode fail(StatusCode status) {
     lastStatus = status;
     // A failed exchange admits no more input; TLS close must not wait for peer data.

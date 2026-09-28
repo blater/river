@@ -19,6 +19,7 @@ import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.protocol.ProtocolPreparedRequestDecoder;
 import io.riverdb.protocol.ProtocolProgramRequestDecoder;
 import io.riverdb.protocol.ProtocolQueryMetadata;
+import io.riverdb.protocol.ProtocolRowBatch;
 import io.riverdb.protocol.ProtocolSqlRequestDecoder;
 import io.riverdb.protocol.ProtocolWorkspaceRetention;
 import io.riverdb.protocol.auth.TokenAuthenticator;
@@ -478,6 +479,24 @@ public final class SessionEndpoint {
     }
     StatusCode status = stageNextRow();
     return encodeRow(response, frame.type(), frame.requestId(), status, state == QUERY);
+  }
+
+  /** Size of the staged next row, or zero when this request cannot append rows. */
+  int nextBatchRowBytes() {
+    ProtocolMessageType type = frame.type();
+    if (state != QUERY || !lookahead.isAvailable()
+        || type != ProtocolMessageType.BEGIN_QUERY
+            && type != ProtocolMessageType.BEGIN_PREPARED_QUERY
+            && type != ProtocolMessageType.FETCH) return 0;
+    return ProtocolRowBatch.rowWireBytes(lookahead);
+  }
+
+  /** Advances the cursor once and encodes the next row under the current request ID. */
+  StatusCode appendBatchRow(ByteBuffer response) {
+    if (nextBatchRowBytes() <= 0) return StatusCode.INVARIANT_BROKEN;
+    StatusCode status = stageNextRow();
+    return encodeRow(response, ProtocolMessageType.FETCH, frame.requestId(),
+        status, state == QUERY);
   }
 
   private StatusCode closeQuery(ByteBuffer response) {
