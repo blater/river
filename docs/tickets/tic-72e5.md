@@ -32,12 +32,14 @@ long full-profile runs from 939.516 to 1,204.348 commits/s; a later clean-build
 run reached 1,334.778. See the [cache checkpoint](../performance-checkpoints.md#2026-09-28--cache-versioned-index-roots-across-join-probes).
 
 The full-profile harness supplies separate River and MariaDB DDL catalogues.
-Their declared primary and named secondary indexes have matching columns, but
-River adds one exact secondary index per foreign key while MariaDB reuses an
-existing index when its leading columns support the foreign key. The physical
-index inventories therefore differ. The prior MariaDB number remains a
-diagnostic control, not a like-for-like performance claim. Do not add a
-Stock Level-specific index to the benchmark schema to close the gap.
+River now reuses an existing index when its leading columns support a foreign
+key. A diagnostic post-load inventory found matching table, uniqueness and
+ordered-column shapes for all 15 workload indexes in each target, excluding
+MariaDB's harness ownership table; see the
+[parity checkpoint](../performance-checkpoints.md#2026-09-28--foreign-key-support-index-reuse-and-schema-parity).
+The harness does not yet enforce that inventory as a comparison eligibility
+rule. The earlier MariaDB number therefore remains a diagnostic control.
+Do not add a Stock Level-specific index to the benchmark schema to close the gap.
 
 ## Delivery
 

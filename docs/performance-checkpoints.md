@@ -1137,3 +1137,37 @@ feature regression. A one-worker candidate `sample all` run passed every
 invariant with zero failures, unknown commits and retries at 553.865 TPS
 (`river_harness_20260928_102754_ad56a5ad`). Keep the feature for schema
 comparison correctness; keep the Stock Level performance ticket open.
+
+## 2026-09-28 — Borrowed descriptor-row decode diagnostic
+
+An isolated `feature/descriptor-row-borrowed-decode` candidate let the
+descriptor row codec read the result-owned heap bytes directly, removing its
+second whole-row copy. The kernel still copied committed row bytes before
+releasing the page pin, and the codec still validated the complete stored row.
+Focused `RelationalDescriptorRowPathTest`, `SqlDescriptorTupleIndexScanTest`
+and `HeapPageTest` passed. Candidate engine and storage JAR checksums were
+`4daf8f451cdcfe20fcb8411f708f3f2b0371036b173c6b466fd4672b1c26a4bf`
+and `959df079b7c92518bfa44127c5f88f088eb3e23614ca1a01da5181792a0a7ab3`.
+Only those two JARs differed from the accepted index-parity control.
+
+The unchanged harness `eba8ab0` ran `full stock-level` with one worker and
+warehouse, seed 42, retry limit 3, GraalVM 25.0.4 JVM `-Xmx1g`, READ
+COMMITTED and durable WAL. Two short 1s/3s samples per build were unstable:
+control 1,107.61/691.27 TPS, candidate 1,004.92/811.25 TPS. The longer
+interleaved 5s/30s sequence was:
+
+| Order | Build | TPS | p99 (ms) | Artifact under `/private/tmp/river-harness-stock-analyze/runs/` |
+| --- | --- | ---: | ---: | --- |
+| B1 | borrowed row | 1,185.254 | 1.125 | `river_harness_20260928_104127_411e3b26` |
+| A1 | index-parity control | 1,196.252 | 1.097 | `river_harness_20260928_104343_13f3876e` |
+| A2 | index-parity control | 1,175.564 | 1.142 | `river_harness_20260928_104554_846a6161` |
+| B2 | borrowed row | 1,186.262 | 1.130 | `river_harness_20260928_104810_885c1e26` |
+
+All four were eligible with comparison key
+`1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`,
+passed invariants and cleanup, and recorded zero failures, unknown commits and
+retries. Candidate and control means were both about 1,186 TPS. The change
+did not establish a Stock Level gain, so its source was reverted and no new
+baseline or performance checkpoint tag was created. The next investigation
+remains a projected lookup or removal of wide-row work that is actually
+measurable on the full-profile join.
