@@ -24,6 +24,7 @@ and runtime configuration.
 | 2026-09-28 02:59:16 | `feature/stock-distinct-inline` | `tic-72e5` | River `209f8b37`; harness `df66a3a`, version `distinct-inline-209f8b37` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 3,817.486 | 0.354 | `river_harness_20260928_025909_cd482460`; [checkpoint](#2026-09-28--inline-distinct-checkpoint) |
 | 2026-09-28 03:19:17 | `feature/stock-singleton-row-store` | `tic-72e5` | River `1bf08325`; harness `df66a3a`, version `singleton-1bf08325` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 4,424.739 | 0.273 | `river_harness_20260928_031909_32bac37c`; [checkpoint](#2026-09-28--single-row-store-checkpoint) |
 | 2026-09-28 03:59:08 | `feature/stock-validated-root-filter` | `tic-72e5` | River `e029efdc`; harness `df66a3a`, version `validated-filter-e029efdc` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 5,018.188 | 0.267 | `river_harness_20260928_035900_d016abce`; [checkpoint](#2026-09-28--validated-root-row-filter-checkpoint) |
+| 2026-09-28 04:25:36 | River `feature/stock-validated-root-filter`; harness `feature/stock-level-program` | `tic-72e5` | River `e029efdc` (merged `2d21b5e5`); harness `4c16840` (merged `dae4786`), version `validated-filter-e029efdc` | `sample stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 10,328.801 | 0.130 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_042529_a09ebfaa`; [checkpoint](#2026-09-28--stock-level-read-program-checkpoint) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -689,3 +690,91 @@ Mean MariaDB/River committed TPS was 1.390. The generic filter is accepted;
 the Stock Level ticket remains open. Next work should measure the remaining
 count-query, district-query and protocol time on this accepted build, then
 target the largest verified component.
+
+## 2026-09-28 — Stock Level read program checkpoint
+
+River `e029efdc` (integrated at `2d21b5e5`) and harness
+`4c16840` (integrated at `dae4786`). The harness binding now uses the
+existing generic River transaction program for Stock Level. It reads
+`district.d_next_o_id`, computes `max(1, nextOrder - 20)` from that result,
+executes the unchanged `COUNT(DISTINCT)` JOIN SQL and commits in one request.
+The engine has no Stock Level-specific behavior. The binding checks both
+scalar result shapes, the positive next order ID, nonnegative count,
+commit status and uncertain outcomes. The SQL catalogue remains the single
+source of both query texts.
+
+A temporary, uncommitted phase-timing build of the standalone harness ran
+the accepted SQL binding for 5 seconds of warmup and 10 seconds of
+measurement, one worker and warehouse. It timed about 68,503 River and
+132,249 MariaDB Stock Level calls across both windows. Mean phase times
+in microseconds were:
+
+| Phase | River | MariaDB |
+| --- | ---: | ---: |
+| Whole call | 218.342 | 112.682 |
+| Begin | 34.102 | 22.990 |
+| District query | 45.766 | 19.405 |
+| Count query | 101.428 | 56.438 |
+| Finish | 36.759 | 13.599 |
+
+These are diagnostic, not a matched performance claim: the runs were
+sequential, modified and without report artifacts. The count query was the
+largest single phase, while begin and finish together cost 70.861 µs in
+River. A separate diagnostic build compared the program's returned next
+order ID and count with the original two SQL reads on every call during a
+short static Stock Level run; no mismatch occurred. That diagnostic was
+restored before measured program runs.
+
+The same River JVM binary and workload were used for the SQL-path and
+program-path A–B–B–A comparison. The 2-second warmup/10-second measured
+samples were 4,684.397 / 10,064.755 / 10,053.068 / 4,552.887 committed
+TPS. All were eligible under comparison key
+`ae608dcd41da1a792877777c58542658174cbd0a3fbd0376f2a65c87568a5ed9`,
+passed validation and cleanup, and had zero retries, failures or unknown
+commits. The corresponding artifacts are
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_041228_e0e8e854`,
+`/private/tmp/river-harness-stock-program/runs/river_harness_20260928_041247_2d1d40ef`,
+`/private/tmp/river-harness-stock-program/runs/river_harness_20260928_041308_cd33296b`,
+and `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_041328_12f6f31a`.
+
+The 5-second warmup/30-second measured A–B–B–A sequence used sample
+Stock Level, one worker and warehouse, seed 42, READ COMMITTED, retry
+limit 3, durable local WAL, loopback TCP/TLS and GraalVM 25.0.4 JVM
+`-Xmx1g`. All four runs passed invariants and cleanup with zero retries,
+failed outcomes or unknown commits and identical eligible comparison key
+`92304f6559add6ca75ccead01a5dbc118982216b805a8f00f784346d5af797a2`.
+
+| Order | Binding | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| A1 | two SQL reads | 5,094.360 | 0.246 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_041457_cd8bd7f8` |
+| B1 | one program request | 11,051.450 | 0.122 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_041540_0aa5153a` |
+| B2 | one program request | 10,338.810 | 0.129 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_041624_6bdbb5df` |
+| A2 | two SQL reads | 5,119.290 | 0.240 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_041706_2cdb16ab` |
+
+Mean program/SQL throughput was 2.094. The final harness source then
+extracted result validation into a tested helper without changing the
+program graph or SQL. `go test ./...`, `go test -race ./...`, `go vet ./...`
+and `make build` passed. The final local harness binary SHA-256 is
+`63162606ae3c903be09643c1ac6054e82bb078ab4204548afce79585d295669d`.
+
+A final MariaDB–River–River–MariaDB sequence used that exact harness binary
+and the same 5-second warmup/30-second workload. MariaDB used its
+harness-owned Unix socket and River used TCP/TLS. All four runs were
+eligible under comparison key
+`92304f6559add6ca75ccead01a5dbc118982216b805a8f00f784346d5af797a2`,
+passed invariants and cleanup with zero retries, failures or unknown
+commits. All four manifest checksums reconciled; MariaDB reported a
+graceful `mariadb-admin` shutdown and inactive service state afterward.
+
+| Order | Target | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| M1 | MariaDB | 6,765.672 | 0.184 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_042401_f1372029` |
+| R1 | River | 10,440.427 | 0.126 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_042446_d625f81b` |
+| R2 | River | 10,328.801 | 0.130 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_042529_a09ebfaa` |
+| M2 | MariaDB | 6,818.415 | 0.182 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_042612_5c530cf8` |
+
+Mean River/MariaDB committed TPS was 1.529 for this one-worker workload.
+The measured whole-transaction Stock Level gap is closed. The separate
+count-query diagnostic still shows a 101.428 versus 56.438 µs difference
+on the SQL path, so JOIN execution remains a candidate for further generic
+optimization; the program result is not evidence of JOIN parity.

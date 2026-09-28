@@ -21,12 +21,15 @@ stock first and performed about 45 indexed order-line lookups.
 
 The accepted root filter, numeric JOIN text-copy pruning, inline exact
 `COUNT(DISTINCT)` set, singleton block row store, and validated root row
-filter raised the measured River baseline to 5,018.188 commits/s. The
-latest matched MariaDB–River–River–MariaDB pair averaged 6,699.939 versus
-4,820.328 commits/s, with passing invariants and zero retries. The remaining
-whole-target gap is 1.390x. JOIN stage startup, the stock scan and
-prepared-query costs remain under investigation. See
-[the latest checkpoint](../performance-checkpoints.md#2026-09-28--validated-root-row-filter-checkpoint).
+filter raised the measured SQL-path River baseline to 5,018.188 commits/s.
+A generic one-request transaction program then raised River's latest
+measured Stock Level baseline to 10,328.801 commits/s. The final matched
+MariaDB–River–River–MariaDB pair averaged 6,792.043 versus 10,384.614
+commits/s: River was 1.529x faster for this one-worker workload. The
+whole-transaction gap is closed. The separately timed count JOIN still
+cost about 101 µs in River versus 56 µs in MariaDB on the SQL path;
+JOIN stage startup, scan and prepared-query costs remain under
+investigation. See [the latest checkpoint](../performance-checkpoints.md#2026-09-28--stock-level-read-program-checkpoint).
 
 ## Delivery
 
