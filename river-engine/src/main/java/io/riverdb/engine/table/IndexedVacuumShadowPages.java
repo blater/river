@@ -2,6 +2,7 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.page.PageCodec;
+import io.riverdb.format.page.LogicalHeadPageCodec;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
@@ -32,6 +33,8 @@ final class IndexedVacuumShadowPages {
     if (current == null) return StatusCode.CORRUPTION;
     boolean heap = HeapPage.isHeap(current);
     boolean leaf = !heap && isLeaf(pageId, current);
+    if (!heap && pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_LOGICAL_HEAD
+        && LogicalHeadPageCodec.type(current) == LogicalHeadPageCodec.ROW_LEAF) leaf = true;
     if (!heap && !leaf) return StatusCode.OK;
     ByteBuffer shadow = pages.beginVacuumPage(pageId);
     StatusCode status = shadowStatus(shadow);
@@ -74,11 +77,41 @@ final class IndexedVacuumShadowPages {
     return leaf == null ? failed(pages.lastStatus()) : leaf;
   }
 
+  StatusCode rewriteHead(int pageId, int slot, long expected, long compacted) {
+    ByteBuffer head = leaf(pageId);
+    if (head == null) return lastStatus;
+    if (LogicalHeadPageCodec.rowHead(head, slot) != expected) {
+      return lastStatus = StatusCode.CORRUPTION;
+    }
+    LogicalHeadPageCodec.rowHead(head, slot, -compacted);
+    return StatusCode.OK;
+  }
+
   StatusCode finish() {
     lastStatus = heapPageId == 0
         ? StatusCode.CORRUPTION : pages.sealVacuumPage(heapPageId);
     if (lastStatus.isOk() && leafPageId != 0) {
       lastStatus = pages.sealVacuumPage(leafPageId);
+    }
+    for (int pageId = IndexedTableKernel.HEAD_TABLE_ROOT_PAGE_ID;
+        lastStatus.isOk() && pageId <= pages.highestPageId(); pageId++) {
+      if (!pages.isPresent(pageId)
+          || pages.payloadKind(pageId) != PageCodec.PAYLOAD_KIND_LOGICAL_HEAD) continue;
+      ByteBuffer current = pages.currentPayloadUnchecked(pageId);
+      if (current == null) return lastStatus = pages.lastStatus();
+      if (LogicalHeadPageCodec.type(current) != LogicalHeadPageCodec.ROW_LEAF) continue;
+      ByteBuffer head = pages.vacuumPayload(pageId);
+      if (head == null) return lastStatus = pages.lastStatus();
+      for (int slot = 0; slot < LogicalHeadPageCodec.ROW_LEAF_ENTRIES; slot++) {
+        long value = LogicalHeadPageCodec.rowHead(head, slot);
+        if (value < 0) {
+          if (LogicalHeadPageCodec.rowHead(current, slot) <= 0) {
+            return lastStatus = StatusCode.CORRUPTION;
+          }
+          LogicalHeadPageCodec.rowHead(head, slot, -value);
+        }
+      }
+      lastStatus = pages.sealVacuumPage(pageId);
     }
     return lastStatus;
   }
@@ -88,6 +121,8 @@ final class IndexedVacuumShadowPages {
       ByteBuffer payload = pages.currentPayloadUnchecked(pageId);
       if (payload == null) return lastStatus = pages.lastStatus();
       boolean publish = HeapPage.isHeap(payload)
+          || pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_LOGICAL_HEAD
+              && LogicalHeadPageCodec.type(payload) == LogicalHeadPageCodec.ROW_LEAF
           || pageId != IndexedTableKernel.ROOT_META_PAGE_ID
               && pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_SCALAR_BTREE
               && BTreePage.type(payload) == BTreePage.TYPE_LEAF;

@@ -224,9 +224,9 @@ final class IndexedRelationalWalCodecTest {
     requireOk(session.commit(outcome));
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     IndexedRelationalMutation mutation = liveRootMutation(
-        descriptor, descriptorHash(descriptor), 4, 4, 1, 2, 1, 2,
+        descriptor, descriptorHash(descriptor), 5, 5, 1, 2, 1, 2,
         IndexedRelationalMutation.REGISTRY_READY,
-        IndexedRelationalMutation.REGISTRY_READY, 0, 0, 4, 4);
+        IndexedRelationalMutation.REGISTRY_READY, 0, 0, 5, 5);
     check(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 103, mutation, new IndexedCommitResult())
         == StatusCode.INVALID_EXTERNAL_INPUT,

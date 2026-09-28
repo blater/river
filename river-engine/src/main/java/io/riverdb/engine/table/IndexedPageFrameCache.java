@@ -223,6 +223,17 @@ final class IndexedPageFrameCache {
         pageId, writable, state.changedPageCapacity(), result);
   }
 
+  StatusCode pinLogicalHeadOperationPage(
+      int pageId, boolean writable, long ownerObjectId, IndexedOperationPage result) {
+    if (!identityMatches(
+        pageId, PageCodec.PAYLOAD_KIND_LOGICAL_HEAD, ownerObjectId)) {
+      lastStatus = StatusCode.CORRUPTION;
+      return lastStatus;
+    }
+    return operationPins.pin(
+        pageId, writable, state.changedPageCapacity(), result);
+  }
+
   StatusCode pinNewOperationPage(int pageId, IndexedOperationPage result) {
     return operationPins.pinNew(
         pageId, IndexedTableLimits.MAX_CHANGED_PAGES,

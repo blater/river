@@ -3,6 +3,7 @@ package io.riverdb.engine.table;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.format.btree.TupleIndexRootRecord;
 import io.riverdb.format.btree.TupleIndexRootRecordCodec;
+import io.riverdb.storage.btree.BTreeRootPage;
 
 /** Exact descriptor and state matching for storage-owned lifecycle records. */
 final class IndexedTupleLifecycleRecordMatch {
@@ -44,7 +45,8 @@ final class IndexedTupleLifecycleRecordMatch {
     }
     return expected == DROPPING
         && record.state() == TupleIndexRootRecordCodec.STATE_DROPPING
-        && record.rootPageId() == 0 && record.cleanupCursor() >= 4
+        && record.rootPageId() == 0
+        && record.cleanupCursor() >= BTreeRootPage.FIRST_REUSABLE_PAGE_ID
         && record.privateOwner() == batch.privateOwnerAt(index);
   }
 }

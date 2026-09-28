@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.format.catalog.CatalogKeyspace;
+import io.riverdb.format.page.PageCodec;
 
 /** Stateless validation of one relational registry transition. */
 final class IndexedRelationalSuboperationTransitions {
@@ -35,7 +36,8 @@ final class IndexedRelationalSuboperationTransitions {
     if (descriptor < 0) return expectedCursor == 0 && resultingCursor == 0;
     boolean expectedValid = expectedState == IndexedRelationalSuboperations.REGISTRY_DROPPING
         && expectedRoot == 0
-            ? expectedCursor >= 4 && expectedCursor <= expectedNextPage
+            ? expectedCursor >= PageCodec.FIRST_ALLOCATABLE_PAGE_ID
+                && expectedCursor <= expectedNextPage
             : expectedCursor == 0;
     if (!expectedValid) return false;
     if (resultingState != IndexedRelationalSuboperations.REGISTRY_DROPPING || resultingRoot != 0) {
@@ -45,7 +47,7 @@ final class IndexedRelationalSuboperationTransitions {
               || expectedCursor <= expectedNextPage);
     }
     if (expectedState != IndexedRelationalSuboperations.REGISTRY_DROPPING || expectedRoot != 0) {
-      return resultingCursor == 4;
+      return resultingCursor == PageCodec.FIRST_ALLOCATABLE_PAGE_ID;
     }
     return resultingCursor > expectedCursor && resultingCursor <= resultingNextPage;
   }

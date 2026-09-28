@@ -35,8 +35,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 final class IndexedFreePageDurableRecoveryTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(941, 947);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
-  private static final int FIRST_FREE_PAGE_ID = 4;
-  private static final int LAST_FREE_PAGE_ID = 6;
+  private static final int FIRST_FREE_PAGE_ID = 5;
+  private static final int LAST_FREE_PAGE_ID = 7;
   private static final int PAGE_COUNT = 4;
   private static final int CHECKSUM_OFFSET = 120;
   private static final int CHECKSUM_COMPLEMENT_OFFSET = 124;
@@ -96,7 +96,7 @@ final class IndexedFreePageDurableRecoveryTest {
         IndexedTableStore.openExisting(
             directory, wal, DATABASE, GENERATION, databaseProviderLease(1), reopened));
     assertNotNull(reopened.store());
-    assertEquals(3, reopened.store().pageCount());
+    assertEquals(4, reopened.store().pageCount());
     assertEquals(StatusCode.OK, reopened.store().validate());
     assertEquals(StatusCode.OK, reopened.store().close());
     assertEquals(StatusCode.OK, wal.close());
@@ -126,7 +126,7 @@ final class IndexedFreePageDurableRecoveryTest {
         PageCodec.MAX_PAYLOAD_BYTES, recordStart, recordEnd);
     for (int pageId = FIRST_FREE_PAGE_ID; pageId <= LAST_FREE_PAGE_ID; pageId++) {
       ByteBuffer page = freePages[pageId];
-      if (corruption == FreeStackCorruption.CHAIN_MEMBER_NON_FREE && pageId == 5) {
+      if (corruption == FreeStackCorruption.CHAIN_MEMBER_NON_FREE && pageId == 6) {
         page = leaf;
         freePages[pageId] = page;
         encodeExisting(page, pageId, PageCodec.PAYLOAD_KIND_SCALAR_BTREE, 0,
@@ -137,11 +137,11 @@ final class IndexedFreePageDurableRecoveryTest {
       }
     }
     if (corruption == FreeStackCorruption.FREE_PAGE_WRONG_OWNER) {
-      FormatBytes.putLong(freePages[5], 88, 1_000);
-      refreshChecksum(freePages[5]);
+      FormatBytes.putLong(freePages[6], 88, 1_000);
+      refreshChecksum(freePages[6]);
     } else if (corruption == FreeStackCorruption.NONZERO_FREE_REMAINDER) {
-      freePages[5].put(PageCodec.HEADER_BYTES + PageCodec.FREE_PAYLOAD_BYTES, (byte) 1);
-      refreshChecksum(freePages[5]);
+      freePages[6].put(PageCodec.HEADER_BYTES + PageCodec.FREE_PAYLOAD_BYTES, (byte) 1);
+      refreshChecksum(freePages[6]);
     }
 
     ByteBuffer payload = reservation.writablePayload();
@@ -211,8 +211,8 @@ final class IndexedFreePageDurableRecoveryTest {
 
   private static byte[][] readBasePages(Path root) throws IOException {
     byte[] encoded = Files.readAllBytes(root.resolve(IndexedTableStore.FILE_NAME));
-    assertEquals(3 * PageCodec.PAGE_BYTES, encoded.length);
-    byte[][] pages = new byte[3][PageCodec.PAGE_BYTES];
+    assertEquals(4 * PageCodec.PAGE_BYTES, encoded.length);
+    byte[][] pages = new byte[4][PageCodec.PAGE_BYTES];
     for (int index = 0; index < pages.length; index++) {
       System.arraycopy(encoded, index * PageCodec.PAGE_BYTES, pages[index], 0, PageCodec.PAGE_BYTES);
       assertEquals(
@@ -299,7 +299,7 @@ final class IndexedFreePageDurableRecoveryTest {
     CYCLE_OR_DUPLICATE_LINK {
       @Override
       void apply(ByteBuffer root, ByteBuffer leaf, ByteBuffer[] freePages) {
-        FormatBytes.putInt(payload(freePages[5]), 0, 6);
+        FormatBytes.putInt(payload(freePages[6]), 0, 7);
       }
     },
     HEAD_COUNT_MISMATCH {
@@ -311,14 +311,14 @@ final class IndexedFreePageDurableRecoveryTest {
     OUT_OF_RANGE_LINK {
       @Override
       void apply(ByteBuffer root, ByteBuffer leaf, ByteBuffer[] freePages) {
-        FormatBytes.putInt(payload(freePages[6]), 0, 7);
+        FormatBytes.putInt(payload(freePages[7]), 0, 8);
       }
     },
     ORPHAN_FREE_PAGE {
       @Override
       void apply(ByteBuffer root, ByteBuffer leaf, ByteBuffer[] freePages) {
         FormatBytes.putInt(payload(root), 24, 2);
-        FormatBytes.putInt(payload(freePages[5]), 0, 0);
+        FormatBytes.putInt(payload(freePages[6]), 0, 0);
       }
     },
     CHAIN_MEMBER_NON_FREE,

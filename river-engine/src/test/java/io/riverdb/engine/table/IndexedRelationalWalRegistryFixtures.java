@@ -53,7 +53,7 @@ final class IndexedRelationalWalRegistryFixtures {
   }
 
   static void assertRecoveredRegistry(IndexedTableStore store) {
-    assertRecoveredRegistry(store, 1_000, 4, OWNER_OBJECT_ID);
+    assertRecoveredRegistry(store, 1_000, 5, OWNER_OBJECT_ID);
   }
 
   static void assertRecoveredRegistry(
@@ -128,13 +128,13 @@ final class IndexedRelationalWalRegistryFixtures {
   static void checkDuplicateReachability(IndexedPageSet pages, int nextPageId) {
     IndexedTupleValidationProvider provider = new IndexedTupleValidationProvider(pages);
     TupleBTreePageReference reference = new TupleBTreePageReference();
-    requireOk(provider.configure(4, 1_000, nextPageId));
-    requireOk(provider.visit(4));
-    requireOk(provider.pin(4, false, reference));
+    requireOk(provider.configure(BTreeRootPage.FIRST_REUSABLE_PAGE_ID, 1_000, nextPageId));
+    requireOk(provider.visit(BTreeRootPage.FIRST_REUSABLE_PAGE_ID));
+    requireOk(provider.pin(BTreeRootPage.FIRST_REUSABLE_PAGE_ID, false, reference));
     requireOk(provider.release(reference));
     reference.reset();
-    requireOk(provider.configure(4, 1_000, nextPageId));
-    check(provider.visit(4) == StatusCode.CORRUPTION,
+    requireOk(provider.configure(BTreeRootPage.FIRST_REUSABLE_PAGE_ID, 1_000, nextPageId));
+    check(provider.visit(BTreeRootPage.FIRST_REUSABLE_PAGE_ID) == StatusCode.CORRUPTION,
         "tuple page reached twice across graphs");
   }
 

@@ -2,6 +2,8 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
+import io.riverdb.format.catalog.CatalogKeyspace;
+import io.riverdb.format.page.LogicalHeadPageCodec;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -21,8 +23,10 @@ final class IndexedTableVacuum {
   private final IndexedVersionRecord sourceVersion = new IndexedVersionRecord();
   private int encodedRows;
   private int outputOffset;
-  private long lastSpace;
-  private long lastKey;
+  private long lastScalarSpace;
+  private long lastScalarKey;
+  private boolean hasLastScalar;
+  private boolean headEntriesStarted;
 
   IndexedTableVacuum(
       IndexedTableKernel table,
@@ -114,8 +118,8 @@ final class IndexedTableVacuum {
   StatusCode beginApply() {
     StatusCode status = publicationAdmission.admit();
     if (!status.isOk()) return status;
-    lastSpace = 0;
-    lastKey = 0;
+    hasLastScalar = false;
+    headEntriesStarted = false;
     return shadow.begin();
   }
 
@@ -128,10 +132,12 @@ final class IndexedTableVacuum {
     long oldRowId = IndexedWalCodec.vacuumEntryRowId(payload, entryOffset);
     int rowBytes = IndexedWalCodec.vacuumEntryRowBytes(payload, entryOffset);
     boolean deleted = IndexedWalCodec.vacuumEntryDeleted(payload, entryOffset);
-    if (!OrderedKey.isFiniteSpace(space)
-        || (compactedRowId > 1
-            && !OrderedKey.lessThan(lastSpace, lastKey, space, key))
-        || oldRowId <= 0) {
+    if (!OrderedKey.isFiniteSpace(space) || oldRowId <= 0) {
+      return StatusCode.CORRUPTION;
+    }
+    boolean base = CatalogKeyspace.isRelationalBaseRowSpace(space);
+    if (!base && (headEntriesStarted
+        || hasLastScalar && !OrderedKey.lessThan(lastScalarSpace, lastScalarKey, space, key))) {
       return StatusCode.CORRUPTION;
     }
     StatusCode status = table.validateVacuumHead(
@@ -146,16 +152,26 @@ final class IndexedTableVacuum {
         rowBytes,
         heapInsert);
     if (status.isOk()) {
-      ByteBuffer leaf = shadow.leaf(table.validatedLeafPageId());
-      if (leaf == null) return shadow.lastStatus();
-      status = BTreePage.updateLeaf(leaf, space, key, compactedRowId);
+      if (base) {
+        status = shadow.rewriteHead(
+            table.validatedHeadLeafPageId(), table.validatedHeadSlot(),
+            oldRowId, compactedRowId);
+      } else {
+        ByteBuffer leaf = shadow.leaf(table.validatedLeafPageId());
+        if (leaf == null) return shadow.lastStatus();
+        status = BTreePage.updateLeaf(leaf, space, key, compactedRowId);
+      }
     }
     if (status.isOk()) {
       status = versions.recordVacuumDeleted(compactedRowId, deleted);
     }
     if (status.isOk()) {
-      lastSpace = space;
-      lastKey = key;
+      if (base) headEntriesStarted = true;
+      else {
+        lastScalarSpace = space;
+        lastScalarKey = key;
+        hasLastScalar = true;
+      }
     }
     return status;
   }
@@ -170,8 +186,8 @@ final class IndexedTableVacuum {
 
   void resetApply() {
     shadow.reset();
-    lastSpace = 0;
-    lastKey = 0;
+    hasLastScalar = false;
+    headEntriesStarted = false;
   }
 
 }

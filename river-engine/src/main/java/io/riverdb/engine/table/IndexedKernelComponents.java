@@ -12,6 +12,7 @@ final class IndexedKernelComponents {
   final IndexedTableIndexTree indexTree;
   final IndexedTableMutationStager mutationStager;
   final IndexedKernelVisibility visibility;
+  final IndexedLogicalHeadDirectory heads;
   final IndexedKernelCapacity capacity;
 
   IndexedKernelComponents(
@@ -25,8 +26,9 @@ final class IndexedKernelComponents {
     vacuum = new IndexedTableVacuum(kernel, pages, versions, heapInsert);
     entryCounter = new IndexedEntryCounter(pages);
     indexTree = new IndexedTableIndexTree(pages);
+    heads = new IndexedLogicalHeadDirectory(kernel, pages);
     mutationStager = new IndexedTableMutationStager(kernel, pages);
-    visibility = new IndexedKernelVisibility(pages, versions, rows, indexTree);
+    visibility = new IndexedKernelVisibility(pages, versions, rows, indexTree, heads);
     capacity = new IndexedKernelCapacity(pages);
   }
 }

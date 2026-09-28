@@ -12,11 +12,13 @@ public final class PageCodec {
   public static final int PAGE_BYTES = 16 * 1024;
   public static final int HEADER_BYTES = 128;
   public static final int MAX_PAYLOAD_BYTES = PAGE_BYTES - HEADER_BYTES;
+  public static final int FIRST_ALLOCATABLE_PAGE_ID = 5;
   public static final int VERSION = 4;
   public static final int PAGE_TYPE_SYNTHETIC = 1;
   public static final int PAYLOAD_KIND_SCALAR_BTREE = 1;
   public static final int PAYLOAD_KIND_TUPLE_BTREE = 2;
   public static final int PAYLOAD_KIND_FREE = 3;
+  public static final int PAYLOAD_KIND_LOGICAL_HEAD = 4;
   public static final int FREE_PAYLOAD_BYTES = Integer.BYTES;
   public static final long SCALAR_OWNER_KEY_ID = 0;
 

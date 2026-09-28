@@ -3,6 +3,8 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
 import io.riverdb.format.page.PageCodec;
+import io.riverdb.format.page.LogicalHeadPageCodec;
+import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.btree.BTreeStructuralLimits;
@@ -18,10 +20,12 @@ final class IndexedTableKernel extends IndexedKernelVersions {
   static final int HEAP_PAGE_ID = 1;
   static final int ROOT_META_PAGE_ID = 2;
   static final int INITIAL_LEAF_PAGE_ID = 3;
+  static final int HEAD_TABLE_ROOT_PAGE_ID = 4;
 
   private final IndexedPageSet pages;
   private final HeapInsertResult heapInsert = new HeapInsertResult();
   private final IndexedVersionRecord versionRecord = new IndexedVersionRecord();
+  private final IndexedHeadLookupResult vacuumHead = new IndexedHeadLookupResult();
   private final IndexedKernelComponents components;
   private final IndexedStagedPageAllocation stagedAllocation =
       new IndexedStagedPageAllocation();
@@ -319,15 +323,23 @@ final class IndexedTableKernel extends IndexedKernelVersions {
     ByteBuffer heap = pages.stageNew(HEAP_PAGE_ID, IndexedTableLimits.MAX_CHANGED_PAGES);
     ByteBuffer metadata = pages.stageNew(ROOT_META_PAGE_ID, IndexedTableLimits.MAX_CHANGED_PAGES);
     ByteBuffer leaf = pages.stageNew(INITIAL_LEAF_PAGE_ID, IndexedTableLimits.MAX_CHANGED_PAGES);
-    if (heap == null || metadata == null || leaf == null) {
+    ByteBuffer headRoot = pages.stageNew(
+        HEAD_TABLE_ROOT_PAGE_ID, IndexedTableLimits.MAX_CHANGED_PAGES,
+        PageCodec.PAYLOAD_KIND_LOGICAL_HEAD, 0);
+    if (heap == null || metadata == null || leaf == null || headRoot == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = HeapPage.initialize(heap);
     if (status.isOk()) {
-      status = BTreeRootPage.initialize(metadata, INITIAL_LEAF_PAGE_ID, 4);
+      status = BTreeRootPage.initialize(metadata, INITIAL_LEAF_PAGE_ID, 5);
     }
     if (status.isOk()) {
       status = BTreePage.initializeLeaf(leaf, 0);
+    }
+    if (status.isOk()) {
+      status = LogicalHeadPageCodec.initialize(
+          headRoot, LogicalHeadPageCodec.TABLE_BRANCH, 0, 0,
+          LogicalHeadPageCodec.TABLE_ROOT_LEVEL);
     }
     return status;
   }
@@ -501,6 +513,15 @@ final class IndexedTableKernel extends IndexedKernelVersions {
     return components.visibility.nextScan(cursor, result, rowCount);
   }
 
+  StatusCode findHeadLeafAtOrAfter(
+      long tableId, long minimumOrdinal, IndexedHeadLeafResult result) {
+    return components.heads.findLeafAtOrAfter(tableId, minimumOrdinal, result);
+  }
+
+  StatusCode nextHeadTableAtOrAfter(long minimumTableId, IndexedHeadTableRoot result) {
+    return components.heads.nextTableAtOrAfter(minimumTableId, result);
+  }
+
   StatusCode prepareMutation(
       long visibleCommitSequence,
       long space,
@@ -652,9 +673,20 @@ final class IndexedTableKernel extends IndexedKernelVersions {
 
   StatusCode validateVacuumHead(
       long space, long key, long oldRowId, long compactedRowId) {
+    if (CatalogKeyspace.isRelationalBaseRowSpace(space)) {
+      StatusCode status = components.heads.lookup(
+          space - CatalogKeyspace.FIRST_RELATIONAL_SPACE, key, vacuumHead);
+      return status.isOk()
+          && (vacuumHead.rowId() == oldRowId
+              || vacuumHead.rowId() == compactedRowId)
+          ? StatusCode.OK : StatusCode.CORRUPTION;
+    }
     return components.mutationValidator.validateVacuumAt(
         findLeafPageId(space, key), space, key, oldRowId, compactedRowId);
   }
+
+  int validatedHeadLeafPageId() { return vacuumHead.leafPageId(); }
+  int validatedHeadSlot() { return vacuumHead.slot(); }
 
   int findLeafPageId(long space, long key) {
     return components.indexTree.findLeafPageId(space, key);

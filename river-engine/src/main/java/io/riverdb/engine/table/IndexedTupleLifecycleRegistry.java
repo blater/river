@@ -70,7 +70,8 @@ final class IndexedTupleLifecycleRegistry {
 
   StatusCode stageDropping(IndexedTupleIndexLifecycleBatch batch, int index) {
     return next(batch, index, TupleIndexRootRecordCodec.STATE_DROPPING,
-        0, batch.privateOwnerAt(index), 4);
+        0, batch.privateOwnerAt(index),
+        io.riverdb.storage.btree.BTreeRootPage.FIRST_REUSABLE_PAGE_ID);
   }
 
   StatusCode stageReclaim(

@@ -365,26 +365,26 @@ final class IndexedRelationalWalRecoveryTest {
 
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     long hash = descriptorHash(descriptor);
-    appendRootGroup(wal, descriptor, hash, 2, 0, 4, 0, 1,
+    appendRootGroup(wal, descriptor, hash, 2, 0, 5, 0, 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
-        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 4, 5);
-    appendRootGroup(wal, descriptor, hash, 3, 4, 4, 1, 2,
+        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 5, 6);
+    appendRootGroup(wal, descriptor, hash, 3, 5, 5, 1, 2,
         IndexedRelationalSuboperations.REGISTRY_BUILDING,
-        IndexedRelationalSuboperations.REGISTRY_READY, 2, 0, 5, 5);
+        IndexedRelationalSuboperations.REGISTRY_READY, 2, 0, 6, 6);
     appendTupleInsertGroup(wal, descriptor, hash);
     int[] secondDescriptor = {SqlTypeDescriptor.varchar(16)};
     long secondHash = descriptorHash(secondDescriptor);
     appendRootGroup(wal, secondDescriptor, secondHash, SECOND_OWNER_OBJECT_ID,
-        1_001, 1_001, 5, 0, 5, 0, 1,
+        1_001, 1_001, 5, 0, 6, 0, 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
-        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 5, 5, 6, 3);
+        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 5, 6, 7, 3);
     appendRootGroup(wal, secondDescriptor, secondHash, SECOND_OWNER_OBJECT_ID,
-        1_001, 1_001, 6, 5, 5, 1, 2,
+        1_001, 1_001, 6, 6, 6, 1, 2,
         IndexedRelationalSuboperations.REGISTRY_BUILDING,
-        IndexedRelationalSuboperations.REGISTRY_READY, 5, 0, 6, 6, 4);
+        IndexedRelationalSuboperations.REGISTRY_READY, 5, 0, 7, 7, 4);
     appendTupleInsertGroup(
         wal, secondDescriptor, secondHash, SECOND_OWNER_OBJECT_ID,
-        1_001, 1_001, 5, 7, 3, 5, physicalTextTuple(2, "second"));
+        1_001, 1_001, 6, 7, 3, 5, physicalTextTuple(2, "second"));
     appendBaseInsertGroup(wal, 8, 6);
     requireOk(wal.close());
     requireOk(directory.close());
@@ -394,7 +394,7 @@ final class IndexedRelationalWalRecoveryTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistry(reopened.store());
-    assertRecoveredRegistry(reopened.store(), 1_001, 5, SECOND_OWNER_OBJECT_ID);
+    assertRecoveredRegistry(reopened.store(), 1_001, 6, SECOND_OWNER_OBJECT_ID);
     HeapRowResult base = new HeapRowResult();
     requireOk(reopened.store().fetchByKey(
         CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID),
@@ -406,7 +406,7 @@ final class IndexedRelationalWalRecoveryTest {
     check(vacuum.rowsBefore() == 7 && vacuum.rowsAfter() == 3,
         "tuple leaf entries inflated scalar vacuum retention");
     assertRecoveredRegistry(reopened.store());
-    assertRecoveredRegistry(reopened.store(), 1_001, 5, SECOND_OWNER_OBJECT_ID);
+    assertRecoveredRegistry(reopened.store(), 1_001, 6, SECOND_OWNER_OBJECT_ID);
     requireOk(reopened.store().fetchByKey(
         CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID),
         1, base));
@@ -422,7 +422,7 @@ final class IndexedRelationalWalRecoveryTest {
     reopened.reset();
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistry(reopened.store());
-    assertRecoveredRegistry(reopened.store(), 1_001, 5, SECOND_OWNER_OBJECT_ID);
+    assertRecoveredRegistry(reopened.store(), 1_001, 6, SECOND_OWNER_OBJECT_ID);
     requireOk(reopened.store().close());
     requireOk(wal.close());
     requireOk(directory.close());
@@ -448,7 +448,7 @@ final class IndexedRelationalWalRecoveryTest {
             descriptor, hash, OWNER_OBJECT_ID, 1_000,
             0, 0, 0, 1, 0, 1,
             IndexedRelationalMutation.REGISTRY_ABSENT,
-            IndexedRelationalMutation.REGISTRY_BUILDING, 0, 2, 4, 4),
+            IndexedRelationalMutation.REGISTRY_BUILDING, 0, 2, 5, 5),
         new IndexedCommitResult()));
     int tuples = 80;
     long prediction = predictTupleInsert(created.store(), descriptor, 0, 1, tuples, 'w');
@@ -459,7 +459,7 @@ final class IndexedRelationalWalRecoveryTest {
         "mid-DROP fixture did not leave an unreclaimed suffix");
     requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 181, liveTupleInsertMutation(
-            descriptor, hash, 0, tupleRoot, 4, nextPage, 1, 1, 1, tuples, 'w'),
+            descriptor, hash, 0, tupleRoot, 5, nextPage, 1, 1, 1, tuples, 'w'),
         new IndexedCommitResult()));
     requireOk(created.store().flush());
     requireOk(created.store().close());

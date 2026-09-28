@@ -122,7 +122,7 @@ final class IndexedRelationalWalRecordFixtures {
     requireOk(mutations.appendDescriptor(
         OWNER_OBJECT_ID, 1_000, 1_000, hash, descriptor, 0, 1));
     requireOk(mutations.appendSuboperation(
-        OWNER_OBJECT_ID, 0, 0, 1, 4, 4, SCALAR_ROOT, SCALAR_ROOT, 5, 5,
+        OWNER_OBJECT_ID, 0, 0, 1, 5, 5, SCALAR_ROOT, SCALAR_ROOT, 6, 6,
         2, 3, 2, 3, IndexedRelationalSuboperations.REGISTRY_READY,
         IndexedRelationalSuboperations.REGISTRY_READY, 0, 0));
     requireOk(mutations.appendTuple(
@@ -141,7 +141,7 @@ final class IndexedRelationalWalRecordFixtures {
     requireOk(mutations.appendDescriptor(
         owner, keyId, schemaId, hash, descriptor, 0, descriptor.length));
     requireOk(mutations.appendSuboperation(
-        owner, 0, 0, 1, root, root, SCALAR_ROOT, SCALAR_ROOT, 6, 6,
+        owner, 0, 0, 1, root, root, SCALAR_ROOT, SCALAR_ROOT, 7, 7,
         resultingGeneration - 1, resultingGeneration, expectedHeap, expectedHeap + 1,
         IndexedRelationalSuboperations.REGISTRY_READY,
         IndexedRelationalSuboperations.REGISTRY_READY, 0, 0));
@@ -159,7 +159,7 @@ final class IndexedRelationalWalRecordFixtures {
     requireOk(mutations.reserve(1, 0, 0, Long.BYTES));
     requireOk(mutations.appendLogicalRowFloor(OWNER_OBJECT_ID, 2));
     requireOk(mutations.appendSuboperation(
-        OWNER_OBJECT_ID, -1, 0, 1, 0, 0, SCALAR_ROOT, SCALAR_ROOT, 6, 6,
+        OWNER_OBJECT_ID, -1, 0, 1, 0, 0, SCALAR_ROOT, SCALAR_ROOT, 7, 10,
         0, 0, expectedHeap, expectedHeap + 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
         IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
@@ -178,7 +178,7 @@ final class IndexedRelationalWalRecordFixtures {
     for (int index = 0; index < 384; index++) {
       requireOk(mutations.appendSuboperation(
           OWNER_OBJECT_ID, -1, index, 1, 0, 0,
-          SCALAR_ROOT, SCALAR_ROOT, 6, 6, 0, 0, 3 + index, 4 + index,
+          SCALAR_ROOT, SCALAR_ROOT, 10, 10, 0, 0, 3 + index, 4 + index,
           IndexedRelationalSuboperations.REGISTRY_ABSENT,
           IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
       requireOk(mutations.appendBase(
