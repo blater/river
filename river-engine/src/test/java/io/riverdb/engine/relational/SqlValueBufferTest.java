@@ -1,4 +1,4 @@
-package io.riverdb.engine.row;
+package io.riverdb.engine.relational;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;

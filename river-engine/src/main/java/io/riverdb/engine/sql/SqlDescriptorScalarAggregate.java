@@ -54,7 +54,7 @@ final class SqlDescriptorScalarAggregate {
     return accumulators.reset(shape.bound());
   }
 
-  StatusCode accumulate(io.riverdb.engine.row.SqlValueBuffer values) {
+  StatusCode accumulate(io.riverdb.engine.relational.SqlValueBuffer values) {
     StatusCode status = input.load(values);
     if (status.isOk()) status = materialization.project(input.row(), projected);
     return status.isOk()

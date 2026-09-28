@@ -35,7 +35,7 @@ final class SqlBlockPhysicalRowDecoding {
     if (plans != null) {
       for (int column = 0; column < columns; column++) {
         if (table.isVarchar(column)) {
-          textRequired[column] = plans.physicalTextUsed(table, column);
+          textRequired[column] = plans.physicalColumnLive(column);
         }
       }
     }

@@ -11,7 +11,6 @@ import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.KeyDescriptor;
@@ -21,6 +20,7 @@ import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.engine.table.IndexedRelationalMutation;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.format.catalog.CatalogKeyspace;
+import io.riverdb.sql.SqlComparison;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import java.nio.file.Path;
@@ -600,6 +600,64 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(2, inserted.logicalRowId());
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void embeddedDescriptorInsertRejectsUnadmittedText(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        textDescriptor(), table, new StatusDetail(128)));
+    SqlValueBuffer values = new SqlValueBuffer();
+    assertEquals(StatusCode.OK, values.reserve(2, 2, 8, 8));
+    assertEquals(StatusCode.OK, values.clearForSize(2));
+    assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, 1));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        values.setTextBytes(1, SqlTypeDescriptor.varchar(64),
+            ByteBuffer.wrap(new byte[] {(byte) 0xc0}), 0, 1));
+
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        session.descriptorRows().insert(table, values, new RelationalRowIdentityResult()));
+    assertEquals(0, session.indexedSession().pendingMutationCount());
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void publicScanRejectsOutOfRangeIntegerFilter(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        textDescriptor(), table, new StatusDetail(128)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, textValues(1, "safe"), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, session.descriptorRows().beginScan(table, cursor));
+    StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
+    assertEquals(StatusCode.OK, filter.configure(2, SqlComparison.EQUAL, 1));
+    SqlValueBuffer output = new SqlValueBuffer();
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.descriptorRows().nextScan(
+        cursor, output, new RelationalRowIdentityResult(), filter));
+    assertEquals(0, output.count());
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
   }
 

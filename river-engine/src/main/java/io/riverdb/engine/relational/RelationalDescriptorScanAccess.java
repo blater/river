@@ -3,10 +3,8 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
-import io.riverdb.engine.row.StoredTableRowFilter;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.tx.api.lock.LockMode;
@@ -79,14 +77,14 @@ final class RelationalDescriptorScanAccess {
   StatusCode next(
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination, RelationalRowIdentityResult result,
-      StoredTableRowFilter filter) {
+      StoredTableRowIntegerFilter filter) {
     return next(owner, cursor, destination, result, filter, true);
   }
 
   StatusCode next(
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination, RelationalRowIdentityResult result,
-      StoredTableRowFilter filter, boolean publishText) {
+      StoredTableRowIntegerFilter filter, boolean publishText) {
     if (cursor == null || destination == null || result == null || !cursor.matches(owner)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

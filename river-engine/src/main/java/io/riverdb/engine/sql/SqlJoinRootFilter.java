@@ -2,7 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.row.StoredTableRowIntegerFilter;
+import io.riverdb.engine.relational.StoredTableRowIntegerFilter;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
@@ -104,8 +104,8 @@ final class SqlJoinRootFilter {
           ? where.comparison(leaf) : where.comparison(leaf).reverseOrder();
       if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN
           || comparison == SqlComparison.HALF_OPEN_RANGE) continue;
-      integerFilter.configure(column, comparison, where.operand(leaf, right, 0));
-      return;
+      if (integerFilter.configure(
+          column, comparison, where.operand(leaf, right, 0)).isOk()) return;
     }
   }
 

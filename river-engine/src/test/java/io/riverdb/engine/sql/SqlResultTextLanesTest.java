@@ -39,5 +39,10 @@ final class SqlResultTextLanesTest {
     assertEquals(1, lanes.byteLength(0));
     assertEquals(-1, lanes.length(0));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, lanes.setUtf8(0, bytes, 1, 1));
+    assertEquals(1, lanes.byteLength(0));
+    HeapRowResult row = new HeapRowResult();
+    row.set(bytes, 1, 0, 1);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, lanes.setUtf8(0, row, 1, 1));
+    assertEquals(1, lanes.byteLength(0));
   }
 }

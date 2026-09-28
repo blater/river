@@ -2,7 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.row.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
 
 /** Reusable conversion from descriptor storage values to one expression block row. */

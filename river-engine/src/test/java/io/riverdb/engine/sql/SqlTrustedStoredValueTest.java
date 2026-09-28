@@ -14,7 +14,6 @@ import io.riverdb.engine.relational.RelationalSessionOpenResult;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlParser;
-import io.riverdb.sql.SqlQuery;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -111,7 +110,7 @@ final class SqlTrustedStoredValueTest {
   }
 
   @Test
-  void numericBlockReadSkipsUnusedStoredText(@TempDir Path root) {
+  void blockReadUsesTransitivePhysicalColumnDemand(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK, RelationalDatabase.create(
         databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
@@ -124,7 +123,15 @@ final class SqlTrustedStoredValueTest {
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult selected = new SqlScanRowResult();
     assertEquals(StatusCode.OK, sql.beginScan(
-        "SELECT quantity FROM (SELECT quantity FROM block_values) block_source", cursor));
+        "SELECT quantity FROM "
+            + "(SELECT quantity,label FROM block_values) block_source", cursor));
+    assertEquals(StatusCode.OK, sql.nextScan(cursor, selected));
+    assertEquals(5, selected.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, sql.nextScan(cursor, selected));
+    assertEquals(StatusCode.OK, sql.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, sql.beginScan(
+        "SELECT q FROM "
+            + "(SELECT quantity AS q,label AS l FROM block_values) block_source", cursor));
     assertEquals(StatusCode.OK, sql.nextScan(cursor, selected));
     assertEquals(5, selected.valueAt(0));
     assertEquals(StatusCode.CONFLICT, sql.nextScan(cursor, selected));
@@ -158,35 +165,97 @@ final class SqlTrustedStoredValueTest {
 
     SqlBlockPhysicalRowDecoding decoder = new SqlBlockPhysicalRowDecoding();
     SqlBlockRow row = new SqlBlockRow();
-    SqlBoundBlockPlans plans = blockPlans(
-        "SELECT quantity FROM (SELECT quantity FROM block_values) block_source");
-    assertEquals(false, plans.physicalTextUsed(table, 2));
+    SqlBoundBlockPlans plans = blockPlans(raw,
+        "SELECT quantity FROM (SELECT quantity,label FROM block_values) block_source");
+    assertEquals(false, plans.physicalColumnLive(2));
     assertEquals(StatusCode.OK, decoder.prepare(table, row, plans));
     assertEquals(StatusCode.OK, decoder.read(1, damaged, table, row));
     assertEquals(5, row.value(1));
+    plans = blockPlans(raw,
+        "SELECT q FROM (SELECT quantity AS q,label AS l FROM block_values) block_source");
+    assertEquals(false, plans.physicalColumnLive(2));
+    assertEquals(StatusCode.OK, decoder.prepare(table, row, plans));
+    assertEquals(StatusCode.OK, decoder.read(1, damaged, table, row));
 
-    plans = blockPlans("SELECT label FROM (SELECT label FROM block_values) block_source");
-    assertEquals(true, plans.physicalTextUsed(table, 2));
-    assertEquals(StatusCode.OK, decoder.prepare(table, row, plans));
-    assertEquals(StatusCode.CORRUPTION, decoder.read(1, damaged, table, row));
-    plans = blockPlans("SELECT quantity FROM "
-        + "(SELECT quantity FROM block_values WHERE label='多🙂') block_source");
-    assertEquals(true, plans.physicalTextUsed(table, 2));
-    assertEquals(StatusCode.OK, decoder.prepare(table, row, plans));
-    assertEquals(StatusCode.CORRUPTION, decoder.read(1, damaged, table, row));
+    String[] requiredText = {
+      "SELECT label FROM (SELECT label FROM block_values) block_source",
+      "SELECT quantity FROM "
+          + "(SELECT quantity,label FROM block_values) block_source WHERE label='多🙂'",
+      "SELECT quantity FROM "
+          + "(SELECT quantity FROM block_values WHERE label='多🙂') block_source",
+      "SELECT quantity FROM "
+          + "(SELECT quantity,label FROM block_values ORDER BY label) block_source",
+      "SELECT q FROM "
+          + "(SELECT quantity AS q,label AS l FROM block_values ORDER BY label) block_source",
+      "SELECT n FROM "
+          + "(SELECT label,COUNT(*) AS n FROM block_values GROUP BY label) block_source",
+      "SELECT n FROM "
+          + "(SELECT COUNT(label) AS n FROM block_values) block_source",
+      "SELECT n FROM "
+          + "(SELECT COUNT(*) AS n FROM block_values HAVING COUNT(label)>0) block_source",
+      "SELECT quantity FROM "
+          + "(SELECT DISTINCT quantity,label FROM block_values) block_source"
+    };
+    for (String query : requiredText) {
+      plans = blockPlans(raw, query);
+      assertEquals(true, plans.physicalColumnLive(2), query);
+      assertEquals(StatusCode.OK, decoder.prepare(table, row, plans), query);
+      assertEquals(StatusCode.CORRUPTION,
+          decoder.read(1, damaged, table, row), query);
+    }
     assertEquals(StatusCode.OK, raw.abort(outcome));
     assertEquals(StatusCode.OK, raw.close());
     assertEquals(StatusCode.OK, database.close());
   }
 
-  private static SqlBoundBlockPlans blockPlans(String sql) {
-    SqlQuery query = new SqlQuery();
-    SqlCommand command = new SqlCommand();
-    assertEquals(StatusCode.OK, new SqlParser().parseQuery(sql, query, command));
-    assertEquals(StatusCode.OK, query.promoteRootBlockPipeline(command));
-    SqlBoundBlockPlans plans = new SqlBoundBlockPlans(new SqlSessionShapeBudget(null));
-    assertEquals(StatusCode.OK, plans.capture(query));
-    return plans;
+  @Test
+  void selectAllRetainsAllPhysicalColumns() {
+    SqlCommand selectAll = new SqlCommand();
+    assertEquals(StatusCode.OK,
+        new SqlParser().parse("SELECT * FROM block_values", selectAll));
+    SqlBlockSchema base = new SqlBlockSchema();
+    base.set(3);
+    base.setColumn(0, "id", io.riverdb.base.type.SqlTypeDescriptor.BIGINT, false);
+    base.setColumn(1, "quantity", io.riverdb.base.type.SqlTypeDescriptor.INTEGER, false);
+    base.setColumn(2, "label", io.riverdb.base.type.SqlTypeDescriptor.varchar(8), false);
+    SqlBlockSchema output = new SqlBlockSchema();
+    output.copyFrom(base);
+    SqlBlockProjectionLiveness liveness = new SqlBlockProjectionLiveness();
+    liveness.prepare(new SqlCommand[] {selectAll}, new SqlBlockSchema[] {output}, base, 1);
+    assertEquals(true, liveness.physicalLive(2));
+  }
+
+  @Test
+  void aliasedInnerOrderColumnRemainsLive(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSession sql = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    execute(sql, result, "CREATE TABLE block_values ("
+        + "id BIGINT PRIMARY KEY,quantity INTEGER,label VARCHAR(8),CHECK(1=1))");
+    execute(sql, result, "INSERT INTO block_values VALUES (1,5,'z'),(2,7,'a')");
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult selected = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, sql.beginScan(
+        "SELECT q FROM (SELECT quantity AS q,label AS l "
+            + "FROM block_values ORDER BY label LIMIT 1) s", cursor));
+    assertEquals(StatusCode.OK, sql.nextScan(cursor, selected));
+    assertEquals(7, selected.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, sql.nextScan(cursor, selected));
+    assertEquals(StatusCode.OK, sql.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, sql.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static SqlBoundBlockPlans blockPlans(RelationalSession session, String sql) {
+    BoundSqlStatement bound = new BoundSqlStatement();
+    assertEquals(StatusCode.OK,
+        new SqlParser().parseQuery(sql, bound.query, bound.command), sql);
+    assertEquals(StatusCode.OK, bound.query.promoteRootBlockPipeline(bound.command), sql);
+    assertEquals(StatusCode.OK, new SqlBlockPlanBinder(null).bind(session, bound, null), sql);
+    return bound.blockPlans();
   }
 
   private static SqlSession session(RelationalDatabase database) {

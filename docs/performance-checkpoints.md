@@ -1468,3 +1468,80 @@ accept the removal of repeated validation and unchanged-value conversion,
 with preserved admission, ownership and transaction semantics. This is a
 diagnostic baseline for the exact final build, not a general speedup or a new
 MariaDB comparison.
+
+## 2026-09-28 — elvenking completion checkpoint
+
+[tic-elvenking-completion](tickets/tic-elvenking-completion.md) closed the
+follow-up review findings on branch `feature/elvenking-completion`. The final
+production source is `775bcef62321c757e7e640b85b3437b9c741a1aa`, based on
+accepted control `7ac1246486dd7102732b208f6b91255ffd5ea1ef`. The public
+checked stored-row codec, duplicate validator and access token are gone. The
+remaining decoder and trusted setters are package-private beside the relational
+readers. A public mutable-row filter callback found during independent review
+was removed; the final integer filter validates its configuration before byte
+access. Physical text demand now comes from the block projection liveness pass.
+An independent two-row SQL review case showed aliased inner `ORDER BY` with
+`LIMIT 1` returned the wrong row before its liveness fix; it returns the
+expected row after both sorting and liveness use one ordinal resolver.
+
+The integrated focused run covered eight row/value/SQL classes: 54 tests, zero
+failures, errors or skips. `./gradlew --no-daemon clean check` passed on the
+final source in 3m 19s (156 tasks), including source and module policy checks.
+The independent correctness and ownership reviewer accepted the final filter,
+admission and ordering boundaries. Compact `slopmark` review found
+`SqlBlockProjectionLiveness` increased from 41.4697 to 117.85 while
+`SqlBoundBlockPlans` decreased from 35.1419 to 22.6209. The reviewer found one
+dependency-propagation responsibility in the liveness class and no useful split
+solely to reduce its score; the separate physical-name scan was deleted.
+
+The installed candidate copied the accepted control distribution and replaced
+only `river-engine-0.1.0-alpha.2.jar`: control SHA-256
+`cebbcedae27f2a6e074cbc59988a97d6f941e14ca03b14aa15a7e10d76854d60`,
+candidate SHA-256
+`bda95eaed636e692cd9c3a6ed783d3cb495a387d4df8b8165eb0ce4d2a7ae01c`.
+Harness `eba8ab0aeaef1ce8e1504c56a7f2688e6f14cdde` ran `sample
+stock-level`, one worker and warehouse, seed 42, retry limit 3, READ COMMITTED,
+durable local WAL, GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64 and loopback
+TCP/TLS. The command varied only executable/version and the two declared
+warmup/measured windows:
+
+```sh
+./benchmark run river tpcc sample stock-level \
+  --river-executable=BUILD/river --river-version=BUILD-LABEL \
+  --warmup=5s --duration=20s --workers=1 --warehouses=1 \
+  --seed=42 --max-retries=3
+```
+
+The longer investigation used `--warmup=10s --duration=60s`. A is control;
+B is the final source. Artifacts are under
+`/private/tmp/river-harness-stock-analyze/runs/`.
+
+| Window; order | Load (s) | TPS | p99 (ms) | Artifact ID |
+| --- | ---: | ---: | ---: | --- |
+| 5/20s; A1 | 1.54 | 12,440.894 | 0.120 | `river_harness_20260928_152756_46313fef` |
+| 5/20s; B1 | 1.60 | 12,214.206 | 0.127 | `river_harness_20260928_152835_deb4d089` |
+| 5/20s; A2 | 1.80 | 12,465.534 | 0.117 | `river_harness_20260928_152915_db872901` |
+| 5/20s; B2 | 1.79 | 12,268.431 | 0.121 | `river_harness_20260928_152950_e0246028` |
+| 10/60s; B1 | 1.52 | 12,407.778 | 0.118 | `river_harness_20260928_153116_3973bac8` |
+| 10/60s; A1 | 1.87 | 11,165.290 | 0.162 | `river_harness_20260928_153242_0f22da65` |
+| 10/60s; B2 | 2.42 | 10,383.175 | 0.143 | `river_harness_20260928_153408_0bfd9235` |
+| 10/60s; A2 | 3.06 | 10,613.185 | 0.145 | `river_harness_20260928_153531_5b5bf074` |
+
+All eight reports passed admission and invariants, had eligible comparison
+metadata, zero retries, failures and unknown commits, and one measured-window
+cancellation each. Each owned server stopped gracefully and the service state
+was inactive afterward. The schema catalogue SHA-256 was identical across all
+runs: `80ac1bf5e9da72957141ccc6ab45f113678fcd899dc358ca5018295426cd84f4`.
+Comparison keys matched within the 5/20s and 10/60s groups, respectively
+`37c65e278707f8ea43973a40aa1b3c1159c5b660f24efe130345363ce22c44dd`
+and `b6ced1fe906f2232bea7ad355afe8923d345519cfc8ba5f60e5727e6e438478f`.
+
+The two short candidates were below adjacent controls by roughly 1.7%, which
+triggered longer interleaved runs. The longer sequence reversed direction in
+its first pair and then both builds slowed; load time rose from 1.52 to 3.06
+seconds and mean measured latency tracked the throughput decline. The user
+reported intermittent other host activity. These observations do not isolate
+its cause, but they do not show a repeated directional regression across both
+windows. **Decision:** accept the correctness and ownership fixes and the
+generic block-liveness mechanism, with no stable TPS gain claimed. This is a
+diagnostic checkpoint, not a new designated baseline or MariaDB comparison.

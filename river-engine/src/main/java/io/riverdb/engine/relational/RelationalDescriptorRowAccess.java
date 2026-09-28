@@ -1,9 +1,7 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
-import io.riverdb.engine.row.StoredTableRowFilter;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
@@ -29,13 +27,13 @@ final class RelationalDescriptorRowAccess {
 
   StatusCode fetch(
       IndexedTransactionSession session, TableDescriptor table,
-      long logicalRowId, SqlValueBuffer destination, StoredTableRowFilter filter) {
+      long logicalRowId, SqlValueBuffer destination, StoredTableRowIntegerFilter filter) {
     return fetch(session, table, logicalRowId, destination, filter, true);
   }
 
   StatusCode fetch(
       IndexedTransactionSession session, TableDescriptor table,
-      long logicalRowId, SqlValueBuffer destination, StoredTableRowFilter filter,
+      long logicalRowId, SqlValueBuffer destination, StoredTableRowIntegerFilter filter,
       boolean publishText) {
     fetched.reset();
     StatusCode status = session.fetchByKey(
@@ -52,13 +50,13 @@ final class RelationalDescriptorRowAccess {
 
   StatusCode decode(
       TableDescriptor table, long logicalRowId,
-      HeapRowResult source, SqlValueBuffer destination, StoredTableRowFilter filter) {
+      HeapRowResult source, SqlValueBuffer destination, StoredTableRowIntegerFilter filter) {
     return decode(table, logicalRowId, source, destination, filter, true);
   }
 
   StatusCode decode(
       TableDescriptor table, long logicalRowId,
-      HeapRowResult source, SqlValueBuffer destination, StoredTableRowFilter filter,
+      HeapRowResult source, SqlValueBuffer destination, StoredTableRowIntegerFilter filter,
       boolean publishText) {
     return buffer.decode(table, logicalRowId, source, destination, filter, publishText);
   }

@@ -11,25 +11,25 @@ numeric columns. Correct join ordering reduces the number of candidates but
 does not remove this work per candidate.
 
 The recommendation is to make indexed access return the required visible values
-with one key search, propagate column requirements into storage, and remove
-repeated semantic validation of trusted content. A clustered primary index is a
+with one key search and propagate column requirements into storage. Repeated
+semantic validation of trusted content was removed by
+[tic-elvenking](../tickets/tic-elvenking.md); that change did not remove the
+extra index search or full base-row fetch. A clustered primary index is a
 serious replacement candidate, not excluded because it changes durable formats.
 There is no backward-compatibility requirement: the selected implementation
 must replace its superseded path, formats and tests completely.
 
 ## Source and evidence boundary
 
-The accepted production code inspected was `f77bb51a`; its later evidence-only
-commit is `a8c50237681e790eeefbcef9bfa8e185e0b2f83d`. The drafting checkout is
-the older investigation snapshot `dd8baefb`. Code links below locate the relevant
-owners, but the accepted revision governs claims about the latest optimizations.
-The newer performance history and Stock Level ticket `tic-72e5` are available
-from that revision without changing this checkout:
-
-```sh
-git show a8c50237:docs/performance-checkpoints.md
-git show a8c50237:docs/tickets/tic-72e5.md
-```
+The original diagnosis inspected accepted production code `f77bb51a`; its
+later evidence-only commit is `a8c50237681e790eeefbcef9bfa8e185e0b2f83d`.
+The drafting checkout was the older investigation snapshot `dd8baefb`.
+Code links below locate the relevant owners. The trusted-value delivery was
+integrated at `75039adc`; its
+[completion review](../delivery/evidence/2026-09-28-tic-elvenking-completion-review.md)
+records the checks removed and the remaining indexed-read work.
+The current [performance history](../performance-checkpoints.md) and
+[Stock Level ticket](../tickets/tic-72e5.md) contain later evidence.
 
 The full profile has 100,000 stock rows and about 300,000 order-line rows per
 warehouse. Measurements used one worker/warehouse, seed 42, retry limit 3,
@@ -41,7 +41,7 @@ diagnostics, not audited TPC-C or an isolated storage-engine comparison.
 | --- | --- | --- |
 | Costed join order, `34ee0800` | Full-profile mean increased from 23.732 to 1,135.756 commits/s. | The earlier full-data join-order problem was real and is already addressed. |
 | Cached tuple-root records, `b17e0450` | Adjacent long-run means were 939.516 control and 1,204.348 candidate commits/s. | Repeated index-root metadata retrieval was material; root caching is already accepted. |
-| Omit unused text publication, `9fcd3007` | Adjacent means were 1,205.110 and 1,247.589 commits/s. | Avoiding some text work helped, but did not eliminate full-row access or validation. |
+| Omit unused text publication, `9fcd3007` | Adjacent means were 1,205.110 and 1,247.589 commits/s. | Avoiding some text work helped, but did not eliminate full-row access. Content validation was removed later. |
 | Latest accepted River baseline versus later MariaDB diagnostic | 1,234.227 versus 4,671.164 commits/s. | Roughly a 3.8-fold remaining target gap; the runs were not interleaved. |
 | Sampled join timing on accepted code | About 633 microseconds per aggregate execution, 615 in row production and 13 in aggregation. | Concentrate on producing join rows, rather than the final count operation. |
 
@@ -90,7 +90,7 @@ flowchart TD
   C --> D[MVCC version resolution]
   D --> E[Row directory: heap page and slot]
   E --> F[Heap fetch and retained row bytes]
-  F --> G[Row buffer copy and content validation]
+  F --> G[Row buffer copy and structural bounds checks]
   G --> H[Value buffer and SQL join row]
   H --> I[Predicate and aggregate]
 ```
@@ -108,7 +108,7 @@ not imply a disk read per stage.
 | [IndexedKernelVisibility](../../river-engine/src/main/java/io/riverdb/engine/table/IndexedKernelVisibility.java) | Searches the separate scalar B-tree, resolves MVCC visibility, then fetches the visible row. |
 | [IndexedKernelRowAccess](../../river-engine/src/main/java/io/riverdb/engine/table/IndexedKernelRowAccess.java) | Resolves a physical version's heap location and retains row bytes before releasing the page. |
 | [RelationalDescriptorRowBuffer](../../river-engine/src/main/java/io/riverdb/engine/relational/RelationalDescriptorRowBuffer.java) | Copies the retained row into another buffer before decoding. |
-| [StoredTableRowDecoder](../../river-engine/src/main/java/io/riverdb/engine/row/StoredTableRowDecoder.java) | Validates the complete stored row and publishes values; latest code can omit text publication but still validates text. |
+| [StoredTableRowDecoder](../../river-engine/src/main/java/io/riverdb/engine/relational/StoredTableRowDecoder.java) | Checks identity and required structural bounds, then publishes trusted values; numeric-only access omits text metadata. |
 | [SqlUniversalDescriptorJoinRow](../../river-engine/src/main/java/io/riverdb/engine/sql/SqlUniversalDescriptorJoinRow.java) | Copies published values into the SQL join-row representation. |
 
 The SQL primary index is therefore not the row store. Its leaf provides a
@@ -145,18 +145,18 @@ change should remove a measurable class of work, with a countable mechanism.
 
 ## Recommended changes
 
-### 1. Trust stored content and internal typed values
+### 1. Trust stored content and internal typed values — delivered
 
-Implement [tic-elvenking](../tickets/tic-elvenking.md) as the first independent
-change. Validate external input and new semantic results at their owning
-boundary. Do not repeatedly scan River-written text, unchanged numeric values
+The first independent change was delivered in
+[tic-elvenking](../tickets/tic-elvenking.md). Validate external input and new
+semantic results at their owning boundary. Do not repeatedly scan River-written
+text, unchanged numeric values
 or canonical padding during normal reads and updates. Keep lightweight bounds,
 identity, generation, visibility and lifetime checks where required.
 
-Updating `s_quantity` must not decode and re-encode every unchanged stock string
-through UTF-16. The current
-[SqlDescriptorMutationValues.copyFetched](../../river-engine/src/main/java/io/riverdb/engine/sql/SqlDescriptorMutationValues.java)
-does that. Preserve trusted typed bytes directly, checking newly assigned or
+Updating `s_quantity` no longer decodes and re-encodes unchanged stock strings
+through UTF-16; [SqlDescriptorMutationValues](../../river-engine/src/main/java/io/riverdb/engine/sql/SqlDescriptorMutationValues.java)
+copies trusted typed bytes directly, checking newly assigned or
 converted values against their actual target constraints. This is broader than
 skipping text in Stock Level and benefits read-modify-write workloads as well.
 
@@ -233,8 +233,8 @@ bypass MVCC, deletion or generation checks.
 
 ## Delivery and validation
 
-Deliver the validation change separately from projection and the selected
-durable storage replacement. Each accepted slice replaces its own superseded
+The validation change was delivered separately from the selected durable storage
+replacement. Each accepted slice replaces its own superseded
 mechanism completely. A durable replacement must change all production callers,
 write paths, format readers and recovery together; staged delivery is not
 permission to leave a second permanent engine. No legacy-format decoder,

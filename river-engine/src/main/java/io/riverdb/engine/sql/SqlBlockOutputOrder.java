@@ -69,7 +69,7 @@ final class SqlBlockOutputOrder {
     return false;
   }
 
-  private static int projection(
+  static int projection(
       SqlCommand command, SqlBlockSchema schema, int expression) {
     if (command.orderBy().qualifier(expression).length() > 0) {
       int projection = SqlProjectionBinder.resolveOrderProjection(command, expression);

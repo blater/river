@@ -1,4 +1,4 @@
-package io.riverdb.engine.row;
+package io.riverdb.engine.relational;
 
 import io.riverdb.base.column.ColumnBitSet;
 import io.riverdb.base.error.StatusCode;

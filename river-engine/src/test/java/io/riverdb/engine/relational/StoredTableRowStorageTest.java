@@ -1,4 +1,4 @@
-package io.riverdb.engine.row;
+package io.riverdb.engine.relational;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -12,6 +12,7 @@ import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.FormatBytes;
 import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import io.riverdb.storage.heap.HeapPage;
+import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.sql.SqlComparison;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
@@ -21,7 +22,7 @@ import java.util.Arrays;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
-final class StoredTableRowCodecTest {
+final class StoredTableRowStorageTest {
   private static final int START = 5;
   private static volatile long allocationGuard;
 
@@ -38,9 +39,8 @@ final class StoredTableRowCodecTest {
     SqlValueBuffer output = values(2, 16);
     assertEquals(StatusCode.OK, output.setFixed(0, SqlTypeDescriptor.SMALLINT, 7));
     StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
-    filter.configure(0, SqlComparison.LESS_THAN, 30);
-    StoredTableRowCodec codec = new StoredTableRowCodec();
-    assertEquals(StatusCode.CONFLICT, codec.decode(
+    assertEquals(StatusCode.OK, filter.configure(0, SqlComparison.LESS_THAN, 30));
+    assertEquals(StatusCode.CONFLICT, decodeTrusted(
         table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
     assertEquals(7, output.valueAt(0));
 
@@ -52,11 +52,45 @@ final class StoredTableRowCodecTest {
         table, 71, ByteBuffer.wrap(corrupt), START, encoded.length, output, filter));
     assertEquals(7, output.valueAt(0));
 
-    filter.configure(0, SqlComparison.LESS_OR_EQUAL, 40);
+    assertEquals(StatusCode.OK, filter.configure(0, SqlComparison.LESS_OR_EQUAL, 40));
     assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, encoded.length, output, filter));
     assertEquals(40, output.valueAt(0));
     assertEquals(0xc0, output.textByteAt(1, 0));
+  }
+
+  @Test
+  void invalidIntegerFilterNeverReadsOutsideTheFixedPrefix() {
+    int text = SqlTypeDescriptor.varchar(4);
+    TableDescriptor table = table(
+        new int[] {SqlTypeDescriptor.BIGINT, text}, new boolean[] {false, false});
+    SqlValueBuffer input = values(2, 16);
+    assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.BIGINT, 4));
+    assertEquals(StatusCode.OK, input.setText(1, text, "safe"));
+    Encoded encoded = encode(table, input);
+    SqlValueBuffer output = values(2, 16);
+    assertEquals(StatusCode.OK, output.setFixed(0, SqlTypeDescriptor.BIGINT, 9));
+    StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
+
+    assertEquals(StatusCode.OK, filter.configure(2, SqlComparison.EQUAL, 4));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(9, output.valueAt(0));
+
+    assertEquals(StatusCode.OK, filter.configure(1, SqlComparison.EQUAL, 4));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(9, output.valueAt(0));
+
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        filter.configure(0, SqlComparison.IN, 4));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        filter.configure(-1, SqlComparison.EQUAL, 4));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(9, output.valueAt(0));
   }
 
   @Test
@@ -71,9 +105,8 @@ final class StoredTableRowCodecTest {
     assertEquals(StatusCode.OK, input.setFixed(2, SqlTypeDescriptor.BOOLEAN, 1));
     Encoded encoded = encode(table, input);
     SqlValueBuffer output = values(3, 16);
-    StoredTableRowCodec codec = new StoredTableRowCodec();
 
-    assertEquals(StatusCode.OK, codec.decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length,
         output, null, false));
     assertEquals(40, output.valueAt(0));
@@ -116,8 +149,7 @@ final class StoredTableRowCodecTest {
     row.position(2).limit(200);
     StoredTableRowEncodeResult encoded = new StoredTableRowEncodeResult();
 
-    StoredTableRowCodec codec = new StoredTableRowCodec();
-    assertEquals(StatusCode.OK, codec.encode(table, 31, input, row, START, encoded));
+    assertEquals(StatusCode.OK, StoredTableRowEncoder.encode(table, 31, input, row, START, encoded));
     assertEquals(2, row.position());
     assertEquals(200, row.limit());
     assertEquals(ByteOrder.BIG_ENDIAN, row.order());
@@ -126,7 +158,7 @@ final class StoredTableRowCodecTest {
 
     SqlValueBuffer output = values(4, 32);
     assertEquals(StatusCode.OK,
-        codec.decode(table, 31, row, START, encoded.length(), output));
+        decodeTrusted(table, 31, row, START, encoded.length(), output));
     assertEquals(-19, output.valueAt(0));
     assertEquals(true, output.isNull(1));
     assertEquals(0, output.valueAt(2));
@@ -147,20 +179,19 @@ final class StoredTableRowCodecTest {
     Arrays.fill(bytes, (byte) 0x5a);
     byte[] before = bytes.clone();
     StoredTableRowEncodeResult result = new StoredTableRowEncodeResult();
-    StoredTableRowCodec codec = new StoredTableRowCodec();
 
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
-        codec.encode(table, 1, wrong, ByteBuffer.wrap(bytes), 0, result));
+        StoredTableRowEncoder.encode(table, 1, wrong, ByteBuffer.wrap(bytes), 0, result));
     assertArrayEquals(before, bytes);
     assertEquals(0, result.length());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
-        codec.encode(table, 0, wrong, ByteBuffer.wrap(bytes), 0, result));
+        StoredTableRowEncoder.encode(table, 0, wrong, ByteBuffer.wrap(bytes), 0, result));
     assertArrayEquals(before, bytes);
     SqlValueBuffer right = values(1, 0);
     assertEquals(StatusCode.OK, right.setFixed(0, SqlTypeDescriptor.BIGINT, 1));
     ByteBuffer shortTarget = ByteBuffer.wrap(bytes).limit(39);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED,
-        codec.encode(table, 1, right, shortTarget, 0, result));
+        StoredTableRowEncoder.encode(table, 1, right, shortTarget, 0, result));
     assertArrayEquals(before, bytes);
   }
 
@@ -222,8 +253,6 @@ final class StoredTableRowCodecTest {
     corrupt = row.bytes.clone();
     int textStart = START + FormatBytes.getInt(ByteBuffer.wrap(corrupt), firstSlot);
     corrupt[textStart] = (byte) 0xc0;
-    assertEquals(StatusCode.CORRUPTION, new StoredTableRowCodec().decode(
-        table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
     assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
     assertEquals(0xc0, output.textByteAt(0, 0));
@@ -243,10 +272,10 @@ final class StoredTableRowCodecTest {
 
     assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(row.bytes), START, row.length + 1, output));
-    assertEquals(StatusCode.CORRUPTION, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.CORRUPTION, decodeTrusted(
         table, 71, ByteBuffer.wrap(row.bytes), START,
-        table.encodedMaximumRowBytes() + 1, output));
-    assertEquals(StatusCode.CORRUPTION, new StoredTableRowCodec().decode(
+        HeapPage.MAXIMUM_ROW_BYTES + 1, output));
+    assertEquals(StatusCode.CORRUPTION, decodeTrusted(
         table, 72, ByteBuffer.wrap(row.bytes), START, row.length, output));
   }
 
@@ -263,7 +292,7 @@ final class StoredTableRowCodecTest {
     assertEquals(StatusCode.OK, tooFewLanes.reserve(1, 1, 16, 16));
     assertEquals(StatusCode.OK, tooFewLanes.clearForSize(1));
     assertEquals(StatusCode.OK, tooFewLanes.setText(0, varchar, "keep"));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, decodeTrusted(
         table, 71, ByteBuffer.wrap(row.bytes), START, row.length, tooFewLanes));
     assertEquals(1, tooFewLanes.count());
     assertEquals(4, tooFewLanes.textByteLengthAt(0));
@@ -271,7 +300,7 @@ final class StoredTableRowCodecTest {
     SqlValueBuffer tooLittleText = values(2, 1);
     assertEquals(StatusCode.OK, tooLittleText.setNull(0, varchar));
     assertEquals(StatusCode.OK, tooLittleText.setText(1, varchar, "x"));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, decodeTrusted(
         table, 71, ByteBuffer.wrap(row.bytes), START, row.length, tooLittleText));
     assertEquals(true, tooLittleText.isNull(0));
     assertEquals(1, tooLittleText.textByteLengthAt(1));
@@ -292,7 +321,7 @@ final class StoredTableRowCodecTest {
     }
     Encoded row = encode(table, input);
     SqlValueBuffer output = values(count, 0);
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(row.bytes), START, row.length, output));
     for (int boundary : boundaries) assertEquals(true, output.isNull(boundary));
     assertEquals(false, output.isNull(6));
@@ -318,11 +347,11 @@ final class StoredTableRowCodecTest {
     assertEquals(StatusCode.OK, input.setFixed(3, SqlTypeDescriptor.BOOLEAN, 0));
     byte[] bytes = new byte[HeapPage.MAXIMUM_ROW_BYTES];
     StoredTableRowEncodeResult result = new StoredTableRowEncodeResult();
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().encode(
+    assertEquals(StatusCode.OK, StoredTableRowEncoder.encode(
         table, 71, input, ByteBuffer.wrap(bytes), 0, result));
     assertEquals(HeapPage.MAXIMUM_ROW_BYTES, result.length());
     SqlValueBuffer output = values(types.length, 4_043 * 4);
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(bytes), 0, result.length(), output));
     assertEquals(1, output.valueAt(2));
     assertEquals(4_043 * 4, output.textByteLengthAt(0));
@@ -337,7 +366,6 @@ final class StoredTableRowCodecTest {
       SqlTypeDescriptor.timestampWithTimeZone(6)
     };
     TableDescriptor table = table(types, new boolean[types.length]);
-    StoredTableRowCodec codec = new StoredTableRowCodec();
     for (int column = 0; column < types.length; column++) {
       for (int edge = 0; edge < 2; edge++) {
         SqlValueBuffer input = values(types.length, 0);
@@ -349,7 +377,7 @@ final class StoredTableRowCodecTest {
         }
         Encoded row = encode(table, input);
         SqlValueBuffer output = values(types.length, 0);
-        assertEquals(StatusCode.OK, codec.decode(
+        assertEquals(StatusCode.OK, decodeTrusted(
             table, 71, ByteBuffer.wrap(row.bytes), START, row.length, output));
         for (int index = 0; index < types.length; index++) {
           assertEquals(input.valueAt(index), output.valueAt(index));
@@ -368,8 +396,6 @@ final class StoredTableRowCodecTest {
           SqlValueDomain.exclusiveMaximumFixed(types[column]));
       SqlValueBuffer output = values(types.length, 0);
       assertEquals(StatusCode.OK, output.setFixed(0, types[0], 7));
-      assertEquals(StatusCode.CORRUPTION, codec.decode(
-          table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
       assertEquals(StatusCode.OK, decodeTrusted(
           table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
       assertEquals(SqlValueDomain.exclusiveMaximumFixed(types[column]),
@@ -390,7 +416,7 @@ final class StoredTableRowCodecTest {
     assertEquals(StatusCode.OK, input.setFixed(1, SqlTypeDescriptor.INTEGER, 7));
     Encoded row = encode(table, input);
     SqlValueBuffer output = values(2, 0);
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(row.bytes), START, row.length, output));
     assertEquals(high, output.highValueAt(0));
     assertEquals(low, output.valueAt(0));
@@ -404,7 +430,7 @@ final class StoredTableRowCodecTest {
   }
 
   @Test
-  void warmedCodecDoesNotAllocatePerRow() {
+  void warmedStoredRowEntryDoesNotAllocatePerRow() {
     ThreadMXBean bean = allocationBean();
     int varchar = SqlTypeDescriptor.varchar(8);
     TableDescriptor table = table(
@@ -414,22 +440,27 @@ final class StoredTableRowCodecTest {
     assertEquals(StatusCode.OK, input.setText(1, varchar, "river"));
     SqlValueBuffer output = values(2, 16);
     ByteBuffer row = ByteBuffer.allocate(128);
-    StoredTableRowCodec codec = new StoredTableRowCodec();
     StoredTableRowEncodeResult result = new StoredTableRowEncodeResult();
-    exercise(codec, table, input, output, row, result, 10_000);
+    assertEquals(StatusCode.OK,
+        StoredTableRowEncoder.encode(table, 71, input, row, 0, result));
+    HeapRowResult fetched = new HeapRowResult();
+    fetched.set(row, 1, 0, result.length());
+    RelationalDescriptorRowBuffer reader = new RelationalDescriptorRowBuffer();
+    assertEquals(StatusCode.OK, reader.reserve(result.length()));
+    exercise(reader, table, fetched, output, 10_000);
 
     long thread = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(thread);
-    exercise(codec, table, input, output, row, result, 100_000);
+    exercise(reader, table, fetched, output, 100_000);
     long allocated = bean.getThreadAllocatedBytes(thread) - before;
-    assertEquals(true, allocated <= 256, "warmed row codec allocated: " + allocated);
+    assertEquals(true, allocated <= 256, "warmed stored row read allocated: " + allocated);
   }
 
   private static void assertCorruptPreserves(
       TableDescriptor table, int length, byte[] bytes, SqlValueBuffer output) {
     int count = output.count();
     long first = output.valueAt(0);
-    assertEquals(StatusCode.CORRUPTION, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.CORRUPTION, decodeTrusted(
         table, 71, ByteBuffer.wrap(bytes), START, length, output));
     assertEquals(count, output.count());
     assertEquals(first, output.valueAt(0));
@@ -443,13 +474,13 @@ final class StoredTableRowCodecTest {
 
   private static StatusCode decodeTrusted(
       TableDescriptor table, long rowId, ByteBuffer source, int start, int length,
-      SqlValueBuffer output, StoredTableRowFilter filter) {
+      SqlValueBuffer output, StoredTableRowIntegerFilter filter) {
     return decodeTrusted(table, rowId, source, start, length, output, filter, true);
   }
 
   private static StatusCode decodeTrusted(
       TableDescriptor table, long rowId, ByteBuffer source, int start, int length,
-      SqlValueBuffer output, StoredTableRowFilter filter, boolean publishText) {
+      SqlValueBuffer output, StoredTableRowIntegerFilter filter, boolean publishText) {
     return new StoredTableRowDecoder().decode(
         table, rowId, source, start, length, output, filter, publishText);
   }
@@ -457,7 +488,7 @@ final class StoredTableRowCodecTest {
   private static Encoded encode(TableDescriptor table, SqlValueBuffer input) {
     byte[] bytes = new byte[START + table.encodedMaximumRowBytes() + 1];
     StoredTableRowEncodeResult result = new StoredTableRowEncodeResult();
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().encode(
+    assertEquals(StatusCode.OK, StoredTableRowEncoder.encode(
         table, 71, input, ByteBuffer.wrap(bytes), START, result));
     return new Encoded(bytes, result.length());
   }
@@ -500,12 +531,11 @@ final class StoredTableRowCodecTest {
   }
 
   private static void exercise(
-      StoredTableRowCodec codec, TableDescriptor table, SqlValueBuffer input,
-      SqlValueBuffer output, ByteBuffer row, StoredTableRowEncodeResult result,
-      int iterations) {
+      RelationalDescriptorRowBuffer reader, TableDescriptor table,
+      HeapRowResult fetched, SqlValueBuffer output, int iterations) {
     for (int index = 0; index < iterations; index++) {
-      codec.encode(table, 71, input, row, 0, result);
-      codec.decode(table, 71, row, 0, result.length(), output);
+      StatusCode status = reader.decode(table, 71, fetched, output);
+      if (!status.isOk()) throw new AssertionError(status);
       allocationGuard += output.valueAt(0) + output.textByteLengthAt(1);
     }
   }
