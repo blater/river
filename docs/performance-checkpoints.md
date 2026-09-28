@@ -793,3 +793,48 @@ larger next target. Earlier temporary engine timing attributed about
 16 µs to repeated block binding within that fixed cost. These components
 are diagnostic estimates from sequential runs, not additive server
 accounting or a MariaDB comparison. The diagnostic SQL was restored.
+
+## 2026-09-28 — Stock Level full-cardinality JOIN-order diagnostic
+
+The accepted one-request Stock Level program was tested with the `full`
+profile, one warehouse, one worker, seed 42, retry limit 3, one-second
+warmup and three-second measured window. Its load contains 598,847 rows,
+including 100,000 stock rows. These short `--no-report` runs passed workload
+validation but are diagnostics, not designated baselines or comparable
+immutable artifacts.
+
+| Target and query order | Committed TPS | p99 (ms) |
+| --- | ---: | ---: |
+| River, stock first, one-request program | 25.31 | 54.034 |
+| MariaDB, stock first | 4,863.22 | 0.231 |
+| River, order-line first, temporary two-read SQL path | 903.23 | 1.427 |
+
+The temporary SQL reversal changed only the two inner JOIN inputs and kept
+the predicates, but used two SQL reads because the River one-request program
+encodes the original SQL. A sample-profile smoke of the reversed SQL reached
+1,141.58 TPS, substantially below the accepted sample one-request baseline.
+Thus source order must be selected by access cost, not reversed universally.
+The full-profile result isolates a severe plan-order cost; the precise
+remaining River/MariaDB difference needs a matched request path and longer
+interleaved evidence.
+
+Temporary server timers on the accepted sample path placed approximately
+24.5 microseconds in root cursor advancement and 12.7 microseconds in inner
+cursor opening per count query. The measurements are diagnostic and were
+collected sequentially. A prepared JOIN table-resolution cache reduced its
+isolated binding step from about 6.25 to 0.63 microseconds, but matched
+30-second A–B–B–A whole-workload runs averaged 10,358.327 control and
+10,406.454 candidate TPS, a 0.46% difference within adjacent variation.
+Both variants passed validation and cleanup with zero retries, failures or
+unknown outcomes and identical eligible comparison key
+`92304f6559add6ca75ccead01a5dbc118982216b805a8f00f784346d5af797a2`.
+The artifacts, in A–B–B–A order, are
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_045045_374e951b`,
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_045128_bb6988d0`,
+`/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_045210_a10b16ca`,
+and `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_045254_083e0885`.
+An ASCII UTF-8 validation fast path likewise did not show a stable
+whole-workload improvement in short adjacent samples. Neither candidate was
+promoted. The next engine change is cardinality-aware ordering for eligible
+inner JOIN roles, followed by measurement of indexed inner probes and row
+scanning on the full profile.

@@ -31,13 +31,20 @@ cost about 101 µs in River versus 56 µs in MariaDB on the SQL path;
 JOIN stage startup, scan and prepared-query costs remain under
 investigation. See [the latest checkpoint](../performance-checkpoints.md#2026-09-28--stock-level-read-program-checkpoint).
 
-The next engine fix is to reuse parameter-independent prepared JOIN binding
-across executions while updating parameter values and invalidating on schema
-or authorization changes. Adjacent zero-match diagnostics on the accepted
-build put the count-query cost near 63 µs even with no stock rows; earlier
-engine timing put repeated block binding near 16 µs. Keep the existing
-single binder and prove correctness for changing parameters, schema changes,
-nulls and failed binding before measuring a matched candidate.
+The next engine fix is to select the cheaper root role for eligible inner
+JOINs using table cardinality and access costs. On the full profile, the
+accepted stock-first plan scanned 100,000 stock rows for each count query
+and reached 25.31 commits/s. A temporary order-line-first SQL diagnostic
+reached 903.23 commits/s on a two-read request path; MariaDB reached
+4,863.22 commits/s. The same reversed SQL performed poorly on the sample
+profile. The planner must choose based on available statistics or another
+bounded cardinality estimate, preserve SQL semantics, and avoid
+workload-specific rules. See [the full-cardinality diagnostic](../performance-checkpoints.md#2026-09-28--stock-level-full-cardinality-join-order-diagnostic).
+
+A prepared JOIN table-resolution cache lowered isolated binding cost but
+changed matched sample whole-workload throughput by only 0.46%, within
+adjacent variation. It was not promoted. Reassess binding only after fixing
+JOIN order and measuring the remaining full-profile cost.
 
 ## Delivery
 
