@@ -31,6 +31,14 @@ cost about 101 µs in River versus 56 µs in MariaDB on the SQL path;
 JOIN stage startup, scan and prepared-query costs remain under
 investigation. See [the latest checkpoint](../performance-checkpoints.md#2026-09-28--stock-level-read-program-checkpoint).
 
+The next engine fix is to reuse parameter-independent prepared JOIN binding
+across executions while updating parameter values and invalidating on schema
+or authorization changes. Adjacent zero-match diagnostics on the accepted
+build put the count-query cost near 63 µs even with no stock rows; earlier
+engine timing put repeated block binding near 16 µs. Keep the existing
+single binder and prove correctness for changing parameters, schema changes,
+nulls and failed binding before measuring a matched candidate.
+
 ## Delivery
 
 - Evaluate safe root-only `WHERE` conjuncts before JOIN probes in both River

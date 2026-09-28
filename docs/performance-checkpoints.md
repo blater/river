@@ -778,3 +778,18 @@ The measured whole-transaction Stock Level gap is closed. The separate
 count-query diagnostic still shows a 101.428 versus 56.438 µs difference
 on the SQL path, so JOIN execution remains a candidate for further generic
 optimization; the program result is not evidence of JOIN parity.
+
+An adjacent, temporary SQL-only diagnostic then isolated the count-query
+components on the accepted River binary. The unmodified 5-second
+warmup/10-second control averaged 101.898 µs per count query. Adding an
+impossible `s_quantity < 0` conjunct kept the stock scan but removed JOIN
+probes and averaged 84.827 µs. An impossible `s_w_id = 0` conjunct removed
+the stock rows and averaged 62.902 µs. The restored unmodified control
+averaged 102.374 µs. The altered queries returned a different count, were
+run with `--no-report`, and are not workload baselines. The adjacent
+differences suggest about 17 µs for JOIN probes and 22 µs for stock-row
+scanning in this setup; the roughly 63 µs empty-root query path is the
+larger next target. Earlier temporary engine timing attributed about
+16 µs to repeated block binding within that fixed cost. These components
+are diagnostic estimates from sequential runs, not additive server
+accounting or a MariaDB comparison. The diagnostic SQL was restored.
