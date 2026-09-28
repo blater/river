@@ -69,11 +69,6 @@ class SqlUniversalJoinRows {
       status = roles[role].resolve(
           joins.tableName(role), context.table(role), detail);
       if (status.isOk() && roles[role].descriptor()) matched = true;
-      if (status.isOk()) {
-        status = session.resolveStatistics(
-            context.table(role), context.statistics(role));
-        if (status == StatusCode.CONFLICT) status = StatusCode.OK;
-      }
     }
     if (!status.isOk() || !matched) {
       StatusCode cleanup = reset(null);

@@ -66,7 +66,10 @@ final class TableDefinitionStateLoader {
     copyText(table, schema);
     copyIndexes(table, schema);
     table.identity = schema.identity;
-    table.primaryIndexColumn = schema.identity ? 0 : -1;
+    table.primaryIndexColumn = schema.primaryIndexColumn;
+    table.primaryIndexPartCount = schema.primaryIndexPartCount;
+    System.arraycopy(schema.primaryIndexParts, 0, table.primaryIndexParts, 0,
+        table.primaryIndexPartCount);
     TableDefinitionRowLayout.deriveOffsets(table);
     if (valueIndexTableId > 0) {
       status = table.upsertIndex(
@@ -124,6 +127,8 @@ final class TableDefinitionStateLoader {
     }
     table.identity = schema.hasIdentity();
     table.primaryIndexColumn = schema.hasIdentity() ? 0 : -1;
+    table.primaryIndexPartCount = schema.hasIdentity() ? 1 : 0;
+    if (table.primaryIndexPartCount > 0) table.primaryIndexParts[0] = 0;
     TableDefinitionRowLayout.deriveOffsets(table);
     if (indexes != 0) {
       TableDefinitionIndexMutation.set(
@@ -166,6 +171,7 @@ final class TableDefinitionStateLoader {
     table.identity = false;
     table.descriptorView = false;
     table.primaryIndexColumn = -1;
+    table.primaryIndexPartCount = 0;
   }
 
   private static StatusCode prepare(

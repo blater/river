@@ -40,6 +40,10 @@ public final class RelationalDescriptorJoinTableView {
     KeyDescriptor primary = descriptor.primaryKey();
     target.primaryIndexColumn = primary == null || primary.partCount() == 0
         ? -1 : primary.columnOrdinalAt(0);
+    target.primaryIndexPartCount = primary == null ? 0 : primary.partCount();
+    for (int part = 0; part < target.primaryIndexPartCount; part++) {
+      target.primaryIndexParts[part] = primary.columnOrdinalAt(part);
+    }
     target.identity = primary != null && primary.partCount() == 1
         && primary.columnOrdinalAt(0) == 0
         && primary.typeDescriptorAt(0) == SqlTypeDescriptor.BIGINT;

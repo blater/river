@@ -12,6 +12,8 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
   TableDefinition[] ownedRoleTables = new TableDefinition[0];
   boolean[] ownedTables = new boolean[0];
   TableStatistics[] statistics = new TableStatistics[0];
+  private final long[] statisticsGenerations =
+      new long[SqlJoinChain.MAXIMUM_JOIN_ROLES];
   SqlBoundBooleanPredicateProgram[] onBooleans =
       new SqlBoundBooleanPredicateProgram[0];
   byte[] accessOuterRoles = new byte[0];
@@ -25,6 +27,7 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
   int roleCount;
   int queryBlock = -1;
   private boolean estimatesAvailable;
+  private boolean reversedFirstInnerRoles;
 
   SqlBoundJoinContext() { this(SqlJoinContextAllocator.STANDARD); }
 
@@ -56,6 +59,28 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
     return role < 0 || role >= roleCount ? null : statistics[role];
   }
 
+  boolean cachedStatistics(int role, long generation) {
+    return generation > 0 && statisticsGenerations[role] == generation
+        && statistics[role].availableFor(tables[role]);
+  }
+
+  void markStatistics(int role, long generation) {
+    statisticsGenerations[role] = generation;
+  }
+
+  void swapFirstInnerRoles() {
+    TableDefinition table = tables[0];
+    tables[0] = tables[1];
+    tables[1] = table;
+    TableStatistics stats = statistics[0];
+    statistics[0] = statistics[1];
+    statistics[1] = stats;
+    long generation = statisticsGenerations[0];
+    statisticsGenerations[0] = statisticsGenerations[1];
+    statisticsGenerations[1] = generation;
+    reversedFirstInnerRoles = !reversedFirstInnerRoles;
+  }
+
   SqlBoundBooleanPredicateProgram onBoolean(int stage) {
     return stage < 0 || stage >= roleCount - 1 ? null : onBooleans[stage];
   }
@@ -66,9 +91,9 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
   }
 
   void reset() {
+    if (reversedFirstInnerRoles) swapFirstInnerRoles();
     for (int role = 0; role < roleCount; role++) {
       if (ownedTables[role] && tables[role] != null) tables[role].reset();
-      if (statistics[role] != null) statistics[role].reset();
       tables[role] = null;
       ownedTables[role] = false;
     }

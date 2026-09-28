@@ -50,6 +50,8 @@ public final class TableDefinition {
   boolean identity;
   boolean descriptorView;
   int primaryIndexColumn = -1;
+  int[] primaryIndexParts = new int[SqlShapeLimits.MAX_KEY_PARTS];
+  int primaryIndexPartCount;
   int defaultTextBytesUsed;
   int checkNodeCount;
   volatile int layoutColumns;
@@ -258,6 +260,12 @@ public final class TableDefinition {
 
   public boolean hasPrimaryIndexOn(int column) {
     return column >= 0 && primaryIndexColumn == column;
+  }
+
+  public int primaryIndexPartCount() { return primaryIndexPartCount; }
+
+  public int primaryIndexColumnAt(int part) {
+    return part < 0 || part >= primaryIndexPartCount ? -1 : primaryIndexParts[part];
   }
 
   public long defaultValue(int column) {

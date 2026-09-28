@@ -35,9 +35,14 @@ final class SqlNestedTableResolver {
       status = resolve(
           session, command.joinChain().tableName(role), context.table(role));
       if (status.isOk()) {
-        status = session.resolveStatistics(
-            context.table(role), context.statistics(role));
-        if (status == StatusCode.CONFLICT) status = StatusCode.OK;
+        long generation = session.catalogGeneration();
+        if (!session.matchesPreparedGeneration(generation)
+            || !context.cachedStatistics(role, generation)) {
+          status = session.resolveStatistics(
+              context.table(role), context.statistics(role));
+          if (status == StatusCode.CONFLICT) status = StatusCode.OK;
+          if (status.isOk()) context.markStatistics(role, generation);
+        }
       }
     }
     return status;
