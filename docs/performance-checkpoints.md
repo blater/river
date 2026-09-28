@@ -620,3 +620,13 @@ used TCP/TLS; MariaDB used the harness-owned Unix socket.
 The mean MariaDB/River TPS ratio was 1.539 for these whole targets.
 Decision: accept the generic singleton row-store path; the Stock Level
 ticket remains open for JOIN startup, stock scan and prepared-query costs.
+
+A later isolated probe removed repeated domain and UTF-8 checks while
+publishing stored rows after full body validation. It passed focused codec
+tests, but a 2-second warmup/10-second measured A–B–B–A sequence was
+inconclusive: 4,045.94, 4,190.84, 4,163.04 and 4,538.04 TPS. The four
+passing artifacts are `river_harness_20260928_033515_ea8d3e34`,
+`river_harness_20260928_033534_4489ce84`,
+`river_harness_20260928_033556_9e1ab7f7` and
+`river_harness_20260928_033620_76986eb1` under the harness `runs`
+directory. The probe remains unmerged; it is not a new baseline.
