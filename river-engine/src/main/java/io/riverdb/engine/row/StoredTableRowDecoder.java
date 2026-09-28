@@ -19,7 +19,8 @@ final class StoredTableRowDecoder {
       int start,
       int length,
       SqlValueBuffer destination,
-      StoredTableRowFilter filter) {
+      StoredTableRowFilter filter,
+      boolean publishText) {
     if (!validArguments(table, expectedLogicalRowId, source, start, length, destination)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -43,7 +44,7 @@ final class StoredTableRowDecoder {
     if (filter != null && !filter.matches(table, source, start)) {
       return StatusCode.CONFLICT;
     }
-    return StoredTableRowPublisher.publish(table, source, start, destination);
+    return StoredTableRowPublisher.publish(table, source, start, destination, publishText);
   }
 
   private static boolean validArguments(

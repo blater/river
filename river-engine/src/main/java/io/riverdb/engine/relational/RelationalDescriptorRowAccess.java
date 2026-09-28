@@ -30,10 +30,18 @@ final class RelationalDescriptorRowAccess {
   StatusCode fetch(
       IndexedTransactionSession session, TableDescriptor table,
       long logicalRowId, SqlValueBuffer destination, StoredTableRowFilter filter) {
+    return fetch(session, table, logicalRowId, destination, filter, true);
+  }
+
+  StatusCode fetch(
+      IndexedTransactionSession session, TableDescriptor table,
+      long logicalRowId, SqlValueBuffer destination, StoredTableRowFilter filter,
+      boolean publishText) {
     fetched.reset();
     StatusCode status = session.fetchByKey(
         RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId, fetched);
-    return status.isOk() ? buffer.decode(table, logicalRowId, fetched, destination, filter) : status;
+    return status.isOk()
+        ? buffer.decode(table, logicalRowId, fetched, destination, filter, publishText) : status;
   }
 
   StatusCode decode(
@@ -45,7 +53,14 @@ final class RelationalDescriptorRowAccess {
   StatusCode decode(
       TableDescriptor table, long logicalRowId,
       HeapRowResult source, SqlValueBuffer destination, StoredTableRowFilter filter) {
-    return buffer.decode(table, logicalRowId, source, destination, filter);
+    return decode(table, logicalRowId, source, destination, filter, true);
+  }
+
+  StatusCode decode(
+      TableDescriptor table, long logicalRowId,
+      HeapRowResult source, SqlValueBuffer destination, StoredTableRowFilter filter,
+      boolean publishText) {
+    return buffer.decode(table, logicalRowId, source, destination, filter, publishText);
   }
 
   ByteBuffer bytes() { return buffer.bytes(); }

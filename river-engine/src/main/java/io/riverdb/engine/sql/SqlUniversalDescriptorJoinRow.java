@@ -36,9 +36,8 @@ final class SqlUniversalDescriptorJoinRow {
   StatusCode next(
       RelationalSession session, RelationalDescriptorScanCursor cursor,
       TableDescriptor table, StoredTableRowFilter filter) {
-    StatusCode status = filter == null
-        ? session.descriptorRows().nextScan(cursor, values, identity)
-        : session.descriptorRows().nextScan(cursor, values, identity, filter);
+    StatusCode status = session.descriptorRows().nextScan(
+        cursor, values, identity, filter, materializeText);
     if (status.isOk()) status = row.reset(table.columnCount());
     for (int column = 0; status.isOk() && column < table.columnCount(); column++) {
       status = copy(table, column);

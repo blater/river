@@ -41,6 +41,15 @@ The harness does not yet enforce that inventory as a comparison eligibility
 rule. The earlier MariaDB number therefore remains a diagnostic control.
 Do not add a Stock Level-specific index to the benchmark schema to close the gap.
 
+Skipping publication of VARCHAR values proved unused by a generic JOIN raised
+the mean of two interleaved 30-second `full stock-level` runs from 1,205.110
+to 1,247.589 River commits/s against adjacent controls. The clean full test
+build and a one-worker `sample all` run passed; the adjacent `sample
+stock-level` candidate also exceeded its control. See the
+[text-publication checkpoint](../performance-checkpoints.md#2026-09-28--omit-unused-text-publication-during-joins).
+This is a small local gain, not a new MariaDB comparison. A projected
+stock-key lookup and lower base-row fetch/decode cost remain the larger targets.
+
 ## Delivery
 
 - Reprofile the accepted cache build. Measure tuple cursor descent and

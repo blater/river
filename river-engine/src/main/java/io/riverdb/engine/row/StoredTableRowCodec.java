@@ -28,7 +28,7 @@ public final class StoredTableRowCodec {
       int length,
       SqlValueBuffer destination) {
     return decoder.decode(
-        descriptor, expectedLogicalRowId, source, start, length, destination, null);
+        descriptor, expectedLogicalRowId, source, start, length, destination, null, true);
   }
 
   public StatusCode decode(
@@ -40,6 +40,21 @@ public final class StoredTableRowCodec {
       SqlValueBuffer destination,
       StoredTableRowFilter filter) {
     return decoder.decode(
-        descriptor, expectedLogicalRowId, source, start, length, destination, filter);
+        descriptor, expectedLogicalRowId, source, start, length, destination, filter, true);
+  }
+
+  /** Validates every field while publishing text only when the caller will read it. */
+  public StatusCode decode(
+      TableDescriptor descriptor,
+      long expectedLogicalRowId,
+      ByteBuffer source,
+      int start,
+      int length,
+      SqlValueBuffer destination,
+      StoredTableRowFilter filter,
+      boolean publishText) {
+    return decoder.decode(
+        descriptor, expectedLogicalRowId, source, start, length, destination,
+        filter, publishText);
   }
 }
