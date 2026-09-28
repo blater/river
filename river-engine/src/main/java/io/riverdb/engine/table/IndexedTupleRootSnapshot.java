@@ -15,12 +15,19 @@ final class IndexedTupleRootSnapshot {
   private final HeapRowResult row = new HeapRowResult();
   private final TupleIndexRootRecord record = new TupleIndexRootRecord();
   private final ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
+  private long cachedVisible;
+  private long cachedKeyId;
+  private boolean cached;
 
   IndexedTupleRootSnapshot(IndexedTableKernel table) {
     kernel = table;
   }
 
-  StatusCode load(long visible, long keyId) {
+  StatusCode load(long visible, long keyId, boolean cacheable) {
+    if (cacheable && cached && visible == cachedVisible && keyId == cachedKeyId) {
+      return StatusCode.OK;
+    }
+    cached = false;
     StatusCode status = kernel.fetchVersionedByKeyAt(
         visible, CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row, version);
     if (!status.isOk()) return pressure(status) ? status : StatusCode.CORRUPTION;
@@ -29,6 +36,11 @@ final class IndexedTupleRootSnapshot {
     bytes.flip();
     if (status.isOk()) {
       status = TupleIndexRootRecordCodec.decode(bytes, 0, record);
+    }
+    if (status.isOk() && cacheable) {
+      cachedVisible = visible;
+      cachedKeyId = keyId;
+      cached = true;
     }
     return status.isOk() || pressure(status) ? status : StatusCode.CORRUPTION;
   }
