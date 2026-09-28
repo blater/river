@@ -51,6 +51,12 @@ final class SqlUniversalDescriptorJoinRole {
     access.prepare(command, descriptor, role, context, where);
   }
 
+  void configureRootFilter(
+      SqlBoundBooleanPredicateProgram where, SqlJoinRootFilter rootFilter) {
+    rootFilter.configureIntegerFilter(where, descriptor);
+    scan.filter(rootFilter.integerFilter());
+  }
+
   void materializeText(boolean required) { current.materializeText(required); }
 
   void configureMergeRoot(int column) {
@@ -124,6 +130,7 @@ final class SqlUniversalDescriptorJoinRole {
       fixedAccess = null;
       mergeColumn = -1;
       current.reset();
+      scan.filter(null);
       name.reset();
     }
     return status;

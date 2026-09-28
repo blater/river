@@ -13,6 +13,7 @@ import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.FormatBytes;
 import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import io.riverdb.storage.heap.HeapPage;
+import io.riverdb.sql.SqlComparison;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -24,6 +25,39 @@ import org.junit.jupiter.api.Test;
 final class StoredTableRowCodecTest {
   private static final int START = 5;
   private static volatile long allocationGuard;
+
+  @Test
+  void filtersOnlyAfterFullValidationAndPreservesDestination() {
+    int text = SqlTypeDescriptor.varchar(4);
+    TableDescriptor table = table(
+        new int[] {SqlTypeDescriptor.SMALLINT, text},
+        new boolean[] {true, false});
+    SqlValueBuffer input = values(2, 16);
+    assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.SMALLINT, 40));
+    assertEquals(StatusCode.OK, input.setText(1, text, "yes"));
+    Encoded encoded = encode(table, input);
+    SqlValueBuffer output = values(2, 16);
+    assertEquals(StatusCode.OK, output.setFixed(0, SqlTypeDescriptor.SMALLINT, 7));
+    StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
+    filter.configure(0, SqlComparison.LESS_THAN, 30);
+    StoredTableRowCodec codec = new StoredTableRowCodec();
+    assertEquals(StatusCode.CONFLICT, codec.decode(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(7, output.valueAt(0));
+
+    byte[] corrupt = encoded.bytes.clone();
+    int textSlot = START + table.fixedOffsetAt(1);
+    int textStart = START + FormatBytes.getInt(ByteBuffer.wrap(corrupt), textSlot);
+    corrupt[textStart] = (byte) 0xc0;
+    assertEquals(StatusCode.CORRUPTION, codec.decode(
+        table, 71, ByteBuffer.wrap(corrupt), START, encoded.length, output, filter));
+    assertEquals(7, output.valueAt(0));
+
+    filter.configure(0, SqlComparison.LESS_OR_EQUAL, 40);
+    assertEquals(StatusCode.OK, codec.decode(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
+    assertEquals(40, output.valueAt(0));
+  }
 
   @Test
   void roundTripsMixedValuesWithoutChangingBufferState() {

@@ -38,7 +38,7 @@ final class SqlSubqueryUniversalJoinFrame {
     StatusCode status = rows.resolveBound(command, context);
     if (status.isOk()) status = predicates.prepare(command, context, where);
     if (status.isOk()) {
-      rows.configureAccess(command, context, where);
+      rows.configureAccess(command, context, where, predicates.rootFilter());
       source.configure(
           command, context, where, rows, predicates, orderedInnerColumn);
     }

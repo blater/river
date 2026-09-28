@@ -125,6 +125,7 @@ final class SqlUniversalJoinPredicates {
   }
 
   boolean matched() { return match.matched(); }
+  SqlJoinRootFilter rootFilter() { return rootFilter; }
 
   void reset() {
     where.reset();

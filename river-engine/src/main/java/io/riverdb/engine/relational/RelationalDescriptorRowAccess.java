@@ -3,6 +3,7 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
+import io.riverdb.engine.row.StoredTableRowFilter;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
@@ -23,16 +24,28 @@ final class RelationalDescriptorRowAccess {
   StatusCode fetch(
       IndexedTransactionSession session, TableDescriptor table,
       long logicalRowId, SqlValueBuffer destination) {
+    return fetch(session, table, logicalRowId, destination, null);
+  }
+
+  StatusCode fetch(
+      IndexedTransactionSession session, TableDescriptor table,
+      long logicalRowId, SqlValueBuffer destination, StoredTableRowFilter filter) {
     fetched.reset();
     StatusCode status = session.fetchByKey(
         RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId, fetched);
-    return status.isOk() ? buffer.decode(table, logicalRowId, fetched, destination) : status;
+    return status.isOk() ? buffer.decode(table, logicalRowId, fetched, destination, filter) : status;
   }
 
   StatusCode decode(
       TableDescriptor table, long logicalRowId,
       HeapRowResult source, SqlValueBuffer destination) {
-    return buffer.decode(table, logicalRowId, source, destination);
+    return decode(table, logicalRowId, source, destination, null);
+  }
+
+  StatusCode decode(
+      TableDescriptor table, long logicalRowId,
+      HeapRowResult source, SqlValueBuffer destination, StoredTableRowFilter filter) {
+    return buffer.decode(table, logicalRowId, source, destination, filter);
   }
 
   ByteBuffer bytes() { return buffer.bytes(); }

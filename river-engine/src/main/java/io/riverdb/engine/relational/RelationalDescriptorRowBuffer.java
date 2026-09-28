@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.row.StoredTableRowCodec;
 import io.riverdb.engine.row.StoredTableRowEncodeResult;
+import io.riverdb.engine.row.StoredTableRowFilter;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
@@ -45,11 +46,20 @@ final class RelationalDescriptorRowBuffer {
       long logicalRowId,
       HeapRowResult source,
       SqlValueBuffer destination) {
+    return decode(table, logicalRowId, source, destination, null);
+  }
+
+  StatusCode decode(
+      TableDescriptor table,
+      long logicalRowId,
+      HeapRowResult source,
+      SqlValueBuffer destination,
+      StoredTableRowFilter filter) {
     bytes.clear();
     StatusCode status = source.copyTo(bytes);
     if (!status.isOk()) return StatusCode.CORRUPTION;
     bytes.flip();
-    return codec.decode(table, logicalRowId, bytes, 0, source.length(), destination);
+    return codec.decode(table, logicalRowId, bytes, 0, source.length(), destination, filter);
   }
 
   ByteBuffer bytes() { return bytes; }

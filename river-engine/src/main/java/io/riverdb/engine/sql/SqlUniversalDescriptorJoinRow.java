@@ -8,6 +8,7 @@ import io.riverdb.engine.relational.RelationalRowIdentityResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.schema.TableDescriptor;
+import io.riverdb.engine.row.StoredTableRowFilter;
 
 /** Reusable decoded row for one streaming descriptor join role. */
 final class SqlUniversalDescriptorJoinRow {
@@ -29,7 +30,15 @@ final class SqlUniversalDescriptorJoinRow {
   StatusCode next(
       RelationalSession session, RelationalDescriptorScanCursor cursor,
       TableDescriptor table) {
-    StatusCode status = session.descriptorRows().nextScan(cursor, values, identity);
+    return next(session, cursor, table, null);
+  }
+
+  StatusCode next(
+      RelationalSession session, RelationalDescriptorScanCursor cursor,
+      TableDescriptor table, StoredTableRowFilter filter) {
+    StatusCode status = filter == null
+        ? session.descriptorRows().nextScan(cursor, values, identity)
+        : session.descriptorRows().nextScan(cursor, values, identity, filter);
     if (status.isOk()) status = row.reset(table.columnCount());
     for (int column = 0; status.isOk() && column < table.columnCount(); column++) {
       status = copy(table, column);

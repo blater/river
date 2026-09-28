@@ -28,6 +28,18 @@ public final class StoredTableRowCodec {
       int length,
       SqlValueBuffer destination) {
     return decoder.decode(
-        descriptor, expectedLogicalRowId, source, start, length, destination);
+        descriptor, expectedLogicalRowId, source, start, length, destination, null);
+  }
+
+  public StatusCode decode(
+      TableDescriptor descriptor,
+      long expectedLogicalRowId,
+      ByteBuffer source,
+      int start,
+      int length,
+      SqlValueBuffer destination,
+      StoredTableRowFilter filter) {
+    return decoder.decode(
+        descriptor, expectedLogicalRowId, source, start, length, destination, filter);
   }
 }

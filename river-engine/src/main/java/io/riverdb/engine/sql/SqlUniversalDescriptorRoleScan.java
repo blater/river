@@ -5,6 +5,7 @@ import io.riverdb.engine.relational.RelationalDescriptorIndexBounds;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.schema.TableDescriptor;
+import io.riverdb.engine.row.StoredTableRowFilter;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.tx.api.lock.LockMode;
 
@@ -16,6 +17,7 @@ final class SqlUniversalDescriptorRoleScan {
   private final SqlUniversalDescriptorScanAdmission admission =
       new SqlUniversalDescriptorScanAdmission();
   private boolean empty;
+  private StoredTableRowFilter filter;
 
   SqlUniversalDescriptorRoleScan(RelationalSession relationalSession) {
     session = relationalSession;
@@ -55,8 +57,10 @@ final class SqlUniversalDescriptorRoleScan {
   }
 
   StatusCode next(SqlUniversalDescriptorJoinRow current, TableDescriptor descriptor) {
-    return empty ? StatusCode.CONFLICT : current.next(session, cursor, descriptor);
+    return empty ? StatusCode.CONFLICT : current.next(session, cursor, descriptor, filter);
   }
+
+  void filter(StoredTableRowFilter rowFilter) { filter = rowFilter; }
 
   StatusCode close() {
     StatusCode status = cursor.isActive()

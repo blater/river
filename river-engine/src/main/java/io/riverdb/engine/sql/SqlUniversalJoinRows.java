@@ -105,9 +105,9 @@ class SqlUniversalJoinRows {
 
   void configureAccess(
       SqlCommand command, SqlBoundJoinContext context,
-      SqlBoundBooleanPredicateProgram where) {
+      SqlBoundBooleanPredicateProgram where, SqlJoinRootFilter rootFilter) {
     for (int role = 0; role < roleCount; role++) {
-      roles[role].configure(command, role, context, where);
+      roles[role].configure(command, role, context, where, rootFilter);
     }
   }
 

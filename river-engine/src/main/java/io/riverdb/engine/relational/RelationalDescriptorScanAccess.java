@@ -5,6 +5,7 @@ import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
+import io.riverdb.engine.row.StoredTableRowFilter;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.tx.api.lock.LockMode;
@@ -71,6 +72,13 @@ final class RelationalDescriptorScanAccess {
   StatusCode next(
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination, RelationalRowIdentityResult result) {
+    return next(owner, cursor, destination, result, null);
+  }
+
+  StatusCode next(
+      RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
+      SqlValueBuffer destination, RelationalRowIdentityResult result,
+      StoredTableRowFilter filter) {
     if (cursor == null || destination == null || result == null || !cursor.matches(owner)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -83,9 +91,10 @@ final class RelationalDescriptorScanAccess {
       if (!status.isOk()) return status;
       long logicalRowId = cursor.logicalRowId();
       status = cursor.isTuplePhysical()
-          ? rowAccess.fetch(session, table, logicalRowId, destination)
-          : rowAccess.decode(table, logicalRowId, cursor.row().row(), destination);
+          ? rowAccess.fetch(session, table, logicalRowId, destination, filter)
+          : rowAccess.decode(table, logicalRowId, cursor.row().row(), destination, filter);
       if (status == StatusCode.CONFLICT && cursor.isTuplePhysical()) continue;
+      if (status == StatusCode.CONFLICT && filter != null) continue;
       if (!status.isOk()) return status;
       if (cursor.isTuplePhysical()) {
         status = cursor.tupleBounds().recheck(destination);
