@@ -23,6 +23,7 @@ and runtime configuration.
 | 2026-09-28 02:20:12 | `feature/stock-join-text-pruning` | `tic-72e5` | River `e56da68c`; harness `df66a3a`, version `e56da68c-text-prune-candidate` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 30s measured | 2,062.893 | 0.598 | `river_harness_20260928_022000_32b6ff1c`; [checkpoint](#2026-09-28--numeric-join-text-materialization-checkpoint) |
 | 2026-09-28 02:59:16 | `feature/stock-distinct-inline` | `tic-72e5` | River `209f8b37`; harness `df66a3a`, version `distinct-inline-209f8b37` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 3,817.486 | 0.354 | `river_harness_20260928_025909_cd482460`; [checkpoint](#2026-09-28--inline-distinct-checkpoint) |
 | 2026-09-28 03:19:17 | `feature/stock-singleton-row-store` | `tic-72e5` | River `1bf08325`; harness `df66a3a`, version `singleton-1bf08325` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 4,424.739 | 0.273 | `river_harness_20260928_031909_32bac37c`; [checkpoint](#2026-09-28--single-row-store-checkpoint) |
+| 2026-09-28 03:59:08 | `feature/stock-validated-root-filter` | `tic-72e5` | River `e029efdc`; harness `df66a3a`, version `validated-filter-e029efdc` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 5,018.188 | 0.267 | `river_harness_20260928_035900_d016abce`; [checkpoint](#2026-09-28--validated-root-row-filter-checkpoint) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -630,3 +631,61 @@ passing artifacts are `river_harness_20260928_033515_ea8d3e34`,
 `river_harness_20260928_033556_9e1ab7f7` and
 `river_harness_20260928_033620_76986eb1` under the harness `runs`
 directory. The probe remains unmerged; it is not a new baseline.
+
+## 2026-09-28 — Validated root row filter checkpoint
+
+Branch `feature/stock-validated-root-filter`, source commit `e029efdc`,
+ticket `tic-72e5`. A mandatory root-local integer comparison is now tested
+after full stored-row validation and before publication into SQL value lanes.
+The filter is compiled from the existing root `WHERE` leaves and applies only
+to direct signed integer column/literal comparisons. Surviving rows still
+pass through the canonical SQL three-valued predicate evaluator. The scan
+skips rejected rows internally; it does not report them as end of scan.
+Persisted-row corruption is reported even when the row fails the filter.
+
+Focused row-codec, JOIN and plan-counter tests passed, including reversed
+comparisons, `AND`, `OR`, and validation before rejection. The expected
+`EXPLAIN ANALYZE` root count changed from two published candidates to one.
+A clean full `./gradlew --no-daemon clean test` passed in 2m53s (116 tasks).
+The candidate distribution is retained at
+`/private/tmp/river-stock-evidence/validated-filter-program/`.
+
+The 2-second warmup/10-second measured A–B–B–A diagnostic returned
+4,054.030 / 4,526.338 / 4,542.740 / 4,049.040 TPS, all passed, with
+artifacts `river_harness_20260928_034912_0aa43a25`,
+`river_harness_20260928_034933_136cdb9e`,
+`river_harness_20260928_034952_c6b49c4e`, and
+`river_harness_20260928_035012_da41a791`.
+
+The longer interleaved River runs used harness `df66a3a`, sample Stock
+Level, one worker and warehouse, seed 42, READ COMMITTED, retry limit 3,
+durable local WAL, loopback TCP/TLS, GraalVM 25.0.4 JVM `-Xmx1g`,
+5-second warmup and 30-second measurement. The only binary difference was
+the engine JAR. All runs passed invariants and cleanup, with zero retries,
+failed outcomes or unknown commits. The four artifacts were eligible with
+identical comparison key
+`92304f6559add6ca75ccead01a5dbc118982216b805a8f00f784346d5af797a2`.
+
+| Order | River engine | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| A1 | `4b5004fc` control | 4,576.140 | 0.258 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_035733_fd2fd966` |
+| B1 | `e029efdc` validated filter | 5,029.350 | 0.265 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_035817_ca6ea11f` |
+| B2 | `e029efdc` validated filter | 5,018.188 | 0.267 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_035900_d016abce` |
+| A2 | `4b5004fc` control | 4,449.000 | 0.303 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_035944_cd31b7fb` |
+
+Mean candidate/control committed TPS was 1.113. The subsequent
+MariaDB–River–River–MariaDB pair used the same manifest and comparison key.
+MariaDB used its harness-owned Unix socket; River used TCP/TLS. All four
+passed invariants and cleanup with zero retries, failures or unknown commits.
+
+| Order | Target | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| M1 | MariaDB | 6,816.334 | 0.182 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_040030_908a2ed2` |
+| R1 | River `e029efdc` | 4,888.125 | 0.302 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_040114_1d52b835` |
+| R2 | River `e029efdc` | 4,752.530 | 0.313 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_040158_a3b40139` |
+| M2 | MariaDB | 6,583.543 | 0.186 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_040240_3d869c6d` |
+
+Mean MariaDB/River committed TPS was 1.390. The generic filter is accepted;
+the Stock Level ticket remains open. Next work should measure the remaining
+count-query, district-query and protocol time on this accepted build, then
+target the largest verified component.
