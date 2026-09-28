@@ -13,55 +13,39 @@ created: 2026-09-28T01:59:00Z
 ---
 # Close the Stock Level join performance gap
 
-The one-worker sample Stock Level baseline at `c9c216d3` was 1,065–1,099
-commits/s for River and 5,981–5,996 for MariaDB. The count query accounted
-for 81% of the measured transaction-time difference. River joined about 207
-`order_line` rows before applying the stock quantity filter; MariaDB selected
-stock first and performed about 45 indexed order-line lookups.
+The one-worker `sample stock-level` workload reached 10,328.801 River
+commits/s; a matched four-run comparison averaged 10,384.614 for River and
+6,792.043 for MariaDB. Full cardinality is different: it loads 100,000
+stock and about 300,000 order-line rows. Costed inner JOIN ordering at River
+`34ee0800` raised the two-run full-profile mean from 23.732 to 1,135.756
+commits/s, while a matched MariaDB control reached 4,848.308. This is
+diagnostic workload evidence, not audited TPC-C. See the
+[full-profile checkpoint](../performance-checkpoints.md#2026-09-28--full-stock-level-costed-inner-join-order).
 
-The accepted root filter, numeric JOIN text-copy pruning, inline exact
-`COUNT(DISTINCT)` set, singleton block row store, and validated root row
-filter raised the measured SQL-path River baseline to 5,018.188 commits/s.
-A generic one-request transaction program then raised River's latest
-measured Stock Level baseline to 10,328.801 commits/s. The final matched
-MariaDB–River–River–MariaDB pair averaged 6,792.043 versus 10,384.614
-commits/s: River was 1.529x faster for this one-worker workload. The
-whole-transaction gap is closed. The separately timed count JOIN still
-cost about 101 µs in River versus 56 µs in MariaDB on the SQL path;
-JOIN stage startup, scan and prepared-query costs remain under
-investigation. See [the latest checkpoint](../performance-checkpoints.md#2026-09-28--stock-level-read-program-checkpoint).
-
-The next engine fix is to select the cheaper root role for eligible inner
-JOINs using table cardinality and access costs. On the full profile, the
-accepted stock-first plan scanned 100,000 stock rows for each count query
-and reached 25.31 commits/s. A temporary order-line-first SQL diagnostic
-reached 903.23 commits/s on a two-read request path; MariaDB reached
-4,863.22 commits/s. The same reversed SQL performed poorly on the sample
-profile. The planner must choose based on available statistics or another
-bounded cardinality estimate, preserve SQL semantics, and avoid
-workload-specific rules. See [the full-cardinality diagnostic](../performance-checkpoints.md#2026-09-28--stock-level-full-cardinality-join-order-diagnostic).
-
-A prepared JOIN table-resolution cache lowered isolated binding cost but
-changed matched sample whole-workload throughput by only 0.46%, within
-adjacent variation. It was not promoted. Reassess binding only after fixing
-JOIN order and measuring the remaining full-profile cost.
+The remaining full-profile gap is in the `order_line` scan and repeated
+indexed `stock` probes. The current nested-loop path opens and closes a
+tuple-index scan for each outer row, then fetches the base row. River already
+has a direct exact primary-key fetch API; its use for joins needs the same
+visibility and source-lock guarantees as the scan path.
 
 ## Delivery
 
-- Evaluate safe root-only `WHERE` conjuncts before JOIN probes in both River
-  join executors, preserving SQL three-valued logic, outer joins and errors.
-- Use the same stock-first SQL order in the standalone harness when it is the
-  faster safe choice. Keep the River engine free of workload-specific rules.
-- Measure the remaining count-query and transaction time. Continue with one
-  generic mechanism per feature branch, using actual plan counters and matched
-  River/MariaDB runs. Stop when the measured gap is closed or a concrete
-  remaining cost is isolated and assigned a separate ticket.
+- Use exact primary-key point fetches for eligible inner JOIN probes without
+  changing SQL results, read-your-writes, isolation, lock protection, or
+  failure cleanup.
+- Profile root scanning, probe lookup, row decoding and transaction overhead
+  after that change. Optimize the largest verified remaining costs through
+  generic engine mechanisms, one feature checkpoint at a time.
+- Keep the `sample` gain while making River faster than MariaDB on matched
+  `full stock-level` runs. Continue improvements while targeted evidence
+  shows a repeatable gain.
 
 ## Acceptance
 
-Focused SQL tests cover rejected root rows, `AND`/`OR`, left joins, aggregate
-output and an expression-error boundary. A clean full test build passes. Two
-identical samples per variant pass validation, accounting and cleanup; a
-longer interleaved comparison resolves host variation. Record commands,
-versions, immutable artifacts, plan counts and the decision in
-`docs/performance-checkpoints.md`.
+Focused tests cover matching and missing keys, pending writes, READ COMMITTED
+and SERIALIZABLE behavior, cancellation and scan cleanup. A clean full test
+build passes. Use at least two identical samples per variant, then longer
+interleaved full-profile River/MariaDB samples with matching eligible
+comparison keys, successful invariants and zero failed or unknown outcomes.
+Check the sample profile for regression. Record commands, versions, source
+commits, artifacts and the decision in `docs/performance-checkpoints.md`.

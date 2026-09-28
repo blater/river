@@ -25,6 +25,7 @@ and runtime configuration.
 | 2026-09-28 03:19:17 | `feature/stock-singleton-row-store` | `tic-72e5` | River `1bf08325`; harness `df66a3a`, version `singleton-1bf08325` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 4,424.739 | 0.273 | `river_harness_20260928_031909_32bac37c`; [checkpoint](#2026-09-28--single-row-store-checkpoint) |
 | 2026-09-28 03:59:08 | `feature/stock-validated-root-filter` | `tic-72e5` | River `e029efdc`; harness `df66a3a`, version `validated-filter-e029efdc` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 5,018.188 | 0.267 | `river_harness_20260928_035900_d016abce`; [checkpoint](#2026-09-28--validated-root-row-filter-checkpoint) |
 | 2026-09-28 04:25:36 | River `feature/stock-validated-root-filter`; harness `feature/stock-level-program` | `tic-72e5` | River `e029efdc` (merged `2d21b5e5`); harness `4c16840` (merged `dae4786`), version `validated-filter-e029efdc` | `sample stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 10,328.801 | 0.130 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_042529_a09ebfaa`; [checkpoint](#2026-09-28--stock-level-read-program-checkpoint) |
+| 2026-09-28 07:02:16 UTC | `feature/inner-join-order-cost` | `tic-72e5` | River `34ee0800`, version `join-cost-34ee0800`; harness `7c4b90d` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,131.222 | 1.109 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_070044_7e89c8f0`; [checkpoint](#2026-09-28--full-stock-level-costed-inner-join-order) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -838,3 +839,75 @@ whole-workload improvement in short adjacent samples. Neither candidate was
 promoted. The next engine change is cardinality-aware ordering for eligible
 inner JOIN roles, followed by measurement of indexed inner probes and row
 scanning on the full profile.
+
+## 2026-09-28 — Full Stock Level costed inner JOIN order
+
+River `34ee0800` chooses the lower estimated access cost for eligible
+two-relation inner JOINs with analyzed tables. It accounts for the constrained
+prefix of a compound primary key, root rows visited, and estimated JOIN
+probes. The harness `7c4b90d` runs `ANALYZE TABLE stock` and `ANALYZE TABLE
+order_line` after validating the River full-profile load. The Stock Level SQL
+and one-request program are unchanged. A clean `./gradlew --no-daemon clean
+test`, focused planner tests, `go test ./...`, and `go vet ./...` passed.
+
+The two River builds came from `master` `971305e1` and feature `34ee0800`.
+Both used the same harness commit, GraalVM 25.0.4 JVM with `-Xmx1g`,
+macOS/arm64, READ COMMITTED, durable local WAL, one worker and warehouse,
+seed 42, retry limit 3, and the `full stock-level` workload. The commands
+changed only `--river-executable` and `--river-version` between builds:
+
+```sh
+./benchmark run river tpcc full stock-level \
+  --river-executable=BUILD/river --river-version=BUILD-LABEL \
+  --warmup=1s --duration=3s --workers=1 --warehouses=1 \
+  --seed=42 --max-retries=3
+```
+
+| Short order | Build | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| A1 | master | 19.318 | 89.194 | `river_harness_20260928_063308_897c0511` |
+| B1 | feature | 1,010.026 | 1.621 | `river_harness_20260928_065139_0cc5fb26` |
+| B2 | feature | 1,018.242 | 1.309 | `river_harness_20260928_065313_b4933876` |
+| A2 | master | 19.653 | 76.087 | `river_harness_20260928_065444_84ad8432` |
+
+The longer sequence used `--warmup=5s --duration=30s` with the other
+options unchanged:
+
+| Long order | Build | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| A1 | master | 23.866 | 61.800 | `river_harness_20260928_065623_12323ec2` |
+| B1 | feature | 1,140.290 | 1.056 | `river_harness_20260928_065833_38d8ff71` |
+| B2 | feature | 1,131.222 | 1.109 | `river_harness_20260928_070044_7e89c8f0` |
+| A2 | master | 23.598 | 62.521 | `river_harness_20260928_070257_047f0667` |
+
+These artifacts are under `/private/tmp/river-harness-stock-analyze/runs/`.
+Each sequence had an identical eligible comparison key within its four
+runs: `3d606a7f865c6ab38afd83034a3cc80f9477a9c89a07d1b5041319e82d45e585`
+for short and `1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`
+for long. Every run passed full-load and post-run invariants with zero
+retries, failed or unknown outcomes. Mean long-run throughput rose from
+23.732 to 1,135.756 TPS, a 47.86-fold change for this workload.
+
+A provisional estimator at River `29a9df94` chose stock first because it
+costed only the first column of `order_line`'s compound primary key. Its
+reported run `river_harness_20260928_063444_69363461` reached 24.65 TPS.
+The compound-key correction and focused regression test are in `34ee0800`;
+the provisional run is excluded from the accepted feature comparison.
+`slopmark` flagged the provisional root-cost file at 104.105. Splitting
+filter selectivity, compound-prefix costing, and root costing brought the
+three touched files to 13.489, 19.854, and 12.144 respectively; the tool
+reported shallow boundary coverage.
+
+One matched MariaDB full-profile control with 5 seconds warmup and 30
+seconds measured reached 4,848.308 TPS, p99 0.231 ms, artifact
+`river_harness_20260928_070520_953426cb`. It has the same eligible long-run
+comparison key, passed invariants, and had zero retries, failures or unknown
+outcomes. River's two-run mean remains 4.27 times lower; this one MariaDB
+control is diagnostic, not an audited cross-database performance claim.
+
+Decision: accept generic costed inner JOIN ordering as a recoverable feature
+checkpoint. Keep `tic-72e5` open. The next mechanism to test is an exact
+primary-key inner probe using River's existing point fetch path while
+preserving source locks and visibility. The current JOIN path opens and
+closes an indexed scan for each matching outer row; the remaining cost must
+be measured against the accepted feature before attribution.
