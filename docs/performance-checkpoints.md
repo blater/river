@@ -1233,3 +1233,66 @@ Accept this generic row-publication reduction. Keep `tic-72e5` open: the
 measured full-profile gap to the earlier MariaDB diagnostic is much larger,
 and no new cross-database comparison or automatic physical-index eligibility
 check was completed here.
+
+## 2026-09-28 — Residual full Stock Level JOIN diagnosis
+
+The accepted River source was integration commit `f77bb51a`, with the
+`9511f692e45653b2557ed39a53f3a829db8a45ae50744cea085813a7e4e2fc2a`
+engine JAR. A new independent MariaDB `full stock-level` run passed at
+4,671.164 TPS, p99 0.303 ms
+(`river_harness_20260928_121525_6944a942`). It used harness `eba8ab0`,
+one worker and warehouse, seed 42, retry limit 3, 5s warmup and 30s measured.
+Its eligible comparison key matched the accepted River baseline's key, and it
+had zero failures, unknown commits and retries. The accepted River baseline
+of 1,234.227 TPS is roughly 0.264 times this MariaDB rate. The measurements
+were not interleaved, so this ratio is only a guide, not a current paired
+cross-database performance result. Actual index shapes were manually matched
+earlier; the harness still does not enforce physical-index parity.
+
+An isolated, unmerged sampled-timing build on the accepted source measured the
+unchanged JOIN path. Approximately 225 `stock` index opens occurred per count
+query. Sampled `SqlBlockJoinStage.accumulateScalar` time averaged 0.633 ms per
+query, of which `rows.next` accounted for 0.615 ms; aggregate work was about
+0.013 ms. A sampled indexed `stock` open was about 0.9 µs. Its transaction
+admission, storage open, base-row read and decode observations are retained in
+`/private/tmp/river-stock-latest-timing.txt`,
+`/private/tmp/river-stock-storage-open-timing.txt` and
+`/private/tmp/river-stock-join-timing.txt`. The sampling instrumentation
+changes execution cost, so these are phase diagnostics, not throughput
+baselines. The code remained in an isolated worktree.
+
+Two general JOIN shortcuts were then tested without changing schema or SQL:
+
+| Candidate | 5s/30s interleaved full-profile TPS, in run order | Longer adjacent check | Decision |
+| --- | --- | --- | --- |
+| Stop advancing a proven exact unique inner cursor after its one candidate | B 1,420.398; A 1,319.199; A 1,206.965; B 1,221.632 | 5s/60s A 1,274.635, B 1,260.643 | No repeatable gain; reject |
+| Reset only active JOIN stages for each root row | B 1,137.394; A 1,181.498; A 1,199.162; B 1,201.363 | Candidate mean 1,169.379 versus control 1,190.330 TPS | Candidate 1.8% below control; reject |
+
+Here A is the accepted `f77bb51a` engine build and B is the isolated
+candidate. The exact-unique 60-second artifacts are
+`river_harness_20260928_120927_112fe1f1` and
+`river_harness_20260928_121201_5b4f18c1`; its 30-second artifacts are
+`river_harness_20260928_120025_57359cbf`,
+`river_harness_20260928_120228_ace1d0e7`,
+`river_harness_20260928_120432_c48c92ed` and
+`river_harness_20260928_120643_a7e46bd8`. Focused tests covered a rejected
+left-JOIN `ON` candidate and pending insert/rollback behavior. The
+active-stage candidate was built from `feature/join-reset-active-stages`; its
+engine JAR SHA-256 was
+`db693b5f702bed80af3f17e40e1542b78c00d3959db470fe5337e08d1a229fb2`.
+The four 30-second active-stage artifacts are
+`river_harness_20260928_122526_f5c9816b`,
+`river_harness_20260928_122745_66d33f28`,
+`river_harness_20260928_123004_6ae5ddac` and
+`river_harness_20260928_123230_6d7bee10`. Its 1s/3s preliminary sequence
+was B 952.618, A 618.608, A 740.921, B 798.939 TPS and showed substantial
+host variation. Focused one-, multi- and left-JOIN tests passed. Slopmark for
+`SqlUniversalJoinSource` rose from 57.719 to 58.650. All listed reported
+artifacts passed validation and cleanup, were eligible within their matching
+sequence, and had zero failures, unknown commits and retries. Neither
+candidate is accepted or designated as a new baseline.
+
+The residual full-cardinality cost remains repeated indexed `stock` probes
+and wide base-row fetches. The next substantive candidate should reduce that
+work through a general projected lookup while preserving the declared index
+structure and SQL results. The `tic-72e5` ticket remains open.

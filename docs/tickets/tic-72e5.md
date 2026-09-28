@@ -50,6 +50,16 @@ stock-level` candidate also exceeded its control. See the
 This is a small local gain, not a new MariaDB comparison. A projected
 stock-key lookup and lower base-row fetch/decode cost remain the larger targets.
 
+A later sampled timing pass found roughly 225 indexed `stock` opens per full
+Stock Level count query and placed most query time in JOIN row production.
+Stopping a proven unique inner cursor after one candidate and limiting the
+per-root stage reset to active JOIN stages both passed focused tests, but
+neither produced a repeatable full-profile throughput gain. Their source was
+not accepted. A fresh independent MariaDB run reached 4,671.164 TPS against
+the accepted River baseline of 1,234.227 TPS, a rough River/MariaDB ratio of
+0.264; the runs were not interleaved. See the
+[residual JOIN diagnosis](../performance-checkpoints.md#2026-09-28--residual-full-stock-level-join-diagnosis).
+
 ## Delivery
 
 - Reprofile the accepted cache build. Measure tuple cursor descent and
