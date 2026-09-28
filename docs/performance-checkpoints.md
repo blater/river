@@ -911,3 +911,39 @@ primary-key inner probe using River's existing point fetch path while
 preserving source locks and visibility. The current JOIN path opens and
 closes an indexed scan for each matching outer row; the remaining cost must
 be measured against the accepted feature before attribution.
+
+## 2026-09-28 — Exact primary-key JOIN point-fetch diagnostic
+
+Feature branch `feature/exact-primary-join-probe`, River `b21f8461`, used
+River's existing exact primary-key fetch for eligible JOIN probes outside
+SERIALIZABLE transactions. SERIALIZABLE retained the scan path. A focused
+test covered missing keys, pending insert/update/delete, rollback, a
+SERIALIZABLE query and early cursor close; `./gradlew --no-daemon clean test`
+passed. A JFR diagnostic at `/private/tmp/river-stock-point-profile.jfr`
+sampled the new `fetchPoint` path, but B-tree child lookup, tuple-key
+comparison and base-row access remained the leading connection CPU samples.
+
+The standalone harness ran `full stock-level`, one worker and warehouse,
+seed 42, READ COMMITTED, retry limit 3, durable local WAL, GraalVM 25.0.4
+JVM `-Xmx1g`, 5 seconds warmup and 30 seconds measured. Only the River
+executable/version changed. The two builds were accepted `34ee0800` and
+point candidate `b21f8461`; harness source was `7c4b90d`. All four runs
+were eligible under comparison key
+`1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`,
+passed full-load and post-run invariants, and had zero retries, failed or
+unknown outcomes. Artifacts are under
+`/private/tmp/river-harness-stock-analyze/runs/`.
+
+| Order | Build | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| A1 | accepted JOIN order | 1,218.767 | 0.972 | `river_harness_20260928_073255_0912150a` |
+| B1 | point fetch | 1,213.001 | 1.064 | `river_harness_20260928_073500_ca1e1c68` |
+| B2 | point fetch | 1,215.667 | 1.024 | `river_harness_20260928_073712_b09ab778` |
+| A2 | accepted JOIN order | 1,132.165 | 1.128 | `river_harness_20260928_073929_3ee8399a` |
+
+Candidate mean was 1,214.334 TPS and control mean 1,175.466 TPS, but the
+two controls differed by 86.602 TPS. The short adjacent sequence also moved
+within that range of host variation. Decision: do not merge the point-fetch
+feature on this evidence. Repeated cursor setup alone has not established a
+material gain; isolate tuple-key traversal, base-row lookup and wide-row
+decode costs before the next production optimization.
