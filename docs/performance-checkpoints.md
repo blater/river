@@ -470,3 +470,24 @@ the touched existing production classes increased by at most 1.87 points;
 the new text-usage proof owner scored 29.29. Decision: accept this generic
 text-copy reduction as an incremental JOIN improvement. Ticket `tic-72e5`
 remains open because Stock Level remains slower than MariaDB.
+
+The subsequent MariaDB–River–River–MariaDB comparison used the same harness
+catalogue and workload settings, with the integrated River source at
+`16736705`. All four artifacts were eligible under the same comparison key
+above, passed invariants and owned cleanup, and recorded zero retries, failed
+outcomes or unknown commits. River used TCP/TLS and MariaDB used its harness
+Unix socket, so the ratio describes whole targets with different transports.
+
+| Order | Target | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| M1 | MariaDB | 5,855.391 | 0.198 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_022305_92bdfe71` |
+| R1 | River | 2,065.196 | 0.599 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_022354_1174e772` |
+| R2 | River | 2,186.190 | 0.594 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_022443_f3f6d6bd` |
+| M2 | MariaDB | 6,079.131 | 0.190 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_022530_2e3d9e04` |
+
+The mean MariaDB/River throughput ratio was 2.807. A temporary diagnostic
+build timed 4,001 steady-state Stock Level calls per target. River averaged
+65.5 µs for the district read and 275.4 µs for the count query; MariaDB
+averaged 19.3 and 42.2 µs respectively. The MariaDB timing window fell near
+the warmup/measurement boundary, so these per-statement figures identify the
+large remaining count-query cost but are not a precise paired latency claim.
