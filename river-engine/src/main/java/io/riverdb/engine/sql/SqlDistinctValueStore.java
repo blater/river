@@ -2,9 +2,12 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 
-/** Exact typed set over the shared paged row-store and external-order engine. */
+/** Exact typed set with bounded inline values and paged external-order spill. */
 final class SqlDistinctValueStore {
+  private static final int INLINE_VALUES = 16;
   private final SqlBlockRowStore rows;
+  private final SqlSessionShapeBudget budget;
+  private final SqlBlockRow[] inline = new SqlBlockRow[INLINE_VALUES];
   private final SqlBlockSchema schema = new SqlBlockSchema();
   private final SqlBlockRow candidate = new SqlBlockRow();
   private final SqlBlockRow probe = new SqlBlockRow();
@@ -13,28 +16,32 @@ final class SqlDistinctValueStore {
   private final SqlDistinctValueKey key = new SqlDistinctValueKey();
   private final long[] finishCount = new long[1];
   private long distinctCount;
+  private int inlineCount;
+  private int inlineRead;
+  private boolean spilled;
   private boolean finished;
   private boolean finalPresent;
 
   SqlDistinctValueStore(SqlSessionShapeBudget budget) {
+    this.budget = budget;
     rows = new SqlBlockRowStore(budget);
   }
 
   StatusCode begin(int descriptor) {
+    StatusCode status = rows.close();
+    if (!status.isOk()) return status;
     key.begin(descriptor);
     schema.set(1);
     schema.setColumn(0, "distinct", descriptor, true);
-    StatusCode status = schema.status();
+    status = schema.status();
     if (status.isOk()) status = prepareRows();
-    if (status.isOk()) status = rows.begin(schema, 0, false);
     resetState();
     return status;
   }
 
   StatusCode reset() {
     StatusCode status = rows.close();
-    if (status.isOk()) status = rows.begin(schema, 0, false);
-    resetState();
+    if (status.isOk()) resetState();
     return status;
   }
 
@@ -54,7 +61,7 @@ final class SqlDistinctValueStore {
     if (status.isOk() && key.isText()) {
       status = candidate.setText(0, source.text(lane), 0, source.textLength(lane));
     }
-    return status.isOk() ? rows.append(candidate) : status;
+    return status.isOk() ? addCandidate() : status;
   }
 
   StatusCode add(SqlBlockRow source, int lane) {
@@ -67,7 +74,28 @@ final class SqlDistinctValueStore {
     if (status.isOk() && key.isText()) {
       status = candidate.setText(0, source.text(lane), 0, source.textLength(lane));
     }
-    return status.isOk() ? rows.append(candidate) : status;
+    return status.isOk() ? addCandidate() : status;
+  }
+
+  private StatusCode addCandidate() {
+    if (spilled) return rows.append(candidate);
+    for (int index = 0; index < inlineCount; index++) {
+      if (key.same(candidate, inline[index])) return StatusCode.OK;
+    }
+    if (inlineCount == inline.length) {
+      StatusCode status = rows.begin(schema, 0, false);
+      if (!status.isOk()) return status;
+      spilled = true;
+      for (int index = 0; index < inlineCount; index++) {
+        status = rows.append(inline[index]);
+        if (!status.isOk()) return status;
+      }
+      return rows.append(candidate);
+    }
+    if (inline[inlineCount] == null) inline[inlineCount] = new SqlBlockRow(budget);
+    StatusCode status = inline[inlineCount].copyFrom(candidate);
+    if (status.isOk()) inlineCount++;
+    return status;
   }
 
   StatusCode copyFrom(SqlDistinctValueStore source) {
@@ -86,9 +114,11 @@ final class SqlDistinctValueStore {
   StatusCode finish(long[] result) {
     if (result == null || result.length == 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (!finished) {
-      StatusCode status = rows.finish();
-      if (status.isOk()) status = countDistinct();
-      if (!status.isOk()) return status;
+      if (spilled) {
+        StatusCode status = rows.finish();
+        if (status.isOk()) status = countDistinct();
+        if (!status.isOk()) return status;
+      } else distinctCount = inlineCount;
       finished = true;
     }
     result[0] = distinctCount;
@@ -97,13 +127,16 @@ final class SqlDistinctValueStore {
 
   StatusCode rewindFinal() {
     if (!finished) return StatusCode.INVALID_EXTERNAL_INPUT;
-    rows.rewind();
+    if (spilled) rows.rewind();
+    else inlineRead = 0;
     finalPresent = false;
     return StatusCode.OK;
   }
 
   StatusCode readFinal(SqlBlockRow destination) {
     if (!finished || destination == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!spilled) return inlineRead >= inlineCount ? StatusCode.CONFLICT
+        : destination.copyFrom(inline[inlineRead++]);
     while (true) {
       StatusCode status = rows.next(probe);
       if (!status.isOk()) return status;
@@ -154,7 +187,11 @@ final class SqlDistinctValueStore {
   }
 
   private void resetState() {
+    for (int index = 0; index < inlineCount; index++) inline[index].reset(0);
     distinctCount = 0;
+    inlineCount = 0;
+    inlineRead = 0;
+    spilled = false;
     finished = false;
     finalPresent = false;
   }

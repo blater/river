@@ -21,6 +21,7 @@ and runtime configuration.
 | 2026-09-28 00:57:54 | `ticket/tic-celegorm-order-status-program` | `tic-celegorm` | River `8a37147f`; harness `f8e615a`, version `tic-celegorm-clean-jvm` | `sample order-status`; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 20s measured | 12,913.782 | 0.122 | `river_harness_20260928_005746_33a8ee5a`; [checkpoint](#2026-09-28--one-request-order-status-program) |
 | 2026-09-28 02:05:19 | `feature/stock-level-root-filter` | `tic-72e5` | River `40470245`; harness `2ab18c9`, version `40470245-stock-first-candidate` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 30s measured | 1,957.795 | 0.618 | `river_harness_20260928_020507_3d0d57eb`; [checkpoint](#2026-09-28--stock-level-root-filter-checkpoint) |
 | 2026-09-28 02:20:12 | `feature/stock-join-text-pruning` | `tic-72e5` | River `e56da68c`; harness `df66a3a`, version `e56da68c-text-prune-candidate` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 30s measured | 2,062.893 | 0.598 | `river_harness_20260928_022000_32b6ff1c`; [checkpoint](#2026-09-28--numeric-join-text-materialization-checkpoint) |
+| 2026-09-28 02:59:16 | `feature/stock-distinct-inline` | `tic-72e5` | River `209f8b37`; harness `df66a3a`, version `distinct-inline-209f8b37` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 3,817.486 | 0.354 | `river_harness_20260928_025909_cd482460`; [checkpoint](#2026-09-28--inline-distinct-checkpoint) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -502,3 +503,67 @@ did not establish a Stock Level gain: 2,094.97, 2,007.46, 2,068.78 and
 `river_harness_20260928_023132_906692c2` and
 `river_harness_20260928_023153_f693ba26` under the harness `runs` directory.
 The probe remains unmerged and is not a new baseline.
+
+## 2026-09-28 — inline DISTINCT checkpoint
+
+Ticket [`tic-72e5`](tickets/tic-72e5.md) remains open. Target-local query
+timing after text pruning put River's Stock Level count query near 275 µs,
+versus about 65 µs for its district read. With an invalid zero-threshold
+diagnostic that still scanned 100 stock rows but made no JOIN probes, the
+count query took about 211 µs. These timings were diagnostic, not workload
+baselines. Temporary engine timing on the normal workload then found about
+30 µs finalizing the small `COUNT(DISTINCT)` set and 25 µs opening a paged
+row store for its single output. Instrumentation changed absolute timings;
+the stage estimates must not be added to the uninstrumented query time.
+
+On branch `feature/stock-distinct-inline`, commit `209f8b37`, the generic
+`COUNT(DISTINCT)` value store keeps up to 16 exact typed values in retained
+rows, using its existing comparison semantics. A seventeenth distinct value
+spills all values into the existing paged external-order store. There is no
+cardinality limit. Focused tests cover decimal and floating-point equality,
+text, the spill boundary, large spills and copying a finalized set. The
+candidate distribution is at
+`/private/tmp/river-stock-evidence/distinct-inline-program/`. Slopmark for
+the DISTINCT owner rose from 56.60 to 74.84; review found one owner for the
+inline and spilled representations, with no workload-specific SQL policy.
+
+The 5-second warmup/30-second measured River control–candidate–candidate–
+control sequence used harness `df66a3a`, sample Stock Level, one worker and
+warehouse, seed 42, READ COMMITTED, retry limit 3, durable local WAL,
+loopback TCP/TLS, and GraalVM 25.0.4 JVM `-Xmx1g`. The only binary
+difference was the engine JAR. All four runs were eligible under comparison
+key `92304f6559add6ca75ccead01a5dbc118982216b805a8f00f784346d5af797a2`,
+passed invariants and owned cleanup, and recorded zero retries, failed
+outcomes or unknown commits.
+
+| Order | River engine | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| A1 | `f44e6948` control | 2,102.037 | 0.606 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_025743_8a19ca06` |
+| B1 | `209f8b37` inline DISTINCT | 3,744.786 | 0.380 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_025825_b5406ae2` |
+| B2 | `209f8b37` inline DISTINCT | 3,817.486 | 0.354 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_025909_cd482460` |
+| A2 | `f44e6948` control | 2,126.206 | 0.591 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_025951_c020e6c9` |
+
+The mean candidate/control TPS ratio was 1.789. An earlier 2-second
+warmup/10-second measured A–B–B–A sequence was also directional:
+1,996.361/3,253.549/3,264.736/1,924.953 TPS. The short candidate JAR
+preceded the final retained-value clearing change; the 30-second artifacts
+above use the committed source.
+
+A fresh MariaDB–River–River–MariaDB sequence used the same 5-second warmup,
+30-second measured workload and comparison key. Every run passed invariants
+and cleanup with zero retries, failed outcomes or unknown commits. River
+used TCP/TLS; MariaDB used the harness-owned Unix socket.
+
+| Order | Target | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| M1 | MariaDB | 6,612.378 | 0.205 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_030047_442234e6` |
+| R1 | River `209f8b37` | 3,705.049 | 0.402 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_030134_5552506d` |
+| R2 | River `209f8b37` | 3,622.254 | 0.371 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_030219_c91e101d` |
+| M2 | MariaDB | 6,352.537 | 0.221 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_030301_1e876091` |
+
+The mean MariaDB/River TPS ratio was 1.769 for these whole targets. The
+remaining measured server costs include opening the one-row scalar result
+store and starting the JOIN scan. They are the next generic mechanisms to
+investigate. The final clean `./gradlew --no-daemon clean test` passed in
+3m15s (116 tasks). Decision: accept the exact inline DISTINCT mechanism as
+an incremental improvement; the ticket stays open.

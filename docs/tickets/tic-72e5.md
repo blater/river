@@ -19,6 +19,14 @@ for 81% of the measured transaction-time difference. River joined about 207
 `order_line` rows before applying the stock quantity filter; MariaDB selected
 stock first and performed about 45 indexed order-line lookups.
 
+The accepted root filter, numeric JOIN text-copy pruning, and inline exact
+`COUNT(DISTINCT)` set raised the measured River baseline to 3,817.486
+commits/s. The latest matched MariaDB–River–River–MariaDB pair averaged
+6,482.457 versus 3,663.652 commits/s, with passing invariants and zero
+retries. Temporary server timing found about 25 µs opening a paged output
+store for the single scalar result; JOIN stage startup and the stock scan
+also remain material. See [the checkpoints](../performance-checkpoints.md#2026-09-28--inline-distinct-checkpoint).
+
 ## Delivery
 
 - Evaluate safe root-only `WHERE` conjuncts before JOIN probes in both River
