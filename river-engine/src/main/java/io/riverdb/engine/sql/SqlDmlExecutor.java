@@ -20,6 +20,8 @@ final class SqlDmlExecutor {
   private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final SequenceValueResult sequenceValue = new SequenceValueResult();
+  private final SqlAcceptedRow acceptedInsert = new SqlAcceptedRow();
+  private final SqlAcceptedRow acceptedUpdate = new SqlAcceptedRow();
 
   private int matchedRowCount;
   private long directKey;
@@ -105,7 +107,8 @@ final class SqlDmlExecutor {
     }
     long key = bound.table.hasIdentity()
         ? generatedInsertKey : rows.insertKey();
-    return session.insertRow(bound.table, key, rows.insertRow());
+    acceptedInsert.accept(session, bound.table, rows.insertRow());
+    return session.insertAcceptedSqlRow(bound.table, key, acceptedInsert);
   }
 
   private StatusCode executeUpdate(
@@ -179,7 +182,8 @@ final class SqlDmlExecutor {
       status = rows.encodeUpdate(command, bound, fetched, primaryKey);
     }
     if (status.isOk()) {
-      status = session.updateRow(bound.table, primaryKey, rows.updatedRow());
+      acceptedUpdate.accept(session, bound.table, rows.updatedRow());
+      status = session.updateAcceptedSqlRow(bound.table, primaryKey, acceptedUpdate);
     }
     return status;
   }

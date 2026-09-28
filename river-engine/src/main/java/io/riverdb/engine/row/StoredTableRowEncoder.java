@@ -2,15 +2,13 @@ package io.riverdb.engine.row;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.base.type.SqlValueBuffer;
-import io.riverdb.base.type.SqlValueDomain;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.FormatBytes;
 import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
-/** Prevalidates then atomically writes one canonical stored row. */
+/** Checks the typed row shape then atomically writes one stored row. */
 final class StoredTableRowEncoder {
   private StoredTableRowEncoder() {
   }
@@ -59,10 +57,7 @@ final class StoredTableRowEncoder {
         int bytes = values.textByteLengthAt(index);
         if (bytes < 0 || bytes > HeapPage.MAXIMUM_ROW_BYTES - length) return -1;
         length += bytes;
-      } else if (SqlTypeDescriptor.isWideDecimal(descriptor)) {
-        if (!SqlValueDomain.validDecimal128(
-            descriptor, values.highValueAt(index), values.valueAt(index))) return -1;
-      } else if (!SqlValueDomain.validFixed(descriptor, values.valueAt(index))) return -1;
+      }
     }
     return length <= table.encodedMaximumRowBytes() ? length : -1;
   }

@@ -4,7 +4,7 @@ import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.format.btree.TupleKeyCodec;
 import java.nio.ByteBuffer;

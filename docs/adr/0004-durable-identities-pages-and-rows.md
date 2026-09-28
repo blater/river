@@ -44,7 +44,9 @@ until an upgrade ADR and fixtures select it.
   defined by that format before creating a trusted bounded view. Page v4 CRC32C
   covers bytes 0–119 of the header only; its value/complement occupy bytes
   120–127. No page payload checksum is computed on reads or writes. Payload
-  structure is validated by its owning codec. Tuple-index root v4 records are
+  offsets and lengths are checked by their owning codec before access; ordinary
+  row reads do not revalidate River-written UTF-8, type domains, null-slot
+  padding, or other field content. Tuple-index root v4 records are
   208 bytes with structural/identity validation and no record CRC.
 - A `PageId`, `RowId`, `Lsn`, or `JournalPosition` is never substituted for
   another unit because their integer representations happen to fit.
@@ -70,6 +72,10 @@ payloads. A persisted payload change that remains structurally valid is no
 longer detected by page admission or offline page inspection. This is an
 explicit reduction of detection coverage, not a new guarantee of atomic writes.
 Repeated tuple-root decode performs no checksum calculation or checksum caching.
+Stored-row updates preserve unchanged typed bytes without a second content
+admission. Post-admission content damage that leaves structural metadata valid
+may remain undetected. Recovery retains its WAL framing and ordering checks;
+it does not perform a substitute full row-content scan.
 
 
 A single page size simplifies buffer, WAL, recovery, and access-method code.

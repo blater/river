@@ -2,7 +2,7 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.tuple.TupleShape;
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.format.btree.TupleKeyCodec;

@@ -1,12 +1,11 @@
 package io.riverdb.engine.row;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.FormatBytes;
 import java.nio.ByteBuffer;
 
-/** Publishes a previously validated row into reusable value storage. */
+/** Publishes a structurally bounded River-owned row into reusable value storage. */
 final class StoredTableRowPublisher {
   private StoredTableRowPublisher() {
   }
@@ -29,22 +28,23 @@ final class StoredTableRowPublisher {
       SqlValueBuffer destination) {
     int descriptor = table.typeDescriptorAt(index);
     if (StoredTableRowAccess.nullAt(source, start, index)) {
-      return destination.setNull(index, descriptor);
+      return destination.setStoredNull(index, descriptor);
     }
     int slot = start + table.fixedOffsetAt(index);
     if (!StoredTableRowEncoder.isText(descriptor)) {
       if (io.riverdb.base.type.SqlTypeDescriptor.isWideDecimal(descriptor)) {
-        return destination.setDecimal128(
+        return destination.setStoredScalar(
             index,
             descriptor,
             StoredTableRowAccess.wideHigh(source, slot),
             StoredTableRowAccess.wideLow(source, slot));
       }
       long value = StoredTableRowAccess.fixedValue(table, index, source, slot);
-      return destination.setFixed(index, descriptor, value);
+      return destination.setStoredScalar(index, descriptor, value >> 63, value);
     }
     int offset = FormatBytes.getInt(source, slot);
     int bytes = FormatBytes.getInt(source, slot + Integer.BYTES);
-    return destination.setTextBytes(index, descriptor, source, start + offset, bytes);
+    return destination.setStoredTextBytes(
+        index, descriptor, source, start + offset, bytes);
   }
 }

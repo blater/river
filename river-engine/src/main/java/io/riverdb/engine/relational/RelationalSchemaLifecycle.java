@@ -338,7 +338,7 @@ final class RelationalSchemaLifecycle {
       return status;
     }
     catalogScratch.flip();
-    return indexedTable.isValidRow(catalogScratch)
+    return indexedTable.hasSafeStoredRowLayout(catalogScratch)
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 

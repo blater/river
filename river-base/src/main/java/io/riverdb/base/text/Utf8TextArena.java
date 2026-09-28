@@ -150,6 +150,15 @@ public final class Utf8TextArena {
     if (scalars < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    return appendTrusted(source, offset, length);
+  }
+
+  /** Copies bytes from a structurally bounded River-owned stored value. */
+  public StatusCode appendTrusted(ByteBuffer source, int offset, int length) {
+    if (source == null || offset < 0 || length < 0
+        || offset > source.limit() - length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (length > maximumBytes - used) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -161,6 +170,22 @@ public final class Utf8TextArena {
     for (int index = 0; index < length; index++) {
       bytes[targetOffset + index] = source.get(offset + index);
     }
+    used += length;
+    lastOffset = targetOffset;
+    lastLength = length;
+    return StatusCode.OK;
+  }
+
+  /** Copies a previously admitted value from another reusable arena. */
+  public StatusCode appendTrusted(Utf8TextArena source, int offset, int length) {
+    if (source == null || !validRange(offset, length, source.used)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (length > maximumBytes - used) return StatusCode.RESOURCE_EXHAUSTED;
+    int targetOffset = used;
+    StatusCode status = ensureCapacity(used + length);
+    if (!status.isOk()) return status;
+    System.arraycopy(source.bytes, offset, bytes, targetOffset, length);
     used += length;
     lastOffset = targetOffset;
     lastLength = length;

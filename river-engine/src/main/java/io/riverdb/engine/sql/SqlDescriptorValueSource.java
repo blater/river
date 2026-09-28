@@ -1,7 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.row.SqlValueBuffer;
 
 /** Allocation-free value view over a decoded or materialized descriptor row. */
 final class SqlDescriptorValueSource {

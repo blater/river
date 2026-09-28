@@ -4,7 +4,7 @@ import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlComparison;
 import java.nio.ByteBuffer;
 
-/** One retained integer comparison over a fully validated stored row. */
+/** One retained integer comparison over a bounded fixed row prefix. */
 public final class StoredTableRowIntegerFilter implements StoredTableRowFilter {
   private int column = -1;
   private SqlComparison comparison;

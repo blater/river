@@ -1,11 +1,10 @@
 package io.riverdb.engine.row;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
 import java.nio.ByteBuffer;
 
-/** Canonical, bounded codec for descriptor-shaped stored table rows. Instances are caller-owned. */
+/** Bounded codec for River-owned descriptor rows. Instances are caller-owned. */
 public final class StoredTableRowCodec {
   private final StoredTableRowDecoder decoder = new StoredTableRowDecoder();
 
@@ -43,7 +42,7 @@ public final class StoredTableRowCodec {
         descriptor, expectedLogicalRowId, source, start, length, destination, filter, true);
   }
 
-  /** Validates every field while publishing text only when the caller will read it. */
+  /** Checks row structure while publishing text only when the caller will read it. */
   public StatusCode decode(
       TableDescriptor descriptor,
       long expectedLogicalRowId,

@@ -17,10 +17,14 @@ caller-owned `StatusDetail`. Diagnostics use stable event IDs, fixed typed
 fields, and `DEBUG | INFO | WARN | ERROR | FATAL` through a bounded/no-op-capable
 sink. Security audit records use a separate durable authenticated path.
 
-Validate public API, protocol, configuration, persisted bytes, replica input,
-and ownership transfers once. Construct a typed bounded value/view and trust it
-inside its declared lifetime; internal services do not repeat null/range checks
-for callers River controls.
+Validate public API, protocol, configuration, replica input, and newly computed
+values at their owning admission boundaries. Persisted River-written content is
+trusted; ordinary reads and updates check the structural identity, offsets and
+lengths needed for safe access without repeating UTF-8 or type-domain scans.
+Construct a typed bounded value/view and trust it inside its declared lifetime;
+internal services do not repeat null/range checks for callers River controls.
+Post-admission content damage may remain undetected. WAL framing and recovery
+checks retain their separate durable-ordering contract.
 
 Every retained or asynchronous buffer operation declares `borrow`, `transfer`,
 bounded `retain/release`, or `copy`. Published WAL/data views are immutable.

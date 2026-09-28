@@ -6,7 +6,7 @@ import io.riverdb.format.FormatBytes;
 import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import java.nio.ByteBuffer;
 
-/** Absolute primitive access shared by validation and publication. */
+/** Absolute primitive access for a structurally bounded stored row. */
 final class StoredTableRowAccess {
   private StoredTableRowAccess() {
   }
@@ -38,10 +38,4 @@ final class StoredTableRowAccess {
     return FormatBytes.getLong(source, slot + Long.BYTES);
   }
 
-  static boolean zero(ByteBuffer source, int offset, int length) {
-    for (int index = 0; index < length; index++) {
-      if (source.get(offset + index) != 0) return false;
-    }
-    return true;
-  }
 }

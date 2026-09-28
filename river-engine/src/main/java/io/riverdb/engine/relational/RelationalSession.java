@@ -668,6 +668,13 @@ public final class RelationalSession {
     return rowMutations.insertRow(table, key, row);
   }
 
+  public StatusCode insertAcceptedSqlRow(
+      TableDefinition table, long key, io.riverdb.engine.sql.SqlAcceptedRow row) {
+    return row == null || !row.belongsTo(this, table)
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : rowMutations.insertAcceptedRow(table, key, row.bytes());
+  }
+
   public StatusCode updateLong(
       TableDefinition table,
       long key,
@@ -678,6 +685,13 @@ public final class RelationalSession {
 
   public StatusCode updateRow(TableDefinition table, long key, ByteBuffer row) {
     return rowMutations.updateRow(table, key, row);
+  }
+
+  public StatusCode updateAcceptedSqlRow(
+      TableDefinition table, long key, io.riverdb.engine.sql.SqlAcceptedRow row) {
+    return row == null || !row.belongsTo(this, table)
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : rowMutations.updateAcceptedRow(table, key, row.bytes());
   }
 
   public StatusCode deleteLong(TableDefinition table, long key) {

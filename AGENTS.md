@@ -369,12 +369,37 @@ the refactor.
   validation, I/O status, or SQL errors. Translate exceptions from Java APIs at
   the adapter boundary. JDBC may create `SQLException` only at its public
   boundary.
-- Validate external/user input, SQL, protocol frames, configuration, persisted
-  bytes, and replica messages before admitting them.
+- Validate external/user input, SQL, protocol frames, configuration, and replica
+  messages at their owning admission boundary. Persisted data follows the
+  storage-trust policy below.
 - Trust validated typed values passed between River-owned internal services.
   Do not scatter redundant null/range checks where River controls every caller.
 - Diagnostics explain an outcome; they are not control flow. Avoid duplicate
   logging while propagating a status.
+
+## Storage trust and content integrity
+
+- Trust storage devices and River-written content in ordinary execution. Once
+  a value is admitted or correctly produced by River, do not repeatedly validate
+  its content during reads, updates, encoding, or internal transfers. This
+  includes UTF-8 scans and rechecking unchanged values against their existing
+  type or column constraints.
+- Validate new external values and newly computed or converted values where
+  their validity is established. Preserve SQL constraints, arithmetic error
+  checks, visibility, locking, ownership, and durable ordering.
+- Retain only lightweight structural checks needed to access the correct bytes
+  safely: bounds, lengths, identities, generations, and format compatibility at
+  their owning boundaries. Every retained hot-path check needs a named invariant
+  and evidence of no measurable steady-state performance regression; do not add
+  full-content scans as precautionary checks.
+- Explicit deep content validation and integrity inspection belong outside all
+  critical paths, preferably in independently invoked standalone utilities.
+  Do not run them implicitly during reads, updates, commit, checkpoint, recovery,
+  or startup. Checks required to establish crash recovery and WAL framing remain
+  part of their existing correctness contract.
+- Standalone integrity utilities are deferred; do not implement or scaffold them
+  as a prerequisite for removing repeated validation. Ordinary execution does
+  not promise exhaustive detection of post-admission content corruption.
 
 ## Coupling and ceremony
 

@@ -227,7 +227,7 @@ final class SqlRowProjectionEvaluator {
   }
 
   StatusCode evaluateDescriptorMutation(
-      int expression, io.riverdb.base.type.SqlValueBuffer source) {
+      int expression, io.riverdb.engine.row.SqlValueBuffer source) {
     if (bound == null
         || expression < 0
         || expression >= bound.projectionPrograms.mutationCount()) {

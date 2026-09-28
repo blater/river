@@ -1,7 +1,7 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.storage.btree.TupleBTreeScanBounds;
 

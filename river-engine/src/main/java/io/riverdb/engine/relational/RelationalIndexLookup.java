@@ -315,7 +315,8 @@ final class RelationalIndexLookup {
     StatusCode status = source.copyTo(rowScratch);
     if (status.isOk()) {
       rowScratch.position(0);
-      status = table.isValidRow(rowScratch) ? StatusCode.OK : StatusCode.CORRUPTION;
+      status = table.hasSafeStoredRowLayout(rowScratch)
+          ? StatusCode.OK : StatusCode.CORRUPTION;
     }
     return status;
   }

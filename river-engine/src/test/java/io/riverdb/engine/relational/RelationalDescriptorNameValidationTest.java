@@ -27,13 +27,17 @@ final class RelationalDescriptorNameValidationTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
-  void malformedCommittedNameIsCorruptionOnReopen(@TempDir Path root) {
+  void damagedCommittedNameContentDoesNotBlockReopen(@TempDir Path root) {
     RelationalDatabase database = create(root);
     long objectId = createNamed(database, "valid_name");
     replaceName(database, objectId, ByteBuffer.wrap(new byte[] {(byte) 0xc0}));
     assertEquals(StatusCode.OK, database.close());
 
-    assertCorruptReopen(root);
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    assertEquals(StatusCode.OK, opened.database().close());
   }
 
   @Test

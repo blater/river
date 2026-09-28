@@ -1,7 +1,9 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlValueDomain;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.sql.SqlCommand;
@@ -103,6 +105,9 @@ final class SqlMutationRowEncoder {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
+    if (update >= 0 && nullValue && !bound.table.isNullable(column)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     setNull(bound.table, column, nullValue);
     return bound.table.isVarchar(column)
         ? encodeUpdatedText(command, bound, update, column, nullValue)
@@ -129,6 +134,12 @@ final class SqlMutationRowEncoder {
       bytes = bound.table.copyDefaultText(column, updatedRow);
     } else {
       bytes = command.copyText(command.updateValue(update), updatedRow);
+    }
+    if (bytes >= 0 && update >= 0 && !command.updateIsDefault(update)
+        && Utf8Text.validate(
+            updatedRow, payloadOffset, bytes,
+            SqlTypeDescriptor.parameterOne(bound.table.typeDescriptor(column))) < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return storeTextHandle(updatedRow, slot, bytes);
   }
@@ -166,6 +177,13 @@ final class SqlMutationRowEncoder {
         value = fixedValues.value();
         high = fixedValues.highValue();
       }
+    }
+    if (update >= 0 && !nullValue) {
+      int descriptor = bound.table.typeDescriptor(column);
+      boolean valid = SqlTypeDescriptor.isWideDecimal(descriptor)
+          ? SqlValueDomain.validDecimal128(descriptor, high, value)
+          : SqlValueDomain.validFixed(descriptor, value);
+      if (!valid) return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     updatedRow.putLong(slot, value);
     if (SqlTypeDescriptor.isWideDecimal(bound.table.typeDescriptor(column))) {
@@ -248,7 +266,7 @@ final class SqlMutationRowEncoder {
   private StatusCode finishRow(ByteBuffer row, TableDefinition table) {
     row.position(0);
     row.limit(payloadOffset);
-    return table.isValidRow(row)
+    return table.hasSafeStoredRowLayout(row)
         ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
@@ -263,7 +281,7 @@ final class SqlMutationRowEncoder {
     status = source.copyTo(sourceRow);
     if (status.isOk()) {
       sourceRow.position(0);
-      status = table.isValidRow(sourceRow)
+      status = table.hasSafeStoredRowLayout(sourceRow)
           ? StatusCode.OK : StatusCode.CORRUPTION;
     }
     return status;

@@ -475,7 +475,8 @@ final class RelationalSecondaryIndexStore {
     StatusCode status = source.copyTo(target);
     if (status.isOk()) {
       target.position(0);
-      status = table.isValidRow(target) ? StatusCode.OK : StatusCode.CORRUPTION;
+      status = table.hasSafeStoredRowLayout(target)
+          ? StatusCode.OK : StatusCode.CORRUPTION;
     }
     return status;
   }

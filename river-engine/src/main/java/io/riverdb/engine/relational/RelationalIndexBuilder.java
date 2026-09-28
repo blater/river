@@ -165,7 +165,7 @@ final class RelationalIndexBuilder {
       return status;
     }
     catalogScratch.flip();
-    return sourceTable.isValidRow(catalogScratch)
+    return sourceTable.hasSafeStoredRowLayout(catalogScratch)
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 

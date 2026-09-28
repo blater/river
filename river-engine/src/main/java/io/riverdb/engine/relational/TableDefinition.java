@@ -334,6 +334,11 @@ public final class TableDefinition {
     return TableDefinitionRowCodec.isValidRow(this, row);
   }
 
+  /** Checks only trusted stored-row offsets and lengths before reading them. */
+  public boolean hasSafeStoredRowLayout(ByteBuffer row) {
+    return TableDefinitionRowCodec.hasSafeStoredRowLayout(this, row);
+  }
+
   public int textOffset(ByteBuffer row, int column) {
     return TableDefinitionRowCodec.textOffset(this, row, column);
   }

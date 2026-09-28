@@ -55,9 +55,16 @@ final class RelationalRowMutation {
 
   StatusCode insertRow(TableDefinition table, long key, ByteBuffer row) {
     StatusCode status = validateCandidate(table, key, row);
-    if (status.isOk()) {
-      status = insert(table, key, row);
-    }
+    return status.isOk() ? writeInsert(table, key, row) : status;
+  }
+
+  StatusCode insertAcceptedRow(TableDefinition table, long key, ByteBuffer row) {
+    StatusCode status = validateAcceptedCandidate(table, key, row);
+    return status.isOk() ? writeInsert(table, key, row) : status;
+  }
+
+  private StatusCode writeInsert(TableDefinition table, long key, ByteBuffer row) {
+    StatusCode status = insert(table, key, row);
     for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
       status = insertReadyIndex(table, key, row, slot);
     }
@@ -66,9 +73,17 @@ final class RelationalRowMutation {
 
   StatusCode updateRow(TableDefinition table, long key, ByteBuffer row) {
     StatusCode status = validateCandidate(table, key, row);
-    if (status.isOk() && table.hasUniqueValueIndex()) {
-      status = capturePreviousIndexedValues(table, key);
-    }
+    return status.isOk() ? writeUpdate(table, key, row) : status;
+  }
+
+  StatusCode updateAcceptedRow(TableDefinition table, long key, ByteBuffer row) {
+    StatusCode status = validateAcceptedCandidate(table, key, row);
+    return status.isOk() ? writeUpdate(table, key, row) : status;
+  }
+
+  private StatusCode writeUpdate(TableDefinition table, long key, ByteBuffer row) {
+    StatusCode status = table.hasUniqueValueIndex()
+        ? capturePreviousIndexedValues(table, key) : StatusCode.OK;
     if (status.isOk()) {
       status = update(table, key, row);
     }
@@ -78,9 +93,20 @@ final class RelationalRowMutation {
     return status;
   }
 
-  private StatusCode validateCandidate(
-      TableDefinition table, long key, ByteBuffer row) {
+  private StatusCode validateCandidate(TableDefinition table, long key, ByteBuffer row) {
     if (!validRow(table, row)) return StatusCode.INVALID_EXTERNAL_INPUT;
+    return validateConstraints(table, key, row);
+  }
+
+  private StatusCode validateAcceptedCandidate(
+      TableDefinition table, long key, ByteBuffer row) {
+    if (table == null || row == null || !table.hasSafeStoredRowLayout(row)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return validateConstraints(table, key, row);
+  }
+
+  private StatusCode validateConstraints(TableDefinition table, long key, ByteBuffer row) {
     StatusCode status = checks.evaluate(table, key, row);
     return status.isOk() ? validateReferences(table, row) : status;
   }
@@ -282,7 +308,8 @@ final class RelationalRowMutation {
     StatusCode status = source.copyTo(target);
     if (status.isOk()) {
       target.position(0);
-      status = table.isValidRow(target) ? StatusCode.OK : StatusCode.CORRUPTION;
+      status = table.hasSafeStoredRowLayout(target)
+          ? StatusCode.OK : StatusCode.CORRUPTION;
     }
     return status;
   }
