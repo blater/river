@@ -14,6 +14,9 @@ final class SqlUniversalDescriptorJoinRow {
   private final RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
   private final SqlValueBuffer values = new SqlValueBuffer();
   private final SqlBlockRow row = new SqlBlockRow();
+  private boolean materializeText = true;
+
+  void materializeText(boolean required) { materializeText = required; }
 
   StatusCode prepare(TableDescriptor table) {
     StatusCode status = values.reserve(
@@ -46,6 +49,7 @@ final class SqlUniversalDescriptorJoinRow {
     } else if (SqlTypeDescriptor.typeId(type) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       row.setValue(column, values.valueAt(column));
     } else {
+      if (!materializeText) return StatusCode.OK;
       int bytes = values.textByteLengthAt(column);
       if (bytes < 0) return StatusCode.CORRUPTION;
       if (bytes == 0) {
@@ -64,5 +68,9 @@ final class SqlUniversalDescriptorJoinRow {
   long key() { return identity.logicalRowId(); }
   long publicKey() { return row.key(); }
   SqlBlockRow row() { return row; }
-  void reset() { values.reset(); identity.reset(); }
+  void reset() {
+    values.reset();
+    identity.reset();
+    materializeText = true;
+  }
 }

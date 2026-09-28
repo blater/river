@@ -51,6 +51,8 @@ final class SqlUniversalDescriptorJoinRole {
     access.prepare(command, descriptor, role, context, where);
   }
 
+  void materializeText(boolean required) { current.materializeText(required); }
+
   void configureMergeRoot(int column) {
     mergeColumn = -1;
     KeyDescriptor key = SqlUniversalDescriptorOrderedKey.find(descriptor, column);

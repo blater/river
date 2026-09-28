@@ -40,7 +40,9 @@ final class SqlBlockJoinStage {
     rows = universalRows;
     StatusCode status = universalRows.prepare(
         block, nested, command, bound.existingJoinContext(block), where,
-        orderedInnerColumn);
+        orderedInnerColumn,
+        SqlJoinTextUsage.requiresText(
+            bound, command, bound.existingJoinContext(block), where));
     if (status == StatusCode.CONFLICT) {
       rows = legacyRows;
       status = legacyRows.prepare(
