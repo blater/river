@@ -1,3 +1,5 @@
+Never use analogies.
+
 # River Agent Working Agreement
 
 This file is the short operational contract for coding agents and contributors.
@@ -280,6 +282,13 @@ feature is required for correctness or observability and is labelled as such.
 Keep measurement review focused on the real workload and its correctness
 boundaries. A TPS run must retain its branch/version, workload and
 resource configuration, result, and relevant correctness and cleanup outcomes.
+When designating a measured run as a new baseline, append it to the
+[`Baseline stats` table](docs/performance-checkpoints.md#baseline-stats). Record
+the measurement date and time with timezone, branch at the run, ticket if any,
+source commit/version, workload and runtime, TPS, latency, and the immutable
+artifact or detailed checkpoint. Keep previous rows and distinguish different
+workloads and platforms; do not infer a missing branch or timestamp from the
+current checkout.
 The test runner must clean up its owned database, server, temporary files, and
 JFR processes on success, failure, and interruption. Do not add runtime
 descriptors, source/workspace fingerprints, host leases, terminal receipts, or

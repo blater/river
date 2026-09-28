@@ -134,7 +134,7 @@ Mapped synchronization changes the macOS JVM primitive from `F_FULLFSYNC` to
 is not evidence of equivalent hardware power-loss protection. The complete
 configuration, single-INSERT timing, correctness results and source-level
 compiler diagnosis are recorded in the
-[performance checkpoint](performance-checkpoints.md#2026-09-09--mapped-wal-tic-6a91).
+[performance checkpoint](performance-checkpoints-archive-2026-09-16.md#2026-09-09--mapped-wal-tic-6a91).
 
 
 ## 2026-09-10 — completed INSERT efficiency versus MariaDB
