@@ -34,6 +34,7 @@ final class TransactionProgramFreezer {
       if (storage.minimumAffectedRows[step] < 0
           || storage.maximumAffectedRows[step] < storage.minimumAffectedRows[step]
           || storage.actions[step] != TransactionProgramAction.COMMAND
+              && storage.actions[step] != TransactionProgramAction.ROW_SET
               && (storage.minimumAffectedRows[step] != 0
                   || storage.maximumAffectedRows[step] != Long.MAX_VALUE)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;

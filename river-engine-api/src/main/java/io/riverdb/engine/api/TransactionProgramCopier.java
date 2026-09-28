@@ -14,6 +14,9 @@ final class TransactionProgramCopier {
       if (status.isOk() && source.actions[step] == TransactionProgramAction.COMMAND) {
         status = target.requireAffectedRows(
             source.minimumAffectedRows[step], source.maximumAffectedRows[step]);
+      } else if (status.isOk() && source.actions[step] == TransactionProgramAction.ROW_SET) {
+        status = target.requireResultRows(
+            source.minimumAffectedRows[step], source.maximumAffectedRows[step]);
       }
       status = copyParameters(source, target, step, status);
       status = copyGuard(source, target, step, status);

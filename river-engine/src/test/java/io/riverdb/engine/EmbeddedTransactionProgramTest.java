@@ -99,6 +99,36 @@ final class EmbeddedTransactionProgramTest {
   }
 
   @Test
+  void rejectsRowSetOutsideRequiredCountBeforeCommit(@TempDir Path root) {
+    Fixture fixture = open(root);
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "INSERT INTO account VALUES (1,10)", new CommandResult()));
+    long insert = fixture.prepare("INSERT INTO account VALUES (?,?)");
+    long ordered = fixture.prepare("SELECT id FROM account ORDER BY id");
+    TransactionProgram program = new TransactionProgram();
+    command(program, insert, 0, SqlTypeDescriptor.INTEGER, 1, SqlTypeDescriptor.BIGINT);
+    assertEquals(StatusCode.OK, program.beginStep(ordered, TransactionProgramAction.ROW_SET));
+    assertEquals(StatusCode.OK, program.requireResultRows(3, 3));
+    assertEquals(StatusCode.OK, program.captureColumn(0));
+    assertEquals(StatusCode.OK, program.endStep());
+    assertEquals(StatusCode.OK, program.freeze());
+    TransactionProgramArguments arguments = new TransactionProgramArguments();
+    assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.INTEGER, 2));
+    assertEquals(StatusCode.OK, arguments.setFixed(1, SqlTypeDescriptor.BIGINT, 20));
+    TransactionProgramResult result = new TransactionProgramResult();
+
+    assertEquals(StatusCode.CARDINALITY_VIOLATION, fixture.session.executeProgram(
+        fixture.prepareProgram(program), IsolationLevel.READ_COMMITTED, arguments, result));
+    assertEquals(StatusCode.CARDINALITY_VIOLATION, result.primaryStatus());
+    assertEquals(StatusCode.OK, result.rollbackStatus());
+    CommandResult count = new CommandResult();
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "SELECT COUNT(*) FROM account", count));
+    assertEquals(1, count.valueAt(0));
+    fixture.close();
+  }
+
+  @Test
   void executesPreparedDataflowAndCommitsOnce(@TempDir Path root) {
     Fixture fixture = open(root);
     long insert = fixture.prepare("INSERT INTO account VALUES (?,?)");

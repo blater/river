@@ -31,6 +31,10 @@ final class ProtocolTransactionProgramCodecTest {
     assertEquals(StatusCode.OK, source.endExpression());
     assertEquals(StatusCode.OK, source.captureColumn(0));
     assertEquals(StatusCode.OK, source.endStep());
+    assertEquals(StatusCode.OK, source.beginStep(8, TransactionProgramAction.ROW_SET));
+    assertEquals(StatusCode.OK, source.requireResultRows(5, 15));
+    assertEquals(StatusCode.OK, source.captureColumn(0));
+    assertEquals(StatusCode.OK, source.endStep());
     assertEquals(StatusCode.OK, source.freeze());
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     assertEquals(StatusCode.OK, codec.encodeProgramPrepareRequest(request, 40, source));
@@ -41,6 +45,8 @@ final class ProtocolTransactionProgramCodecTest {
     assertEquals(2, decoded.program().parameterCount(0));
     assertEquals(SqlTypeDescriptor.BIGINT,
         decoded.program().expressionDescriptor(decoded.program().parameterExpression(1)));
+    assertEquals(5, decoded.program().minimumAffectedRows(1));
+    assertEquals(15, decoded.program().maximumAffectedRows(1));
   }
 
   @Test

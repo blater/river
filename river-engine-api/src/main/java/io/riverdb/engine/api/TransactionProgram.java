@@ -26,6 +26,9 @@ public final class TransactionProgram {
   public StatusCode requireAffectedRows(long minimum, long maximum) {
     return builder.requireAffectedRows(minimum, maximum);
   }
+  public StatusCode requireResultRows(long minimum, long maximum) {
+    return builder.requireResultRows(minimum, maximum);
+  }
   public StatusCode beginGuard(int falseTarget) { return builder.beginGuard(falseTarget); }
   public StatusCode argument(int slot, int descriptor) { return builder.argument(slot, descriptor); }
   public StatusCode priorResult(int step, int column, int descriptor) {

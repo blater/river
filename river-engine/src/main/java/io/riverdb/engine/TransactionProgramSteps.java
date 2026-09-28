@@ -183,12 +183,18 @@ final class TransactionProgramSteps {
   private int executeRowSet(
       TransactionProgram program, int step, TransactionProgramResult result) {
     status = result.beginStepResult(step, TransactionProgramAction.ROW_SET, 0);
+    long rows = 0;
     while (status.isOk() && nextRow()) {
       reader.pointTo(row);
       status = values.captureOutput(program, step, reader, reader.columnCount(), result);
+      rows++;
     }
     StatusCode closed = session.closeScan(scan, execution);
     if (status.isOk()) status = closed;
+    if (status.isOk() && (rows < program.minimumAffectedRows(step)
+        || rows > program.maximumAffectedRows(step))) {
+      status = StatusCode.CARDINALITY_VIOLATION;
+    }
     return status.isOk() ? step + 1 : Integer.MIN_VALUE;
   }
 

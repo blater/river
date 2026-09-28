@@ -39,6 +39,15 @@ final class TransactionProgramBuilder {
     return StatusCode.OK;
   }
 
+  StatusCode requireResultRows(long minimum, long maximum) {
+    if (s.frozen || s.currentStep < 0 || s.currentExpression >= 0
+        || s.actions[s.currentStep] != TransactionProgramAction.ROW_SET
+        || minimum < 0 || maximum < minimum) return StatusCode.INVALID_EXTERNAL_INPUT;
+    s.minimumAffectedRows[s.currentStep] = minimum;
+    s.maximumAffectedRows[s.currentStep] = maximum;
+    return StatusCode.OK;
+  }
+
   StatusCode beginParameter() {
     return beginExpression(false, -1);
   }

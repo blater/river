@@ -32,6 +32,9 @@ final class ProtocolProgramGraphStepDecoder {
     if (action == TransactionProgramAction.COMMAND) {
       status = program.requireAffectedRows(minimumAffected, maximumAffected);
       if (!status.isOk()) return -1;
+    } else if (action == TransactionProgramAction.ROW_SET) {
+      status = program.requireResultRows(minimumAffected, maximumAffected);
+      if (!status.isOk()) return -1;
     } else if (minimumAffected != 0 || maximumAffected != Long.MAX_VALUE) {
       return -1;
     }
