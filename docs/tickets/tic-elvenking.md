@@ -1,10 +1,16 @@
 ---
 id: tic-elvenking
-status: open
+status: closed
 type: feature
 priority: 1
 assignee: blater
 delivery: code
+base-commit: f77bb51afd5bde178b1fd2ffed4843059a2bcf53
+branch: feature/trusted-row-values
+delivered-commit: 7ac1246486dd7102732b208f6b91255ffd5ea1ef
+evidence:
+  - docs/performance-checkpoints.md
+  - docs/delivery/evidence/2026-09-28-tic-elvenking-intent-review.md
 tags:
   - performance
   - storage
@@ -141,3 +147,16 @@ row/index consistency and other deep integrity properties. Its command,
 implementation, scheduling and scaffolding are not part of this ticket and must
 not delay it. Creating this ticket does not start production implementation or
 reopen the historically parked backlog wholesale.
+
+## Delivered
+
+Trusted stored rows now retain bounded structural checks without repeated
+content validation; public raw row input still passes full admission. Numeric
+descriptor and block reads skip unused text, unchanged update values retain
+typed bytes, and result publication owns a direct UTF-8 copy. The intent
+review's two findings and the final independent review's additional admission,
+block-read and result-publication findings were resolved. Focused tests,
+independent correctness/ownership review and the clean full check passed on
+`7ac12464`. The [performance checkpoint](../performance-checkpoints.md#2026-09-28--trusted-stored-values-tic-elvenking)
+records all paired samples, correctness outcomes and host variability. No
+stable TPS gain is claimed.
