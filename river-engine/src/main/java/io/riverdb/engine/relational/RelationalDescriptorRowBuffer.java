@@ -13,6 +13,7 @@ import java.nio.ByteBuffer;
 final class RelationalDescriptorRowBuffer {
   private static final int INITIAL_BYTES = 256;
   private final StoredTableRowCodec codec = new StoredTableRowCodec();
+  private final RelationalStoredRowAccess storedAccess = new RelationalStoredRowAccess();
   private final StoredTableRowEncodeResult encoded = new StoredTableRowEncodeResult();
   private ByteBuffer bytes = ByteBuffer.allocateDirect(INITIAL_BYTES);
 
@@ -69,7 +70,7 @@ final class RelationalDescriptorRowBuffer {
     StatusCode status = source.copyTo(bytes);
     if (!status.isOk()) return StatusCode.CORRUPTION;
     bytes.flip();
-    return codec.decode(
+    return codec.decodeStored(storedAccess,
         table, logicalRowId, bytes, 0, source.length(), destination, filter, publishText);
   }
 

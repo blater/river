@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
 
-/** Owns the physical cursor and validates rows before the first block boundary. */
+/** Owns the physical cursor and copies rows before the first block boundary. */
 final class SqlBlockSource {
   private final io.riverdb.engine.relational.RelationalSession session;
   private final BoundSqlStatement bound;
@@ -53,7 +53,7 @@ final class SqlBlockSource {
       descriptorActive = status.isOk();
       return status;
     }
-    StatusCode status = physical.prepare(bound.table, row);
+    StatusCode status = physical.prepare(bound.table, row, bound.blockPlans());
     return status.isOk() ? session.beginScan(bound.table, cursor) : status;
   }
 

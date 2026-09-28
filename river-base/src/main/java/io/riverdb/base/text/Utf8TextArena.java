@@ -176,6 +176,23 @@ public final class Utf8TextArena {
     return StatusCode.OK;
   }
 
+  /** Copies bounded bytes from a borrowed River-owned view before its owner reuses it. */
+  public StatusCode appendTrusted(BoundedByteSource source, int offset, int length) {
+    if (source == null || offset < 0 || length < 0
+        || offset > source.length() - length) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (length > maximumBytes - used) return StatusCode.RESOURCE_EXHAUSTED;
+    int targetOffset = used;
+    StatusCode status = ensureCapacity(used + length);
+    if (!status.isOk()) return status;
+    for (int index = 0; index < length; index++) {
+      bytes[targetOffset + index] = source.getByte(offset + index);
+    }
+    used += length;
+    lastOffset = targetOffset;
+    lastLength = length;
+    return StatusCode.OK;
+  }
+
   /** Copies a previously admitted value from another reusable arena. */
   public StatusCode appendTrusted(Utf8TextArena source, int offset, int length) {
     if (source == null || !validRange(offset, length, source.used)) {

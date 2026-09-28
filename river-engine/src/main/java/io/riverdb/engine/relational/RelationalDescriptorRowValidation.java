@@ -11,6 +11,7 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Reusable full-row decoder that resolves and owns exact retained historical layouts. */
 final class RelationalDescriptorRowValidation {
   private final StoredTableRowCodec codec = new StoredTableRowCodec();
+  private final RelationalStoredRowAccess storedAccess = new RelationalStoredRowAccess();
   private final StoredTableRowHeader header = new StoredTableRowHeader();
   private final SqlValueBuffer values = new SqlValueBuffer();
   private final RelationalDescriptorHistoricalValidation historical;
@@ -39,8 +40,8 @@ final class RelationalDescriptorRowValidation {
       layout = historical.value();
     }
     values.reset();
-    status = codec.decode(
-        layout, logicalRowId, bytes.value(), 0, row.length(), values);
+    status = codec.decodeStored(storedAccess,
+        layout, logicalRowId, bytes.value(), 0, row.length(), values, null, true);
     return finish(status, historical.close());
   }
 

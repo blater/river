@@ -33,19 +33,21 @@ final class SqlResultTextLanes {
   }
 
   StatusCode setUtf8(
-      int index, int descriptor, HeapRowResult source, int offset, int length) {
-    if (source == null || offset < 0 || length < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    int characters = Utf8RowText.decode(source, offset, length, scratch);
-    return characters < 0
-        ? StatusCode.CORRUPTION : set(index, descriptor, scratch, 0, characters);
+      int index, HeapRowResult source, int offset, int length) {
+    if (source == null || offset < 0 || length < 0
+        || offset > source.length() - length) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = arena.appendTrusted(source, offset, length);
+    if (status.isOk()) publish(index);
+    return status;
   }
 
   StatusCode setUtf8(
-      int index, int descriptor, ByteBuffer source, int offset, int length) {
-    if (source == null || offset < 0 || length < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    int characters = io.riverdb.base.text.Utf8Text.decode(source, offset, length, scratch, 0);
-    return characters < 0
-        ? StatusCode.CORRUPTION : set(index, descriptor, scratch, 0, characters);
+      int index, ByteBuffer source, int offset, int length) {
+    if (source == null || offset < 0 || length < 0
+        || offset > source.limit() - length) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = arena.appendTrusted(source, offset, length);
+    if (status.isOk()) publish(index);
+    return status;
   }
 
   void clear(int count) {

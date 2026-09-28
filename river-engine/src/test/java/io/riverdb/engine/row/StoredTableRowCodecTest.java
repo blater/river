@@ -48,12 +48,12 @@ final class StoredTableRowCodecTest {
     int textSlot = START + table.fixedOffsetAt(1);
     int textStart = START + FormatBytes.getInt(ByteBuffer.wrap(corrupt), textSlot);
     corrupt[textStart] = (byte) 0xc0;
-    assertEquals(StatusCode.CONFLICT, codec.decode(
+    assertEquals(StatusCode.CONFLICT, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, encoded.length, output, filter));
     assertEquals(7, output.valueAt(0));
 
     filter.configure(0, SqlComparison.LESS_OR_EQUAL, 40);
-    assertEquals(StatusCode.OK, codec.decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, encoded.length, output, filter));
     assertEquals(40, output.valueAt(0));
     assertEquals(0xc0, output.textByteAt(1, 0));
@@ -84,7 +84,7 @@ final class StoredTableRowCodecTest {
     byte[] corrupt = encoded.bytes.clone();
     int slot = START + table.fixedOffsetAt(1);
     corrupt[START + FormatBytes.getInt(ByteBuffer.wrap(corrupt), slot)] = (byte) 0xc0;
-    assertEquals(StatusCode.OK, codec.decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, encoded.length,
         output, null, false));
     assertEquals(40, output.valueAt(0));
@@ -93,7 +93,7 @@ final class StoredTableRowCodecTest {
     corrupt = encoded.bytes.clone();
     FormatBytes.putInt(ByteBuffer.wrap(corrupt), slot, Integer.MAX_VALUE);
     FormatBytes.putInt(ByteBuffer.wrap(corrupt), slot + Integer.BYTES, -1);
-    assertEquals(StatusCode.OK, codec.decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, encoded.length,
         output, null, false));
     assertEquals(40, output.valueAt(0));
@@ -180,19 +180,19 @@ final class StoredTableRowCodecTest {
 
     byte[] corrupt = row.bytes.clone();
     corrupt[START + StoredTableRowHeaderCodec.HEADER_BYTES + 1] |= (byte) 0x80;
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
     assertEquals(true, output.isNull(7));
 
     corrupt = row.bytes.clone();
     corrupt[START + table.fixedOffsetAt(7)] = 1;
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
     assertEquals(true, output.isNull(7));
 
     corrupt = row.bytes.clone();
     corrupt[START + table.fixedOffsetAt(0)] = 2;
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
     assertEquals(2, output.valueAt(0));
   }
@@ -211,7 +211,7 @@ final class StoredTableRowCodecTest {
     int firstSlot = START + table.fixedOffsetAt(0);
     FormatBytes.putInt(ByteBuffer.wrap(corrupt), firstSlot,
         FormatBytes.getInt(ByteBuffer.wrap(corrupt), firstSlot) + 1);
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
     assertEquals('b', output.textByteAt(0, 0));
 
@@ -222,7 +222,9 @@ final class StoredTableRowCodecTest {
     corrupt = row.bytes.clone();
     int textStart = START + FormatBytes.getInt(ByteBuffer.wrap(corrupt), firstSlot);
     corrupt[textStart] = (byte) 0xc0;
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.CORRUPTION, new StoredTableRowCodec().decode(
+        table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
     assertEquals(0xc0, output.textByteAt(0, 0));
 
@@ -239,7 +241,7 @@ final class StoredTableRowCodecTest {
     StoredTableRowHeaderCodec.encode(ByteBuffer.wrap(corrupt), START, 99, 71);
     assertCorruptPreserves(table, row.length, corrupt, output);
 
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(row.bytes), START, row.length + 1, output));
     assertEquals(StatusCode.CORRUPTION, new StoredTableRowCodec().decode(
         table, 71, ByteBuffer.wrap(row.bytes), START,
@@ -366,7 +368,9 @@ final class StoredTableRowCodecTest {
           SqlValueDomain.exclusiveMaximumFixed(types[column]));
       SqlValueBuffer output = values(types.length, 0);
       assertEquals(StatusCode.OK, output.setFixed(0, types[0], 7));
-      assertEquals(StatusCode.OK, codec.decode(
+      assertEquals(StatusCode.CORRUPTION, codec.decode(
+          table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
+      assertEquals(StatusCode.OK, decodeTrusted(
           table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
       assertEquals(SqlValueDomain.exclusiveMaximumFixed(types[column]),
           output.valueAt(column));
@@ -394,7 +398,7 @@ final class StoredTableRowCodecTest {
     byte[] corrupt = row.bytes.clone();
     FormatBytes.putLong(
         ByteBuffer.wrap(corrupt), START + table.fixedOffsetAt(0), Long.MAX_VALUE);
-    assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
+    assertEquals(StatusCode.OK, decodeTrusted(
         table, 71, ByteBuffer.wrap(corrupt), START, row.length, output));
     assertEquals(Long.MAX_VALUE, output.highValueAt(0));
   }
@@ -429,6 +433,25 @@ final class StoredTableRowCodecTest {
         table, 71, ByteBuffer.wrap(bytes), START, length, output));
     assertEquals(count, output.count());
     assertEquals(first, output.valueAt(0));
+  }
+
+  private static StatusCode decodeTrusted(
+      TableDescriptor table, long rowId, ByteBuffer source, int start, int length,
+      SqlValueBuffer output) {
+    return decodeTrusted(table, rowId, source, start, length, output, null, true);
+  }
+
+  private static StatusCode decodeTrusted(
+      TableDescriptor table, long rowId, ByteBuffer source, int start, int length,
+      SqlValueBuffer output, StoredTableRowFilter filter) {
+    return decodeTrusted(table, rowId, source, start, length, output, filter, true);
+  }
+
+  private static StatusCode decodeTrusted(
+      TableDescriptor table, long rowId, ByteBuffer source, int start, int length,
+      SqlValueBuffer output, StoredTableRowFilter filter, boolean publishText) {
+    return new StoredTableRowDecoder().decode(
+        table, rowId, source, start, length, output, filter, publishText);
   }
 
   private static Encoded encode(TableDescriptor table, SqlValueBuffer input) {

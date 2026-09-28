@@ -12,6 +12,10 @@ import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
 import io.riverdb.engine.relational.TableDefinition;
+import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlParser;
+import io.riverdb.sql.SqlQuery;
+import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import java.nio.ByteBuffer;
@@ -104,6 +108,85 @@ final class SqlTrustedStoredValueTest {
     assertEquals(StatusCode.OK, raw.abort(outcome));
     assertEquals(StatusCode.OK, raw.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void numericBlockReadSkipsUnusedStoredText(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSession sql = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    execute(sql, result, "CREATE TABLE block_values ("
+        + "id BIGINT PRIMARY KEY,quantity INTEGER,label VARCHAR(8),CHECK(1=1))");
+    execute(sql, result, "INSERT INTO block_values VALUES (1,5,'多🙂')");
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult selected = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, sql.beginScan(
+        "SELECT quantity FROM (SELECT quantity FROM block_values) block_source", cursor));
+    assertEquals(StatusCode.OK, sql.nextScan(cursor, selected));
+    assertEquals(5, selected.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, sql.nextScan(cursor, selected));
+    assertEquals(StatusCode.OK, sql.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, sql.beginScan(
+        "SELECT label FROM (SELECT label FROM block_values) block_source", cursor));
+    assertEquals(StatusCode.OK, sql.nextScan(cursor, selected));
+    char[] selectedText = new char[8];
+    int selectedLength = selected.copyTextAt(0, selectedText, 0);
+    assertEquals("多🙂", new String(selectedText, 0, selectedLength));
+    assertEquals(StatusCode.CONFLICT, sql.nextScan(cursor, selected));
+    assertEquals(StatusCode.OK, sql.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, sql.close());
+
+    RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RelationalSession raw = sessionResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, raw.begin(IsolationLevel.SERIALIZABLE));
+    TableDefinition table = new TableDefinition();
+    assertEquals(StatusCode.OK, raw.resolveTable("block_values", table));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, raw.fetch(table, 1, fetched));
+    ByteBuffer bytes = ByteBuffer.allocate(fetched.length());
+    assertEquals(StatusCode.OK, fetched.copyTo(bytes));
+    bytes.flip();
+    int textOffset = (int) (bytes.getLong(table.valueOffset(2)) >>> 32);
+    bytes.put(textOffset, (byte) 0xc0);
+    HeapRowResult damaged = new HeapRowResult();
+    damaged.set(bytes, fetched.rowId(), 0, fetched.length());
+
+    SqlBlockPhysicalRowDecoding decoder = new SqlBlockPhysicalRowDecoding();
+    SqlBlockRow row = new SqlBlockRow();
+    SqlBoundBlockPlans plans = blockPlans(
+        "SELECT quantity FROM (SELECT quantity FROM block_values) block_source");
+    assertEquals(false, plans.physicalTextUsed(table, 2));
+    assertEquals(StatusCode.OK, decoder.prepare(table, row, plans));
+    assertEquals(StatusCode.OK, decoder.read(1, damaged, table, row));
+    assertEquals(5, row.value(1));
+
+    plans = blockPlans("SELECT label FROM (SELECT label FROM block_values) block_source");
+    assertEquals(true, plans.physicalTextUsed(table, 2));
+    assertEquals(StatusCode.OK, decoder.prepare(table, row, plans));
+    assertEquals(StatusCode.CORRUPTION, decoder.read(1, damaged, table, row));
+    plans = blockPlans("SELECT quantity FROM "
+        + "(SELECT quantity FROM block_values WHERE label='多🙂') block_source");
+    assertEquals(true, plans.physicalTextUsed(table, 2));
+    assertEquals(StatusCode.OK, decoder.prepare(table, row, plans));
+    assertEquals(StatusCode.CORRUPTION, decoder.read(1, damaged, table, row));
+    assertEquals(StatusCode.OK, raw.abort(outcome));
+    assertEquals(StatusCode.OK, raw.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static SqlBoundBlockPlans blockPlans(String sql) {
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(StatusCode.OK, new SqlParser().parseQuery(sql, query, command));
+    assertEquals(StatusCode.OK, query.promoteRootBlockPipeline(command));
+    SqlBoundBlockPlans plans = new SqlBoundBlockPlans(new SqlSessionShapeBudget(null));
+    assertEquals(StatusCode.OK, plans.capture(query));
+    return plans;
   }
 
   private static SqlSession session(RelationalDatabase database) {
