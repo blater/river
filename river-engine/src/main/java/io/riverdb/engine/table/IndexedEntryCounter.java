@@ -2,6 +2,7 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.page.PageCodec;
+import io.riverdb.format.page.LogicalHeadPageCodec;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
@@ -22,6 +23,26 @@ final class IndexedEntryCounter {
       if (!pages.isPresent(pageId)
           || pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
           || pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_FREE) continue;
+      if (pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_LOGICAL_HEAD) {
+        StatusCode status = pages.pinCurrentPage(pageId);
+        if (!status.isOk()) return status;
+        try {
+          ByteBuffer page = pages.currentPayload(pageId);
+          if (page == null || !LogicalHeadPageCodec.validate(page).isOk()) {
+            return StatusCode.CORRUPTION;
+          }
+          if (LogicalHeadPageCodec.type(page) == LogicalHeadPageCodec.ROW_LEAF) {
+            for (int slot = 0; slot < LogicalHeadPageCodec.ROW_LEAF_ENTRIES; slot++) {
+              long head = LogicalHeadPageCodec.rowHead(page, slot);
+              if (head < 0) return StatusCode.CORRUPTION;
+              if (head > 0) entries++;
+            }
+          }
+        } finally {
+          pages.unpinCurrentPage(pageId);
+        }
+        continue;
+      }
       if (pages.payloadKind(pageId) != PageCodec.PAYLOAD_KIND_SCALAR_BTREE
           || pages.ownerKeyId(pageId) != PageCodec.SCALAR_OWNER_KEY_ID) {
         return StatusCode.CORRUPTION;

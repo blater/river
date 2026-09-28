@@ -2,6 +2,7 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.page.PageCodec;
+import io.riverdb.format.page.LogicalHeadPageCodec;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.heap.HeapPage;
@@ -20,6 +21,21 @@ final class IndexedVacuumPublicationAdmission {
       if (!pages.isPresent(pageId)
           || pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
           || pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_FREE) continue;
+      if (pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_LOGICAL_HEAD) {
+        StatusCode status = pages.pinCurrentPage(pageId);
+        if (!status.isOk()) return status;
+        try {
+          ByteBuffer payload = pages.currentPayload(pageId);
+          if (payload == null || !LogicalHeadPageCodec.validate(payload).isOk()
+              || pages.ownerKeyId(pageId)
+                  != LogicalHeadPageCodec.ownerObjectId(payload)) {
+            return StatusCode.CORRUPTION;
+          }
+        } finally {
+          pages.unpinCurrentPage(pageId);
+        }
+        continue;
+      }
       if (pages.payloadKind(pageId) != PageCodec.PAYLOAD_KIND_SCALAR_BTREE
           || pages.ownerKeyId(pageId) != PageCodec.SCALAR_OWNER_KEY_ID) {
         return StatusCode.CORRUPTION;

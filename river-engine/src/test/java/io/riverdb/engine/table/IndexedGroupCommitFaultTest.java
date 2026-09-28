@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.engine.runtime.DatabasePageCachePlan;
 import io.riverdb.engine.runtime.DatabasePageCacheTestPlan;
 import io.riverdb.engine.testsupport.fault.CrashPointController;
@@ -335,6 +336,8 @@ final class IndexedGroupCommitFaultTest {
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     IndexedTable table = tableResult.table();
     cleanup.table = table;
+    IndexedPageSet pressurePages =
+        IndexedRelationalWalStorageFixtures.pageSet(storeResult.store());
     ForcedGroupFixture.HeldForce heldForce =
         new ForcedGroupFixture.HeldForce(ForcedGroupFixture.walFile(wal));
     ForcedGroupFixture.replaceWalFile(wal, heldForce);
@@ -403,6 +406,7 @@ final class IndexedGroupCommitFaultTest {
       assertTrue(closed.isOk() || closed == StatusCode.CLOSED);
       assertEquals(StatusCode.OK, first.close());
       assertEquals(StatusCode.OK, second.close());
+      assertEquals(StatusCode.OK, pressurePages.reclaimHistorical(Long.MAX_VALUE));
       assertEquals(StatusCode.OK, table.flush());
       assertEquals(StatusCode.OK, table.close());
       assertEquals(StatusCode.OK, wal.close());
@@ -613,6 +617,7 @@ final class IndexedGroupCommitFaultTest {
   @MethodSource("groupFaults")
   void groupedFacadeCommitFailureWithholdsAcknowledgmentAndFencesAdmission(
       String name,
+      long space,
       DirectoryOperation operation,
       FaultOperation faultOperation,
       FaultAction action) throws Exception {
@@ -647,9 +652,9 @@ final class IndexedGroupCommitFaultTest {
     TransactionOutcome firstOutcome = new TransactionOutcome();
     TransactionOutcome secondOutcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, first.insert( 0,41, row(410)));
+    assertEquals(StatusCode.OK, first.insert(space, 41, row(410)));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, second.insert( 0,42, row(420)));
+    assertEquals(StatusCode.OK, second.insert(space, 42, row(420)));
 
     CountDownLatch ready = new CountDownLatch(2);
     CountDownLatch start = new CountDownLatch(1);
@@ -696,14 +701,25 @@ final class IndexedGroupCommitFaultTest {
   }
 
   private static Stream<Arguments> groupFaults() {
+    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(1);
     return Stream.of(
         Arguments.of(
-            Named.of("file write", "write"),
+            Named.of("scalar file write", "scalar-write"), 0L,
             DirectoryOperation.FILE_WRITE,
             FaultOperation.DIRECTORY_FILE_WRITE,
             FaultAction.PARTIAL_WRITE),
         Arguments.of(
-            Named.of("file force", "force"),
+            Named.of("scalar file force", "scalar-force"), 0L,
+            DirectoryOperation.FILE_FORCE,
+            FaultOperation.DIRECTORY_FILE_FORCE,
+            FaultAction.FORCE_FAILURE),
+        Arguments.of(
+            Named.of("head directory file write", "head-write"), baseSpace,
+            DirectoryOperation.FILE_WRITE,
+            FaultOperation.DIRECTORY_FILE_WRITE,
+            FaultAction.PARTIAL_WRITE),
+        Arguments.of(
+            Named.of("head directory file force", "head-force"), baseSpace,
             DirectoryOperation.FILE_FORCE,
             FaultOperation.DIRECTORY_FILE_FORCE,
             FaultAction.FORCE_FAILURE));

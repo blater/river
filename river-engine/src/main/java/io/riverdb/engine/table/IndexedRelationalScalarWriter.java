@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapInsertResult;
 import java.nio.ByteBuffer;
@@ -10,6 +11,7 @@ final class IndexedRelationalScalarWriter {
   private final IndexedTableKernel kernel;
   private final IndexedPageSet pages;
   private final IndexedRelationalScalarLookup lookup;
+  private final IndexedLogicalHeadDirectory heads;
   private final IndexedOperationPage leaf = new IndexedOperationPage();
   private final HeapInsertResult inserted = new HeapInsertResult();
 
@@ -17,10 +19,16 @@ final class IndexedRelationalScalarWriter {
     kernel = table;
     pages = pageSet;
     lookup = new IndexedRelationalScalarLookup(table, pageSet);
+    heads = new IndexedLogicalHeadDirectory(table, pageSet);
   }
 
   StatusCode stage(
       long space, long key, long previousRowId, ByteBuffer row, boolean deleted) {
+    if (CatalogKeyspace.isRelationalBaseRowSpace(space)) {
+      return heads.stage(
+          space - CatalogKeyspace.FIRST_RELATIONAL_SPACE,
+          key, previousRowId, row, deleted, inserted);
+    }
     StatusCode found = lookup.find(space, key);
     if (previousRowId == 0 ? found != StatusCode.CONFLICT
         : !found.isOk() || lookup.rowId() != previousRowId) return StatusCode.CORRUPTION;

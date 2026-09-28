@@ -42,6 +42,11 @@ public final class CatalogKeyspace {
     return FIRST_RELATIONAL_SPACE + objectId;
   }
 
+  public static boolean isRelationalBaseRowSpace(long space) {
+    return space > FIRST_RELATIONAL_SPACE
+        && space <= FIRST_RELATIONAL_SPACE + MAXIMUM_RELATIONAL_OBJECT_ID;
+  }
+
   /** Dedicated root/page space for one globally unique durable key identity. */
   public static long relationalIndexSpace(long keyId) {
     return FIRST_INDEX_SPACE + keyId - 1;

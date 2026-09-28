@@ -105,6 +105,11 @@ final class IndexedPageSet {
       int pageId, boolean writable, IndexedOperationPage result) {
     return cache.pinScalarOperationPage(pageId, writable, result);
   }
+  StatusCode pinLogicalHeadOperationPage(
+      int pageId, boolean writable, long ownerObjectId, IndexedOperationPage result) {
+    return cache.pinLogicalHeadOperationPage(
+        pageId, writable, ownerObjectId, result);
+  }
   StatusCode pinNewOperationPage(int pageId, IndexedOperationPage result) {
     return cache.pinNewOperationPage(pageId, result);
   }
@@ -118,6 +123,12 @@ final class IndexedPageSet {
     return cache.pinNewOperationPage(
         pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_TUPLE_BTREE,
         ownerKeyId, result);
+  }
+  StatusCode pinNewLogicalHeadOperationPage(
+      int pageId, long ownerObjectId, IndexedOperationPage result) {
+    return cache.pinNewOperationPage(
+        pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_LOGICAL_HEAD,
+        ownerObjectId, result);
   }
   StatusCode releaseOperationPage(IndexedOperationPage page) {
     return cache.releaseOperationPage(page);

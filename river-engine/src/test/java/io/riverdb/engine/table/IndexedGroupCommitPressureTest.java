@@ -187,6 +187,7 @@ final class IndexedGroupCommitPressureTest {
         assertEquals(StatusCode.OK, pages.unpinPage(pins[index]));
       }
     }
+    assertEquals(StatusCode.OK, pages.reclaimHistorical(Long.MAX_VALUE));
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());

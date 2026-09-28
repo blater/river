@@ -6,6 +6,9 @@ import io.riverdb.base.key.OrderedKey;
 /** Caller-owned position for one ordered snapshot scan. */
 public final class IndexedScanCursor {
   private final IndexedScanResult committedLookahead = new IndexedScanResult();
+  private IndexedScanCursor mixedHeadCursor;
+  private IndexedScanResult mixedScalarResult;
+  private IndexedScanResult mixedHeadResult;
   private IndexedTable owner;
   private IndexedTransactionSession sessionOwner;
   private long visibleCommitSequence;
@@ -17,6 +20,14 @@ public final class IndexedScanCursor {
   private long upperSpace;
   private int leafPageId;
   private int entryIndex;
+  private long headLeafOrdinal;
+  private boolean headDirectory;
+  private boolean mixed;
+  private boolean mixedScalarReady;
+  private boolean mixedHeadReady;
+  private boolean mixedScalarDone;
+  private boolean mixedHeadDone;
+  private long nextHeadTableId;
   private long lastReturnedKey;
   private long lastReturnedSpace;
   private boolean hasCommittedLookahead;
@@ -38,6 +49,15 @@ public final class IndexedScanCursor {
     upperSpace = 0;
     leafPageId = 0;
     entryIndex = 0;
+    headLeafOrdinal = 0;
+    headDirectory = false;
+    mixed = false;
+    mixedScalarReady = false;
+    mixedHeadReady = false;
+    mixedScalarDone = false;
+    mixedHeadDone = false;
+    nextHeadTableId = 0;
+    if (mixedHeadCursor != null) mixedHeadCursor.reset();
     lastReturnedKey = 0;
     lastReturnedSpace = 0;
     hasCommittedLookahead = false;
@@ -67,8 +87,49 @@ public final class IndexedScanCursor {
     upperSpace = scanUpperSpace;
     leafPageId = firstLeafPageId;
     entryIndex = 0;
+    headDirectory = false;
+    mixed = false;
     active = true;
     return StatusCode.OK;
+  }
+
+  StatusCode claimHead(
+      IndexedTable table, long visible,
+      long scanLowerSpace, long lower,
+      long scanUpperSpace, long upper,
+      int firstLeafPageId, long firstLeafOrdinal) {
+    StatusCode status = claim(
+        table, visible, scanLowerSpace, lower,
+        scanUpperSpace, upper, firstLeafPageId);
+    if (status.isOk()) {
+      headDirectory = true;
+      headLeafOrdinal = firstLeafOrdinal;
+    }
+    return status;
+  }
+
+  StatusCode claimMixed(
+      IndexedTable table, long visible,
+      long scanLowerSpace, long lower,
+      long scanUpperSpace, long upper,
+      int firstLeafPageId, long firstTableId) {
+    StatusCode status = claim(
+        table, visible, scanLowerSpace, lower,
+        scanUpperSpace, upper, firstLeafPageId);
+    if (status.isOk()) {
+      if (mixedHeadCursor == null) {
+        mixedHeadCursor = new IndexedScanCursor();
+        mixedScalarResult = new IndexedScanResult();
+        mixedHeadResult = new IndexedScanResult();
+      }
+      mixed = true;
+      nextHeadTableId = firstTableId;
+      mixedScalarReady = false;
+      mixedHeadReady = false;
+      mixedScalarDone = false;
+      mixedHeadDone = false;
+    }
+    return status;
   }
 
   StatusCode attach(IndexedTransactionSession session) {
@@ -86,6 +147,8 @@ public final class IndexedScanCursor {
   boolean isOwnedBy(IndexedTable table) {
     return active && owner == table;
   }
+
+  IndexedTable owner() { return owner; }
 
   long observedCommitSequence() { return observedCommitSequence; }
 
@@ -126,6 +189,29 @@ public final class IndexedScanCursor {
     return entryIndex;
   }
 
+  boolean headDirectory() { return headDirectory; }
+  boolean mixed() { return mixed; }
+  IndexedScanCursor mixedHeadCursor() { return mixedHeadCursor; }
+  IndexedScanResult mixedScalarResult() { return mixedScalarResult; }
+  IndexedScanResult mixedHeadResult() { return mixedHeadResult; }
+  boolean mixedScalarReady() { return mixedScalarReady; }
+  boolean mixedHeadReady() { return mixedHeadReady; }
+  boolean mixedScalarDone() { return mixedScalarDone; }
+  boolean mixedHeadDone() { return mixedHeadDone; }
+  long nextHeadTableId() { return nextHeadTableId; }
+  void mixedScalarReady(boolean ready) { mixedScalarReady = ready; }
+  void mixedHeadReady(boolean ready) { mixedHeadReady = ready; }
+  void finishMixedScalar() { mixedScalarDone = true; }
+  void finishMixedHead() { mixedHeadDone = true; }
+  void nextHeadTableId(long id) { nextHeadTableId = id; }
+  long headLeafOrdinal() { return headLeafOrdinal; }
+
+  void advanceHeadLeaf(int nextLeafPageId, long nextOrdinal) {
+    leafPageId = nextLeafPageId;
+    headLeafOrdinal = nextOrdinal;
+    entryIndex = 0;
+  }
+
   void advanceEntry() {
     entryIndex++;
   }
@@ -137,6 +223,7 @@ public final class IndexedScanCursor {
 
   void complete() {
     active = false;
+    if (mixedHeadCursor != null) mixedHeadCursor.complete();
   }
 
   IndexedScanResult committedLookahead() {

@@ -296,6 +296,15 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
     return kernel.nextScan(cursor, result);
   }
 
+  StatusCode findHeadLeafAtOrAfter(
+      long tableId, long minimumOrdinal, IndexedHeadLeafResult result) {
+    return kernel.findHeadLeafAtOrAfter(tableId, minimumOrdinal, result);
+  }
+
+  StatusCode nextHeadTableAtOrAfter(long minimumTableId, IndexedHeadTableRoot result) {
+    return kernel.nextHeadTableAtOrAfter(minimumTableId, result);
+  }
+
   StatusCode prepareMutation(
       long visibleCommitSequence,
       long space,

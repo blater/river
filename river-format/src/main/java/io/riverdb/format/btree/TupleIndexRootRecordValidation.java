@@ -3,6 +3,7 @@ package io.riverdb.format.btree;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.format.FormatBytes;
 import io.riverdb.format.catalog.CatalogKeyspace;
+import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
 /** Allocation-free identity and descriptor validation for tuple-root records. */
@@ -24,7 +25,8 @@ final class TupleIndexRootRecordValidation {
       return root > 0 && owner == 0 && cleanupCursor == 0;
     }
     return state == TupleIndexRootRecordCodec.STATE_DROPPING && owner > 0
-        && (root > 0 ? cleanupCursor == 0 : cleanupCursor >= 4);
+        && (root > 0 ? cleanupCursor == 0
+            : cleanupCursor >= PageCodec.FIRST_ALLOCATABLE_PAGE_ID);
   }
 
   static boolean descriptors(int[] values, int offset, int count, long expectedHash) {

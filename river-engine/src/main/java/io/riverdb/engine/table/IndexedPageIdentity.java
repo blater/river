@@ -12,6 +12,8 @@ final class IndexedPageIdentity {
         ? ownerKeyId == PageCodec.SCALAR_OWNER_KEY_ID
         : payloadKind == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
             ? CatalogKeyspace.validKeyId(ownerKeyId)
+            : payloadKind == PageCodec.PAYLOAD_KIND_LOGICAL_HEAD
+                ? ownerKeyId == 0 || CatalogKeyspace.validObjectHead(ownerKeyId)
             : payloadKind == PageCodec.PAYLOAD_KIND_FREE
                 && ownerKeyId == PageCodec.SCALAR_OWNER_KEY_ID;
   }

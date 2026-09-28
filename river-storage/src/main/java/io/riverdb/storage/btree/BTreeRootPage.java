@@ -2,13 +2,14 @@ package io.riverdb.storage.btree;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.FormatBytes;
+import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
 /** Durable scalar-root identity and intrusive free-page stack head. */
 public final class BTreeRootPage {
   public static final int BYTES = 28;
-  public static final int VERSION = 3;
-  public static final int FIRST_REUSABLE_PAGE_ID = 4;
+  public static final int VERSION = 4;
+  public static final int FIRST_REUSABLE_PAGE_ID = PageCodec.FIRST_ALLOCATABLE_PAGE_ID;
   private static final long MAGIC = 0x5249564552425452L; // RIVERBTR
 
   private BTreeRootPage() { }

@@ -195,7 +195,8 @@ final class IndexedTupleIndexLifecycleBatch {
         && shape.partCount() <= TupleKeyCodec.MAX_INDEX_KEY_PARTS
         && shape.maximumPhysicalEncodedBytes() <= TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES
         && (operation == RECLAIM_DROPPING || operation == FINISH_DROPPING
-            ? cleanupEnd >= 4 : cleanupEnd == 0);
+            ? cleanupEnd >= io.riverdb.storage.btree.BTreeRootPage.FIRST_REUSABLE_PAGE_ID
+            : cleanupEnd == 0);
   }
 
   private void changeGeneration() {

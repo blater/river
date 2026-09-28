@@ -30,10 +30,11 @@ page and a leaf, as well as reading the scalar-root metadata page. This is a
 source-derived lower bound on page count, not a measured cache-miss count.
 The existing physical-row directory stores 8-byte records, but its key is a
 physical version ID; it cannot answer a `(tableId, logicalRowId)` lookup.
-With a 32-byte directory-page header, a 16 KiB River page can hold 2,028
-eight-byte heads or 4,056 four-byte child pointers. The two full-profile
-tables above would occupy about 198 head pages plus one root page per table
-while their IDs remain below roughly 8.2 million. This is a format-capacity
+With the candidate's 40-byte directory-page header, a 16 KiB River page can
+hold 2,027 eight-byte heads or 4,054 four-byte child pointers. The two
+full-profile tables above would occupy about 198 head pages plus sparse radix
+branches and shared table-map pages while their IDs remain below roughly
+8.2 million. This is a format-capacity
 model, not a measured disk footprint or cache hit rate.
 
 ## First candidate
@@ -56,56 +57,51 @@ recovery outcomes.
 
 | Concern | Current scalar heads | Direct head directory | Clustered primary rows |
 | --- | --- | --- | --- |
-| Indexed base read | Root metadata and B-tree path, then version/heap access | Root cached per table, radix leaf, then existing version/heap access | Primary leaf can carry row and version data; secondary probes still resolve through primary |
+| Indexed base read | Root metadata and B-tree path, then version/heap access | Cached table-map leaf, radix leaf, then existing version/heap access | Primary leaf can carry row and version data; secondary probes still resolve through primary |
 | Base update | Heap version plus scalar leaf rewrite | Heap version plus one head-leaf rewrite | Primary leaf rewrite; possible split or overflow work for wide rows |
-| Mapping capacity | 24 bytes per leaf entry, 256 entries/page | 8 bytes per head, about 2,028 entries/page | Depends on row width; no fixed fanout estimate without a row layout |
-| Recovery | Logical relational WAL replays scalar mutations; page-image WAL covers separate indexed operations | Replay `BASE_*` logical records into head pages and validate resulting roots and page allocation | Replace primary row, version, secondary-reference and vacuum contracts |
+| Mapping capacity | 24 bytes per leaf entry, 256 entries/page | 8 bytes per head, 2,027 entries/page | Depends on row width; no fixed fanout estimate without a row layout |
+| Recovery | Logical relational WAL replays scalar mutations; page-image WAL covers separate indexed operations | Replay relational base-space `SCALAR_*` and explicit `BASE_*` records into head pages and validate resulting roots and page allocation | Replace primary row, version, secondary-reference and vacuum contracts |
 
 The read timing is measured; the other cells describe work required by the
 respective layouts. Candidate write latency, WAL volume and recovery cost have
 not yet been measured. If those measurements contradict this selection, revise
 the decision before accepting production code.
 
-The directory belongs in the existing indexed page set, not an independently
-forced sidecar. Normal relational commits record logical `BASE_*` WAL records;
-preflight builds and freezes candidate page generations, and recovery recompiles
+The directory belongs in the existing indexed page set. Normal relational
+commits record base-space `SCALAR_*` WAL suboperations; explicit `BASE_*`
+suboperations also exist for replay and tests. Commit preflight builds and
+freezes candidate page generations, and recovery recompiles
 those records into pages. Stage head pages with the existing prepared batch,
 and make replay rebuild the same head pages. Direct commits force their WAL
 decision before installing pages. Shared groups append the decision, install
 the prepared pages and publish the commit under the transaction manager's
 snapshot barrier, then force and acknowledge durability. Preserve that order,
 its retained durability pins, and fencing on force failure. Install the head
-pages and update or invalidate cached roots in the same publication step,
-before the commit frontier becomes visible. Extend logical WAL's expected/resulting root and
-allocation evidence to cover the per-table directory root and every new
-directory page. Reject replay when those outcomes differ. The separate
+pages before the commit frontier becomes visible. The fixed table map stores
+the current row-tree root in page generations under the same WAL decision;
+a bounded cache stores only the table-map leaf page ID and rereads its current
+root entry on each lookup. Failed staging therefore cannot publish a cached
+root. Logical WAL's expected/resulting page allocation and row-count evidence
+must cover new directory pages and reject divergent replay. The separate
 page-image WAL path remains for its existing indexed operations and must also
 recognize the new payload kind when it restores such pages. Checkpoints must
 include directory pages and the durable per-table root mapping.
 
-Reserve `CatalogKeyspace.HEAD_DIRECTORY_ROOT_SPACE` at `Long.MAX_VALUE - 5`.
-The current maximum tuple key ID maps to that space, so reduce
-`MAXIMUM_KEY_ID` by one and update its exhaustion boundary and tests in the
-same format change. The new space is then disjoint from tuple indexes and
-existing catalog spaces. Store one versioned scalar
-record there, keyed by table object ID, with a format version, table object ID,
-root generation, root page ID and radix height. Validate that identity and the
-root page's owner and height when loading it. Cache the page ID, height and
-generation in the database-owned table registry. Insert or update that record
-in the same logical WAL group when the radix height grows. This record is read
-once when a table root is loaded; it is not a per-row scalar
-lookup. A reader can use the latest root for an older snapshot because root
-growth retains the prior subtree, while the version chain determines row
-visibility. Publication must update the cached root after the prepared group
-installs its pages and before the commit frontier becomes visible. Failed
-or rolled-back staging must leave the published cache unchanged. Recovery
-loads or reconstructs the same root record before serving reads. Table drop
-marks the table retired but retains its root record and directory pages while
-an older snapshot can still reference it. Vacuum tombstones the root record
-and reclaims its pages only after that snapshot boundary has passed.
+Page 4 is a fixed, typed table-map root in the indexed page set. Its sparse
+two-level radix path maps every valid table object ID to a table-leaf entry.
+Each entry stores the table's row-tree root page ID and height. This avoids a
+versioned scalar root record, another heap version, and a catalog keyspace
+reservation. The current root may serve an older snapshot because growth
+retains the prior subtree and row-version chains select visibility. New map
+and row-tree pages are allocated under the existing watermark and become
+durable with the same logical decision as their base mutation. Recovery
+reconstructs the same map before serving reads. Reclamation of a retired
+table's tree requires an oldest-snapshot boundary and a separate lifecycle
+decision; the current candidate retains those pages.
 
-Allocate head pages under the existing page watermark. Cache only a bounded
-number of directory pages and table roots. Address table-local IDs through
+Allocate head pages under the existing page watermark. Cache up to 256
+table-map leaf page IDs; read each root entry from its current page generation.
+Address table-local IDs through
 sparse radix pages so a new table or a high reserved ID
 does not allocate its entire possible range. Grow the radix height without
 changing existing entry locations; the root publication must be in the same
@@ -136,16 +132,18 @@ keyspaces, including catalog and tuple-root records, keep the scalar B-tree.
 Base table scans must iterate live logical IDs or an existing tuple index;
 they cannot retain the old base-row scalar scan as a fallback. Remove base-row
 entries from validation, vacuum and recovery expectations in the same delivery.
-Link allocated head leaves in logical-ID order and scan their nonzero entries;
-do not loop across unallocated IDs, since aborted reservations can create large
-gaps. Keep the existing base-space lock identity and transactional pending-row
+Enumerate populated radix leaves in logical-ID order and scan their nonzero
+entries; do not loop across unallocated IDs, since aborted reservations can
+create large gaps and reservations can commit out of order. Keep the existing
+base-space lock identity and transactional pending-row
 merge for full scans, including SERIALIZABLE phantom protection. A deleted
 head remains a version-chain head until vacuum can prove that no reader needs
 the prior version; reclaiming a leaf must not remove another live head. The
-current vacuum stream walks the scalar B-tree in `(space, key)` order and
-rewrites scalar leaves. Its scanner, ordered stream, head validation and
-publisher must be changed together so relational directory heads participate
-without retaining base-row scalar entries.
+vacuum stream walks scalar leaves before directory row leaves, then rewrites
+both kinds of head leaf. Its stream order is internal to the replayable vacuum
+operation, so it need not be global `(space, key)` order. The scanner, head
+validation and publisher must include directory heads without retaining
+base-row scalar entries.
 
 ## Acceptance measurements
 

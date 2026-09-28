@@ -29,7 +29,7 @@ final class IndexedRelationalWalMutationFixtures {
   static final long SECOND_OWNER_OBJECT_ID = 20;
   static final long KEY_SCHEMA_ID = 2_000;
   static final int SCALAR_ROOT = 3;
-  static final int NEXT_PAGE = 4;
+  static final int NEXT_PAGE = 5;
   static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(919, 929);
   static final WalGeneration GENERATION = WalGeneration.of(1);
 
@@ -39,7 +39,7 @@ final class IndexedRelationalWalMutationFixtures {
     requireOk(mutation.appendLogicalRowFloor(OWNER_OBJECT_ID, 2));
     requireOk(mutation.appendSuboperation(
         OWNER_OBJECT_ID, -1, 0, 1, 0, 0, expectedRoot, SCALAR_ROOT,
-        NEXT_PAGE, NEXT_PAGE, 0, 0, 0, 1,
+        NEXT_PAGE, NEXT_PAGE + 3, 0, 0, 0, 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
         IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
     ByteBuffer row = ByteBuffer.allocate(Long.BYTES);

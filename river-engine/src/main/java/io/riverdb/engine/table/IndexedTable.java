@@ -14,6 +14,7 @@ import java.nio.ByteBuffer;
 public final class IndexedTable extends IndexedRelationalTableAccess
     implements TransactionAdmissionSource, TransactionGroupCommitParticipant {
   private final IndexedTableStore store;
+  private final IndexedHeadLeafResult firstHeadLeaf = new IndexedHeadLeafResult();
 
   private IndexedTable(IndexedTableStore tableStore) {
     super(tableStore);
@@ -347,10 +348,40 @@ public final class IndexedTable extends IndexedRelationalTableAccess
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (io.riverdb.format.catalog.CatalogKeyspace
+        .isRelationalBaseRowSpace(lowerSpace)
+        && (upperSpace == lowerSpace
+            || upperSpace == lowerSpace + 1 && upperKey == Long.MIN_VALUE)) {
+      long tableId = lowerSpace
+          - io.riverdb.format.catalog.CatalogKeyspace.FIRST_RELATIONAL_SPACE;
+      long minimum = lowerKey <= 1 ? 0
+          : (lowerKey - 1)
+              / io.riverdb.format.page.LogicalHeadPageCodec.ROW_LEAF_ENTRIES;
+      StatusCode status = store.findHeadLeafAtOrAfter(
+          tableId, minimum, firstHeadLeaf);
+      if (status != StatusCode.OK && status != StatusCode.CONFLICT) return status;
+      return cursor.claimHead(
+          this, visibleCommitSequence, lowerSpace, lowerKey,
+          upperSpace, upperKey, firstHeadLeaf.pageId(), firstHeadLeaf.ordinal());
+    }
     int leafPageId = store.firstLeafPageIdAt(
         visibleCommitSequence, lowerSpace, lowerKey);
     if (leafPageId <= 0) {
       return store.snapshotLookupStatus();
+    }
+    long firstBaseSpace =
+        io.riverdb.format.catalog.CatalogKeyspace.FIRST_RELATIONAL_SPACE + 1;
+    long lastBaseSpace =
+        io.riverdb.format.catalog.CatalogKeyspace.FIRST_RELATIONAL_SPACE
+            + io.riverdb.format.catalog.CatalogKeyspace.MAXIMUM_RELATIONAL_OBJECT_ID;
+    if (lowerSpace <= lastBaseSpace
+        && (upperSpace >= firstBaseSpace
+            || OrderedKey.isInfinity(upperSpace, upperKey))) {
+      long firstTableId = lowerSpace < firstBaseSpace ? 1
+          : lowerSpace - io.riverdb.format.catalog.CatalogKeyspace.FIRST_RELATIONAL_SPACE;
+      return cursor.claimMixed(
+          this, visibleCommitSequence, lowerSpace, lowerKey,
+          upperSpace, upperKey, leafPageId, firstTableId);
     }
     return cursor.claim(
         this, visibleCommitSequence,
