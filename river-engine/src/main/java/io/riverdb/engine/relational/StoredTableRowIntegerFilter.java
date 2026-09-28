@@ -32,6 +32,8 @@ public final class StoredTableRowIntegerFilter {
 
   public boolean active() { return column >= 0; }
 
+  int column() { return column; }
+
   StatusCode test(TableDescriptor table, ByteBuffer source, int start) {
     int selectedColumn = column;
     SqlComparison selectedComparison = comparison;

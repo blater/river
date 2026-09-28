@@ -244,7 +244,7 @@ public final class RelationalDescriptorTableAccess {
         : scanAccess.next(this, cursor, destination, result, filter);
   }
 
-  /** The caller must prepare all columns consumed by its scan and index recheck. */
+  /** The caller prepares query columns; index rechecks and row filters are included here. */
   public StatusCode nextScan(
       RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination,

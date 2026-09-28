@@ -319,12 +319,57 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
         table, bounds, LockMode.SHARED, cursor));
     SqlValueBuffer destination = emptyValues();
+    StoredTableColumnSelection selected = new StoredTableColumnSelection();
+    assertEquals(StatusCode.OK, selected.selectNone(COLUMN_COUNT));
+    selected.select(63);
+    selected.select(255);
     assertEquals(StatusCode.OK, session.descriptorRows().nextScan(
-        cursor, destination, new RelationalRowIdentityResult()));
+        cursor, destination, new RelationalRowIdentityResult(), null, selected));
     assertEquals(41, destination.valueAt(0));
+    assertEquals(1, destination.valueAt(63));
     assertTrue(destination.isNull(255));
+    assertEquals(0, destination.descriptorAt(7));
     assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
     assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void projectedScanRetainsFilterColumn(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        indexedPayloadDescriptor(), table, new StatusDetail(128)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, indexedPayloadValues(41, 7, 55), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, indexedPayloadValues(42, 7, 66), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, session.descriptorRows().beginScan(table, cursor));
+    StoredTableColumnSelection selected = new StoredTableColumnSelection();
+    assertEquals(StatusCode.OK, selected.selectNone(3));
+    selected.select(0);
+    StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
+    assertEquals(StatusCode.OK, filter.configure(2, SqlComparison.EQUAL, 66));
+    SqlValueBuffer destination = new SqlValueBuffer();
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(
+        cursor, destination, new RelationalRowIdentityResult(), filter, selected));
+    assertEquals(42, destination.valueAt(0));
+    assertEquals(66, destination.valueAt(2));
+    assertEquals(0, destination.descriptorAt(1));
+    assertEquals(StatusCode.CONFLICT, session.descriptorRows().nextScan(
+        cursor, destination, new RelationalRowIdentityResult(), filter, selected));
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
   }
 

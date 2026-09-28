@@ -37,7 +37,7 @@ final class RelationalDescriptorRowAccess {
       StoredTableColumnSelection selection) {
     fetched.reset();
     StatusCode status = selection == null ? StatusCode.OK
-        : selection.prepareProjection(table);
+        : selection.prepareProjection(table, filter);
     if (!status.isOk()) return status;
     fetched.retentionProjection(selection == null ? null : selection.projection());
     status = session.fetchByKey(
@@ -63,7 +63,7 @@ final class RelationalDescriptorRowAccess {
       HeapRowResult source, SqlValueBuffer destination, StoredTableRowIntegerFilter filter,
       StoredTableColumnSelection selection) {
     if (selection != null) {
-      StatusCode status = selection.prepareProjection(table);
+      StatusCode status = selection.prepareProjection(table, filter);
       if (!status.isOk()) return status;
       if (selection.projection() != null) {
         source.retentionProjection(selection.projection());

@@ -25,7 +25,7 @@ public final class HeapRowResult implements BoundedByteSource {
     return length;
   }
 
-  /** Applies only to the next retained row; the caller owns this plan. */
+  /** Applies until changed; the caller owns this plan. */
   public void retentionProjection(HeapRowProjection plan) { projection = plan; }
 
   /** Borrowed until this result is reused; only rows retained by this result expose it. */

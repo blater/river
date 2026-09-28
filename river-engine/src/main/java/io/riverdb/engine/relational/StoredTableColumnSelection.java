@@ -64,9 +64,11 @@ public final class StoredTableColumnSelection {
   public int count() { return all ? columns : count; }
   public int columnAt(int index) { return all ? index : ordinals[index]; }
 
-  StatusCode prepareProjection(TableDescriptor table) {
+  StatusCode prepareProjection(
+      TableDescriptor table, StoredTableRowIntegerFilter filter) {
     if (all) return StatusCode.OK;
     if (!matches(table.columnCount())) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (filter != null && filter.active()) select(filter.column());
     if (!projectionDirty && projectionLayoutId == table.rowLayoutId()) return StatusCode.OK;
     StatusCode status = projection.prepare(
         StoredTableRowHeaderCodec.HEADER_BYTES + table.nullBitmapBytes(),

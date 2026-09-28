@@ -92,7 +92,7 @@ final class RelationalDescriptorScanAccess {
     if (selection != null && !selection.matches(table.columnCount())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = cursor.prepareSelection(selection);
+    StatusCode status = cursor.prepareSelection(selection, filter);
     if (!status.isOk()) return status;
     status = reserveRow(table, destination, selection);
     if (!status.isOk()) return status;
