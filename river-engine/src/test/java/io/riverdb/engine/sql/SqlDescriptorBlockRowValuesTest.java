@@ -8,7 +8,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.row.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueBuffer;
 import io.riverdb.engine.runtime.RiverRuntimeConfig;
 import io.riverdb.engine.runtime.SqlDatabaseRuntime;
 import io.riverdb.engine.runtime.SqlRuntimeLease;

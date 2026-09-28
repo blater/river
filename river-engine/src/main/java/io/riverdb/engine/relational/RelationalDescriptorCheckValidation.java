@@ -6,7 +6,6 @@ import io.riverdb.base.type.ExactDecimal128Conversion;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlNumericValue;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.ColumnConstraintDescriptorSet;
 import io.riverdb.engine.schema.TableDescriptor;
 

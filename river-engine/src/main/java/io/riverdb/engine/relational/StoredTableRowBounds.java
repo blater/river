@@ -1,4 +1,4 @@
-package io.riverdb.engine.row;
+package io.riverdb.engine.relational;
 
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.FormatBytes;

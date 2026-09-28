@@ -1,7 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.row.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueBuffer;
 import io.riverdb.engine.relational.RelationalDescriptorJoinTableView;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.schema.TableDescriptor;

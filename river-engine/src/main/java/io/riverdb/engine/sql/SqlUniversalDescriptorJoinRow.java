@@ -2,13 +2,13 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.row.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueBuffer;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
 import io.riverdb.engine.relational.RelationalRowIdentityResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.schema.TableDescriptor;
-import io.riverdb.engine.row.StoredTableRowFilter;
+import io.riverdb.engine.relational.StoredTableRowFilter;
 
 /** Reusable decoded row for one streaming descriptor join role. */
 final class SqlUniversalDescriptorJoinRow {

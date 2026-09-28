@@ -5,7 +5,7 @@ import io.riverdb.engine.relational.RelationalDescriptorIndexBounds;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.schema.TableDescriptor;
-import io.riverdb.engine.row.StoredTableRowFilter;
+import io.riverdb.engine.relational.StoredTableRowFilter;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.tx.api.lock.LockMode;
 

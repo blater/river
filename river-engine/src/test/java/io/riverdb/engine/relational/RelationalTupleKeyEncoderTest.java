@@ -8,7 +8,6 @@ import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlApproximateNumeric;
-import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.format.btree.TupleKeyCodec;

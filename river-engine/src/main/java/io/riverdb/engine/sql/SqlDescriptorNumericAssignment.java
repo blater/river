@@ -8,7 +8,7 @@ import io.riverdb.base.type.SqlApproximateNumeric;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlNumericValue;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.row.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueBuffer;
 
 /** Reusable checked coercion from one numeric descriptor value into a row buffer. */
 final class SqlDescriptorNumericAssignment {

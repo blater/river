@@ -1,10 +1,6 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.row.SqlValueBuffer;
-import io.riverdb.engine.row.StoredTableRowCodec;
-import io.riverdb.engine.row.StoredTableRowEncodeResult;
-import io.riverdb.engine.row.StoredTableRowFilter;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
@@ -12,8 +8,7 @@ import java.nio.ByteBuffer;
 /** Reusable direct encoding buffer for one descriptor-row access session. */
 final class RelationalDescriptorRowBuffer {
   private static final int INITIAL_BYTES = 256;
-  private final StoredTableRowCodec codec = new StoredTableRowCodec();
-  private final RelationalStoredRowAccess storedAccess = new RelationalStoredRowAccess();
+  private final StoredTableRowDecoder decoder = new StoredTableRowDecoder();
   private final StoredTableRowEncodeResult encoded = new StoredTableRowEncodeResult();
   private ByteBuffer bytes = ByteBuffer.allocateDirect(INITIAL_BYTES);
 
@@ -36,7 +31,7 @@ final class RelationalDescriptorRowBuffer {
   StatusCode encode(
       TableDescriptor table, long logicalRowId, SqlValueBuffer values) {
     bytes.clear();
-    StatusCode status = codec.encode(
+    StatusCode status = StoredTableRowEncoder.encode(
         table, logicalRowId, values, bytes, 0, encoded);
     if (status.isOk()) bytes.position(0).limit(encoded.length());
     return status;
@@ -70,7 +65,7 @@ final class RelationalDescriptorRowBuffer {
     StatusCode status = source.copyTo(bytes);
     if (!status.isOk()) return StatusCode.CORRUPTION;
     bytes.flip();
-    return codec.decodeStored(storedAccess,
+    return decoder.decode(
         table, logicalRowId, bytes, 0, source.length(), destination, filter, publishText);
   }
 

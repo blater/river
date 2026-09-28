@@ -1,14 +1,14 @@
-package io.riverdb.engine.row;
+package io.riverdb.engine.relational;
 
 /** Caller-owned publication result for one encoded stored table row. */
-public final class StoredTableRowEncodeResult {
+final class StoredTableRowEncodeResult {
   private int length;
 
-  public void reset() {
+  void reset() {
     length = 0;
   }
 
-  public int length() {
+  int length() {
     return length;
   }
 

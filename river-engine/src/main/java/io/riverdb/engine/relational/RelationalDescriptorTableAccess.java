@@ -1,7 +1,6 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedTransactionSession;
@@ -235,12 +234,12 @@ public final class RelationalDescriptorTableAccess {
         : scanAccess.next(this, cursor, destination, result);
   }
 
-  /** Validates each stored row and skips rows rejected by a borrowed-row filter. */
+  /** Reads each stored row and skips rows rejected by a borrowed-row filter. */
   public StatusCode nextScan(
       RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination,
       RelationalRowIdentityResult result,
-      io.riverdb.engine.row.StoredTableRowFilter filter) {
+      StoredTableRowFilter filter) {
     return !active() ? StatusCode.INVALID_EXTERNAL_INPUT
         : scanAccess.next(this, cursor, destination, result, filter);
   }
@@ -250,7 +249,7 @@ public final class RelationalDescriptorTableAccess {
       RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination,
       RelationalRowIdentityResult result,
-      io.riverdb.engine.row.StoredTableRowFilter filter,
+      StoredTableRowFilter filter,
       boolean publishText) {
     return !active() ? StatusCode.INVALID_EXTERNAL_INPUT
         : scanAccess.next(this, cursor, destination, result, filter, publishText);
