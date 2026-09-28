@@ -6,7 +6,7 @@ priority: 1
 assignee: blater
 delivery: code
 base-commit: 75039adc0461dd4b8f37f8b5b200032e2bac9936
-branch: feature/elvenking-completion
+branch: ticket/tic-elvenking-completion
 evidence:
   - docs/delivery/evidence/2026-09-28-tic-elvenking-completion-review.md
 tags:
@@ -23,7 +23,7 @@ of [tic-elvenking](tic-elvenking.md). Keep its original two P2 findings closed;
 this ticket owns the remaining encapsulation and projection work. Preserve
 the established storage-trust policy and real external input admission.
 
-## Required work
+## Design
 
 1. **Internalize stored-row decoding.** Remove the unused public checked
    `StoredTableRowCodec.decode` overloads, `StoredTableRowExternalAdmission`,
@@ -60,7 +60,7 @@ the established storage-trust policy and real external input admission.
    final source revision with an adjacent control if its result is surprising;
    report host variation and do not claim a gain from short local runs.
 
-## Acceptance
+## Acceptance Criteria
 
 - No unused public encoded-row admission path, duplicate full validator or
   access-token dependency remains. Actual external entry points still reject
@@ -77,7 +77,7 @@ the established storage-trust policy and real external input admission.
   evidence and a recorded decision. Keep the wider indexed-read investigation
   in [tic-72e5](tic-72e5.md); it is not a prerequisite or a claimed outcome.
 
-## R3 ownership audit
+### R3 ownership audit
 
 `SqlAcceptedRow` is constructed and accepted only inside the SQL package. It
 binds a specific relational session and table before the shared relational
@@ -99,3 +99,30 @@ reports ambiguity. The prepared physical mask stores those base-schema
 ordinals; an unresolved dependency retains all columns. This replaces the
 separate scan of raw physical column names while preserving the binder's
 identity decision.
+
+### Completion
+
+- **R1 closed:** the checked public stored-row codec, duplicate full validator
+  and access token were removed. Decoder and trusted setters now share the
+  relational package with their internal readers. Independent review found a
+  public mutable filter callback that could alter bytes before trusted
+  publication; it was removed. The remaining final integer filter checks its
+  configuration before byte access. Embedded and SQL raw admission tests still
+  reject malformed values.
+- **R2 closed:** the physical text mask uses the prepared block liveness pass
+  and bound schema ordinals. Real SQL and decoder tests cover dead inner text,
+  aliases, predicates, ordering, grouping, aggregates, hidden HAVING, DISTINCT
+  and structural metadata. An independent two-row review case returned the
+  wrong row for aliased inner ordering before the ordinal-resolution fix; it
+  returns the expected row afterward. SELECT-all demand is covered by a direct
+  liveness test because derived-table SELECT-all is rejected by the parser.
+- **R3 closed:** the duplicate result-text range guards were removed and
+  failed-copy ownership was tested. The session-bound `SqlAcceptedRow` contract
+  and final INSERT row admission were retained for the invariants above.
+- **Evidence:** the integrated focused run passed 54 tests in eight classes;
+  `./gradlew --no-daemon clean check` passed on production source `775bcef6`
+  in 3m 19s (156 tasks). Independent correctness and ownership review found
+  no remaining blocker. The [performance checkpoint](../performance-checkpoints.md#2026-09-28--elvenking-completion-checkpoint)
+  records the exact build, eight matched diagnostic runs, host variation and
+  decision. It designates no new performance baseline. The wider indexed-read
+  search and full-row cost remain in [tic-72e5](tic-72e5.md).
