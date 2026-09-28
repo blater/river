@@ -26,6 +26,7 @@ and runtime configuration.
 | 2026-09-28 03:59:08 | `feature/stock-validated-root-filter` | `tic-72e5` | River `e029efdc`; harness `df66a3a`, version `validated-filter-e029efdc` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 5,018.188 | 0.267 | `river_harness_20260928_035900_d016abce`; [checkpoint](#2026-09-28--validated-root-row-filter-checkpoint) |
 | 2026-09-28 04:25:36 | River `feature/stock-validated-root-filter`; harness `feature/stock-level-program` | `tic-72e5` | River `e029efdc` (merged `2d21b5e5`); harness `4c16840` (merged `dae4786`), version `validated-filter-e029efdc` | `sample stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 10,328.801 | 0.130 | `/private/tmp/river-harness-stock-program/runs/river_harness_20260928_042529_a09ebfaa`; [checkpoint](#2026-09-28--stock-level-read-program-checkpoint) |
 | 2026-09-28 07:02:16 UTC | `feature/inner-join-order-cost` | `tic-72e5` | River `34ee0800`, version `join-cost-34ee0800`; harness `7c4b90d` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,131.222 | 1.109 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_070044_7e89c8f0`; [checkpoint](#2026-09-28--full-stock-level-costed-inner-join-order) |
+| 2026-09-28 08:41:56 UTC | `feature/index-root-snapshot-cache` | `tic-72e5` | River `b17e0450`, version `b17e0450-jvm-clean`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,334.778 | 0.914 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_084035_50a125d8`; [checkpoint](#2026-09-28--cache-versioned-index-roots-across-join-probes) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -947,3 +948,123 @@ within that range of host variation. Decision: do not merge the point-fetch
 feature on this evidence. Repeated cursor setup alone has not established a
 material gain; isolate tuple-key traversal, base-row lookup and wide-row
 decode costs before the next production optimization.
+
+## 2026-09-28 — Full Stock Level JOIN phase timing
+
+Temporary timing counters on a detached worktree at accepted integration
+`9221d802` measured the unchanged full-profile Stock Level JOIN. The
+diagnostic code is under `/private/tmp/river-join-timing-diagnostic`, and its
+shutdown counters are at `/private/tmp/river-join-timing-index.txt` (written
+2026-09-28 09:04:56 BST). The harness was `7c4b90d`, version label
+`diagnostic-join-timing-index`. Command:
+
+```sh
+./benchmark run river tpcc full stock-level \
+  --river-executable=/private/tmp/river-join-timing-candidate/river \
+  --river-version=diagnostic-join-timing-index \
+  --warmup=2s --duration=10s --workers=1 --warehouses=1 \
+  --seed=42 --max-retries=3 --no-report
+```
+
+The GraalVM 25.0.4 JVM used `-Xmx1g`, READ COMMITTED, and durable local WAL.
+The run passed with 9,117 commits, 911.67 TPS, p99 1.653 ms, successful
+post-run validation, and owned-server cleanup. Counters include warmup and
+measured workload, so their totals must not be divided by measured commits.
+They added per-call timing overhead and are diagnostic rather than a baseline.
+
+| Timed operation | Calls | Total time (s) | Mean (µs/call) |
+| --- | ---: | ---: | ---: |
+| `order_line` root next | 2,355,372 | 1.947 | 0.826 |
+| `stock` inner open | 2,344,950 | 3.692 | 1.574 |
+| `stock` inner admission within open | 2,344,950 | 0.324 | 0.138 |
+| `stock` inner index begin within open | 2,344,950 | 3.287 | 1.401 |
+| Versioned index-root reload within begin | 2,344,950 | 0.938 | 0.400 |
+| Tuple-index cursor open within begin | 2,344,950 | 1.475 | 0.629 |
+| `stock` base-row lookup | 2,344,950 | 0.942 | 0.402 |
+| `stock` base-row decode | 2,344,950 | 0.912 | 0.389 |
+| `stock` inner close | 2,376,216 | 0.173 | 0.072 |
+
+The inner index begin and base-row read dominate the timed JOIN path. The
+accepted code reloads a versioned index-root record and opens an index cursor
+for each inner key, then fetches and decodes the base row. The point-fetch
+candidate still traversed the index to find the logical row ID before fetching
+the base row, explaining why changing the cursor API alone did not remove the
+dominant work. The following checkpoint tests caching the validated root record
+across probes with the same visible snapshot and key, excluding private index
+builds. After that, the remaining index traversal and base-row lookup motivate
+a projected unique-key lookup.
+This diagnostic does not establish that one feature alone will close the full
+MariaDB gap.
+
+## 2026-09-28 — Cache versioned index roots across JOIN probes
+
+River `b17e0450` reuses a validated tuple-index root record when a reopened
+scan requests the same key at the same visible commit sequence. It reloads on
+snapshot or key change and never caches private index builds or direct prefix
+probes. The focused JOIN test checks an indexed inner lookup, READ COMMITTED
+visibility across statements, and REPEATABLE READ visibility. The final clean
+`./gradlew --no-daemon clean test` passed. Independent review found no
+production visibility defect; it requested a mechanism check, which a separate
+temporary counter build supplied: 3,261,119 cache hits, 69 cacheable misses,
+and 1,497,531 intentionally uncached calls in one passed full-profile run.
+Those counters are at `/private/tmp/river-index-root-cache-hits.txt` and are
+absent from `b17e0450`. `slopmark` scored the touched root-snapshot file
+31.160 before and 33.785 after; the other two touched files remained at
+28.774 and 17.498. It reported shallow boundary coverage.
+
+The River builds were accepted `34ee0800` and candidate `b17e0450`, from
+branch `feature/index-root-snapshot-cache`. The standalone harness source was
+`eba8ab0` (workload behavior introduced at `7c4b90d`). All runs used the
+unchanged `full stock-level` SQL, GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64,
+READ COMMITTED, durable local WAL, one worker and warehouse, seed 42, and
+retry limit 3. Only executable/version changed between variants. Short
+commands used 1 second warmup and 3 seconds measured; long commands used
+5 seconds warmup and 30 seconds measured:
+
+```sh
+./benchmark run river tpcc full stock-level \
+  --river-executable=BUILD/river --river-version=BUILD-LABEL \
+  --warmup=5s --duration=30s --workers=1 --warehouses=1 \
+  --seed=42 --max-retries=3
+```
+
+| Order | Window | Build | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | --- | ---: | ---: | --- |
+| A1 | short | control | 1,015.232 | 1.361 | `river_harness_20260928_081032_218194f9` |
+| B1 | short | cache | 948.551 | 3.201 | `river_harness_20260928_081205_bfd4fd9b` |
+| B2 | short | cache | 816.179 | 2.308 | `river_harness_20260928_081341_29bd9b92` |
+| A2 | short | control | 736.246 | 2.404 | `river_harness_20260928_081522_36840536` |
+| B1 | long | cache | 1,203.377 | 1.570 | `river_harness_20260928_081738_da30e565` |
+| A1 | long | control | 933.213 | 2.517 | `river_harness_20260928_081943_c560676a` |
+| A2 | long | control | 945.819 | 3.813 | `river_harness_20260928_082205_cafb7b33` |
+| B2 | long | cache | 1,205.319 | 1.077 | `river_harness_20260928_082446_1cd85efd` |
+
+Artifacts are under `/private/tmp/river-harness-stock-analyze/runs/`.
+Every run was eligible, passed full-load and post-run invariants, and had
+zero retries, failures, or unknown commits. The short runs shared comparison
+key `3d606a7f865c6ab38afd83034a3cc80f9477a9c89a07d1b5041319e82d45e585`
+but the two controls differed by 27.5%, so that sequence was inconclusive.
+The long runs shared key
+`1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`;
+their controls averaged 939.516 TPS and cache builds averaged 1,204.348 TPS,
+a 28.2% increase in this diagnostic window.
+
+One adjacent `sample stock-level` pair used the same 5/30 second window.
+Control reached 10,177.150 TPS and candidate 11,129.246 TPS, with eligible
+comparison key
+`92304f6559add6ca75ccead01a5dbc118982216b805a8f00f784346d5af797a2`;
+artifacts are `river_harness_20260928_083309_109a8811` and
+`river_harness_20260928_083357_5fdcd476`. Both passed invariants with zero
+retries, failures, or unknown commits. This pair checks for an obvious sample
+regression; it is not a separate accepted improvement estimate.
+
+An additional clean-build candidate run labelled `b17e0450-jvm-clean`
+started at 2026-09-28 08:41:56 UTC and reached 1,334.778 TPS, p99 0.914 ms,
+artifact `river_harness_20260928_084035_50a125d8`. Its engine JAR checksum
+matched the earlier candidate JAR, and the run had the eligible long-run key,
+passed validation, and had zero retries, failures, or unknown commits. It is
+the new baseline row above; the long interleaved sequence is the evidence for
+the feature decision. Accept this generic cache as a recoverable feature
+checkpoint. Keep `tic-72e5` open: repeated tuple cursor descent and base-row
+fetch still dominate the inner probe, and the prior MariaDB control remains
+substantially faster on full cardinality.

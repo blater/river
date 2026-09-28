@@ -22,20 +22,23 @@ commits/s, while a matched MariaDB control reached 4,848.308. This is
 diagnostic workload evidence, not audited TPC-C. See the
 [full-profile checkpoint](../performance-checkpoints.md#2026-09-28--full-stock-level-costed-inner-join-order).
 
-The remaining full-profile gap is in the `order_line` scan and repeated
-indexed `stock` probes. The current nested-loop path opens and closes a
-tuple-index scan for each outer row, then fetches the base row. River already
-has a direct exact primary-key fetch API; its use for joins needs the same
-visibility and source-lock guarantees as the scan path.
+The remaining full-profile gap is dominated by repeated indexed `stock`
+probes. An exact primary-key fetch candidate passed correctness tests but did
+not produce a repeatable throughput gain, so it was not merged. A timing pass
+measured about 0.40 µs per probe reloading the versioned index-root record,
+0.63 µs opening the index cursor, and 0.84 µs fetching and decoding the wide
+base row. Caching the root record at River `b17e0450` raised the mean of two
+long full-profile runs from 939.516 to 1,204.348 commits/s; a later clean-build
+run reached 1,334.778. See the [cache checkpoint](../performance-checkpoints.md#2026-09-28--cache-versioned-index-roots-across-join-probes).
 
 ## Delivery
 
-- Use exact primary-key point fetches for eligible inner JOIN probes without
-  changing SQL results, read-your-writes, isolation, lock protection, or
-  failure cleanup.
-- Profile root scanning, probe lookup, row decoding and transaction overhead
-  after that change. Optimize the largest verified remaining costs through
-  generic engine mechanisms, one feature checkpoint at a time.
+- Reprofile the accepted cache build. Measure tuple cursor descent and
+  base-row fetch on the unchanged JOIN.
+- Test a generic projected unique-key lookup that returns needed values from
+  one index search. Add index payload support if the measured gain justifies
+  the storage and update cost. Preserve SQL results, read-your-writes,
+  isolation, lock protection, and failure cleanup.
 - Keep the `sample` gain while making River faster than MariaDB on matched
   `full stock-level` runs. Continue improvements while targeted evidence
   shows a repeatable gain.
