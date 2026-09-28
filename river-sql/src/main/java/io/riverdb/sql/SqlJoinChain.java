@@ -66,6 +66,17 @@ public final class SqlJoinChain {
     return SqlJoinChainCopy.copy(this, source);
   }
 
+  /** Changes only the physical role order of a two-relation inner JOIN. */
+  public void swapFirstInnerRoles() {
+    if (roleCount != 2 || stageCount != 1 || joinKinds[0] != INNER) return;
+    SqlIdentifier name = tableNames[0];
+    tableNames[0] = tableNames[1];
+    tableNames[1] = name;
+    SqlIdentifier alias = aliases[0];
+    aliases[0] = aliases[1];
+    aliases[1] = alias;
+  }
+
   public void reset() {
     for (int role = 0; role < roleCount; role++) {
       tableNames[role].reset();

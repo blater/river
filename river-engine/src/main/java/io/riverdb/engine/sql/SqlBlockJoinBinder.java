@@ -8,6 +8,7 @@ import io.riverdb.sql.SqlCommand;
 final class SqlBlockJoinBinder {
   private final SqlBinder binder;
   private final SqlNestedTableResolver tables = new SqlNestedTableResolver();
+  private final SqlTwoRoleJoinOrder joinOrder = new SqlTwoRoleJoinOrder();
 
   SqlBlockJoinBinder(SqlBinder sharedBinder) {
     binder = sharedBinder;
@@ -18,8 +19,15 @@ final class SqlBlockJoinBinder {
       BoundSqlStatement bound,
       SqlCommand command,
       int block) {
-    return tables.resolveContextRoles(
-        session, command, bound.joinContext(block));
+    SqlBoundJoinContext context = bound.joinContext(block);
+    StatusCode status = tables.resolveContextRoles(session, command, context);
+    if (status.isOk() && bound.executableQuery.edgeCount() == 0
+        && joinOrder.reverse(command, context)) {
+      command.joinChain().swapFirstInnerRoles();
+      bound.executableQuery.block(block).swapFirstInnerRoles();
+      context.swapFirstInnerRoles();
+    }
+    return status;
   }
 
   StatusCode preflight(

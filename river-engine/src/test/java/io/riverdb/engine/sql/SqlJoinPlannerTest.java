@@ -54,7 +54,7 @@ final class SqlJoinPlannerTest {
         + "GROUP BY aid ORDER BY aid";
     assertPlanContains(session, result, "EXPLAIN ANALYZE " + grouped, "exact");
     assertPlanContains(session, result, "EXPLAIN ANALYZE " + grouped, "est");
-    assertPlanContains(session, result, "EXPLAIN ANALYZE " + grouped, "hash");
+    assertPlanContains(session, result, "EXPLAIN ANALYZE " + grouped, "join");
     assertRows(session, result, grouped, 4);
 
     assertEquals(StatusCode.OK, session.close());
@@ -83,6 +83,149 @@ final class SqlJoinPlannerTest {
 
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void reordersQualifiedInnerAggregateWhenAnalyzedRootIsSmaller(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSession session = openSession(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    createFixture(session, result);
+    String query = "SELECT COUNT(DISTINCT a.id) FROM cost_left a "
+        + "JOIN cost_small b ON a.id=b.left_id";
+    assertRootRows(session, result, query, 4);
+    analyze(session, result, "cost_left", 4);
+    analyze(session, result, "cost_small", 1);
+    assertRootRows(session, result, query, 1);
+    assertCount(session, result, query, 1);
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void selectsRootFromAnalyzedRangeSelectivity(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSession session = openSession(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    createFixture(session, result);
+    analyze(session, result, "cost_left", 4);
+    analyze(session, result, "cost_large", 4);
+    String source = "SELECT COUNT(DISTINCT a.id) FROM cost_left a "
+        + "JOIN cost_large b ON a.id=b.left_id WHERE ";
+    assertRootRows(session, result, source + "a.id<=4 AND b.id>=14", 1);
+    assertRootRows(session, result, source + "a.id<=1 AND b.id>=11", 1);
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void unindexedZeroMatchFilterStillPaysForRootScan(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSession session = openSession(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE cost_scan (id BIGINT PRIMARY KEY,qty INTEGER)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE cost_probe (id BIGINT PRIMARY KEY,scan_id BIGINT)", result));
+    for (int first = 1; first <= 100; first += 50) {
+      StringBuilder insert = new StringBuilder("INSERT INTO cost_scan VALUES ");
+      for (int id = first; id < first + 50; id++) {
+        if (id > first) insert.append(',');
+        insert.append('(').append(id).append(",10)");
+      }
+      assertEquals(StatusCode.OK, session.execute(insert.toString(), result));
+    }
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO cost_probe VALUES (11,1),(12,2),(13,3),(14,4)", result));
+    String query = "SELECT COUNT(DISTINCT s.id) FROM cost_scan s "
+        + "JOIN cost_probe p ON s.id=p.scan_id "
+        + "WHERE s.qty<10 AND p.id>=14";
+    analyze(session, result, "cost_scan", 100);
+    analyze(session, result, "cost_probe", 4);
+    assertRootRows(session, result, query, 1);
+    assertRootRows(session, result,
+        "SELECT COUNT(DISTINCT s.id) FROM cost_scan s "
+            + "JOIN cost_probe p ON s.id=p.scan_id "
+            + "WHERE s.id>=1 AND s.qty<10", 4);
+    assertCount(session, result, query, 0);
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void costsConstrainedCompoundPrimaryKeyPrefix(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSession session = openSession(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE cost_stock (id BIGINT PRIMARY KEY)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE cost_composite (w BIGINT,d BIGINT,id BIGINT,item BIGINT,"
+            + "PRIMARY KEY(w,d,id))", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO cost_stock VALUES (9),(10)", result));
+    for (int first = 1; first <= 100; first += 50) {
+      StringBuilder insert = new StringBuilder("INSERT INTO cost_composite VALUES ");
+      for (int row = first; row < first + 50; row++) {
+        if (row > first) insert.append(',');
+        int district = (row - 1) / 10 + 1;
+        int id = (row - 1) % 10 + 1;
+        insert.append("(1,").append(district).append(',').append(id).append(',')
+            .append(id % 2 == 0 ? 10 : 9).append(')');
+      }
+      assertEquals(StatusCode.OK, session.execute(insert.toString(), result));
+    }
+    analyze(session, result, "cost_stock", 2);
+    analyze(session, result, "cost_composite", 100);
+    String query = "SELECT COUNT(DISTINCT s.id) FROM cost_stock s "
+        + "JOIN cost_composite c ON s.id=c.item "
+        + "WHERE c.w=1 AND c.d=1 AND c.id>=9 AND c.id<11";
+    assertRootRows(session, result, query, 2);
+    assertCount(session, result, query, 2);
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertRootRows(
+      SqlSession session, SqlExecutionResult result, String query, long expected) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan("EXPLAIN ANALYZE " + query, cursor));
+    boolean found = false;
+    StatusCode status;
+    while ((status = session.nextScan(cursor, row)).isOk()) {
+      if (!found && (row.valueAt(0) == PackedText.pack("primary")
+          || row.valueAt(0) == PackedText.pack("table"))) {
+        assertEquals(expected, row.valueAt(2));
+        found = true;
+      }
+    }
+    assertEquals(StatusCode.CONFLICT, status);
+    assertTrue(found);
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertCount(
+      SqlSession session, SqlExecutionResult result, String query, long expected) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(query, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(expected, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
 
   private static void createFixture(SqlSession session, SqlExecutionResult result) {

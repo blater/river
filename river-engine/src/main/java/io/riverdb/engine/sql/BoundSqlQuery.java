@@ -311,6 +311,10 @@ final class BoundSqlQuery {
       SqlJoinChain join = snapshot.join();
       return join != null && join.stageCount() > 0 ? join : null;
     }
+    void swapFirstInnerRoles() {
+      SqlJoinChain join = joinChain();
+      if (join != null) join.swapFirstInnerRoles();
+    }
     CharSequence orderColumnName() { return orderColumnName; }
     int columnCount() { return columnCount; }
     CharSequence firstColumnName() { return columnName(0); }
