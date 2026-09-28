@@ -1545,3 +1545,87 @@ its cause, but they do not show a repeated directional regression across both
 windows. **Decision:** accept the correctness and ownership fixes and the
 generic block-liveness mechanism, with no stable TPS gain claimed. This is a
 diagnostic checkpoint, not a new designated baseline or MariaDB comparison.
+
+## 2026-09-28 — projected descriptor-read investigation
+
+[tic-healthy-bellodonna](tickets/tic-healthy-bellodonna.md) carries a reusable
+column selection through descriptor JOIN scans. The unchanged `full stock-level` query uses
+`s_w_id`, `s_i_id` and `s_quantity` from the seventeen-column `stock` row.
+The selected-column path publishes those three values and copies no `stock`
+VARCHAR payload. The safe implementation retains the full heap row while
+releasing its page pin, then decodes directly from that retained read-only
+buffer without a second full-row copy. The separate scalar base-row tree lookup still occurs once per tuple
+candidate; no search-count gain is claimed for this slice.
+
+The control distribution came from accepted source `17978d4b`.
+An exploratory projected/borrowed candidate used engine JAR SHA-256
+`4fa65fcb2de13aa490151bd22fe11edd73e2663817951adacbfcb2118ae4c8dc`
+and storage JAR SHA-256
+`cad55e49fabea477d2c8c838aa9fabc845c636bc6dbbb0669aeb491d2c2df843`.
+Harness `eba8ab0` used one worker and warehouse, seed 42, retry limit 3,
+5-second warmup, 30-second measured window, READ COMMITTED, durable local WAL,
+GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64 and loopback TCP/TLS. Only the
+executable and version label changed between matched runs. Every listed run
+passed validation, had eligible comparison metadata, zero retries, failures
+and unknown commits, and stopped its owned server. Matching comparison keys
+were `1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`
+for full Stock Level and
+`05f20bc0068d89fee38a6b0139663924924f4f8a3d27b66756242eecbe6ccea6`
+for sample New Order. Artifact paths have prefix
+`/private/tmp/river-harness-stock-analyze/runs/`.
+
+| Workload; order | Build | TPS | p99 (ms) | Artifact ID |
+| --- | --- | ---: | ---: | --- |
+| `full stock-level`; A1 | Control | 1,399.309 | 0.921 | `river_harness_20260928_155626_584a1e39` |
+| same; A2 | Control | 1,464.008 | 0.862 | `river_harness_20260928_155838_f70e5e8f` |
+| same; B0 | Early candidate, CPU contaminated | 593.840 | 6.767 | `river_harness_20260928_160723_836e78c5` |
+| same; A3 | Control | 1,343.742 | 1.000 | `river_harness_20260928_161027_e8a440d1` |
+| same; B1 | Rejected borrowed candidate | 1,508.794 | 0.823 | `river_harness_20260928_163315_e55d0eb3` |
+| same; A4 | Control | 1,451.695 | 0.859 | `river_harness_20260928_163506_41adee16` |
+| same; B2 | Rejected borrowed candidate | 1,475.829 | 0.854 | `river_harness_20260928_163703_78f87d65` |
+| `sample new-order`; B1 | Rejected borrowed candidate | 378.700 | 5.112 | `river_harness_20260928_163902_1548e4ad` |
+| same; A1 | Control | 387.097 | 4.526 | `river_harness_20260928_163948_e1533bb8` |
+| same; A2 | Control | 379.866 | 4.649 | `river_harness_20260928_164035_29151c9a` |
+| same; B2 | Rejected borrowed candidate | 378.433 | 5.014 | `river_harness_20260928_164127_1c453858` |
+
+The user identified the 593.840 TPS result as an anomaly caused by other high
+CPU processes. It is excluded from every comparison and is not a regression
+signal. Other exploratory variants at 1,257.579 and 1,134.611 TPS used
+different intermediate code and are not combined with the final candidate.
+Independent ownership review then found that the public borrowed callback
+could reenter table operations while holding a page pin and expose the writable
+page buffer. That path was removed from the working source. The usable runs
+above apply only to the rejected candidate and establish no throughput result
+for the safe selected-column implementation. Review also found that public
+column selections needed a descriptor-width check; the safe source now rejects
+an oversized selection before decoding. **Decision:** continue the
+indexed-read architecture work; do not designate a new baseline or promote
+this slice on these runs. The earlier `./gradlew --no-daemon clean check`
+passed in 3m 10s (156 tasks) before the reviewed correction; a fresh clean
+check and exact-build performance checkpoint are required before promotion.
+
+The revised safe candidate retained the full-row pin-release copy and removed
+only the second copy into decoder scratch. Its measured engine JAR SHA-256 was
+`96773b44522bc633c87998da8acc41bdd395d64a7dd22d15117ba0fafc6abbcd`;
+storage JAR SHA-256 was
+`cb3d1db44a52d8c9fbdc1feea0c062375cf80a733b722a0bec9a8be1e168f283`.
+The same harness, manifests and 5/30-second settings applied. All five reports
+passed with eligible matching comparison keys, zero retries, failures and
+unknown commits, and clean owned-server shutdown.
+
+| Workload; order | Build | TPS | p99 (ms) | Artifact ID |
+| --- | --- | ---: | ---: | --- |
+| `full stock-level`; B1 | Safe projected candidate | 1,489.262 | 0.818 | `river_harness_20260928_165736_3bc23439` |
+| same; A1 | Control | 1,455.192 | 0.863 | `river_harness_20260928_165925_64b2cf08` |
+| same; B2 | Safe projected candidate | 1,480.260 | 0.837 | `river_harness_20260928_170118_df9e0c11` |
+| `sample new-order`; B1 | Safe projected candidate | 378.532 | 4.813 | `river_harness_20260928_170312_7a092427` |
+| same; A1 | Control | 373.231 | 4.608 | `river_harness_20260928_170357_60261959` |
+
+These short safe-path runs show no repeated regression and do not establish a
+stable gain. The final source fixes atomic retained-view growth and pending
+wide-row indexed reads after the measured JAR. A focused pending wide-row test
+passed, and independent ownership review found no remaining blocker in the
+pin, buffer and selection boundaries. `./gradlew --no-daemon clean check`
+passed on that corrected source in 3m 12s (156 tasks). The accepted baseline
+table remains unchanged; exact-build longer interleaved evidence is still
+required before performance promotion.

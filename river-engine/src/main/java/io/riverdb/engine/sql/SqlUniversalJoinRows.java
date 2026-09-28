@@ -106,10 +106,20 @@ class SqlUniversalJoinRows {
     }
   }
 
-  void materializeText(boolean required) {
+  StatusCode selectNone() {
     for (int role = 0; role < roleCount; role++) {
-      roles[role].materializeText(required);
+      StatusCode status = roles[role].selectNone();
+      if (!status.isOk()) return status;
     }
+    return StatusCode.OK;
+  }
+
+  void select(int role, int column) {
+    roles[role].select(column);
+  }
+
+  void selectAll() {
+    for (int role = 0; role < roleCount; role++) roles[role].selectAll();
   }
 
   StatusCode open(int role) {

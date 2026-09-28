@@ -53,6 +53,9 @@ public final class RelationalDescriptorScanCursor {
   IndexedTupleScanCursor tupleIndexed() { return tupleIndexed; }
   IndexedTupleScanResult tupleRow() { return tupleRow; }
   RelationalDescriptorIndexCursor tupleBounds() { return tupleBounds; }
+  void prepareSelection(StoredTableColumnSelection selection) {
+    if (selection != null && tuplePhysical) selection.selectKey(tupleBounds.key());
+  }
   long logicalRowId() { return logicalRowId; }
   void logicalRowId(long value) { logicalRowId = value; }
 

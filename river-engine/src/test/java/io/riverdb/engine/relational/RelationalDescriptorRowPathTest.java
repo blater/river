@@ -20,9 +20,11 @@ import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.engine.table.IndexedRelationalMutation;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.format.catalog.CatalogKeyspace;
+import io.riverdb.storage.btree.TupleBTreeScanBounds;
 import io.riverdb.sql.SqlComparison;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
+import io.riverdb.tx.api.lock.LockMode;
 import java.nio.file.Path;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -283,6 +285,46 @@ final class RelationalDescriptorRowPathTest {
         session.descriptorRows().nextScan(cursor, destination, result));
     assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
     assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void indexedScanReadsPendingWideRow(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        wideDescriptor(), table, new StatusDetail(128)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, values(41, NULL_ORDINALS), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.descriptorRows().update(
+        table, 41, values(41, new int[] {8, 64, 255})));
+    SqlValueBuffer key = new SqlValueBuffer();
+    assertEquals(StatusCode.OK, key.reserve(1, 1, 0, 0));
+    assertEquals(StatusCode.OK, key.clearForSize(1));
+    assertEquals(StatusCode.OK, key.setFixed(0, SqlTypeDescriptor.BIGINT, 41));
+    RelationalDescriptorIndexBounds bounds = new RelationalDescriptorIndexBounds();
+    assertEquals(StatusCode.OK, bounds.set(
+        table.descriptor().primaryKey(), key, 1, true, key, 1, true,
+        TupleBTreeScanBounds.FORWARD));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
+        table, bounds, LockMode.SHARED, cursor));
+    SqlValueBuffer destination = emptyValues();
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(
+        cursor, destination, new RelationalRowIdentityResult()));
+    assertEquals(41, destination.valueAt(0));
+    assertTrue(destination.isNull(255));
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, session.abort(outcome));
     assertEquals(StatusCode.OK, database.close());
   }
 
@@ -650,6 +692,11 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
     assertEquals(StatusCode.OK, session.descriptorRows().beginScan(table, cursor));
+    StoredTableColumnSelection oversized = new StoredTableColumnSelection();
+    assertEquals(StatusCode.OK, oversized.selectNone(3));
+    oversized.selectAll();
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.descriptorRows().nextScan(
+        cursor, new SqlValueBuffer(), new RelationalRowIdentityResult(), null, oversized));
     StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
     assertEquals(StatusCode.OK, filter.configure(2, SqlComparison.EQUAL, 1));
     SqlValueBuffer output = new SqlValueBuffer();

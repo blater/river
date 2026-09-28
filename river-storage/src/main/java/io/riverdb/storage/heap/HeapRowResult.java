@@ -8,6 +8,7 @@ import java.nio.ByteBuffer;
 public final class HeapRowResult implements BoundedByteSource {
   private ByteBuffer page;
   private ByteBuffer ownedPage;
+  private ByteBuffer retainedReadOnly;
   private int rowId;
   private int offset;
   private int length;
@@ -18,6 +19,13 @@ public final class HeapRowResult implements BoundedByteSource {
 
   public int length() {
     return length;
+  }
+
+  /** Borrowed until this result is reused; only rows retained by this result expose it. */
+  public ByteBuffer retainedReadOnlyBytes() {
+    if (page != ownedPage || retainedReadOnly == null) return null;
+    retainedReadOnly.clear();
+    return retainedReadOnly;
   }
 
   /** Reads a validated internal BIGINT field directly from the borrowed row. */
@@ -62,11 +70,16 @@ public final class HeapRowResult implements BoundedByteSource {
     ByteBuffer source = page;
     int sourceOffset = offset;
     if (ownedPage == null || ownedPage.capacity() < length) {
+      ByteBuffer grownPage;
+      ByteBuffer grownReadOnly;
       try {
-        ownedPage = ByteBuffer.allocate(retainedCapacity(length));
+        grownPage = ByteBuffer.allocate(retainedCapacity(length));
+        grownReadOnly = grownPage.asReadOnlyBuffer();
       } catch (OutOfMemoryError exhausted) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
+      ownedPage = grownPage;
+      retainedReadOnly = grownReadOnly;
     }
     for (int index = 0; index < length; index++) {
       ownedPage.put(index, source.get(sourceOffset + index));

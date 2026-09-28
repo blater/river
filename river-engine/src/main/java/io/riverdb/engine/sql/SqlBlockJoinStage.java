@@ -39,10 +39,8 @@ final class SqlBlockJoinStage {
         ? bound.nestedBoolean(block) : bound.whereBoolean;
     rows = universalRows;
     StatusCode status = universalRows.prepare(
-        block, nested, command, bound.existingJoinContext(block), where,
-        orderedInnerColumn,
-        SqlJoinTextUsage.requiresText(
-            bound, command, bound.existingJoinContext(block), where));
+        block, nested, bound, command, bound.existingJoinContext(block), where,
+        orderedInnerColumn);
     if (status == StatusCode.CONFLICT) {
       rows = legacyRows;
       status = legacyRows.prepare(

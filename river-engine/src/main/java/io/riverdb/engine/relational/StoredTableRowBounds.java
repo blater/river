@@ -15,10 +15,13 @@ final class StoredTableRowBounds {
   }
 
   static int publishedTextBytes(
-      TableDescriptor table, ByteBuffer source, int start, int length) {
+      TableDescriptor table, ByteBuffer source, int start, int length,
+      StoredTableColumnSelection selection) {
     int fixedEnd = StoredTableRowEncoder.fixedEnd(table);
     int total = 0;
-    for (int index = 0; index < table.columnCount(); index++) {
+    int selected = selection == null ? table.columnCount() : selection.count();
+    for (int position = 0; position < selected; position++) {
+      int index = selection == null ? position : selection.columnAt(position);
       if (!StoredTableRowEncoder.isText(table.typeDescriptorAt(index))
           || StoredTableRowAccess.nullAt(source, start, index)) continue;
       int slot = start + table.fixedOffsetAt(index);

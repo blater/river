@@ -70,12 +70,18 @@ final class HeapPageTest {
             page, ByteBuffer.wrap(new byte[] {1, 2, 3}), new HeapInsertResult()));
     HeapRowResult row = new HeapRowResult();
     assertEquals(StatusCode.OK, HeapPage.fetch(page, 1, row));
+    assertEquals(null, row.retainedReadOnlyBytes());
     assertEquals(StatusCode.OK, row.retainBytes());
+
+    ByteBuffer retained = row.retainedReadOnlyBytes();
+    assertEquals(true, retained.isReadOnly());
+    assertEquals(2, retained.get(1));
 
     assertEquals(StatusCode.OK, HeapPage.initialize(page));
 
     assertEquals(3, row.length());
     assertEquals(2, row.getByte(1));
+    assertEquals(2, retained.get(1));
   }
 
   @Test

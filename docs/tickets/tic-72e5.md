@@ -62,16 +62,18 @@ the accepted River baseline of 1,234.227 TPS, a rough River/MariaDB ratio of
 
 ## Delivery
 
-- Reprofile the accepted cache build. Measure tuple cursor descent and
-  base-row fetch on the unchanged JOIN.
+- Deliver the general [indexed-read architecture epic](tic-isildur.md) in
+  stages, starting with [projected descriptor reads](tic-healthy-bellodonna.md).
+  Keep the second base-tree lookup and row-transfer replacement as distinct
+  measured decisions under that epic.
 - Define one canonical workload schema/index contract and verify the actual
   primary and secondary index columns on each target after schema creation.
   Account for automatically created foreign-key indexes and reject comparisons
   when the resulting index sets differ.
-- Test a generic projected unique-key lookup that returns needed values from
-  one index search. Add index payload support if the measured gain justifies
-  the storage and update cost. Preserve SQL results, read-your-writes,
-  isolation, lock protection, and failure cleanup.
+- Select one general storage replacement using read, update and recovery
+  evidence. Add index payload support only if its measured general benefit
+  justifies storage and maintenance cost. Preserve SQL results,
+  read-your-writes, isolation, lock protection and failure cleanup.
 - Keep the `sample` gain while making River faster than MariaDB on matched
   `full stock-level` runs. Continue improvements while targeted evidence
   shows a repeatable gain.
@@ -85,5 +87,7 @@ interleaved full-profile River/MariaDB samples with matching eligible
 comparison keys, successful invariants and zero failed or unknown outcomes.
 Require matching actual index inventories before promoting a cross-database
 performance result.
-Check the sample profile for regression. Record commands, versions, source
+Check Stock Level and New Order for regression. Account for occasional host
+activity with interleaved controls and mechanism counters; a short TPS
+difference alone cannot establish a gain. Record commands, versions, source
 commits, artifacts and the decision in `docs/performance-checkpoints.md`.

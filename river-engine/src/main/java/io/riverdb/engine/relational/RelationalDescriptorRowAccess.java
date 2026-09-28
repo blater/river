@@ -28,18 +28,18 @@ final class RelationalDescriptorRowAccess {
   StatusCode fetch(
       IndexedTransactionSession session, TableDescriptor table,
       long logicalRowId, SqlValueBuffer destination, StoredTableRowIntegerFilter filter) {
-    return fetch(session, table, logicalRowId, destination, filter, true);
+    return fetch(session, table, logicalRowId, destination, filter, null);
   }
 
   StatusCode fetch(
       IndexedTransactionSession session, TableDescriptor table,
       long logicalRowId, SqlValueBuffer destination, StoredTableRowIntegerFilter filter,
-      boolean publishText) {
+      StoredTableColumnSelection selection) {
     fetched.reset();
     StatusCode status = session.fetchByKey(
         RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId, fetched);
     return status.isOk()
-        ? buffer.decode(table, logicalRowId, fetched, destination, filter, publishText) : status;
+        ? buffer.decode(table, logicalRowId, fetched, destination, filter, selection) : status;
   }
 
   StatusCode decode(
@@ -51,14 +51,14 @@ final class RelationalDescriptorRowAccess {
   StatusCode decode(
       TableDescriptor table, long logicalRowId,
       HeapRowResult source, SqlValueBuffer destination, StoredTableRowIntegerFilter filter) {
-    return decode(table, logicalRowId, source, destination, filter, true);
+    return decode(table, logicalRowId, source, destination, filter, null);
   }
 
   StatusCode decode(
       TableDescriptor table, long logicalRowId,
       HeapRowResult source, SqlValueBuffer destination, StoredTableRowIntegerFilter filter,
-      boolean publishText) {
-    return buffer.decode(table, logicalRowId, source, destination, filter, publishText);
+      StoredTableColumnSelection selection) {
+    return buffer.decode(table, logicalRowId, source, destination, filter, selection);
   }
 
   ByteBuffer bytes() { return buffer.bytes(); }

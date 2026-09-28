@@ -57,7 +57,9 @@ final class SqlUniversalDescriptorJoinRole {
     scan.filter(rootFilter.integerFilter());
   }
 
-  void materializeText(boolean required) { current.materializeText(required); }
+  StatusCode selectNone() { return current.selectNone(descriptor); }
+  void select(int column) { current.select(column); }
+  void selectAll() { current.selectAll(); }
 
   void configureMergeRoot(int column) {
     mergeColumn = -1;
