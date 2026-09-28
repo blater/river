@@ -1,12 +1,15 @@
 ---
 id: tic-a29fc0d0ece668f5aa0a5fd8ba576f15
-status: in_progress
+status: closed
 type: feature
 priority: 1
 assignee: blater
 delivery: code
 base-commit: c9c216d3c214bec8e51bad9b4e650c42ae4a48af
 branch: ticket/tic-a29fc0d0ece668f5aa0a5fd8ba576f15-order-status-batches
+delivered-commit: e128e066555291dbf06ace440d51a954f2454d86
+evidence:
+    - docs/performance-checkpoints.md
 tags:
     - performance
     - protocol
