@@ -34,8 +34,6 @@ final class SqlResultTextLanes {
 
   StatusCode setUtf8(
       int index, HeapRowResult source, int offset, int length) {
-    if (source == null || offset < 0 || length < 0
-        || offset > source.length() - length) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = arena.appendTrusted(source, offset, length);
     if (status.isOk()) publish(index);
     return status;
@@ -43,8 +41,6 @@ final class SqlResultTextLanes {
 
   StatusCode setUtf8(
       int index, ByteBuffer source, int offset, int length) {
-    if (source == null || offset < 0 || length < 0
-        || offset > source.limit() - length) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = arena.appendTrusted(source, offset, length);
     if (status.isOk()) publish(index);
     return status;
