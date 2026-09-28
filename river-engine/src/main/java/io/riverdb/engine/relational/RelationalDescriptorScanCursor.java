@@ -53,8 +53,13 @@ public final class RelationalDescriptorScanCursor {
   IndexedTupleScanCursor tupleIndexed() { return tupleIndexed; }
   IndexedTupleScanResult tupleRow() { return tupleRow; }
   RelationalDescriptorIndexCursor tupleBounds() { return tupleBounds; }
-  void prepareSelection(StoredTableColumnSelection selection) {
+  StatusCode prepareSelection(StoredTableColumnSelection selection) {
     if (selection != null && tuplePhysical) selection.selectKey(tupleBounds.key());
+    StatusCode status = selection == null ? StatusCode.OK
+        : selection.prepareProjection(schema.descriptor());
+    if (status.isOk()) row.row().retentionProjection(
+        selection == null ? null : selection.projection());
+    return status;
   }
   long logicalRowId() { return logicalRowId; }
   void logicalRowId(long value) { logicalRowId = value; }

@@ -36,10 +36,14 @@ final class RelationalDescriptorRowAccess {
       long logicalRowId, SqlValueBuffer destination, StoredTableRowIntegerFilter filter,
       StoredTableColumnSelection selection) {
     fetched.reset();
-    StatusCode status = session.fetchByKey(
+    StatusCode status = selection == null ? StatusCode.OK
+        : selection.prepareProjection(table);
+    if (!status.isOk()) return status;
+    fetched.retentionProjection(selection == null ? null : selection.projection());
+    status = session.fetchByKey(
         RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId, fetched);
     return status.isOk()
-        ? buffer.decode(table, logicalRowId, fetched, destination, filter, selection) : status;
+        ? decode(table, logicalRowId, fetched, destination, filter, selection) : status;
   }
 
   StatusCode decode(
@@ -58,6 +62,17 @@ final class RelationalDescriptorRowAccess {
       TableDescriptor table, long logicalRowId,
       HeapRowResult source, SqlValueBuffer destination, StoredTableRowIntegerFilter filter,
       StoredTableColumnSelection selection) {
+    if (selection != null) {
+      StatusCode status = selection.prepareProjection(table);
+      if (!status.isOk()) return status;
+      if (selection.projection() != null) {
+        source.retentionProjection(selection.projection());
+        if (source.retainedReadOnlyBytes() == null) {
+          status = source.retainBytes();
+          if (!status.isOk()) return status;
+        }
+      }
+    }
     return buffer.decode(table, logicalRowId, source, destination, filter, selection);
   }
 

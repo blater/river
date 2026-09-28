@@ -3,6 +3,9 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.engine.schema.KeyDescriptor;
+import io.riverdb.engine.schema.TableDescriptor;
+import io.riverdb.format.row.StoredTableRowHeaderCodec;
+import io.riverdb.storage.heap.HeapRowProjection;
 import java.util.Arrays;
 
 /** Reusable statement-owned column demand, stable while a scan reads rows. */
@@ -12,6 +15,9 @@ public final class StoredTableColumnSelection {
   private int columns;
   private int count;
   private boolean all = true;
+  private final HeapRowProjection projection = new HeapRowProjection();
+  private long projectionLayoutId;
+  private boolean projectionDirty = true;
 
   public StatusCode selectNone(int count) {
     if (count < 0 || count > SqlShapeLimits.MAX_TABLE_COLUMNS) {
@@ -32,6 +38,7 @@ public final class StoredTableColumnSelection {
     columns = count;
     this.count = 0;
     all = false;
+    projectionDirty = true;
     return StatusCode.OK;
   }
 
@@ -39,10 +46,14 @@ public final class StoredTableColumnSelection {
     if (column >= 0 && column < columns && !selected[column]) {
       selected[column] = true;
       ordinals[count++] = column;
+      projectionDirty = true;
     }
   }
 
-  public void selectAll() { all = true; }
+  public void selectAll() {
+    all = true;
+    projectionDirty = true;
+  }
 
   public boolean matches(int columnCount) { return columns == columnCount; }
 
@@ -52,6 +63,28 @@ public final class StoredTableColumnSelection {
 
   public int count() { return all ? columns : count; }
   public int columnAt(int index) { return all ? index : ordinals[index]; }
+
+  StatusCode prepareProjection(TableDescriptor table) {
+    if (all) return StatusCode.OK;
+    if (!matches(table.columnCount())) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!projectionDirty && projectionLayoutId == table.rowLayoutId()) return StatusCode.OK;
+    StatusCode status = projection.prepare(
+        StoredTableRowHeaderCodec.HEADER_BYTES + table.nullBitmapBytes(),
+        StoredTableRowEncoder.fixedEnd(table), count);
+    for (int index = 0; status.isOk() && index < count; index++) {
+      int column = ordinals[index];
+      status = projection.add(
+          column, table.fixedOffsetAt(column), table.fixedWidthAt(column),
+          StoredTableRowEncoder.isText(table.typeDescriptorAt(column)));
+    }
+    if (status.isOk()) {
+      projectionLayoutId = table.rowLayoutId();
+      projectionDirty = false;
+    }
+    return status;
+  }
+
+  HeapRowProjection projection() { return all ? null : projection; }
 
   void selectKey(KeyDescriptor key) {
     for (int part = 0; part < key.partCount(); part++) {
