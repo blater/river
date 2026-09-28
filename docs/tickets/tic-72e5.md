@@ -50,6 +50,12 @@ stock-level` candidate also exceeded its control. See the
 This is a small local gain, not a new MariaDB comparison. A projected
 stock-key lookup and lower base-row fetch/decode cost remain the larger targets.
 
+The later [indexed-read checkpoint](../performance-checkpoints.md#2026-09-28--combined-indexed-read-candidate-checkpoint)
+replaced the extra relational base-row B-tree lookup with a direct logical-head
+directory and retained selected row bytes. Its accepted 60-second full Stock
+Level run reached 1,390.067 TPS; the adjacent candidate/control sequence
+favored the candidate locally. This does not establish parity with MariaDB.
+
 A later sampled timing pass found roughly 225 indexed `stock` opens per full
 Stock Level count query and placed most query time in JOIN row production.
 Stopping a proven unique inner cursor after one candidate and limiting the

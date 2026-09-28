@@ -10,11 +10,11 @@ local throughput runs did not establish a stable gain. The 593.840 TPS run was
 affected by other high CPU processes and is excluded from comparisons; see the
 [investigation](performance-checkpoints.md#2026-09-28--projected-descriptor-read-investigation).
 
-The next decision is the measured choice between clustered primary rows and a
-paged direct logical-head directory. Implement one canonical layout and remove
-the superseded scalar base-row lookup and its write/recovery path. Then check
-the unchanged full Stock Level and New Order workloads with adjacent controls,
-matching schema and index inventories, and mechanism evidence before promotion.
+The [base-row head-directory ticket](tickets/tic-base-row-head-directory.md)
+removes the extra scalar B-tree search and has passed its clean full build.
+The accepted full Stock Level checkpoint and adjacent controls use unchanged
+SQL, schema and indexes; New Order shows no repeated candidate regression.
+Separate full-workload copy/decode mechanism evidence remains in the epic.
 
 ## Current performance frontier — 2026-09-15
 

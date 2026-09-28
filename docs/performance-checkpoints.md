@@ -29,6 +29,7 @@ and runtime configuration.
 | 2026-09-28 08:41:56 UTC | `feature/index-root-snapshot-cache` | `tic-72e5` | River `b17e0450`, version `b17e0450-jvm-clean`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,334.778 | 0.914 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_084035_50a125d8`; [checkpoint](#2026-09-28--cache-versioned-index-roots-across-join-probes) |
 | 2026-09-28 11:18:40 UTC | `feature/join-skip-unused-text-values` | `tic-72e5` | River code later committed as `9fcd3007`, engine JAR SHA-256 `9511f692e45653b2557ed39a53f3a829db8a45ae50744cea085813a7e4e2fc2a`, version `join-skip-unused-text-long-b2`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,234.227 | 1.064 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_111715_048cab5f`; [checkpoint](#2026-09-28--omit-unused-text-publication-during-joins) |
 | 2026-09-28 14:37:52 UTC | `feature/trusted-row-values` | `tic-elvenking` | River `7ac12464`, version `trusted-values-7ac12464-full60-b1`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 60s measured | 1,306.026 | 1.083 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_143610_01952633`; [checkpoint](#2026-09-28--trusted-stored-values-tic-elvenking) |
+| 2026-09-28 20:46:55 UTC | `feature/indexed-read-amplification` | `tic-base-row-head-directory` | River `699e3c9b`, version `indexed-read-699e3c9b-long-b1`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 60s measured | 1,390.067 | 0.910 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_204514_34e6ff60`; [checkpoint](#2026-09-28--combined-indexed-read-candidate-checkpoint) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -1686,3 +1687,101 @@ did not find the primary-key mapping to dominate writes and did not justify a
 clustered row-format rewrite. The directory is the narrower first candidate
 for the combined projection/transfer evaluation. **Decision:** retain it on a
 feature branch for that evaluation; do not promote or claim a standalone gain.
+
+## 2026-09-28 — combined indexed-read candidate checkpoint
+
+The combined directory and selected-byte retention source is `ecff434c` on
+`feature/indexed-read-amplification`. Its engine and storage JAR SHA-256 values
+were `40619434f10de8cafbb25f884605666a46e79f287da965fb7ed8c45b76010efb`
+and `3d4c42bbe914ae2886569018edf477458ae562d0c0767c391a8435c746af4c5c`.
+The accepted control was `17978d4b` with engine JAR SHA-256
+`bda95eaed636e692cd9c3a6ed783d3cb495a387d4df8b8165eb0ce4d2a7ae01c`.
+Harness `eba8ab0` used unchanged `full stock-level`, one worker and warehouse,
+seed 42, retry limit 3, 5s warmup and 30s measured, READ COMMITTED, durable
+local WAL, GraalVM 25.0.4 JVM `-Xmx1g`, loopback TCP/TLS and identical SQL,
+schema and indexes. The command form and artifact directory are those in the
+directory diagnostic above. All three reports passed, were comparison eligible
+with the same key, had zero failed or unknown commits and retries, passed
+invariants, and shut down the owned server.
+
+| Order | TPS | p99 (ms) | Artifact ID |
+| --- | ---: | ---: | --- |
+| A1 control | 1,228.953 | 1.167 | `river_harness_20260928_200517_9e5699ab` |
+| B1 combined | 888.875 | 3.097 | `river_harness_20260928_200805_ff30b71f` |
+| B2 combined | 1,290.818 | 1.063 | `river_harness_20260928_201052_cf008c9b` |
+
+The user reported competing host activity during these runs. B1 and B2 differ
+by 45% despite the same build and workload; B2 is the successful rerun of the
+anomalously low B1. B1 is excluded from an effect estimate. This incomplete
+A-B-B sequence cannot establish a stable gain or a new baseline; continue with
+adjacent controls and rerun any anomalously low result once on the same build
+and configuration.
+`./gradlew --no-daemon clean check` passed on `ecff434c` in 3m 26s (156 tasks).
+An additional pending wide-row selected-read test passed after that build.
+
+The subsequent filter-column correctness fix is `699e3c9b` on the same branch.
+Its engine JAR SHA-256 is
+`e6997988921477315d1980fffc31d690e17a0f98b3cd693be21c20c71ce90069`;
+the storage JAR SHA-256 remains
+`3d4c42bbe914ae2886569018edf477458ae562d0c0767c391a8435c746af4c5c`.
+The candidate and accepted `17978d4b` control used the same distribution
+launcher and manifest except executable and version. Source `699e3c9b` passed
+the complete engine and storage module tests and focused projected-filter and
+pending-row tests. Each report below passed, had eligible matching comparison
+metadata within its workload, successful validation and owned-server shutdown,
+and zero failed or unknown commits and retries.
+
+| Workload; order | TPS | p99 (ms) | Artifact ID |
+| --- | ---: | ---: | --- |
+| `full stock-level`; A1 control | 1,379.793 | 0.874 | `river_harness_20260928_202435_994b5a7d` |
+| same; B1 candidate | 1,318.361 | 1.149 | `river_harness_20260928_202627_f6224e24` |
+| same; B2 candidate | 1,304.791 | 1.176 | `river_harness_20260928_202837_993e7609` |
+| same; A2 control, anomalous low | 866.789 | 3.017 | `river_harness_20260928_203119_70b0bfd4` |
+| same; A3 control rerun | 1,200.986 | 1.186 | `river_harness_20260928_203400_c8be0283` |
+| `sample new-order`; A1 control | 239.998 | 9.601 | `river_harness_20260928_203641_311fcdda` |
+| same; B1 candidate | 246.049 | 9.028 | `river_harness_20260928_203720_f59af64f` |
+| same; B2 candidate, anomalous low | 86.239 | 26.903 | `river_harness_20260928_203754_5fe67bda` |
+| same; B3 candidate rerun | 162.698 | 12.960 | `river_harness_20260928_203835_132676cd` |
+| same; A2 control, anomalous low | 93.498 | 21.152 | `river_harness_20260928_203923_4d0ee456` |
+| same; A3 control rerun | 229.498 | 9.855 | `river_harness_20260928_204007_13e7aa87` |
+| same; B4 candidate | 235.945 | 8.921 | `river_harness_20260928_204043_ad59d0cd` |
+
+`full stock-level` used 5s warmup and 30s measured; `sample new-order` used
+5s warmup and 20s measured. Both used one worker and warehouse, seed 42,
+retry limit 3, READ COMMITTED, durable local WAL, GraalVM 25.0.4 JVM `-Xmx1g`
+and loopback TCP/TLS. The anomalously low control Stock Level result recovered
+on its immediate rerun. The low New Order results appeared in both targets and
+recovered on their reruns; later New Order control/candidate values were
+229.498/235.945 TPS. The remaining short Stock Level control range overlaps
+the candidate range. These short runs alone establish no gain or repeated New
+Order regression.
+
+The longer interleaved `full stock-level` sequence used the same manifest with
+10s warmup and 60s measured. All four reports passed with identical eligible
+comparison keys, successful invariants and owned-server cleanup, zero failed
+or unknown commits and retries. No SQL, schema or physical index changed.
+
+| Order | TPS | p99 (ms) | Artifact ID |
+| --- | ---: | ---: | --- |
+| A1 control | 1,265.998 | 1.014 | `river_harness_20260928_204220_10e1a615` |
+| B1 candidate | **1,390.067** | 0.910 | `river_harness_20260928_204514_34e6ff60` |
+| B2 candidate | 1,345.899 | 0.985 | `river_harness_20260928_204805_b075f6ff` |
+| A2 control | 1,219.711 | 1.090 | `river_harness_20260928_205054_45c96d23` |
+
+The candidate mean is 1,367.983 TPS and the adjacent control mean is
+1,242.854 TPS, a 10.1% increase in this local sequence. The selected
+1,390.067 TPS B1 artifact is the new measured baseline above. Host activity
+affected earlier short runs, so this result is an accepted checkpoint rather
+than a general throughput guarantee. Source inspection confirms the relational
+base-row `IndexedKernelVisibility.lookup` calls
+`IndexedLogicalHeadDirectory.lookup` and skips scalar `BTreePage.lookupLeaf`;
+non-base scalar keyspaces still use the tree. The selected-byte storage test
+retains 66 bytes where the original row had 166 bytes, but full-workload copy
+and decode counters are still needed for the remaining `tic-isildur` acceptance
+criteria. **Decision:** accept the direct head directory and selected-byte
+retention implementation, with no observed repeated New Order regression.
+Independent ownership and recovery review of the directory found no blocker.
+The final combined source passed `./gradlew --no-daemon clean check` in 54s
+(156 tasks); `git diff --check` passed. The directory work is closed by
+[tic-base-row-head-directory](tickets/tic-base-row-head-directory.md), while
+the parent epic remains open for full-workload copy/decode counters.

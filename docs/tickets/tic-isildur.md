@@ -28,7 +28,8 @@ work in [tic-72e5](tic-72e5.md).
    rechecks. Share the existing liveness owner where it applies, then carry the
    result into storage-owned decoding and copying. Preserve full-row mutation
    reads and every SQL semantic dependency.
-2. Measure and choose one replacement for the extra scalar base-row search:
+2. Measure and choose one replacement for the extra scalar base-row search
+   ([tic-base-row-head-directory](tic-base-row-head-directory.md)):
    clustered primary-row storage or a paged directly addressed logical-row
    head directory. Record read, update, page fanout, MVCC and recovery evidence
    before selecting. Implement the chosen format and remove the superseded

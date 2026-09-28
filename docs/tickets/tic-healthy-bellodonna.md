@@ -54,12 +54,14 @@ column.
 ## Current investigation
 
 The selected-column reader and JOIN demand path pass a clean full test build,
-including a pending wide-row indexed scan. An exploratory pinned callback was
-removed after independent review found writable buffer exposure and unsafe
-reentry during a page pin. The safe reader retains the full row once and
-decodes it directly from its retained read-only buffer. Short full Stock Level
-and New Order samples show no repeated regression but no stable gain. The
-593.840 TPS exploratory run was contaminated by other high CPU processes and
-is excluded. See the [checkpoint](../performance-checkpoints.md#2026-09-28--projected-descriptor-read-investigation).
-The feature remains open pending measured mechanism evidence and the canonical
-head lookup replacement in the parent epic.
+including pending wide-row indexed reads and a filter-column selection check.
+An exploratory pinned callback was removed after independent review found
+writable buffer exposure and unsafe reentry during a page pin. The accepted
+reader copies only selected bytes into result-owned storage before releasing
+the heap page. The storage test retained 66 bytes from a 166-byte row.
+The 593.840 TPS exploratory run was contaminated by other high CPU processes
+and is excluded. The combined candidate's [checkpoint](../performance-checkpoints.md#2026-09-28--combined-indexed-read-candidate-checkpoint)
+records an accepted full Stock Level run and unchanged New Order control.
+The feature remains open for full-workload copied-byte and decoded-column
+counts; the canonical head lookup replacement is complete under
+[tic-base-row-head-directory](tic-base-row-head-directory.md).
