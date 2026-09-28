@@ -89,6 +89,32 @@ final class SqlDistinctValueStoreTest {
     fixture.close();
   }
 
+  @Test
+  void spillsAfterInlineValuesAndCopiesTheExactSet(@TempDir Path root) {
+    SqlMaterializedTestFixture fixture = SqlMaterializedTestFixture.open(root);
+    SqlDistinctValueStore source = new SqlDistinctValueStore(fixture.budget());
+    SqlDistinctValueStore copied = new SqlDistinctValueStore(fixture.budget());
+    SqlBlockRow row = new SqlBlockRow();
+    long[] count = new long[1];
+    assertEquals(StatusCode.OK, source.begin(SqlTypeDescriptor.BIGINT));
+    assertEquals(StatusCode.OK, copied.begin(SqlTypeDescriptor.BIGINT));
+    assertEquals(StatusCode.OK, row.reset(1));
+    for (int value = 0; value < 17; value++) {
+      row.setValue(0, value);
+      assertEquals(StatusCode.OK, source.add(row, 0));
+    }
+    row.setValue(0, 3);
+    assertEquals(StatusCode.OK, source.add(row, 0));
+    assertEquals(StatusCode.OK, source.finish(count));
+    assertEquals(17, count[0]);
+    assertEquals(StatusCode.OK, copied.copyFrom(source));
+    assertEquals(StatusCode.OK, copied.finish(count));
+    assertEquals(17, count[0]);
+    assertEquals(StatusCode.OK, copied.close());
+    assertEquals(StatusCode.OK, source.close());
+    fixture.close();
+  }
+
   private static void addDecimal(
       SqlDistinctValueStore values, SqlBlockRow row, long high, long low) {
     assertEquals(StatusCode.OK, row.reset(1));
