@@ -35,6 +35,10 @@ final class SqlUniversalJoinRole {
     }
   }
 
+  void materializeText(boolean required) {
+    if (usesDescriptor) descriptor.materializeText(required);
+  }
+
   StatusCode open(SqlUniversalJoinRows rows) {
     return usesDescriptor ? descriptor.open(rows) : legacy.open();
   }

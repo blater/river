@@ -111,6 +111,12 @@ class SqlUniversalJoinRows {
     }
   }
 
+  void materializeText(boolean required) {
+    for (int role = 0; role < roleCount; role++) {
+      roles[role].materializeText(required);
+    }
+  }
+
   StatusCode open(int role) {
     clearCandidate(role);
     nulls[role] = false;

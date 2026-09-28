@@ -159,6 +159,14 @@ final class SqlNTableJoinTest {
         new long[][] {{1, 1}, {2, 2}});
     assertRows(session, result,
         "SELECT COUNT(DISTINCT b.id)" + source, new long[][] {{1}});
+    assertRows(session, result,
+        "SELECT a.id,b.id FROM chain0 a JOIN chain1 b ON a.k=b.k "
+            + "WHERE a.label='second'",
+        new long[][] {{2, 2}});
+    assertRows(session, result,
+        "SELECT a.id,b.id FROM chain0 a JOIN chain1 b "
+            + "ON a.k=b.k AND a.label='second'",
+        new long[][] {{2, 2}});
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(StatusCode.OK,

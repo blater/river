@@ -20,6 +20,7 @@ and runtime configuration.
 | 2026-09-27 23:57:22 | `ticket/tic-a29fc0d0ece668f5aa0a5fd8ba576f15-order-status-batches` | `tic-a29fc0d0ece668f5aa0a5fd8ba576f15` | River `e128e066`; harness `4a2c185`, version `e128e066-jvm-batched-b` | `sample order-status`; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 20s measured | 3,763.695 | 0.428 | `river_harness_20260927_235714_cce57930`; [checkpoint](#2026-09-27--order-status-row-batching) |
 | 2026-09-28 00:57:54 | `ticket/tic-celegorm-order-status-program` | `tic-celegorm` | River `8a37147f`; harness `f8e615a`, version `tic-celegorm-clean-jvm` | `sample order-status`; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 20s measured | 12,913.782 | 0.122 | `river_harness_20260928_005746_33a8ee5a`; [checkpoint](#2026-09-28--one-request-order-status-program) |
 | 2026-09-28 02:05:19 | `feature/stock-level-root-filter` | `tic-72e5` | River `40470245`; harness `2ab18c9`, version `40470245-stock-first-candidate` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 30s measured | 1,957.795 | 0.618 | `river_harness_20260928_020507_3d0d57eb`; [checkpoint](#2026-09-28--stock-level-root-filter-checkpoint) |
+| 2026-09-28 02:20:12 | `feature/stock-join-text-pruning` | `tic-72e5` | River `e56da68c`; harness `df66a3a`, version `e56da68c-text-prune-candidate` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 30s measured | 2,062.893 | 0.598 | `river_harness_20260928_022000_32b6ff1c`; [checkpoint](#2026-09-28--numeric-join-text-materialization-checkpoint) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -434,3 +435,38 @@ engine. The root-filter mechanism is accepted, but the Stock Level gap to
 MariaDB remains open. A separate 10-second MariaDB diagnostic using the prior
 catalogue reached 9,311.55 TPS; it is not a paired comparison with this
 checkpoint.
+
+## 2026-09-28 — Numeric JOIN text-materialization checkpoint
+
+The descriptor JOIN row used to copy and decode every `VARCHAR` column even
+when a query referenced only numeric columns. On feature branch
+`feature/stock-join-text-pruning`, commit `e56da68c`, the bound JOIN block's
+projection, `WHERE` and `ON` programs prove whether any text column is read.
+Blocks with nested subqueries, ordering, grouping or an incomplete proof retain
+full materialization. Only blocks with no text references omit the text copies.
+The full row remains in the storage result buffer, and joins that project or
+filter text continue to decode it. Focused tests covered text in projections,
+`WHERE` and `ON`, plus mixed descriptor and nested JOIN paths. A clean
+`./gradlew --no-daemon clean test` passed in 3m10s (116 tasks).
+
+Interleaved root-filter control–text-prune candidate–candidate–control runs
+used harness `df66a3a`, sample Stock Level, one worker and warehouse, seed 42,
+READ COMMITTED, retry limit 3, durable local WAL, loopback TCP/TLS, GraalVM
+25.0.4 JVM `-Xmx1g`, 10-second warmup and 30-second measurement. All four
+artifacts were eligible under comparison key
+`51420951377fa60dc58b255012cbb5b7d9c9a51a83f377137da80a61803f7bf5`
+and passed invariants and owned cleanup, with zero retries, failed outcomes
+and unknown commits. The only binary difference was the engine JAR.
+
+| Order | River engine | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| A1 | `5a92fceb` root-filter control | 1,970.161 | 0.614 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_021824_c75589b9` |
+| B1 | `e56da68c` text prune | 2,144.462 | 0.590 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_021911_97e50daa` |
+| B2 | `e56da68c` text prune | 2,062.893 | 0.598 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_022000_32b6ff1c` |
+| A2 | `5a92fceb` root-filter control | 1,919.327 | 0.628 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_022047_b2f66a83` |
+
+The mean candidate/control throughput ratio was 1.082. Slopmark scores for
+the touched existing production classes increased by at most 1.87 points;
+the new text-usage proof owner scored 29.29. Decision: accept this generic
+text-copy reduction as an incremental JOIN improvement. Ticket `tic-72e5`
+remains open because Stock Level remains slower than MariaDB.
