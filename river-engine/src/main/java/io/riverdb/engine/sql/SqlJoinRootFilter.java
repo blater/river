@@ -104,8 +104,8 @@ final class SqlJoinRootFilter {
           ? where.comparison(leaf) : where.comparison(leaf).reverseOrder();
       if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN
           || comparison == SqlComparison.HALF_OPEN_RANGE) continue;
-      integerFilter.configure(column, comparison, where.operand(leaf, right, 0));
-      return;
+      if (integerFilter.configure(
+          column, comparison, where.operand(leaf, right, 0)).isOk()) return;
     }
   }
 
