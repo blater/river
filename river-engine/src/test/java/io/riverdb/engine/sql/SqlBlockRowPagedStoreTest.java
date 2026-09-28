@@ -19,6 +19,40 @@ import org.junit.jupiter.api.io.TempDir;
 
 final class SqlBlockRowPagedStoreTest {
   @Test
+  void readsEmptyAndSingleSortedOutputsWithoutASecondRow(@TempDir Path root) {
+    SqlMaterializedTestFixture fixture = SqlMaterializedTestFixture.open(root);
+    SqlBlockSchema schema = new SqlBlockSchema();
+    schema.set(1);
+    schema.setColumn(0, "label", SqlTypeDescriptor.varchar(16), false);
+    SqlBlockRow source = new SqlBlockRow();
+    SqlBlockRow result = new SqlBlockRow();
+    SqlBlockRowStore store = new SqlBlockRowStore(fixture.budget());
+    assertEquals(StatusCode.OK, store.begin(schema, 0, true));
+    assertEquals(StatusCode.OK, store.finish());
+    assertEquals(0, store.rowCount());
+    assertEquals(StatusCode.CONFLICT, store.next(result));
+    assertEquals(StatusCode.OK, store.begin(schema, 0, true));
+    assertEquals(StatusCode.OK, source.reset(1));
+    assertEquals(StatusCode.OK, source.setText(0, "river".toCharArray(), 0, 5));
+    source.setKey(73);
+    assertEquals(StatusCode.OK, store.append(source));
+    assertEquals(StatusCode.OK, store.finish());
+    assertEquals(1, store.rowCount());
+    assertEquals(StatusCode.OK, store.next(result));
+    assertEquals(73, result.key());
+    assertEquals(5, result.textLength(0));
+    assertEquals('r', result.textCharacter(0, 0));
+    assertEquals(StatusCode.CONFLICT, store.next(result));
+    store.rewind();
+    assertEquals(StatusCode.OK, store.readAt(0, result));
+    assertEquals(73, result.key());
+    assertEquals(StatusCode.OK, store.limit(0));
+    assertEquals(StatusCode.CONFLICT, store.next(result));
+    assertEquals(StatusCode.OK, store.close());
+    fixture.close();
+  }
+
+  @Test
   void exceedsFormerRowBoundaryWithoutResidentRowMetadata(@TempDir Path root) {
     SqlMaterializedTestFixture fixture = SqlMaterializedTestFixture.open(root);
     SqlBlockSchema schema = schema();

@@ -22,6 +22,7 @@ and runtime configuration.
 | 2026-09-28 02:05:19 | `feature/stock-level-root-filter` | `tic-72e5` | River `40470245`; harness `2ab18c9`, version `40470245-stock-first-candidate` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 30s measured | 1,957.795 | 0.618 | `river_harness_20260928_020507_3d0d57eb`; [checkpoint](#2026-09-28--stock-level-root-filter-checkpoint) |
 | 2026-09-28 02:20:12 | `feature/stock-join-text-pruning` | `tic-72e5` | River `e56da68c`; harness `df66a3a`, version `e56da68c-text-prune-candidate` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 30s measured | 2,062.893 | 0.598 | `river_harness_20260928_022000_32b6ff1c`; [checkpoint](#2026-09-28--numeric-join-text-materialization-checkpoint) |
 | 2026-09-28 02:59:16 | `feature/stock-distinct-inline` | `tic-72e5` | River `209f8b37`; harness `df66a3a`, version `distinct-inline-209f8b37` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 3,817.486 | 0.354 | `river_harness_20260928_025909_cd482460`; [checkpoint](#2026-09-28--inline-distinct-checkpoint) |
+| 2026-09-28 03:19:17 | `feature/stock-singleton-row-store` | `tic-72e5` | River `1bf08325`; harness `df66a3a`, version `singleton-1bf08325` | `sample stock-level`, stock-first SQL; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 4,424.739 | 0.273 | `river_harness_20260928_031909_32bac37c`; [checkpoint](#2026-09-28--single-row-store-checkpoint) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -567,3 +568,55 @@ store and starting the JOIN scan. They are the next generic mechanisms to
 investigate. The final clean `./gradlew --no-daemon clean test` passed in
 3m15s (116 tasks). Decision: accept the exact inline DISTINCT mechanism as
 an incremental improvement; the ticket stays open.
+
+## 2026-09-28 — single-row store checkpoint
+
+The scalar COUNT result used to open paged row and index streams before
+writing its only output row. On branch `feature/stock-singleton-row-store`,
+commit `1bf08325`, the generic block row store retains its first row in a
+budgeted reusable row. A second row moves both rows to the existing paged
+store. The first row still passes the normal row and sort-key encoders for
+validation. Empty and single sorted outputs, text and public keys, stable
+ordering after migration, large paged results, and the DISTINCT spill path
+passed focused tests. A clean `./gradlew --no-daemon clean test` passed in
+3m9s (116 tasks). The candidate distribution is retained at
+`/private/tmp/river-stock-evidence/singleton-program/`.
+
+Interleaved control–candidate–candidate–control River runs used harness
+`df66a3a`, sample Stock Level, one worker and warehouse, seed 42, READ
+COMMITTED, retry limit 3, durable local WAL, loopback TCP/TLS, GraalVM
+25.0.4 JVM `-Xmx1g`, 5-second warmup and 30-second measurement. The only
+binary difference was the engine JAR. All four runs were eligible under
+comparison key `92304f6559add6ca75ccead01a5dbc118982216b805a8f00f784346d5af797a2`,
+passed invariants and owned cleanup, and had zero retries, failed outcomes
+or unknown commits.
+
+| Order | River engine | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| A1 | `7c5ecf33` control | 3,918.213 | 0.303 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_031743_7f4149bc` |
+| B1 | `1bf08325` single row | 4,376.012 | 0.303 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_031825_e45e57c8` |
+| B2 | `1bf08325` single row | 4,424.739 | 0.273 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_031909_32bac37c` |
+| A2 | `7c5ecf33` control | 3,743.280 | 0.340 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_031951_f26c1ed9` |
+
+The mean candidate/control TPS ratio was 1.149. Earlier 2-second
+warmup/10-second measured samples were also directional:
+3,619.55/3,991.94/4,018.74/3,454.76 TPS. Slopmark for the row-store
+owner rose from 65.73 to 83.18. Review found the bounded inline and paged
+representations within the same storage owner, with no second result
+encoder or benchmark-specific branch.
+
+A fresh MariaDB–River–River–MariaDB sequence used the same 5-second warmup,
+30-second measured workload and comparison key. Every run passed invariants
+and cleanup with zero retries, failed outcomes or unknown commits. River
+used TCP/TLS; MariaDB used the harness-owned Unix socket.
+
+| Order | Target | Committed TPS | p99 (ms) | Immutable artifact |
+| --- | --- | ---: | ---: | --- |
+| M1 | MariaDB | 6,821.345 | 0.185 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_032052_a0cdc7e4` |
+| R1 | River `1bf08325` | 4,429.242 | 0.302 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_032135_1b9f5d72` |
+| R2 | River `1bf08325` | 4,228.680 | 0.294 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_032218_9c04e259` |
+| M2 | MariaDB | 6,504.864 | 0.196 | `/Users/blater/src/ingres/river-harness/runs/river_harness_20260928_032300_0280f7c0` |
+
+The mean MariaDB/River TPS ratio was 1.539 for these whole targets.
+Decision: accept the generic singleton row-store path; the Stock Level
+ticket remains open for JOIN startup, stock scan and prepared-query costs.
