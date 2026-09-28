@@ -42,6 +42,7 @@ final class SqlBlockPhysicalRowWriter {
     for (int column = 1; column < table.columnCount(); column++) {
       int slot = table.valueOffset(column);
       if (source.nullValue(column)) {
+        if (!table.isNullable(column)) return StatusCode.CORRUPTION;
         SqlPhysicalRowNulls.set(bytes, table, column, true);
         bytes.putLong(slot, 0);
         if (io.riverdb.base.type.SqlTypeDescriptor.isWideDecimal(
@@ -51,7 +52,10 @@ final class SqlBlockPhysicalRowWriter {
       } else if (table.isVarchar(column)) {
         text.set(source, column);
         bytes.position(payload);
-        int length = Utf8Text.encode(text, Utf8Text.MAXIMUM_SCALARS, bytes);
+        int length = Utf8Text.encode(
+            text,
+            io.riverdb.base.type.SqlTypeDescriptor.parameterOne(
+                table.typeDescriptor(column)), bytes);
         text.clear();
         if (length < 0) return StatusCode.CORRUPTION;
         bytes.putLong(slot, (long) payload << 32 | Integer.toUnsignedLong(length));
@@ -66,7 +70,7 @@ final class SqlBlockPhysicalRowWriter {
     }
     bytes.position(0);
     bytes.limit(payload);
-    if (!table.isValidRow(bytes)) return StatusCode.CORRUPTION;
+    if (!table.hasSafeStoredRowLayout(bytes)) return StatusCode.CORRUPTION;
     row.set(bytes, 0, 0, payload);
     return StatusCode.OK;
   }

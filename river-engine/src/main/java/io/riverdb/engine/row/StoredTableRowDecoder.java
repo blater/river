@@ -1,14 +1,13 @@
 package io.riverdb.engine.row;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.row.StoredTableRowHeader;
 import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
-/** Validates a complete row before publishing values into caller-owned storage. */
+/** Checks stored-row identity and bounds before publishing trusted values. */
 final class StoredTableRowDecoder {
   private final StoredTableRowHeader header = new StoredTableRowHeader();
 
@@ -34,15 +33,19 @@ final class StoredTableRowDecoder {
     if (!status.isOk() || header.rowLayoutId() != table.rowLayoutId()) {
       return StatusCode.CORRUPTION;
     }
-    int textBytes = StoredTableRowBodyValidator.validate(table, source, start, length);
-    if (textBytes < 0) return StatusCode.CORRUPTION;
-    if (destination.capacity() < table.columnCount()
-        || destination.textCapacity() < textBytes
-        || destination.textMaximumBytes() < textBytes) {
+    if (!StoredTableRowBounds.fixedPrefix(table, length)) return StatusCode.CORRUPTION;
+    if (destination.capacity() < table.columnCount()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (filter != null && !filter.matches(table, source, start)) {
       return StatusCode.CONFLICT;
+    }
+    int textBytes = publishText
+        ? StoredTableRowBounds.publishedTextBytes(table, source, start, length) : 0;
+    if (textBytes < 0) return StatusCode.CORRUPTION;
+    if (destination.textCapacity() < textBytes
+        || destination.textMaximumBytes() < textBytes) {
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
     return StoredTableRowPublisher.publish(table, source, start, destination, publishText);
   }

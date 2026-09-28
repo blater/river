@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlQuery;
 
@@ -87,4 +88,26 @@ final class SqlBoundBlockPlans {
     return liveness.live(block, projection, schemas, count);
   }
 
+  /** Whether any block names this physical text column as an input. */
+  boolean physicalTextUsed(TableDefinition table, int column) {
+    if (table == null || count == 0 || column < 0 || column >= table.columnCount()) {
+      return true;
+    }
+    CharSequence name = table.columnName(column);
+    if (name == null) return true;
+    for (int block = 0; block < count; block++) {
+      SqlCommand command = commands[block];
+      if (command == null || command.isSelectAll()) return true;
+      for (int symbol = 0; symbol < command.projections().symbolCount(); symbol++) {
+        if (SqlBindingNames.same(name, command.projections().symbolName(symbol))) return true;
+      }
+      for (int projection = 0; projection < command.columnCount(); projection++) {
+        if (SqlBindingNames.same(name, command.columnName(projection))) return true;
+      }
+      for (int order = 0; order < command.orderBy().count(); order++) {
+        if (SqlBindingNames.same(name, command.orderBy().name(order))) return true;
+      }
+    }
+    return false;
+  }
 }

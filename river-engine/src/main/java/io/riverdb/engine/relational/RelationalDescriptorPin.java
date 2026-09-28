@@ -1,6 +1,6 @@
 package io.riverdb.engine.relational;
 
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;

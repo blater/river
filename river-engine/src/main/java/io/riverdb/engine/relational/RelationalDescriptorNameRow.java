@@ -43,14 +43,16 @@ final class RelationalDescriptorNameRow implements CharSequence {
     bytes.clear();
     if (!candidate.copyTo(bytes).isOk()) return StatusCode.CORRUPTION;
     bytes.flip();
-    int decodedCharacters = Utf8Text.validate(
-        bytes, 0, candidateLength, TableSchema.MAXIMUM_NAME_LENGTH);
-    if (decodedCharacters <= 0
-        || Utf8Text.decode(bytes, 0, candidateLength, decoded, 0) != decodedCharacters) {
-      return StatusCode.CORRUPTION;
-    }
     objectId = candidateObjectId;
     length = candidateLength;
+    return StatusCode.OK;
+  }
+
+  StatusCode decodeName() {
+    if (length <= 0) return StatusCode.CORRUPTION;
+    if (characters > 0) return StatusCode.OK;
+    int decodedCharacters = Utf8Text.decode(bytes, 0, length, decoded, 0);
+    if (decodedCharacters <= 0) return StatusCode.CORRUPTION;
     characters = decodedCharacters;
     return StatusCode.OK;
   }

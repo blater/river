@@ -111,7 +111,7 @@ final class SqlResultLanes {
     if (!isText(index) || source == null || offset < 0 || length < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = text.setUtf8(index, descriptors[index], source, offset, length);
+    StatusCode status = text.setUtf8(index, source, offset, length);
     if (status.isOk()) publishText(index);
     return status;
   }
@@ -120,7 +120,7 @@ final class SqlResultLanes {
     if (!isText(index) || source == null || offset < 0 || length < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = text.setUtf8(index, descriptors[index], source, offset, length);
+    StatusCode status = text.setUtf8(index, source, offset, length);
     if (status.isOk()) publishText(index);
     return status;
   }

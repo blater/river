@@ -1,4 +1,4 @@
-package io.riverdb.base.type;
+package io.riverdb.engine.row;
 
 import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;

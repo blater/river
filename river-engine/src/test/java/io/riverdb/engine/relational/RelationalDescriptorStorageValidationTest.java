@@ -9,7 +9,7 @@ import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;

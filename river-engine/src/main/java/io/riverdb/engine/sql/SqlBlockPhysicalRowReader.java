@@ -18,6 +18,11 @@ final class SqlBlockPhysicalRowReader {
     return decoding.prepare(table, destination);
   }
 
+  StatusCode prepare(
+      TableDefinition table, SqlBlockRow destination, SqlBoundBlockPlans plans) {
+    return decoding.prepare(table, destination, plans);
+  }
+
   StatusCode read(
       long primaryKey,
       HeapRowResult source,

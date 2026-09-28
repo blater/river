@@ -1,13 +1,15 @@
 package io.riverdb.engine.row;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.relational.RelationalStoredRowAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import java.nio.ByteBuffer;
 
-/** Canonical, bounded codec for descriptor-shaped stored table rows. Instances are caller-owned. */
+/** Bounded codec for River-owned descriptor rows. Instances are caller-owned. */
 public final class StoredTableRowCodec {
   private final StoredTableRowDecoder decoder = new StoredTableRowDecoder();
+  private final StoredTableRowExternalAdmission externalAdmission =
+      new StoredTableRowExternalAdmission();
 
   public StatusCode encode(
       TableDescriptor descriptor,
@@ -27,8 +29,8 @@ public final class StoredTableRowCodec {
       int start,
       int length,
       SqlValueBuffer destination) {
-    return decoder.decode(
-        descriptor, expectedLogicalRowId, source, start, length, destination, null, true);
+    return decode(descriptor, expectedLogicalRowId, source, start, length,
+        destination, null, true);
   }
 
   public StatusCode decode(
@@ -39,11 +41,11 @@ public final class StoredTableRowCodec {
       int length,
       SqlValueBuffer destination,
       StoredTableRowFilter filter) {
-    return decoder.decode(
-        descriptor, expectedLogicalRowId, source, start, length, destination, filter, true);
+    return decode(descriptor, expectedLogicalRowId, source, start, length,
+        destination, filter, true);
   }
 
-  /** Validates every field while publishing text only when the caller will read it. */
+  /** Admits caller-supplied row bytes before publishing values. */
   public StatusCode decode(
       TableDescriptor descriptor,
       long expectedLogicalRowId,
@@ -53,8 +55,26 @@ public final class StoredTableRowCodec {
       SqlValueBuffer destination,
       StoredTableRowFilter filter,
       boolean publishText) {
-    return decoder.decode(
+    StatusCode status = externalAdmission.validate(
+        descriptor, expectedLogicalRowId, source, start, length);
+    return status.isOk() ? decoder.decode(
         descriptor, expectedLogicalRowId, source, start, length, destination,
-        filter, publishText);
+        filter, publishText) : status;
+  }
+
+  /** Decodes a row fetched by a River-owned relational reader. */
+  public StatusCode decodeStored(
+      RelationalStoredRowAccess access,
+      TableDescriptor descriptor,
+      long expectedLogicalRowId,
+      ByteBuffer source,
+      int start,
+      int length,
+      SqlValueBuffer destination,
+      StoredTableRowFilter filter,
+      boolean publishText) {
+    if (access == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    return decoder.decode(descriptor, expectedLogicalRowId, source, start, length,
+        destination, filter, publishText);
   }
 }

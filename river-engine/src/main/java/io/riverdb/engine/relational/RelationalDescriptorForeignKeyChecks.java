@@ -1,7 +1,7 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedScanCursor;
@@ -87,7 +87,9 @@ final class RelationalDescriptorForeignKeyChecks {
   }
 
   private StatusCode openChild() {
-    StatusCode status = owner.resolveDescriptor(name, child, null);
+    StatusCode status = name.decodeName();
+    if (!status.isOk()) return status;
+    status = owner.resolveDescriptor(name, child, null);
     return status == StatusCode.CONFLICT
         ? services.descriptors().open(name.objectId(), child, null) : status;
   }

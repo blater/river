@@ -1,7 +1,9 @@
-package io.riverdb.base.type;
+package io.riverdb.engine.row;
 
 import io.riverdb.base.column.ColumnBitSet;
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlValueDomain;
 import io.riverdb.base.text.Utf8TextArena;
 import java.nio.ByteBuffer;
 
@@ -128,6 +130,50 @@ public final class SqlValueBuffer {
     }
     publish(index, descriptor, 0, 0, text.lastOffset(), text.lastLength());
     return StatusCode.OK;
+  }
+
+  StatusCode setStoredScalar(
+      int index, int descriptor, long high, long low) {
+    if (!unassigned(index)) return StatusCode.INVARIANT_BROKEN;
+    publish(index, descriptor, high, low, 0, 0);
+    return StatusCode.OK;
+  }
+
+  StatusCode setStoredTextBytes(
+      int index, int descriptor, ByteBuffer source, int offset, int length) {
+    if (!unassigned(index)) return StatusCode.INVARIANT_BROKEN;
+    StatusCode status = text.appendTrusted(source, offset, length);
+    if (!status.isOk()) return status;
+    publish(index, descriptor, 0, 0, text.lastOffset(), text.lastLength());
+    return StatusCode.OK;
+  }
+
+  StatusCode setStoredNull(int index, int descriptor) {
+    if (!unassigned(index)) return StatusCode.INVARIANT_BROKEN;
+    lanes.publish(index, descriptor, 0, 0, 0, 0);
+    nulls.set(index);
+    return StatusCode.OK;
+  }
+
+  /** Copies an already admitted typed value and its owned bytes without revalidation. */
+  public StatusCode copyTrusted(int index, SqlValueBuffer source, int sourceIndex) {
+    if (!unassigned(index) || source == null || !source.validIndex(sourceIndex)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int descriptor = source.lanes.descriptorAt(sourceIndex);
+    if (descriptor == 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (source.nulls.get(sourceIndex)) return setStoredNull(index, descriptor);
+    if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+      int length = source.lanes.textLengthAt(sourceIndex);
+      StatusCode status = text.appendTrusted(
+          source.text, source.lanes.textOffsetAt(sourceIndex), length);
+      if (!status.isOk()) return status;
+      publish(index, descriptor, 0, 0, text.lastOffset(), text.lastLength());
+      return StatusCode.OK;
+    }
+    return setStoredScalar(
+        index, descriptor, source.lanes.highAt(sourceIndex),
+        source.lanes.lowAt(sourceIndex));
   }
 
   public StatusCode setNull(int index, int descriptor) {

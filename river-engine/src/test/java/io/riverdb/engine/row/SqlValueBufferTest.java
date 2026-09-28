@@ -1,4 +1,4 @@
-package io.riverdb.base.type;
+package io.riverdb.engine.row;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -156,6 +157,45 @@ final class SqlValueBufferTest {
     assertEquals(0xa3, values.textByteAt(0, 2));
     assertEquals(-1, values.textByteAt(0, 3));
     assertEquals(16, values.textMaximumBytes());
+  }
+
+  @Test
+  void copiesAdmittedValuesAndRetainsTextAcrossSourceReuse() {
+    int text = SqlTypeDescriptor.varchar(8);
+    SqlValueBuffer source = prepared(4, 32);
+    assertEquals(StatusCode.OK, source.setText(0, text, "A£河🌊"));
+    assertEquals(StatusCode.OK, source.setText(1, text, ""));
+    assertEquals(StatusCode.OK, source.setNull(2, text));
+    assertEquals(StatusCode.OK, source.setFixed(3, SqlTypeDescriptor.INTEGER, 17));
+    SqlValueBuffer destination = prepared(4, 32);
+    for (int index = 0; index < 4; index++) {
+      assertEquals(StatusCode.OK, destination.copyTrusted(index, source, index));
+    }
+    source.reset();
+    byte[] copied = new byte[destination.textByteLengthAt(0)];
+    assertEquals(StatusCode.OK, destination.copyTextBytes(0, copied, 0));
+    assertEquals("A£河🌊", new String(copied, StandardCharsets.UTF_8));
+    assertEquals(0, destination.textByteLengthAt(1));
+    assertTrue(destination.isNull(2));
+    assertEquals(17, destination.valueAt(3));
+
+    assertEquals(StatusCode.OK, destination.clearForSize(4));
+    assertEquals(StatusCode.OK, source.clearForSize(4));
+    assertEquals(StatusCode.OK, source.setText(0, text, "next"));
+    assertEquals(StatusCode.OK, destination.copyTrusted(0, source, 0));
+    assertEquals(4, destination.textByteLengthAt(0));
+  }
+
+  @Test
+  void rejectsMalformedNewTextAtPublicByteAdmission() {
+    SqlValueBuffer values = prepared(1, 16);
+    ByteBuffer malformed = ByteBuffer.wrap(new byte[] {(byte) 0xc0});
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        values.setTextBytes(0, SqlTypeDescriptor.varchar(2), malformed, 0, 1));
+    assertEquals(0, values.descriptorAt(0));
+    ByteBuffer tooLong = ByteBuffer.wrap(new byte[] {'a', 'b'});
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        values.setTextBytes(0, SqlTypeDescriptor.varchar(1), tooLong, 0, 2));
   }
 
   private static SqlValueBuffer prepared(int lanes, int textBytes) {

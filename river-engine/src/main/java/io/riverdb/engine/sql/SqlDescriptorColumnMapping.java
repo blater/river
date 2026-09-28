@@ -3,7 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.row.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
 

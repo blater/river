@@ -14,6 +14,31 @@ import org.junit.jupiter.api.Test;
 
 final class LocalTemporalStorageValidationTest {
   @Test
+  void storedRowBoundsTrustContentButRawAdmissionRejectsMalformedText() {
+    TableSchema schema = new TableSchema();
+    assertEquals(StatusCode.OK, schema.addBigint("id", false));
+    assertEquals(StatusCode.OK, schema.addVarchar("label", 4, false));
+    TableDefinition definition = new TableDefinition();
+    assertEquals(StatusCode.OK, definition.set(
+        new RelationalSchemaGate(), 18, 0, TableDefinition.INDEX_NONE, -1, schema));
+    int fixed = definition.fixedRowBytes();
+    ByteBuffer row = ByteBuffer.allocateDirect(fixed + 2);
+    row.putLong(definition.valueOffset(1), (long) fixed << 32 | 2);
+    row.put(fixed, (byte) 0xc0);
+    row.put(fixed + 1, (byte) 0xaf);
+    row.position(0);
+    assertTrue(definition.hasSafeStoredRowLayout(row));
+    assertFalse(definition.isValidRow(row));
+
+    row.putLong(definition.valueOffset(1), (long) (fixed + 1) << 32 | 1);
+    assertTrue(definition.hasSafeStoredRowLayout(row));
+    assertFalse(definition.isValidRow(row));
+
+    row.putLong(definition.valueOffset(1), (long) (fixed + 1) << 32 | 2);
+    assertFalse(definition.hasSafeStoredRowLayout(row));
+  }
+
+  @Test
   void rejectsOutOfDomainAndOverPrecisePersistedValues() {
     TableSchema schema = temporalSchema();
     TableDefinition definition = new TableDefinition();

@@ -2,7 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.row.SqlValueBuffer;
 
 /** Reusable primitive/text result for one evaluated predicate operand. */
 final class SqlPredicateOperand {

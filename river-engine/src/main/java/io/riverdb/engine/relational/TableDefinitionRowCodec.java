@@ -6,7 +6,7 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueDomain;
 import java.nio.ByteBuffer;
 
-/** Validates and locates the transitional table-definition row representation. */
+/** Separates stored-row bounds from admission of new raw row content. */
 final class TableDefinitionRowCodec {
   private TableDefinitionRowCodec() { }
 
@@ -17,11 +17,25 @@ final class TableDefinitionRowCodec {
     return (row.get(row.position() + table.nullBitmapOffset() + byteIndex) & bit) != 0;
   }
 
-  static boolean isValidRow(TableDefinition table, ByteBuffer row) {
-    if (!hasFixedBytes(table, row) || row.remaining() > table.maximumRowBytes()
-        || !validNulls(table, row)) return false;
+  static boolean hasSafeStoredRowLayout(TableDefinition table, ByteBuffer row) {
+    if (!hasFixedBytes(table, row)) return false;
     int base = row.position();
-    int payloadOffset = table.fixedRowBytes();
+    for (int column = 1; column < table.columnCount; column++) {
+      if (!table.isVarchar(column) || isNull(table, row, column)) continue;
+      int valueOffset = table.valueOffset(column);
+      long slot = row.getLong(base + valueOffset);
+      int offset = (int) (slot >>> 32);
+      int length = (int) slot;
+      if (offset < table.fixedRowBytes() || length < 0
+          || offset > row.remaining() - length) return false;
+    }
+    return true;
+  }
+
+  static boolean isValidRow(TableDefinition table, ByteBuffer row) {
+    if (!hasSafeStoredRowLayout(table, row)
+        || !canonicalTextLayout(table, row) || !validNulls(table, row)) return false;
+    int base = row.position();
     for (int column = 1; column < table.columnCount; column++) {
       int valueOffset = table.valueOffset(column);
       long slot = row.getLong(base + valueOffset);
@@ -42,13 +56,11 @@ final class TableDefinitionRowCodec {
       } else {
         int offset = (int) (slot >>> 32);
         int length = (int) slot;
-        if (offset != payloadOffset || length < 0 || offset > row.remaining() - length
-            || Utf8Text.validate(row, base + offset, length,
+        if (Utf8Text.validate(row, base + offset, length,
                 SqlTypeDescriptor.parameterOne(table.typeDescriptors[column])) < 0) return false;
-        payloadOffset += length;
       }
     }
-    return payloadOffset == row.remaining();
+    return true;
   }
 
   static int textOffset(TableDefinition table, ByteBuffer row, int column) {
@@ -66,6 +78,18 @@ final class TableDefinitionRowCodec {
         && row != null
         && row.remaining() >= table.fixedRowBytes()
         && row.remaining() <= table.maximumRowBytes();
+  }
+
+  private static boolean canonicalTextLayout(TableDefinition table, ByteBuffer row) {
+    int payloadOffset = table.fixedRowBytes();
+    int base = row.position();
+    for (int column = 1; column < table.columnCount; column++) {
+      if (!table.isVarchar(column) || isNull(table, row, column)) continue;
+      long slot = row.getLong(base + table.valueOffset(column));
+      if ((int) (slot >>> 32) != payloadOffset) return false;
+      payloadOffset += (int) slot;
+    }
+    return payloadOffset == row.remaining();
   }
 
   private static boolean validNulls(TableDefinition table, ByteBuffer row) {

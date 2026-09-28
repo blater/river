@@ -1,10 +1,11 @@
 package io.riverdb.storage.heap;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.BoundedByteSource;
 import java.nio.ByteBuffer;
 
 /** Reusable heap-row view that can retain bytes across provider pin lifetimes. */
-public final class HeapRowResult {
+public final class HeapRowResult implements BoundedByteSource {
   private ByteBuffer page;
   private ByteBuffer ownedPage;
   private int rowId;

@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.format.FormatBytes;
-import io.riverdb.base.text.Utf8Text;
 import java.nio.ByteBuffer;
 final class CatalogKeyPayloadReader {
   private CatalogKeyPayloadReader() { }
@@ -43,11 +42,6 @@ final class CatalogKeyPayloadReader {
         ordinals[part] = FormatBytes.getInt(source, ordinalStart + part * Integer.BYTES);
       }
       int nameStart = ordinalStart + partCount * Integer.BYTES;
-      if (nameBytes > 0
-          && Utf8Text.validate(source, nameStart, nameBytes,
-              KeyDescriptor.MAXIMUM_NAME_LENGTH) <= 0) {
-        return StatusCode.CORRUPTION;
-      }
       StatusCode status = keys.decodeName(source, nameStart, nameBytes);
       if (!status.isOk()) return status;
       status = keys.add(FormatBytes.getLong(source, cursor),

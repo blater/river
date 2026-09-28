@@ -80,6 +80,7 @@ final class RelationalCatalogObjectReader {
 
   private StatusCode publishDescriptor(CatalogObjectResult result) {
     StatusCode status = descriptorName.read(scanRow);
+    if (status.isOk()) status = descriptorName.decodeName();
     if (status.isOk()) result.set(descriptorName, CatalogObjectResult.TABLE);
     return status;
   }

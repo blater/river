@@ -28,6 +28,7 @@ and runtime configuration.
 | 2026-09-28 07:02:16 UTC | `feature/inner-join-order-cost` | `tic-72e5` | River `34ee0800`, version `join-cost-34ee0800`; harness `7c4b90d` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,131.222 | 1.109 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_070044_7e89c8f0`; [checkpoint](#2026-09-28--full-stock-level-costed-inner-join-order) |
 | 2026-09-28 08:41:56 UTC | `feature/index-root-snapshot-cache` | `tic-72e5` | River `b17e0450`, version `b17e0450-jvm-clean`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,334.778 | 0.914 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_084035_50a125d8`; [checkpoint](#2026-09-28--cache-versioned-index-roots-across-join-probes) |
 | 2026-09-28 11:18:40 UTC | `feature/join-skip-unused-text-values` | `tic-72e5` | River code later committed as `9fcd3007`, engine JAR SHA-256 `9511f692e45653b2557ed39a53f3a829db8a45ae50744cea085813a7e4e2fc2a`, version `join-skip-unused-text-long-b2`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 5s warmup, 30s measured | 1,234.227 | 1.064 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_111715_048cab5f`; [checkpoint](#2026-09-28--omit-unused-text-publication-during-joins) |
+| 2026-09-28 14:37:52 UTC | `feature/trusted-row-values` | `tic-elvenking` | River `7ac12464`, version `trusted-values-7ac12464-full60-b1`; harness `eba8ab0` | `full stock-level`, one-request program; 1 worker, 1 warehouse, seed 42, retry limit 3; GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64; 10s warmup, 60s measured | 1,306.026 | 1.083 | `/private/tmp/river-harness-stock-analyze/runs/river_harness_20260928_143610_01952633`; [checkpoint](#2026-09-28--trusted-stored-values-tic-elvenking) |
 
 The initial row was the latest recorded run as of this table's creation. Its source
 commit is on `master`, but the branch checked out during the run was not recorded.
@@ -1296,3 +1297,174 @@ The residual full-cardinality cost remains repeated indexed `stock` probes
 and wide base-row fetches. The next substantive candidate should reduce that
 work through a general projected lookup while preserving the declared index
 structure and SQL results. The `tic-72e5` ticket remains open.
+
+## 2026-09-28 — Trusted stored values (`tic-elvenking`)
+
+The initial candidate on `feature/trusted-row-values` at `f7b01b90` starts from
+`perf-checkpoint-20260928-join-skip-unused-text` (`f77bb51a`). It removes
+repeated UTF-8, type-domain and canonical-content checks when already admitted
+rows are read or carried through an update. Numeric-only descriptor reads now
+check the row identity and fixed prefix without walking unused VARCHAR slots;
+published text is checked for bounds only when accessed. The existing legacy
+row path uses structural bounds for stored rows and retains full validation at
+raw `RelationalSession` admission. A reusable SQL-owned accepted-row token
+prevents the legacy SQL INSERT/UPDATE path from re-admitting its encoded values.
+Stored catalog-name lookups compare bounded bytes; UTF-8 decoding occurs only
+when a name is used as text. Unchanged descriptor values are copied as typed
+bytes into the mutation's owned buffer, without a UTF-16 round trip.
+
+The [intent review](delivery/evidence/2026-09-28-tic-elvenking-intent-review.md)
+identified two P2 gaps. The legacy SQL and relational read/update callers now
+use the stored-row structural contract, while public raw-row admission remains
+semantic. The descriptor decoder now skips variable-field metadata entirely
+when `publishText=false`, and bounds each published text field without requiring
+contiguous packing or exhaustive payload consumption. Focused tests cover
+malformed raw input, damaged but structurally safe stored content, inaccessible
+text metadata, accessed-text bounds, buffer reuse, multibyte/empty/null text,
+pending writes, rollback, restart, and both real SQL UPDATE paths.
+
+Temporary counters at `Utf8Text.validate(ByteBuffer, ...)` and
+`SqlValueBuffer.copyTextChars` recorded **zero calls** during numeric UPDATE and
+numeric SELECT against both descriptor and legacy tables containing unchanged
+multibyte text. They were removed before the clean build. The warmed row-codec
+allocation test passed. The initial `./gradlew --no-daemon clean check` passed in 3m 16s
+(156 tasks), including all repository policy checks and the full engine suite;
+`git diff --check` passed. Slopmark scored `SqlDescriptorMutationValues`
+109.954 before and 100.352 after, `Utf8TextArena` 53.526 to 58.279,
+`SqlValueBuffer` 45.279 to 54.332 after its package move, and
+`RelationalRowMutation` 131.179 to 140.478. The latter gained only the existing
+row owner's raw versus accepted admission dispatch; constraints and index
+maintenance still have one path. The score is a review trigger, not a pass gate.
+
+All measurements used harness `eba8ab0`, binary SHA-256
+`9d90e020ae212f920ea4927fa0304b3f262502f9364d4210adc4505d2ae9ec63`,
+GraalVM 25.0.4 JVM `-Xmx1g`, macOS/arm64, READ COMMITTED, durable local WAL,
+loopback TCP/TLS, one worker and warehouse, seed 42 and retry limit 3. The
+unchanged installed control was the accepted `f77bb51a` build. The candidate
+distribution replaced only the base and engine JARs, rebuilt after the clean
+check from `f7b01b90`; their SHA-256 values were
+`6bedf06676577eda2a295b007b5a81805805aba37c32e8e0c8d9e2b0a406cc45`
+and `266b765569531fc2afd89eccab86a93516f5c118508f1ba50bd8c9009a366e01`.
+The harness created the same schema and indexes for each River run; no workload
+or database-specific test tuning changed.
+
+```sh
+./benchmark run river tpcc PROFILE CATEGORY \
+  --river-executable=BUILD/river --river-version=BUILD-LABEL \
+  --warmup=WARMUP --duration=DURATION --workers=1 --warehouses=1 \
+  --seed=42 --max-retries=3
+```
+
+The table records every fixed-configuration sample and the later interleaved
+investigation. Artifact IDs are under
+`/private/tmp/river-harness-stock-analyze/runs/`. A is the unchanged control;
+B is `f7b01b90`. Load seconds help identify host disturbance; workload TPS and
+p99 cover only the measured window.
+
+| Workload; warmup/measured | Order | Load (s) | TPS | p99 (ms) | Artifact ID |
+| --- | --- | ---: | ---: | ---: | --- |
+| `sample new-order`; 5/20s | A1 | 1.4 | 365.992 | 4.669 | `river_harness_20260928_124612_b28a833f` |
+| same | A2 | 1.4 | 387.846 | 4.080 | `river_harness_20260928_124723_afdbf673` |
+| same | B1 | 1.5 | 375.897 | 4.596 | `river_harness_20260928_132608_93312519` |
+| same | B2 | 1.7 | 351.896 | 5.521 | `river_harness_20260928_132842_c0c430af` |
+| `full stock-level`; 5/30s | A1 | 67.0 | 1,408.683 | 0.874 | `river_harness_20260928_124854_0661a565` |
+| same | A2 | 68.4 | 1,350.516 | 0.955 | `river_harness_20260928_125303_39c2e35e` |
+| same | B1 | 69.7 | 1,428.653 | 0.905 | `river_harness_20260928_132646_1f8bfbbe` |
+| same | B2 | 109.1 | 671.484 | 2.796 | `river_harness_20260928_132923_beb56517` |
+| same | A3 | 86.7 | 1,221.154 | 1.164 | `river_harness_20260928_133214_21829800` |
+| same | B3 | 108.2 | 419.957 | 4.891 | `river_harness_20260928_133437_86a6c363` |
+| same | A4 | 82.8 | 1,150.088 | 1.192 | `river_harness_20260928_133728_535626c5` |
+| `sample stock-level`; 5/30s | A1 | 1.8 | 11,817.301 | 0.119 | `river_harness_20260928_134002_2d42a4ac` |
+| same | B1 | 1.8 | 12,173.088 | 0.122 | `river_harness_20260928_134050_462378a1` |
+| `full stock-level`; 10/60s | A1 | 77.1 | 1,207.324 | 1.184 | `river_harness_20260928_134154_99ac4a3f` |
+| same | B1 | 85.1 | 1,301.557 | 0.963 | `river_harness_20260928_134441_45950f0d` |
+| same | A2 | 79.1 | 1,227.489 | 1.104 | `river_harness_20260928_134740_1aa5c4d7` |
+| same | B2 | 132.2 | 1,364.474 | 0.878 | `river_harness_20260928_135023_fac42ddb` |
+
+Every artifact reported `status: passed`, validation passed, graceful stop and
+inactive service afterward, zero failed/unknown outcomes and zero retries.
+Within each workload/window group, `.comparison.eligibility` was `eligible`
+and `.comparison.key` matched exactly: New Order
+`fd1585b927399c30def2890e256d24f0b885d3c580519fc4f00a29204faa9a30`,
+30-second full Stock Level
+`1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`,
+sample Stock Level
+`92304f6559add6ca75ccead01a5dbc118982216b805a8f00f784346d5af797a2`,
+and 60-second full Stock Level
+`f7b5a6af0cf208ccf907fb1d6fc0585a508a22c80c4fb44003ea3c52b783c1f9`.
+
+The short full-profile candidate samples varied from 420 to 1,429 TPS, and
+New Order samples overlapped the controls. The user reported other intermittent
+host activity. Slower loads accompanied both low full-profile candidate runs,
+but this does not prove the host activity was their only cause. The longer
+interleaved full-profile controls were 1,207/1,227 TPS and candidates were
+1,302/1,364 TPS; their candidate mean was 1,333 versus 1,217 TPS for controls
+in this local diagnostic. The adjacent sample Stock Level candidate was also
+above its control. There is no repeated directional regression in the longer
+matched samples, but these data do not establish a general throughput gain or
+change the MariaDB comparison. These initial measurements are retained for
+`f7b01b90`; the independent follow-up review found three remaining gaps, so
+that source was not accepted as the final candidate.
+
+### Final candidate `7ac12464`
+
+Commit `7ac1246486dd7102732b208f6b91255ffd5ea1ef` closes those findings.
+Public `StoredTableRowCodec.decode` fully admits caller-supplied rows; only
+relational readers can construct the capability used by `decodeStored` on
+River-fetched rows. Block reads no longer recheck numeric domains or
+nullability, and a physical block source skips a VARCHAR payload when no
+block projection, predicate, group, aggregate or ordering expression names
+that column. Result publication copies borrowed UTF-8 directly into the
+result-owned arena, without an extra retained byte buffer or UTF-16 round
+trip. Focused tests verify public malformed-byte rejection, real nested SQL
+numeric and text scans, post-admission damaged text ignored by a numeric
+block read but rejected when projected or used in WHERE, and result ownership
+after the source buffer is reused. The independent read-only correctness and
+ownership review approved the final source. `./gradlew --no-daemon clean check`
+passed on `7ac12464` in 3m 21s (156 tasks); `git diff --check` passed.
+
+The installed final candidate changed only the base, storage and engine JARs
+from the accepted control distribution. Their SHA-256 values are respectively
+`0887eeeb394bb95968f20fedfd7850d9ad15ddf64616a8aa39f0f82d5268d503`,
+`c17a38fd12f682a92a591399483c3be7eb4f1f0fbc7fa08f219c1d2b41613775`
+and `cebbcedae27f2a6e074cbc59988a97d6f941e14ca03b14aa15a7e10d76854d60`.
+The same harness binary and configuration described above ran each target.
+A is the unchanged `f77bb51a` control; B is final `7ac12464`.
+
+| Workload; warmup/measured | Order | Load (s) | TPS | p99 (ms) | Artifact ID |
+| --- | --- | ---: | ---: | ---: | --- |
+| `sample new-order`; 5/20s | A1 | 1.5 | 374.097 | 4.854 | `river_harness_20260928_142032_6134bf9f` |
+| same | B1 | 1.5 | 355.346 | 5.276 | `river_harness_20260928_142117_deac612f` |
+| same | B2 | 3.6 | 221.288 | 16.425 | `river_harness_20260928_142156_e16d409d` |
+| same | A2 | 2.1 | 201.496 | 12.157 | `river_harness_20260928_142241_4e17b128` |
+| `full stock-level`; 5/30s | A1 | 74.0 | 1,204.022 | 1.124 | `river_harness_20260928_142357_6183d09f` |
+| same | B1 | 89.1 | 789.543 | 4.383 | `river_harness_20260928_142601_c908ac87` |
+| same | A2 | 90.3 | 1,130.057 | 1.203 | `river_harness_20260928_142816_83741648` |
+| same | B2 | 101.8 | 1,182.257 | 1.196 | `river_harness_20260928_143039_e6b23a7e` |
+| `full stock-level`; 10/60s | A1 | 85.0 | 1,207.460 | 1.146 | `river_harness_20260928_143324_89d4f8fd` |
+| same | B1 | 91.3 | 1,306.026 | 1.083 | `river_harness_20260928_143610_01952633` |
+| `sample stock-level`; 5/30s | A1 | 2.2 | 6,984.172 | 0.405 | `river_harness_20260928_143904_435ce6b2` |
+| same | B1 | 2.0 | 11,865.303 | 0.137 | `river_harness_20260928_143954_04cd81c9` |
+| same | A2 | 1.8 | 10,502.331 | 0.153 | `river_harness_20260928_144054_bbb066f0` |
+| same | B2 | 1.9 | 7,671.413 | 0.343 | `river_harness_20260928_144143_2fed9a3d` |
+
+All 14 final-run artifacts are under
+`/private/tmp/river-harness-stock-analyze/runs/`; every result passed validation,
+reported zero retries, failures and unknown commits, and stopped its owned
+River instance gracefully with service state inactive. Each run was eligible;
+comparison keys matched within the four workload/window groups and were
+`fd1585b927399c30def2890e256d24f0b885d3c580519fc4f00a29204faa9a30`,
+`1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`,
+`f7b5a6af0cf208ccf907fb1d6fc0585a508a22c80c4fb44003ea3c52b783c1f9`
+and `92304f6559add6ca75ccead01a5dbc118982216b805a8f00f784346d5af797a2`.
+
+The user reported intermittent other host activity. New Order B2 and its
+following control both fell sharply. Full Stock Level B1 was low, but B2
+recovered despite a longer load, and the longer matched candidate exceeded
+its control. The adjacent sample Stock Level results fluctuated in both
+directions. There is no repeated directional regression across the matched
+samples; no stable TPS gain can be attributed to this change. **Decision:**
+accept the removal of repeated validation and unchanged-value conversion,
+with preserved admission, ownership and transaction semantics. This is a
+diagnostic baseline for the exact final build, not a general speedup or a new
+MariaDB comparison.
