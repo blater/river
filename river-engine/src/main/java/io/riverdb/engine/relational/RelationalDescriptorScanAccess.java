@@ -3,7 +3,6 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedTransactionSession;
@@ -78,29 +77,34 @@ final class RelationalDescriptorScanAccess {
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination, RelationalRowIdentityResult result,
       StoredTableRowIntegerFilter filter) {
-    return next(owner, cursor, destination, result, filter, true);
+    return next(owner, cursor, destination, result, filter, null);
   }
 
   StatusCode next(
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination, RelationalRowIdentityResult result,
-      StoredTableRowIntegerFilter filter, boolean publishText) {
+      StoredTableRowIntegerFilter filter, StoredTableColumnSelection selection) {
     if (cursor == null || destination == null || result == null || !cursor.matches(owner)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
     TableDescriptor table = cursor.descriptor();
-    boolean decodeText = publishText || indexNeedsText(cursor);
-    StatusCode status = reserveRow(table, destination);
+    if (selection != null && !selection.matches(table.columnCount())) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = cursor.prepareSelection(selection, filter);
+    if (!status.isOk()) return status;
+    status = reserveRow(table, destination, selection);
     if (!status.isOk()) return status;
     while (true) {
       status = nextPhysical(cursor);
       if (!status.isOk()) return status;
       long logicalRowId = cursor.logicalRowId();
       status = cursor.isTuplePhysical()
-          ? rowAccess.fetch(session, table, logicalRowId, destination, filter, decodeText)
+          ? rowAccess.fetch(
+              session, table, logicalRowId, destination, filter, selection)
           : rowAccess.decode(
-              table, logicalRowId, cursor.row().row(), destination, filter, decodeText);
+              table, logicalRowId, cursor.row().row(), destination, filter, selection);
       if (status == StatusCode.CONFLICT && cursor.isTuplePhysical()) continue;
       if (status == StatusCode.CONFLICT && filter != null) continue;
       if (!status.isOk()) return status;
@@ -114,18 +118,10 @@ final class RelationalDescriptorScanAccess {
     }
   }
 
-  private static boolean indexNeedsText(RelationalDescriptorScanCursor cursor) {
-    if (!cursor.isTuplePhysical()) return false;
-    KeyDescriptor key = cursor.tupleBounds().key();
-    for (int part = 0; part < key.partCount(); part++) {
-      if (SqlTypeDescriptor.typeId(key.typeDescriptorAt(part))
-          == SqlTypeDescriptor.TYPE_ID_VARCHAR) return true;
-    }
-    return false;
-  }
-
-  private StatusCode reserveRow(TableDescriptor table, SqlValueBuffer destination) {
-    int textBytes = maximumTextBytes(table);
+  private StatusCode reserveRow(
+      TableDescriptor table, SqlValueBuffer destination,
+      StoredTableColumnSelection selection) {
+    int textBytes = maximumTextBytes(table, selection);
     if (textBytes < 0) return StatusCode.RESOURCE_EXHAUSTED;
     StatusCode status = destination.reserve(
         table.columnCount(), SqlShapeLimits.MAX_TABLE_COLUMNS,
@@ -178,9 +174,12 @@ final class RelationalDescriptorScanAccess {
     return cleanup.isOk() ? original : cleanup;
   }
 
-  private static int maximumTextBytes(TableDescriptor table) {
+  private static int maximumTextBytes(
+      TableDescriptor table, StoredTableColumnSelection selection) {
     long bytes = 0;
-    for (int index = 0; index < table.columnCount(); index++) {
+    int selected = selection == null ? table.columnCount() : selection.count();
+    for (int position = 0; position < selected; position++) {
+      int index = selection == null ? position : selection.columnAt(position);
       int descriptor = table.typeDescriptorAt(index);
       if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         bytes += SqlTypeDescriptor.parameterOne(descriptor) * 4L;

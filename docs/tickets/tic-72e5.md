@@ -50,6 +50,12 @@ stock-level` candidate also exceeded its control. See the
 This is a small local gain, not a new MariaDB comparison. A projected
 stock-key lookup and lower base-row fetch/decode cost remain the larger targets.
 
+The later [indexed-read checkpoint](../performance-checkpoints.md#2026-09-28--combined-indexed-read-candidate-checkpoint)
+replaced the extra relational base-row B-tree lookup with a direct logical-head
+directory and retained selected row bytes. Its accepted 60-second full Stock
+Level run reached 1,390.067 TPS; the adjacent candidate/control sequence
+favored the candidate locally. This does not establish parity with MariaDB.
+
 A later sampled timing pass found roughly 225 indexed `stock` opens per full
 Stock Level count query and placed most query time in JOIN row production.
 Stopping a proven unique inner cursor after one candidate and limiting the
@@ -62,16 +68,18 @@ the accepted River baseline of 1,234.227 TPS, a rough River/MariaDB ratio of
 
 ## Delivery
 
-- Reprofile the accepted cache build. Measure tuple cursor descent and
-  base-row fetch on the unchanged JOIN.
+- Deliver the general [indexed-read architecture epic](tic-isildur.md) in
+  stages, starting with [projected descriptor reads](tic-healthy-bellodonna.md).
+  Keep the second base-tree lookup and row-transfer replacement as distinct
+  measured decisions under that epic.
 - Define one canonical workload schema/index contract and verify the actual
   primary and secondary index columns on each target after schema creation.
   Account for automatically created foreign-key indexes and reject comparisons
   when the resulting index sets differ.
-- Test a generic projected unique-key lookup that returns needed values from
-  one index search. Add index payload support if the measured gain justifies
-  the storage and update cost. Preserve SQL results, read-your-writes,
-  isolation, lock protection, and failure cleanup.
+- Select one general storage replacement using read, update and recovery
+  evidence. Add index payload support only if its measured general benefit
+  justifies storage and maintenance cost. Preserve SQL results,
+  read-your-writes, isolation, lock protection and failure cleanup.
 - Keep the `sample` gain while making River faster than MariaDB on matched
   `full stock-level` runs. Continue improvements while targeted evidence
   shows a repeatable gain.
@@ -85,5 +93,7 @@ interleaved full-profile River/MariaDB samples with matching eligible
 comparison keys, successful invariants and zero failed or unknown outcomes.
 Require matching actual index inventories before promoting a cross-database
 performance result.
-Check the sample profile for regression. Record commands, versions, source
+Check Stock Level and New Order for regression. Account for occasional host
+activity with interleaved controls and mechanism counters; a short TPS
+difference alone cannot establish a gain. Record commands, versions, source
 commits, artifacts and the decision in `docs/performance-checkpoints.md`.

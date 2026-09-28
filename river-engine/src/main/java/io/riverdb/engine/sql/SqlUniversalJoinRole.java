@@ -38,8 +38,14 @@ final class SqlUniversalJoinRole {
     }
   }
 
-  void materializeText(boolean required) {
-    if (usesDescriptor) descriptor.materializeText(required);
+  StatusCode selectNone() {
+    return usesDescriptor ? descriptor.selectNone() : StatusCode.OK;
+  }
+  void select(int column) {
+    if (usesDescriptor) descriptor.select(column);
+  }
+  void selectAll() {
+    if (usesDescriptor) descriptor.selectAll();
   }
 
   StatusCode open(SqlUniversalJoinRows rows) {

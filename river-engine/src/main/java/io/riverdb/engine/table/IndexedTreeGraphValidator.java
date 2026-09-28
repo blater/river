@@ -45,12 +45,12 @@ final class IndexedTreeGraphValidator {
     leafLevel = -1;
     StatusCode status = validateSubtree(
         rootPageId, 0, 0, false, OrderedKey.INFINITY_SPACE, 0, 0);
-    if (!status.isOk() || versionRows != rowCount) {
-      return status.isOk() ? StatusCode.CORRUPTION : status;
-    }
+    if (!status.isOk()) return status;
     status = validateLeafTail();
     return status.isOk() ? validateTreeCoverage(nextPageId) : status;
   }
+
+  long versionRows() { return versionRows; }
 
   private StatusCode validateSubtree(
       int pageId,
@@ -103,7 +103,7 @@ final class IndexedTreeGraphValidator {
       return StatusCode.CORRUPTION;
     }
     if (entryCount == 0) {
-      return depth == 0 && rowCount == 0 ? StatusCode.OK : StatusCode.CORRUPTION;
+      return depth == 0 ? StatusCode.OK : StatusCode.CORRUPTION;
     }
     long firstKey = BTreePage.keyAt(page, 0);
     long firstSpace = BTreePage.spaceAt(page, 0);
@@ -198,7 +198,7 @@ final class IndexedTreeGraphValidator {
   }
 
   private StatusCode validateLeafTail() {
-    if (rowCount == 0) return StatusCode.OK;
+    if (versionRows == 0) return StatusCode.OK;
     if (previousLeafPageId <= 0) return StatusCode.CORRUPTION;
     StatusCode status = pages.pinCurrentPage(previousLeafPageId);
     if (!status.isOk()) return status;

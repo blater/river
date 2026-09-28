@@ -2,6 +2,7 @@ package io.riverdb.format.btree;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.FormatBytes;
+import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
 /** Self-contained durable tuple-root registry record. */
@@ -24,7 +25,8 @@ public final class TupleIndexRootRecordCodec {
       long keyId, long ownerObjectId, long schemaId,
       long descriptorHash, long privateOwner, long generation,
       int[] descriptors, int descriptorOffset, int descriptorCount) {
-    int cursor = state == STATE_DROPPING && rootPageId == 0 ? 4 : 0;
+    int cursor = state == STATE_DROPPING && rootPageId == 0
+        ? PageCodec.FIRST_ALLOCATABLE_PAGE_ID : 0;
     return encode(
         target, start, state, rootPageId, keyId, ownerObjectId, schemaId,
         descriptorHash, privateOwner, generation, cursor,

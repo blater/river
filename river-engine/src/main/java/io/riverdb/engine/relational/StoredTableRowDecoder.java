@@ -19,7 +19,7 @@ final class StoredTableRowDecoder {
       int length,
       SqlValueBuffer destination,
       StoredTableRowIntegerFilter filter,
-      boolean publishText) {
+      StoredTableColumnSelection selection) {
     if (!validArguments(table, expectedLogicalRowId, source, start, length, destination)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -41,14 +41,14 @@ final class StoredTableRowDecoder {
       status = filter.test(table, source, start);
       if (!status.isOk()) return status;
     }
-    int textBytes = publishText
-        ? StoredTableRowBounds.publishedTextBytes(table, source, start, length) : 0;
+    int textBytes = StoredTableRowBounds.publishedTextBytes(
+        table, source, start, length, selection);
     if (textBytes < 0) return StatusCode.CORRUPTION;
     if (destination.textCapacity() < textBytes
         || destination.textMaximumBytes() < textBytes) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    return StoredTableRowPublisher.publish(table, source, start, destination, publishText);
+    return StoredTableRowPublisher.publish(table, source, start, destination, selection);
   }
 
   private static boolean validArguments(

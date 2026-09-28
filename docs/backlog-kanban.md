@@ -1,5 +1,21 @@
 # River delivery Kanban and priority queue
 
+## Current indexed-read frontier — 2026-09-28
+
+[tic-isildur](tickets/tic-isildur.md) is the current user-directed performance
+epic under [tic-30c3](tickets/tic-30c3.md). Its first slice,
+[tic-healthy-bellodonna](tickets/tic-healthy-bellodonna.md), carries required
+columns into descriptor storage reads. A clean test build passed, while short
+local throughput runs did not establish a stable gain. The 593.840 TPS run was
+affected by other high CPU processes and is excluded from comparisons; see the
+[investigation](performance-checkpoints.md#2026-09-28--projected-descriptor-read-investigation).
+
+The [base-row head-directory ticket](tickets/tic-base-row-head-directory.md)
+removes the extra scalar B-tree search and has passed its clean full build.
+The accepted full Stock Level checkpoint and adjacent controls use unchanged
+SQL, schema and indexes; New Order shows no repeated candidate regression.
+Separate full-workload copy/decode mechanism evidence remains in the epic.
+
 ## Current performance frontier — 2026-09-15
 
 Two of the three bounded performance epics are complete:

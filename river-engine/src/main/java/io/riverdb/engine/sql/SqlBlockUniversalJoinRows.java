@@ -37,14 +37,15 @@ final class SqlBlockUniversalJoinRows implements SqlBlockJoinRows {
   StatusCode prepare(
       int block,
       boolean nested,
+      BoundSqlStatement bound,
       SqlCommand command,
       SqlBoundJoinContext context,
       SqlBoundBooleanPredicateProgram where,
-      int orderedInnerColumn,
-      boolean materializeText) {
+      int orderedInnerColumn) {
     prepareFrame(block, nested);
     StatusCode status = frame.prepare(command, context, where, orderedInnerColumn);
-    if (status.isOk()) frame.rows().materializeText(materializeText);
+    if (status.isOk()) status = SqlJoinColumnUsage.prepare(
+        bound, command, context, where, frame.rows());
     if (status.isOk() && nested) subqueries.registerExternalUniversal(block, frame.rows());
     if (!status.isOk()) {
       StatusCode reset = frame.reset();

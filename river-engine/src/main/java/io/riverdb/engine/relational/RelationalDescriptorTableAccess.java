@@ -244,15 +244,15 @@ public final class RelationalDescriptorTableAccess {
         : scanAccess.next(this, cursor, destination, result, filter);
   }
 
-  /** The caller must prove it will not read text from a partially published row. */
+  /** The caller prepares query columns; index rechecks and row filters are included here. */
   public StatusCode nextScan(
       RelationalDescriptorScanCursor cursor,
       SqlValueBuffer destination,
       RelationalRowIdentityResult result,
       StoredTableRowIntegerFilter filter,
-      boolean publishText) {
+      StoredTableColumnSelection selection) {
     return !active() ? StatusCode.INVALID_EXTERNAL_INPUT
-        : scanAccess.next(this, cursor, destination, result, filter, publishText);
+        : scanAccess.next(this, cursor, destination, result, filter, selection);
   }
 
   public StatusCode closeScan(RelationalDescriptorScanCursor cursor) {

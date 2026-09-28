@@ -35,12 +35,12 @@ final class IndexedRelationalWalCheckpointTest {
     requireOk(created.store().close());
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     long hash = descriptorHash(descriptor);
-    appendRootGroup(wal, descriptor, hash, 2, 0, 4, 0, 1,
+    appendRootGroup(wal, descriptor, hash, 2, 0, 5, 0, 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
-        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 4, 5);
-    appendRootGroup(wal, descriptor, hash, 3, 4, 4, 1, 2,
+        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 5, 6);
+    appendRootGroup(wal, descriptor, hash, 3, 5, 5, 1, 2,
         IndexedRelationalSuboperations.REGISTRY_BUILDING,
-        IndexedRelationalSuboperations.REGISTRY_READY, 2, 0, 5, 5);
+        IndexedRelationalSuboperations.REGISTRY_READY, 2, 0, 6, 6);
     appendTupleInsertGroup(wal, descriptor, hash);
     requireOk(wal.close());
     requireOk(directory.close());
@@ -56,9 +56,9 @@ final class IndexedRelationalWalCheckpointTest {
         pages.currentPayloadUnchecked(IndexedTableKernel.ROOT_META_PAGE_ID));
     checkDuplicateReachability(pages, next);
 
-    ByteBuffer tupleRoot = pages.currentPayloadUnchecked(4);
+    ByteBuffer tupleRoot = pages.currentPayloadUnchecked(5);
     int pointer = tupleRoot.getInt(24);
-    tupleRoot.putInt(24, 4);
+    tupleRoot.putInt(24, 5);
     check(store.validate() == StatusCode.CORRUPTION, "tuple leaf cycle accepted");
     tupleRoot.putInt(24, pointer);
 
@@ -101,9 +101,9 @@ final class IndexedRelationalWalCheckpointTest {
         SqlTypeDescriptor.varchar(255),
         SqlTypeDescriptor.varchar(250)
     };
-    appendRootGroup(wal, descriptor, descriptorHash(descriptor), 2, 0, 4, 0, 1,
+    appendRootGroup(wal, descriptor, descriptorHash(descriptor), 2, 0, 5, 0, 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
-        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 4, 5);
+        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 5, 6);
     requireOk(wal.close());
     requireOk(directory.close());
 
@@ -113,10 +113,10 @@ final class IndexedRelationalWalCheckpointTest {
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     int tuples = 80;
     long prediction = predictTupleInsert(
-        reopened.store(), descriptor, 4, 1, tuples, 'x');
+        reopened.store(), descriptor, 5, 1, tuples, 'x');
     int tupleRoot = (int) (prediction >>> 32);
     int nextPage = (int) prediction;
-    check(tupleRoot != 4 && nextPage - 4 <= 50,
+    check(tupleRoot != 5 && nextPage - 5 <= 50,
         "fixed tuple fixture root/next " + tupleRoot + "/" + nextPage);
     IndexedRelationalMutation mutation =
         new IndexedRelationalMutation(tuples, 1, descriptor.length);
@@ -126,8 +126,8 @@ final class IndexedRelationalWalCheckpointTest {
     requireOk(mutation.appendDescriptor(
         OWNER_OBJECT_ID, 1_000, 1_000, hash, descriptor, 0, descriptor.length));
     requireOk(mutation.appendSuboperation(
-        OWNER_OBJECT_ID, 0, 0, tuples, 4, tupleRoot,
-        SCALAR_ROOT, SCALAR_ROOT, 5, nextPage,
+        OWNER_OBJECT_ID, 0, 0, tuples, 5, tupleRoot,
+        SCALAR_ROOT, SCALAR_ROOT, 6, nextPage,
         1, 2, 1, 2, IndexedRelationalMutation.REGISTRY_BUILDING,
         IndexedRelationalMutation.REGISTRY_BUILDING, 2, 2));
     for (int index = 0; index < tuples; index++) {
@@ -189,7 +189,7 @@ final class IndexedRelationalWalCheckpointTest {
       cleanupCursor = resultingCursor;
     }
     check(BTreeRootPage.freePageCount(
-        pageSet(reopened.store()).currentPayloadUnchecked(2)) == nextPage - 4,
+        pageSet(reopened.store()).currentPayloadUnchecked(2)) == nextPage - 5,
         "failed BUILDING graph was not reclaimed");
     requireOk(commitRelationalQuiescent(reopened.store(),
         transaction, liveRootMutation(
@@ -228,7 +228,7 @@ final class IndexedRelationalWalCheckpointTest {
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     appendRootGroup(wal, descriptor, descriptorHash(descriptor), 2, 0, 0, 0, 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
-        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 4, 4);
+        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 5, 5);
     requireOk(wal.close());
     requireOk(directory.close());
 
@@ -251,7 +251,7 @@ final class IndexedRelationalWalCheckpointTest {
         TRANSACTION_ID + 102, liveRootMutation(
             descriptor, descriptorHash(descriptor), 0, 0, 1, 2, 1, 2,
             IndexedRelationalMutation.REGISTRY_BUILDING,
-            IndexedRelationalMutation.REGISTRY_ABSENT, 2, 0, 4, 4),
+            IndexedRelationalMutation.REGISTRY_ABSENT, 2, 0, 5, 5),
         new IndexedCommitResult()));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_ABSENT, 0, 2, 0);
@@ -272,15 +272,15 @@ final class IndexedRelationalWalCheckpointTest {
     requireOk(created.store().close());
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     long hash = descriptorHash(descriptor);
-    appendRootGroup(wal, descriptor, hash, 2, 0, 4, 0, 1,
+    appendRootGroup(wal, descriptor, hash, 2, 0, 5, 0, 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
-        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 4, 5);
-    appendRootGroup(wal, descriptor, hash, 3, 4, 4, 1, 2,
+        IndexedRelationalSuboperations.REGISTRY_BUILDING, 0, 2, 5, 6);
+    appendRootGroup(wal, descriptor, hash, 3, 5, 5, 1, 2,
         IndexedRelationalSuboperations.REGISTRY_BUILDING,
-        IndexedRelationalSuboperations.REGISTRY_READY, 2, 0, 5, 5);
-    appendRootGroup(wal, descriptor, hash, 4, 4, 4, 2, 3,
+        IndexedRelationalSuboperations.REGISTRY_READY, 2, 0, 6, 6);
+    appendRootGroup(wal, descriptor, hash, 4, 5, 5, 2, 3,
         IndexedRelationalSuboperations.REGISTRY_READY,
-        IndexedRelationalSuboperations.REGISTRY_DROPPING, 0, 4, 5, 5);
+        IndexedRelationalSuboperations.REGISTRY_DROPPING, 0, 4, 6, 6);
     requireOk(wal.close());
     requireOk(directory.close());
 
@@ -289,7 +289,7 @@ final class IndexedRelationalWalCheckpointTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
-        reopened.store(), TupleIndexRootRecordCodec.STATE_DROPPING, 4, 3, 4);
+        reopened.store(), TupleIndexRootRecordCodec.STATE_DROPPING, 5, 3, 4);
     requireOk(reopened.store().flush());
     requireOk(reopened.store().close());
     requireOk(wal.close());
@@ -300,7 +300,7 @@ final class IndexedRelationalWalCheckpointTest {
     reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
-        reopened.store(), TupleIndexRootRecordCodec.STATE_DROPPING, 4, 3, 4);
+        reopened.store(), TupleIndexRootRecordCodec.STATE_DROPPING, 5, 3, 4);
     requireOk(reopened.store().close());
     requireOk(wal.close());
     requireOk(directory.close());
@@ -329,12 +329,12 @@ final class IndexedRelationalWalCheckpointTest {
             descriptor, hash, OWNER_OBJECT_ID, 1_000,
             0, 0, 0, generation, 0, heap,
             IndexedRelationalMutation.REGISTRY_ABSENT,
-            IndexedRelationalMutation.REGISTRY_BUILDING, 0, 2, 4, 4),
+            IndexedRelationalMutation.REGISTRY_BUILDING, 0, 2, 5, 5),
         new IndexedCommitResult()));
     int tupleRoot = 0;
-    int nextPage = 4;
+    int nextPage = 5;
     long logicalRowId = 1;
-    for (int batch = 0; nextPage - 4 <= IndexedTableLimits.MAX_CHANGED_PAGES; batch++) {
+    for (int batch = 0; nextPage - 5 <= IndexedTableLimits.MAX_CHANGED_PAGES; batch++) {
       check(batch < 8, "tuple graph did not cross the changed-page bound");
       int tupleCount = 80;
       char value = (char) ('a' + batch);

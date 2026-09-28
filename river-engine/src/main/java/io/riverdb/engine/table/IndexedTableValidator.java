@@ -11,6 +11,7 @@ final class IndexedTableValidator {
   private final IndexedVersionState versions;
   private final IndexedTreeGraphValidator tree;
   private final IndexedTupleRegistryValidation tuples;
+  private final IndexedHeadGraphValidation heads;
   private final IndexedFreePageValidation freePages;
   private final IndexedPagePayloadValidation payloads;
 
@@ -33,16 +34,20 @@ final class IndexedTableValidator {
     versions = versionState;
     tree = new IndexedTreeGraphValidator(pages, versions, scalarVisited);
     tuples = new IndexedTupleRegistryValidation(pages, versions, tupleVisited);
+    heads = new IndexedHeadGraphValidation(pages, versions);
     freePages = new IndexedFreePageValidation(pages);
     payloads = new IndexedPagePayloadValidation(pages);
   }
 
   StatusCode validate(long rows) {
-    ByteBuffer heap = pages.currentPayload(IndexedTableKernel.HEAP_PAGE_ID);
-    ByteBuffer metadata = pages.currentPayload(IndexedTableKernel.ROOT_META_PAGE_ID);
-    if (heap == null || metadata == null) {
+    if (!pages.validPresentPage(IndexedTableKernel.HEAP_PAGE_ID)
+        || !pages.validPresentPage(IndexedTableKernel.ROOT_META_PAGE_ID)) {
       return StatusCode.CORRUPTION;
     }
+    ByteBuffer heap = pages.currentPayload(IndexedTableKernel.HEAP_PAGE_ID);
+    if (heap == null) return pages.lastStatus();
+    ByteBuffer metadata = pages.currentPayload(IndexedTableKernel.ROOT_META_PAGE_ID);
+    if (metadata == null) return pages.lastStatus();
     StatusCode status = HeapPage.validate(heap);
     if (status.isOk()) {
       status = BTreeRootPage.validate(metadata);
@@ -69,7 +74,12 @@ final class IndexedTableValidator {
         return StatusCode.CORRUPTION;
       }
       status = tree.validate(rootPageId, nextPageId, rows);
-      return status.isOk() ? tuples.validate(nextPageId, rows) : status;
+      if (status.isOk()) status = heads.validate(nextPageId, rows);
+      if (status.isOk() && tree.versionRows() + heads.versionRows() != rows) {
+        status = StatusCode.CORRUPTION;
+      }
+      if (status.isOk()) status = tuples.validate(nextPageId, rows);
+      return status;
     } finally {
       pages.unpinCurrentPage(IndexedTableKernel.ROOT_META_PAGE_ID);
     }
@@ -93,10 +103,9 @@ final class IndexedTableValidator {
     for (int pageId = IndexedTableKernel.INITIAL_LEAF_PAGE_ID;
         pageId < nextPageId;
         pageId++) {
+      if (!pages.validPresentPage(pageId)) return StatusCode.CORRUPTION;
       ByteBuffer page = pages.currentPayload(pageId);
-      if (page == null) {
-        return StatusCode.CORRUPTION;
-      }
+      if (page == null) return pages.lastStatus();
       StatusCode status = payloads.validate(pageId);
       if (!status.isOk()) {
         return status;

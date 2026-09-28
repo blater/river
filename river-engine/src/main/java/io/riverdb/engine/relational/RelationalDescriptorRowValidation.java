@@ -38,7 +38,7 @@ final class RelationalDescriptorRowValidation {
     }
     values.reset();
     status = decoder.decode(
-        layout, logicalRowId, bytes.value(), 0, row.length(), values, null, true);
+        layout, logicalRowId, bytes.value(), 0, row.length(), values, null, null);
     return finish(status, historical.close());
   }
 

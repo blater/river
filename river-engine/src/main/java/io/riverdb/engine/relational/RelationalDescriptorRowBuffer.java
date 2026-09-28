@@ -51,7 +51,7 @@ final class RelationalDescriptorRowBuffer {
       HeapRowResult source,
       SqlValueBuffer destination,
       StoredTableRowIntegerFilter filter) {
-    return decode(table, logicalRowId, source, destination, filter, true);
+    return decode(table, logicalRowId, source, destination, filter, null);
   }
 
   StatusCode decode(
@@ -60,13 +60,18 @@ final class RelationalDescriptorRowBuffer {
       HeapRowResult source,
       SqlValueBuffer destination,
       StoredTableRowIntegerFilter filter,
-      boolean publishText) {
+      StoredTableColumnSelection selection) {
+    ByteBuffer retained = source.retainedReadOnlyBytes();
+    if (retained != null) {
+      return decoder.decode(
+          table, logicalRowId, retained, 0, source.length(), destination, filter, selection);
+    }
     bytes.clear();
     StatusCode status = source.copyTo(bytes);
     if (!status.isOk()) return StatusCode.CORRUPTION;
     bytes.flip();
     return decoder.decode(
-        table, logicalRowId, bytes, 0, source.length(), destination, filter, publishText);
+        table, logicalRowId, bytes, 0, source.length(), destination, filter, selection);
   }
 
   ByteBuffer bytes() { return bytes; }

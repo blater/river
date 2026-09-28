@@ -17,6 +17,12 @@ The current strategy has three independently owned implementation epics:
 this is scheduling preference, not a false dependency between whole epics.
 The immediate shared evidence ticket is tic-da4e.
 
+The next user-directed architecture delivery is
+[tic-isildur](tic-isildur.md), which removes indexed-read work amplification
+through projection, one selected base-row storage lookup design and simpler
+row transfer. It extends the open [Stock Level performance ticket](tic-72e5.md)
+without changing the benchmark workload or indexes.
+
 The 2026-09-11 M5 diagnostic median was approximately447 River JVM versus1126
 MariaDB TPS, with differing transports and short samples. It is not an engine-only
 comparison, a native result, or a forecast of additive gains. See the ledger.

@@ -140,7 +140,7 @@ final class IndexedTableTest {
     row.limit(Long.BYTES);
     writer.insert(0, 10_000, row);
     assertEquals(StatusCode.OK, writer.session.close());
-    assertEquals(5, table.rootPageId());
+    assertEquals(6, table.rootPageId());
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
 
@@ -150,7 +150,7 @@ final class IndexedTableTest {
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKey( 0,10_000, fetched));
     assertEquals(10_000, rowValue(fetched));
-    assertEquals(5, table.rootPageId());
+    assertEquals(6, table.rootPageId());
     assertEquals(BTreePage.MAX_ENTRIES + 1, table.rowCount());
     close(table, wal, directory);
   }

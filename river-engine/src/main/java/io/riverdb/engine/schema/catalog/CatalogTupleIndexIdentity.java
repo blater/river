@@ -29,7 +29,9 @@ final class CatalogTupleIndexIdentity {
           state.rootPageId() > 0 && state.cleanupCursor() == 0
               && state.privateOwner() == 0;
       case TupleIndexRootRecordCodec.STATE_DROPPING ->
-          state.rootPageId() == 0 && state.cleanupCursor() >= 4
+          state.rootPageId() == 0
+              && state.cleanupCursor()
+                  >= io.riverdb.storage.btree.BTreeRootPage.FIRST_REUSABLE_PAGE_ID
               && state.privateOwner() == privateOwner;
       case TupleIndexRootRecordCodec.STATE_ABSENT ->
           state.rootPageId() == 0 && state.cleanupCursor() == 0

@@ -3,6 +3,8 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
 import io.riverdb.format.page.PageCodec;
+import io.riverdb.format.page.LogicalHeadPageCodec;
+import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.storage.btree.BTreeRootPage;
@@ -16,9 +18,13 @@ final class IndexedVacuumRowCursor {
   private final IndexedPageSet pages;
   private final IndexedRowPin rowPin = new IndexedRowPin();
   private ByteBuffer leaf;
+  private ByteBuffer headLeaf;
   private long rowsToSkip;
   private int pageId;
   private int pinnedPageId;
+  private int headPinnedPageId;
+  private int nextHeadPageId;
+  private int headEntry;
   private int entry;
   private long currentRowId;
   private long currentSpace;
@@ -27,6 +33,7 @@ final class IndexedVacuumRowCursor {
   private long expectedKey;
   private boolean hasExpectedKey;
   private boolean exhausted;
+  private boolean scalarExhausted;
 
   IndexedVacuumRowCursor(IndexedTableKernel tableKernel, IndexedPageSet pageSet) {
     table = tableKernel;
@@ -48,6 +55,9 @@ final class IndexedVacuumRowCursor {
     expectedKey = 0;
     hasExpectedKey = false;
     exhausted = false;
+    scalarExhausted = false;
+    nextHeadPageId = IndexedTableKernel.HEAD_TABLE_ROOT_PAGE_ID;
+    headEntry = 0;
     return openFirstLeaf();
   }
 
@@ -57,7 +67,10 @@ final class IndexedVacuumRowCursor {
     if (!status.isOk()) return status;
     boolean finished = false;
     while (!finished) {
-      if (leaf != null && entry < BTreePage.entryCount(leaf)) {
+      if (scalarExhausted) {
+        status = nextHead(result);
+        finished = status != StatusCode.RETRY;
+      } else if (leaf != null && entry < BTreePage.entryCount(leaf)) {
         int current = entry++;
         if (rowsToSkip > 0) {
           rowsToSkip--;
@@ -79,8 +92,11 @@ final class IndexedVacuumRowCursor {
   StatusCode close() {
     StatusCode status = releaseRow();
     if (pinnedPageId != 0) pages.unpinCurrentPage(pinnedPageId);
+    if (headPinnedPageId != 0) pages.unpinCurrentPage(headPinnedPageId);
     pinnedPageId = 0;
+    headPinnedPageId = 0;
     leaf = null;
+    headLeaf = null;
     return status;
   }
 
@@ -100,8 +116,8 @@ final class IndexedVacuumRowCursor {
     hasExpectedKey = true;
     close();
     if (candidate == 0) {
-      exhausted = OrderedKey.isInfinity(expectedSpace, expectedKey);
-      return exhausted ? StatusCode.CONFLICT : StatusCode.CORRUPTION;
+      scalarExhausted = OrderedKey.isInfinity(expectedSpace, expectedKey);
+      return scalarExhausted ? StatusCode.OK : StatusCode.CORRUPTION;
     }
     if (!validPageId(candidate)) return StatusCode.CORRUPTION;
     StatusCode status = pages.pinCurrentPage(candidate);
@@ -117,6 +133,57 @@ final class IndexedVacuumRowCursor {
     leaf = payload;
     entry = 0;
     return StatusCode.OK;
+  }
+
+  private StatusCode nextHead(HeapRowResult result) {
+    while (true) {
+      if (headLeaf != null) {
+        while (headEntry < LogicalHeadPageCodec.ROW_LEAF_ENTRIES) {
+          int slot = headEntry++;
+          long head = LogicalHeadPageCodec.rowHead(headLeaf, slot);
+          if (head == 0) continue;
+          long base = LogicalHeadPageCodec.base(headLeaf);
+          if (head < 0 || base > (Long.MAX_VALUE - slot - 1)
+              / LogicalHeadPageCodec.ROW_LEAF_ENTRIES) return StatusCode.CORRUPTION;
+          if (rowsToSkip > 0) {
+            rowsToSkip--;
+            continue;
+          }
+          currentRowId = head;
+          currentSpace = CatalogKeyspace.relationalBaseRowSpace(
+              LogicalHeadPageCodec.ownerObjectId(headLeaf));
+          currentKey = base * LogicalHeadPageCodec.ROW_LEAF_ENTRIES + slot + 1;
+          return table.pinRow(currentRowId, result, rowPin);
+        }
+        pages.unpinCurrentPage(headPinnedPageId);
+        headPinnedPageId = 0;
+        headLeaf = null;
+      }
+      while (nextHeadPageId <= pages.highestPageId()
+          && pages.payloadKind(nextHeadPageId) != PageCodec.PAYLOAD_KIND_LOGICAL_HEAD) {
+        nextHeadPageId++;
+      }
+      if (nextHeadPageId > pages.highestPageId()) {
+        exhausted = true;
+        return StatusCode.CONFLICT;
+      }
+      int candidate = nextHeadPageId++;
+      StatusCode status = pages.pinCurrentPage(candidate);
+      if (!status.isOk()) return status;
+      ByteBuffer payload = pages.currentPayload(candidate);
+      if (payload == null || !LogicalHeadPageCodec.validate(payload).isOk()
+          || pages.ownerKeyId(candidate) != LogicalHeadPageCodec.ownerObjectId(payload)) {
+        pages.unpinCurrentPage(candidate);
+        return StatusCode.CORRUPTION;
+      }
+      if (LogicalHeadPageCodec.type(payload) != LogicalHeadPageCodec.ROW_LEAF) {
+        pages.unpinCurrentPage(candidate);
+        continue;
+      }
+      headPinnedPageId = candidate;
+      headLeaf = payload;
+      headEntry = 0;
+    }
   }
 
   private StatusCode openFirstLeaf() {

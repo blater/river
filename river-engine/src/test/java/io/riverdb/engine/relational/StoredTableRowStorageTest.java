@@ -135,6 +135,41 @@ final class StoredTableRowStorageTest {
   }
 
   @Test
+  void projectedReadPublishesOnlySelectedNumericColumns() {
+    int text = SqlTypeDescriptor.varchar(4);
+    TableDescriptor table = table(
+        new int[] {SqlTypeDescriptor.SMALLINT, text, SqlTypeDescriptor.INTEGER},
+        new boolean[] {false, false, false});
+    SqlValueBuffer input = values(3, 16);
+    assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.SMALLINT, 40));
+    assertEquals(StatusCode.OK, input.setText(1, text, "wide"));
+    assertEquals(StatusCode.OK, input.setFixed(2, SqlTypeDescriptor.INTEGER, 91));
+    Encoded encoded = encode(table, input);
+    StoredTableColumnSelection selected = new StoredTableColumnSelection();
+    assertEquals(StatusCode.OK, selected.selectNone(table.columnCount()));
+    selected.select(2);
+    SqlValueBuffer output = values(3, 0);
+    assertEquals(StatusCode.OK, new StoredTableRowDecoder().decode(
+        table, 71, ByteBuffer.wrap(encoded.bytes), START, encoded.length,
+        output, null, selected));
+    assertEquals(0, output.descriptorAt(0));
+    assertEquals(0, output.descriptorAt(1));
+    assertEquals(SqlTypeDescriptor.INTEGER, output.descriptorAt(2));
+    assertEquals(91, output.valueAt(2));
+
+    byte[] corrupt = encoded.bytes.clone();
+    int slot = START + table.fixedOffsetAt(1);
+    FormatBytes.putInt(ByteBuffer.wrap(corrupt), slot, Integer.MAX_VALUE);
+    assertEquals(StatusCode.OK, new StoredTableRowDecoder().decode(
+        table, 71, ByteBuffer.wrap(corrupt), START, encoded.length,
+        output, null, selected));
+    selected.select(1);
+    assertEquals(StatusCode.CORRUPTION, new StoredTableRowDecoder().decode(
+        table, 71, ByteBuffer.wrap(corrupt), START, encoded.length,
+        output, null, selected));
+  }
+
+  @Test
   void roundTripsMixedValuesWithoutChangingBufferState() {
     TableDescriptor table = table(
         new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BOOLEAN,
@@ -481,8 +516,19 @@ final class StoredTableRowStorageTest {
   private static StatusCode decodeTrusted(
       TableDescriptor table, long rowId, ByteBuffer source, int start, int length,
       SqlValueBuffer output, StoredTableRowIntegerFilter filter, boolean publishText) {
+    StoredTableColumnSelection selection = null;
+    if (!publishText) {
+      selection = new StoredTableColumnSelection();
+      StatusCode status = selection.selectNone(table.columnCount());
+      if (!status.isOk()) return status;
+      for (int column = 0; column < table.columnCount(); column++) {
+        if (!StoredTableRowEncoder.isText(table.typeDescriptorAt(column))) {
+          selection.select(column);
+        }
+      }
+    }
     return new StoredTableRowDecoder().decode(
-        table, rowId, source, start, length, output, filter, publishText);
+        table, rowId, source, start, length, output, filter, selection);
   }
 
   private static Encoded encode(TableDescriptor table, SqlValueBuffer input) {

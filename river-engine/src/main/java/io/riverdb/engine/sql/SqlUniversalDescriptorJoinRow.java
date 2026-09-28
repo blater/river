@@ -9,20 +9,35 @@ import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.relational.StoredTableRowIntegerFilter;
+import io.riverdb.engine.relational.StoredTableColumnSelection;
 
 /** Reusable decoded row for one streaming descriptor join role. */
 final class SqlUniversalDescriptorJoinRow {
   private final RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
   private final SqlValueBuffer values = new SqlValueBuffer();
   private final SqlBlockRow row = new SqlBlockRow();
-  private boolean materializeText = true;
+  private final StoredTableColumnSelection selected = new StoredTableColumnSelection();
 
-  void materializeText(boolean required) { materializeText = required; }
+  StatusCode selectNone(TableDescriptor table) {
+    StatusCode status = selected.selectNone(table.columnCount());
+    if (!status.isOk()) return status;
+    if (table.primaryKey() != null) {
+      for (int part = 0; part < table.primaryKey().partCount(); part++) {
+        selected.select(table.primaryKey().columnOrdinalAt(part));
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  void select(int column) { selected.select(column); }
+  void selectAll() { selected.selectAll(); }
 
   StatusCode prepare(TableDescriptor table) {
-    StatusCode status = values.reserve(
+    StatusCode status = selected.selectNone(table.columnCount());
+    if (status.isOk()) selected.selectAll();
+    if (status.isOk()) status = values.reserve(
         table.columnCount(), table.columnCount(),
-        TableSchema.MAXIMUM_ROW_BYTES, TableSchema.MAXIMUM_ROW_BYTES);
+        0, TableSchema.MAXIMUM_ROW_BYTES);
     if (status.isOk()) status = row.reset(table.columnCount());
     return status;
   }
@@ -37,10 +52,11 @@ final class SqlUniversalDescriptorJoinRow {
       RelationalSession session, RelationalDescriptorScanCursor cursor,
       TableDescriptor table, StoredTableRowIntegerFilter filter) {
     StatusCode status = session.descriptorRows().nextScan(
-        cursor, values, identity, filter, materializeText);
+        cursor, values, identity, filter, selected);
     if (status.isOk()) status = row.reset(table.columnCount());
     for (int column = 0; status.isOk() && column < table.columnCount(); column++) {
-      status = copy(table, column);
+      if (selected.includes(column)) status = copy(table, column);
+      else row.setNull(column);
     }
     if (status.isOk()) row.setKey(SqlDescriptorPublicRowKey.from(table, values));
     return status;
@@ -57,7 +73,6 @@ final class SqlUniversalDescriptorJoinRow {
     } else if (SqlTypeDescriptor.typeId(type) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       row.setValue(column, values.valueAt(column));
     } else {
-      if (!materializeText) return StatusCode.OK;
       int bytes = values.textByteLengthAt(column);
       if (bytes < 0) return StatusCode.CORRUPTION;
       if (bytes == 0) {
@@ -79,6 +94,6 @@ final class SqlUniversalDescriptorJoinRow {
   void reset() {
     values.reset();
     identity.reset();
-    materializeText = true;
+    selected.selectAll();
   }
 }

@@ -138,7 +138,8 @@ final class IndexedTupleLifecycleCompiler {
         batch, index, mutation, firstMutation,
         tupleRoot, 0, scalarRoot, nextPage, heap,
         generation, generation + 1, state, TupleIndexRootRecordCodec.STATE_DROPPING,
-        privateOwner, batch.privateOwnerAt(index), 0, 4) : status;
+        privateOwner, batch.privateOwnerAt(index), 0,
+        BTreeRootPage.FIRST_REUSABLE_PAGE_ID) : status;
   }
 
   private StatusCode reclaim(

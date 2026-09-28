@@ -45,15 +45,15 @@ final class IndexedTableStoreEncodingTest {
     assertRecordHeader(bootstrap, 1, 1);
     byte[] bootstrapPayload = bytes(bootstrap.payload());
     assertArrayEquals(expectedPageImageHeader(), Arrays.copyOf(bootstrapPayload, 24));
-    assertEquals(24 + 3 * PageCodec.PAGE_BYTES, bootstrapPayload.length);
+    assertEquals(24 + 4 * PageCodec.PAGE_BYTES, bootstrapPayload.length);
     assertPageImageHeaders(
         bootstrapPayload,
         WalFileHeaderCodec.HEADER_BYTES,
         bootstrap.recordEnd());
 
     byte[] flushedPages = Files.readAllBytes(root.resolve(IndexedTableStore.FILE_NAME));
-    assertEquals(3 * PageCodec.PAGE_BYTES, flushedPages.length);
-    for (int pageIndex = 0; pageIndex < 3; pageIndex++) {
+    assertEquals(4 * PageCodec.PAGE_BYTES, flushedPages.length);
+    for (int pageIndex = 0; pageIndex < 4; pageIndex++) {
       int imageOffset = 24 + pageIndex * PageCodec.PAGE_BYTES;
       int fileOffset = pageIndex * PageCodec.PAGE_BYTES;
       assertArrayEquals(
@@ -72,7 +72,7 @@ final class IndexedTableStoreEncodingTest {
         IndexedTableStore.checkpointFileName(CHECKPOINT_GENERATION));
     byte[] checkpointBytes = Files.readAllBytes(checkpoint);
     assertCheckpointHeaders(checkpointBytes, table.pageCount());
-    for (int pageIndex = 0; pageIndex < 3; pageIndex++) {
+    for (int pageIndex = 0; pageIndex < 4; pageIndex++) {
       int fileOffset = pageIndex * PageCodec.PAGE_BYTES;
       assertArrayEquals(
           Arrays.copyOfRange(
@@ -96,7 +96,7 @@ final class IndexedTableStoreEncodingTest {
     putLong(expected, 0, OPERATION_MAGIC);
     putInt(expected, 8, IndexedWalCodec.FORMAT_VERSION);
     putInt(expected, 12, 1);
-    putInt(expected, 16, 3);
+    putInt(expected, 16, 4);
     putInt(expected, 20, 0);
     return expected;
   }
@@ -142,7 +142,7 @@ final class IndexedTableStoreEncodingTest {
     CRC32C checksum = new CRC32C();
     PageHeader header = new PageHeader();
     ByteBuffer payload = ByteBuffer.wrap(encoded);
-    for (int pageId = 1; pageId <= 3; pageId++) {
+    for (int pageId = 1; pageId <= 4; pageId++) {
       int offset = 24 + (pageId - 1) * PageCodec.PAGE_BYTES;
       assertEquals(
           StatusCode.OK,
