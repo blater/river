@@ -134,6 +134,7 @@ final class TransactionProgramDominators {
       int source = program.nodeFirst(node);
       int action = program.action(source);
       if (action != TransactionProgramAction.EXACT_ONE
+          && action != TransactionProgramAction.ROW_AT
           && action != TransactionProgramAction.ZERO_OR_ONE) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
