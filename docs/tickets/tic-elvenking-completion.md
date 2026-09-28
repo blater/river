@@ -92,3 +92,10 @@ text validity/limit and complete row-layout guarantees before that call. In
 particular, an omitted non-null column and same-descriptor fixed numeric value
 reach it without those earlier checks. Removing it would require a separate,
 coherent admission change across every field path.
+
+The block binder and liveness analysis both resolve a symbol against the same
+bound child schema. Its `find` operation returns a unique column ordinal or
+reports ambiguity. The prepared physical mask stores those base-schema
+ordinals; an unresolved dependency retains all columns. This replaces the
+separate scan of raw physical column names while preserving the binder's
+identity decision.
