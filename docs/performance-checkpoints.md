@@ -1629,3 +1629,60 @@ pin, buffer and selection boundaries. `./gradlew --no-daemon clean check`
 passed on that corrected source in 3m 12s (156 tasks). The accepted baseline
 table remains unchanged; exact-build longer interleaved evidence is still
 required before performance promotion.
+
+## 2026-09-28 — logical-head directory candidate diagnostic
+
+The unchanged `full stock-level` workload was run against accepted source
+`17978d4b` and the separate directory candidate `1df8f23b`. The candidate
+engine JAR SHA-256 was
+`13fdc59b733a2f870495e8d140964ecae33e8c431a362d61683c4769269007c3`;
+the control engine JAR SHA-256 was
+`bda95eaed636e692cd9c3a6ed783d3cb495a387d4df8b8165eb0ce4d2a7ae01c`.
+Harness `eba8ab0` used the same SQL, schema, indexes, one worker and warehouse,
+seed 42, retry limit 3, READ COMMITTED, durable local WAL, GraalVM 25.0.4 JVM
+`-Xmx1g` and loopback TCP/TLS. Only the executable and version label changed.
+Commands used `./benchmark run river tpcc PROFILE CATEGORY
+--river-executable=BUILD/river --river-version=LABEL --warmup=W --duration=D
+--workers=1 --warehouses=1 --seed=42 --max-retries=3` in
+`/private/tmp/river-harness-stock-analyze`. All artifacts below are in its
+`runs/` directory. All passed admission, invariants and owned-server cleanup,
+with eligible metadata and zero retries, failures and unknown commits. Within
+each workload/window group, comparison keys matched.
+
+| Workload; warmup/measured | Order | Load (s) | TPS | p99 (ms) | Artifact ID |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full stock-level`; 5/30s | A1 control | 70.1 | 1,382.780 | 1.025 | `river_harness_20260928_192114_9d7ade76` |
+| same | B1 directory | 84.0 | 1,199.294 | 1.371 | `river_harness_20260928_192311_0e513e37` |
+| same | B2 directory | 102.9 | 1,403.570 | 0.983 | `river_harness_20260928_192529_e66fda19` |
+| same | A2 control | 85.8 | 1,274.782 | 1.480 | `river_harness_20260928_192800_7b251f6a` |
+| `sample new-order`; 5/20s | A1 control | 2.7 | 276.591 | 8.946 | `river_harness_20260928_193017_0ef4d46f` |
+| same | B1 directory | 1.9 | 320.644 | 7.287 | `river_harness_20260928_193056_90b02e18` |
+| same | B2 directory | 2.8 | 279.793 | 9.429 | `river_harness_20260928_193134_c2ef26df` |
+| same | A2 control | 6.0 | 264.444 | 8.110 | `river_harness_20260928_193211_f513d4e2` |
+| `full stock-level`; 10/60s | A1 control | 110.9 | 1,020.704 | 2.458 | `river_harness_20260928_193305_af5f7bff` |
+| same | B1 directory | 88.7 | 1,213.185 | 1.320 | `river_harness_20260928_193631_f434d1f6` |
+| same | B2 directory | 109.1 | 1,404.234 | 0.890 | `river_harness_20260928_193922_f48b0251` |
+| same | A2 control | 93.3 | 1,272.650 | 1.033 | `river_harness_20260928_194232_a6df3bb8` |
+
+The comparison keys were
+`1233ecf3b5d1481602a7daaef90e8d09db95fa8853cd6657579ce827583e835f`
+for short Stock Level,
+`fd1585b927399c30def2890e256d24f0b885d3c580519fc4f00a29204faa9a30`
+for New Order, and
+`f7b5a6af0cf208ccf907fb1d6fc0585a508a22c80c4fb44003ea3c52b783c1f9`
+for long Stock Level. Short Stock Level reversed direction between pairs; the
+long sequence rose and the first control was particularly slow. Data load and
+latency also varied. The user reported intermittent competing CPU work, so
+these runs do not establish a stable TPS effect or a new baseline. New Order
+shows no repeated directional regression.
+
+Source inspection confirms that relational base-row lookups route through
+`IndexedLogicalHeadDirectory` and do not call the scalar B-tree lookup; other
+scalar keyspaces retain their tree. Focused high-ID, older-snapshot, vacuum,
+checkpoint, WAL replay, crash-reopen and force-failure tests passed, followed
+by `./gradlew --no-daemon clean check` on the directory branch in 3m 15s
+(156 tasks). Prior matched insert profiling in [tic-4f20](tickets/tic-4f20.md)
+did not find the primary-key mapping to dominate writes and did not justify a
+clustered row-format rewrite. The directory is the narrower first candidate
+for the combined projection/transfer evaluation. **Decision:** retain it on a
+feature branch for that evaluation; do not promote or claim a standalone gain.
