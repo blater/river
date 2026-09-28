@@ -28,8 +28,11 @@ final class SqlUniversalJoinRole {
 
   void configure(
       io.riverdb.sql.SqlCommand command, int role, SqlBoundJoinContext context,
-      SqlBoundBooleanPredicateProgram where) {
-    if (usesDescriptor) descriptor.configure(command, role, context, where);
+      SqlBoundBooleanPredicateProgram where, SqlJoinRootFilter rootFilter) {
+    if (usesDescriptor) {
+      descriptor.configure(command, role, context, where);
+      if (role == 0) descriptor.configureRootFilter(where, rootFilter);
+    }
     if (usesDescriptor && role == 0 && context.strategy(0) == SqlJoinStrategy.MERGE) {
       descriptor.configureMergeRoot(context.strategyOuterColumn(0));
     }

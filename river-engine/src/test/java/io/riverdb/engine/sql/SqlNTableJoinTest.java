@@ -171,7 +171,7 @@ final class SqlNTableJoinTest {
     SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(StatusCode.OK,
         session.beginScan("EXPLAIN ANALYZE SELECT a.id,b.id" + source, cursor));
-    assertPlanRow(session, cursor, row, "table", -1, 2);
+    assertPlanRow(session, cursor, row, "table", -1, 1);
     assertPlanRow(session, cursor, row, "index", 1, 1);
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }

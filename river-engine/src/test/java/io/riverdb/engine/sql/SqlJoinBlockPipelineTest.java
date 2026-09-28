@@ -22,6 +22,22 @@ final class SqlJoinBlockPipelineTest {
     SqlExecutionResult result = fixture.result;
 
     assertRows(
+        session, result,
+        "SELECT l.id,r.id FROM left_rows l JOIN right_rows r "
+            + "ON l.id=r.left_id WHERE l.id<3 ORDER BY l.id,r.id",
+        new long[][] {{1, 11}, {1, 12}, {2, 21}});
+    assertRows(
+        session, result,
+        "SELECT l.id,r.id FROM left_rows l JOIN right_rows r "
+            + "ON l.id=r.left_id WHERE 3>l.id AND r.flag=TRUE ORDER BY l.id",
+        new long[][] {{1, 11}, {2, 21}});
+    assertRows(
+        session, result,
+        "SELECT l.id,r.id FROM left_rows l JOIN right_rows r "
+            + "ON l.id=r.left_id WHERE l.id<2 OR r.id=31 ORDER BY l.id,r.id",
+        new long[][] {{1, 11}, {1, 12}, {3, 31}});
+
+    assertRows(
         session,
         result,
         "SELECT lid,rid FROM (SELECT l.id AS lid,r.id AS rid "
