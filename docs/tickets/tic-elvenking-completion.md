@@ -1,18 +1,20 @@
 ---
 id: tic-elvenking-completion
-status: open
+status: closed
 type: feature
 priority: 1
 assignee: blater
 delivery: code
 base-commit: 75039adc0461dd4b8f37f8b5b200032e2bac9936
 branch: ticket/tic-elvenking-completion
+delivered-commit: 231233ef9a1cbd6bb5e013358140d46482f22101
 evidence:
-  - docs/delivery/evidence/2026-09-28-tic-elvenking-completion-review.md
+    - docs/delivery/evidence/2026-09-28-tic-elvenking-completion-review.md
+    - docs/performance-checkpoints.md
 tags:
-  - performance
-  - storage
-  - sql
+    - performance
+    - storage
+    - sql
 created: 2026-09-28T15:02:03Z
 ---
 # Complete trusted-row boundaries and physical text liveness
@@ -126,3 +128,4 @@ identity decision.
   records the exact build, eight matched diagnostic runs, host variation and
   decision. It designates no new performance baseline. The wider indexed-read
   search and full-row cost remain in [tic-72e5](tic-72e5.md).
+
