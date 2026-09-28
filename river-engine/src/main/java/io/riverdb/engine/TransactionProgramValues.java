@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.TransactionProgram;
+import io.riverdb.engine.api.TransactionProgramAction;
 import io.riverdb.engine.api.TransactionProgramArguments;
 import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.engine.api.TransactionScalarOperator;
@@ -17,6 +18,7 @@ final class TransactionProgramValues {
   private final TransactionScalarEvaluator evaluator;
   private final TransactionTextSource text = new TransactionTextSource();
   private StatusCode status = StatusCode.OK;
+  private long rowOrdinal;
 
   TransactionProgramValues(SqlRetainedBudget budget) {
     parameters = new ParameterSet(
@@ -48,7 +50,8 @@ final class TransactionProgramValues {
       TransactionProgram program, TransactionProgramArguments arguments, int step) {
     parameters.reset();
     int first = program.firstParameter(step);
-    int end = first + program.parameterCount(step);
+    int end = first + program.parameterCount(step)
+        - (program.action(step) == TransactionProgramAction.ROW_AT ? 1 : 0);
     for (int parameter = first; parameter < end; parameter++) {
       StatusCode evaluated = evaluator.evaluate(
           program, program.parameterExpression(parameter), arguments, dataflow);
@@ -58,6 +61,26 @@ final class TransactionProgramValues {
     }
     return StatusCode.OK;
   }
+
+  StatusCode selectRowOrdinal(
+      TransactionProgram program, TransactionProgramArguments arguments, int step) {
+    int parameter = program.firstParameter(step) + program.parameterCount(step) - 1;
+    status = evaluator.evaluate(program, program.parameterExpression(parameter), arguments, dataflow);
+    if (!status.isOk()) return status;
+    int descriptor = evaluator.descriptor();
+    if (descriptor != SqlTypeDescriptor.SMALLINT
+        && descriptor != SqlTypeDescriptor.INTEGER
+        && descriptor != SqlTypeDescriptor.BIGINT) {
+      return status = StatusCode.DATATYPE_MISMATCH;
+    }
+    if (evaluator.isNull() || evaluator.low() < 0) {
+      return status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    rowOrdinal = evaluator.low();
+    return status = StatusCode.OK;
+  }
+
+  long rowOrdinal() { return rowOrdinal; }
 
   StatusCode captureDataflow(
       TransactionProgram program, int step, TransactionValueReader source, int columns) {

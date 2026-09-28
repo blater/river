@@ -18,6 +18,7 @@ public final class TransactionProgram {
     builder.attach(this);
   }
 
+  /** ROW_AT uses its final parameter expression as a zero-based row ordinal. */
   public StatusCode beginStep(long preparedHandle, int action) {
     return builder.beginStep(preparedHandle, action);
   }

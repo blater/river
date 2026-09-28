@@ -1,6 +1,7 @@
 package io.riverdb.engine.api;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Performs final graph admission and publishes immutable derived reference chains. */
 final class TransactionProgramFreezer {
@@ -40,6 +41,18 @@ final class TransactionProgramFreezer {
       if (storage.actions[step] == TransactionProgramAction.ROW_SET
           && (step != storage.stepCount - 1 || storage.captureCounts[step] == 0)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (storage.actions[step] == TransactionProgramAction.ROW_AT) {
+        int parameters = storage.parameterCounts[step];
+        if (parameters < 1) return StatusCode.INVALID_EXTERNAL_INPUT;
+        int ordinal = storage.parameterExpressions[
+            storage.firstParameters[step] + parameters - 1];
+        int descriptor = storage.expressionDescriptors[ordinal];
+        if (descriptor != SqlTypeDescriptor.SMALLINT
+            && descriptor != SqlTypeDescriptor.INTEGER
+            && descriptor != SqlTypeDescriptor.BIGINT) {
+          return StatusCode.DATATYPE_MISMATCH;
+        }
       }
     }
     return StatusCode.OK;

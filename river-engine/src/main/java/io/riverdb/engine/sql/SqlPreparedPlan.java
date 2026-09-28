@@ -41,6 +41,7 @@ public final class SqlPreparedPlan {
         ? action == TransactionProgramAction.EXACT_ONE
             || action == TransactionProgramAction.ZERO_OR_ONE
             || action == TransactionProgramAction.ROW_SET
+            || action == TransactionProgramAction.ROW_AT
         : action == TransactionProgramAction.COMMAND;
   }
 

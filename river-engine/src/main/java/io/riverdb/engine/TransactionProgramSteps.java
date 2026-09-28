@@ -46,7 +46,7 @@ final class TransactionProgramSteps {
     status = values.bind(program, arguments, step);
     if (!status.isOk()) return Integer.MIN_VALUE;
     return plan.query()
-        ? executeQuery(program, step, plan, result)
+        ? executeQuery(program, arguments, step, plan, result)
         : executeCommand(program, step, plan, result);
   }
 
@@ -74,11 +74,17 @@ final class TransactionProgramSteps {
   }
 
   private int executeQuery(
-      TransactionProgram program, int step,
+      TransactionProgram program, TransactionProgramArguments arguments, int step,
       SqlPreparedPlan plan, TransactionProgramResult result) {
+    int action = program.action(step);
+    if (action == TransactionProgramAction.ROW_AT) {
+      status = values.selectRowOrdinal(program, arguments, step);
+      if (!status.isOk()) return Integer.MIN_VALUE;
+    }
     status = scan.reset();
     queryPath.reset();
-    if (status.isOk() && program.action(step) == TransactionProgramAction.ROW_SET) {
+    if (status.isOk() && (action == TransactionProgramAction.ROW_SET
+        || action == TransactionProgramAction.ROW_AT)) {
       status = session.beginPreparedScan(
           plan, values.parameters(), scan);
     } else if (status.isOk()) {
@@ -87,9 +93,35 @@ final class TransactionProgramSteps {
     }
     if (queryPath.point()) return executePointSingleton(program, step, result);
     if (!status.isOk()) return Integer.MIN_VALUE;
-    return program.action(step) == TransactionProgramAction.ROW_SET
+    if (action == TransactionProgramAction.ROW_AT) {
+      return executeRowAt(program, step, result);
+    }
+    return action == TransactionProgramAction.ROW_SET
         ? executeRowSet(program, step, result)
         : executeSingleRow(program, step, result);
+  }
+
+  private int executeRowAt(
+      TransactionProgram program, int step, TransactionProgramResult result) {
+    long ordinal = values.rowOrdinal();
+    long index = 0;
+    boolean selected = false;
+    while (status.isOk() && nextRow()) {
+      if (!selected && index == ordinal) {
+        status = result.beginStepResult(step, TransactionProgramAction.ROW_AT, 1);
+        if (status.isOk()) {
+          reader.pointTo(row);
+          captureSingleton(program, step, result);
+          selected = status.isOk();
+        }
+      } else if (!selected) {
+        index++;
+      }
+    }
+    StatusCode closed = session.closeScan(scan, execution);
+    if (status.isOk()) status = closed;
+    if (status.isOk() && !selected) status = StatusCode.CARDINALITY_VIOLATION;
+    return status.isOk() ? step + 1 : Integer.MIN_VALUE;
   }
 
   private int executePointSingleton(

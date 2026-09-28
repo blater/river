@@ -20,6 +20,30 @@ final class ProtocolTransactionProgramCodecTest {
   private final ProtocolFrame frame = new ProtocolFrame();
 
   @Test
+  void roundTripsOrderedRowSelectionWithFinalOrdinalExpression() {
+    TransactionProgram source = new TransactionProgram();
+    assertEquals(StatusCode.OK, source.beginStep(7, TransactionProgramAction.ROW_AT));
+    assertEquals(StatusCode.OK, source.beginParameter());
+    assertEquals(StatusCode.OK, source.argument(0, SqlTypeDescriptor.INTEGER));
+    assertEquals(StatusCode.OK, source.endExpression());
+    assertEquals(StatusCode.OK, source.beginParameter());
+    assertEquals(StatusCode.OK, source.argument(1, SqlTypeDescriptor.BIGINT));
+    assertEquals(StatusCode.OK, source.endExpression());
+    assertEquals(StatusCode.OK, source.captureColumn(0));
+    assertEquals(StatusCode.OK, source.endStep());
+    assertEquals(StatusCode.OK, source.freeze());
+    ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    assertEquals(StatusCode.OK, codec.encodeProgramPrepareRequest(request, 40, source));
+    assertEquals(StatusCode.OK, codec.decode(request, frame));
+    ProtocolProgramRequestDecoder decoded = new ProtocolProgramRequestDecoder();
+    assertEquals(StatusCode.OK, codec.decodeProgramRequest(frame, decoded));
+    assertEquals(TransactionProgramAction.ROW_AT, decoded.program().action(0));
+    assertEquals(2, decoded.program().parameterCount(0));
+    assertEquals(SqlTypeDescriptor.BIGINT,
+        decoded.program().expressionDescriptor(decoded.program().parameterExpression(1)));
+  }
+
+  @Test
   void preparesFrozenGraphAndExecutesHandleWithTypedArguments() {
     TransactionProgram source = program();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
