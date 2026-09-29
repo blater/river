@@ -28,9 +28,10 @@ final class SqlGeneralConcurrencyTest {
           f.completed(first);
           f.exec(1, "ROLLBACK");
           f.exec(0, "COMMIT");
+          // Either held row identity or clustered key can be the first conflicting lock.
           f.cycle(1,
-              new Edge(0, 1, pair == 2 ? "TUPLE_KEY" : "KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", pair == 2 ? 1 : 4294967297L, pair == 2 ? 0 : 2),
-              new Edge(1, 0, pair == 2 ? "TUPLE_KEY" : "KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", pair == 2 ? 1 : 4294967297L, pair == 2 ? 0 : 1));
+              new Edge(0, 1, null, "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 0, 2),
+              new Edge(1, 0, null, "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 0, 1));
           assertEquals(101, f.scalar(0, "SELECT value FROM rows WHERE id=1"));
           assertEquals(202, f.scalar(0, "SELECT value FROM rows WHERE id=2"));
           f.begin(1, pairs[pair][1]);

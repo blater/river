@@ -471,3 +471,6 @@ This is branch-level correctness evidence, not final durable-format approval.
 `RelationalDescriptorRowPathTest.oldControlFormatIsRejectedBeforeAnyDurableFileChanges`
 reopens a database with a committed row and a checksum-valid prior control
 version. Open returns `CORRUPTION` and every database file remains byte-identical.
+The [clustered write-lock evidence](../delivery/evidence/2026-09-29-tic-erebor-clustered-write-lock.md)
+records the New Order/Payment lock regression found by the clean check, its
+tuple-key protection fix and the focused concurrency results.

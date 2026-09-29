@@ -42,14 +42,24 @@ final class SqlConcurrencyDiagnostics {
       assertEquals("" + (101 + want.blocker()), edge.get("blocker_attempt_tag"), text);
       assertEquals("" + pendingSteps[want.waiter()], edge.get("waiter_step_tag"), text);
       assertEquals("" + pendingSteps[want.blocker()], edge.get("blocker_step_tag"), text);
-      assertEquals(want.scope(), edge.get("scope"), text);
+      // Point updates can first wait on their row identity or clustered tuple key.
+      if (want.scope() == null) {
+        boolean rowKey = "KEY".equals(edge.get("scope"));
+        assertTrue(rowKey || "TUPLE_KEY".equals(edge.get("scope")), text);
+        assertEquals(rowKey ? "4294967297" : "1", edge.get("resource_namespace"), text);
+        assertEquals(rowKey ? "" + want.key() : "0", edge.get("resource_lower"), text);
+        assertEquals(rowKey ? "4294967297" : "1", edge.get("resource_upper_namespace"), text);
+        assertEquals(rowKey ? "" + want.key() : "0", edge.get("resource_upper"), text);
+      } else {
+        assertEquals(want.scope(), edge.get("scope"), text);
+        assertEquals("" + want.namespace(), edge.get("resource_namespace"), text);
+        assertEquals("" + want.key(), edge.get("resource_lower"), text);
+        assertEquals("" + want.namespace(), edge.get("resource_upper_namespace"), text);
+        assertEquals("" + want.key(), edge.get("resource_upper"), text);
+      }
       assertEquals(want.requested(), edge.get("requested_mode"), text);
       assertEquals(want.held(), edge.get("held_mode"), text);
       assertEquals(want.queue(), edge.get("waiter_queue"), text);
-      assertEquals("" + want.namespace(), edge.get("resource_namespace"), text);
-      assertEquals("" + want.key(), edge.get("resource_lower"), text);
-      assertEquals("" + want.namespace(), edge.get("resource_upper_namespace"), text);
-      assertEquals("" + want.key(), edge.get("resource_upper"), text);
       assertEquals("false", edge.get("grant_predicate"), text);
       boolean fifo = want.held().equals("null");
       assertEquals(fifo ? "FIFO_FAIRNESS" : "ACTIVE_OWNER", edge.get("kind"), text);
@@ -73,8 +83,8 @@ final class SqlConcurrencyDiagnostics {
             + " blocker_resource_digest=" + snapshot.edges().blockingResourceDigestAt(edge));
       }
       int resources = expected.length == 2
-          && expected[0].scope().equals("TUPLE_KEY")
-          && expected[1].scope().equals("TUPLE_KEY")
+          && "TUPLE_KEY".equals(expected[0].scope())
+          && "TUPLE_KEY".equals(expected[1].scope())
           && expected[0].held().equals("SHARED")
           && expected[1].held().equals("SHARED") ? 1 : expected.length;
       assertEquals(resources, new java.util.HashSet<>(digests.values()).size(),
