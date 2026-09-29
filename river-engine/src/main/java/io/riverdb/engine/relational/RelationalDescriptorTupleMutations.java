@@ -74,7 +74,7 @@ final class RelationalDescriptorTupleMutations {
       SqlValueAccess values, long logicalRowId,
       RelationalDescriptorForeignKeyChecks foreignKeys) {
     StatusCode status = planDelete(table, values, logicalRowId);
-    if (status.isOk()) status = preflightSingleRow(session, table, 1);
+    if (status.isOk()) status = preflight(session, table);
     if (status.isOk()) status = protect(session, table);
     return status.isOk() ? foreignKeys.checkDelete(table, values, logicalRowId) : status;
   }
@@ -82,18 +82,10 @@ final class RelationalDescriptorTupleMutations {
   int mutationCount() { return plan.mutationCount(); }
   int payloadBytes() { return plan.payloadBytes(); }
 
-  StatusCode preflightWithRows(
-      IndexedTransactionSession session, TableDescriptor table,
-      int[] rowLengths, int rowStart, int rowCount,
-      int mutations, int bytes) {
+  StatusCode preflight(IndexedTransactionSession session, TableDescriptor table) {
     int descriptors = admission.additionalDescriptors(session, table, plan);
     return descriptors < 0 ? StatusCode.CORRUPTION
-        : session.preflightTupleMutations(mutations, descriptors, bytes);
-  }
-
-  StatusCode preflightSingleRow(
-      IndexedTransactionSession session, TableDescriptor table, int rowBytes) {
-    return preflightWithRows(
-        session, table, null, 0, 0, mutationCount(), payloadBytes());
+        : session.preflightTupleMutations(
+            mutationCount(), descriptors, payloadBytes());
   }
 }

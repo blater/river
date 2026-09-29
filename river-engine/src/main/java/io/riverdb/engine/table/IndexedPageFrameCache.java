@@ -449,15 +449,18 @@ final class IndexedPageFrameCache {
   }
 
   ByteBuffer stageFreeTuple(int pageId, long ownerKeyId, int maximumChangedPages) {
-    if (!identityMatches(pageId, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId)) {
+    int kind = identityMatches(pageId, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId)
+        ? PageCodec.PAYLOAD_KIND_TUPLE_BTREE
+        : identityMatches(pageId, PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW, ownerKeyId)
+            ? PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW : 0;
+    if (kind == 0) {
       lastStatus = StatusCode.CORRUPTION;
       return null;
     }
     ByteBuffer payload = stageExisting(pageId, maximumChangedPages);
     IndexedPageFrame staging = stagingFrame(pageId);
     if (payload == null || staging == null) return null;
-    staging.rememberIdentity(
-        PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId);
+    staging.rememberIdentity(kind, ownerKeyId);
     staging.invalidatePageValidation();
     for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
       staging.page.put(index, (byte) 0);

@@ -82,19 +82,13 @@ final class RelationalDescriptorScanAccess {
       status = nextPhysical(cursor);
       if (!status.isOk()) return status;
       long logicalRowId = cursor.logicalRowId();
-      boolean primaryLeaf = cursor.isTuplePhysical()
-          && cursor.tupleBounds().key() == table.clusteredKey();
+      boolean primaryLeaf = cursor.tupleBounds().key() == table.clusteredKey();
       status = primaryLeaf
           ? bindPrimaryLeaf(table, cursor, destination, filter, selection)
-          : cursor.isTuplePhysical()
-              ? fetchSecondaryLocator(
-                  table, cursor, destination, filter, selection)
-              : destination.bindFetched(table, cursor.row().row(), filter, selection);
-      if (status == StatusCode.CONFLICT && cursor.isTuplePhysical()) continue;
-      if (status == StatusCode.CONFLICT && filter != null) continue;
+          : fetchSecondaryLocator(table, cursor, destination, filter, selection);
+      if (status == StatusCode.CONFLICT) continue;
       if (!status.isOk()) return status;
-      if (cursor.isTuplePhysical()
-          && (!primaryLeaf || cursor.tupleRow().pending())) {
+      if (!primaryLeaf || cursor.tupleRow().pending() && table.primaryKey() != null) {
         status = cursor.tupleBounds().recheck(destination);
         if (!status.isOk()) return status;
         if (!cursor.tupleBounds().matches()) continue;
@@ -143,11 +137,8 @@ final class RelationalDescriptorScanAccess {
 
   private StatusCode nextPhysical(RelationalDescriptorScanCursor cursor) {
     if (cursor.isEmptyPhysical()) return StatusCode.CONFLICT;
-    StatusCode status = cursor.isTuplePhysical()
-        ? session.nextTupleScan(cursor.tupleIndexed(), cursor.tupleRow())
-        : session.nextScan(cursor.indexed(), cursor.row());
-    if (status.isOk()) cursor.logicalRowId(cursor.isTuplePhysical()
-        ? cursor.tupleRow().logicalRowId() : cursor.row().key());
+    StatusCode status = session.nextTupleScan(cursor.tupleIndexed(), cursor.tupleRow());
+    if (status.isOk()) cursor.logicalRowId(cursor.tupleRow().logicalRowId());
     return status;
   }
 
@@ -157,8 +148,7 @@ final class RelationalDescriptorScanAccess {
     StatusCode status = cursor.releaseView();
     if (!status.isOk()) return status;
     status = !cursor.isPhysicalOpen() || cursor.isEmptyPhysical() ? StatusCode.OK
-        : cursor.isTuplePhysical() ? session.closeTupleScan(cursor.tupleIndexed())
-            : session.closeScan(cursor.indexed());
+        : session.closeTupleScan(cursor.tupleIndexed());
     if (status.isOk()) cursor.markPhysicalClosed();
     if (status.isOk()) status = cursor.complete();
     if (status.isOk()) status = active.release(cursor);
@@ -173,16 +163,16 @@ final class RelationalDescriptorScanAccess {
 
   private StatusCode cleanupFailedBegin(
       RelationalDescriptorScanCursor cursor, StatusCode original) {
-    StatusCode cleanup = cursor.isEmptyPhysical() ? StatusCode.OK : cursor.isTuplePhysical()
-        ? session.closeTupleScan(cursor.tupleIndexed()) : session.closeScan(cursor.indexed());
+    StatusCode cleanup = cursor.isEmptyPhysical() ? StatusCode.OK
+        : session.closeTupleScan(cursor.tupleIndexed());
     if (cleanup.isOk()) cursor.markPhysicalClosed();
     return cleanup.isOk() ? original : cleanup;
   }
 
   private StatusCode cleanupClaimedBegin(
       RelationalDescriptorScanCursor cursor, StatusCode original) {
-    StatusCode cleanup = cursor.isEmptyPhysical() ? StatusCode.OK : cursor.isTuplePhysical()
-        ? session.closeTupleScan(cursor.tupleIndexed()) : session.closeScan(cursor.indexed());
+    StatusCode cleanup = cursor.isEmptyPhysical() ? StatusCode.OK
+        : session.closeTupleScan(cursor.tupleIndexed());
     if (cleanup.isOk()) cursor.markPhysicalClosed();
     if (cleanup.isOk()) cleanup = cursor.complete();
     return cleanup.isOk() ? original : cleanup;

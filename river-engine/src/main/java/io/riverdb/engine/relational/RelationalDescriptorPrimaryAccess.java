@@ -17,7 +17,6 @@ import java.nio.ByteBuffer;
 final class RelationalDescriptorPrimaryAccess {
   private final IndexedTupleProbeResult probe = new IndexedTupleProbeResult();
   private final RelationalTupleKeyEncoder expectedEncoder = new RelationalTupleKeyEncoder();
-  private final RelationalTupleKeyEncoder actualEncoder = new RelationalTupleKeyEncoder();
   private final SqlMutationValues scalarValues = new SqlMutationValues();
   private final TupleBTreeScanBounds pointBounds = new TupleBTreeScanBounds();
   private final TupleBTreeScanBounds identityBounds = new TupleBTreeScanBounds();
@@ -141,6 +140,7 @@ final class RelationalDescriptorPrimaryAccess {
             identityCursor);
     if (!status.isOk()) return status;
     status = session.nextTupleScan(identityCursor, identityRow);
+    boolean mapped = status.isOk();
     if (status.isOk()) {
       if (identityRow.logicalRowId() != logicalRowId
           || identityRow.valueLength() <= TupleKeyCodec.LOGICAL_ROW_ID_BYTES
@@ -158,7 +158,7 @@ final class RelationalDescriptorPrimaryAccess {
       }
     }
     StatusCode closed = session.closeTupleScan(identityCursor);
-    if (status == StatusCode.CONFLICT && identityRow.logicalRowId() == logicalRowId) {
+    if (status == StatusCode.CONFLICT && mapped) {
       status = StatusCode.CORRUPTION;
     }
     return status.isOk() ? closed : status;
@@ -265,18 +265,6 @@ final class RelationalDescriptorPrimaryAccess {
     if (!status.isOk()) return status;
     if (!probe.found()) return StatusCode.CONFLICT;
     result.set(probe.logicalRowId());
-    return StatusCode.OK;
-  }
-
-  StatusCode validateResolved(TableDescriptor table, SqlValueAccess values) {
-    StatusCode status = actualEncoder.encodeUser(table.primaryKey(), values);
-    if (!status.isOk()) return status;
-    if (expectedEncoder.length() != actualEncoder.length()) return StatusCode.CONFLICT;
-    ByteBuffer expected = expectedEncoder.bytes();
-    ByteBuffer actual = actualEncoder.bytes();
-    for (int index = 0; index < expectedEncoder.length(); index++) {
-      if (expected.get(index) != actual.get(index)) return StatusCode.CONFLICT;
-    }
     return StatusCode.OK;
   }
 

@@ -21,14 +21,13 @@ public final class RelationalDescriptorTableAccess {
   private final RelationalDescriptorCheckValidation checks =
       new RelationalDescriptorCheckValidation();
   private final RelationalDescriptorForeignKeyChecks foreignKeyChecks;
-  private final RelationalDescriptorRowAccess rowAccess = new RelationalDescriptorRowAccess();
+  private final RelationalDescriptorRowBuffer rowBuffer = new RelationalDescriptorRowBuffer();
   private final RelationalDescriptorPointViews pointViews =
       new RelationalDescriptorPointViews();
   private final RelationalDescriptorLockedRows lockedRows;
   private final RelationalDescriptorPrimaryAccess primaryAccess =
       new RelationalDescriptorPrimaryAccess(pointViews);
   private final RelationalDescriptorScanAccess scanAccess;
-  private final RelationalRowIdentityResult resolved = new RelationalRowIdentityResult();
 
   RelationalDescriptorTableAccess(
       RelationalSession relationalSession,
@@ -296,21 +295,17 @@ public final class RelationalDescriptorTableAccess {
     return session.reserveLogicalRowIds(objectId, count, result);
   }
 
-  private StatusCode preflightMutation(TableDescriptor table, int rowBytes) {
-    return tupleMutations.preflightSingleRow(session, table, rowBytes);
-  }
-
   private StatusCode prepareUpdate(
       TableDescriptor table, long logicalRowId, SqlValueAccess values) {
-    StatusCode status = rowAccess.reserve(table);
-    if (status.isOk()) status = rowAccess.encode(table, values);
+    StatusCode status = rowBuffer.reserve(table.encodedMaximumRowBytes());
+    if (status.isOk()) status = rowBuffer.encode(table, values);
     if (!status.isOk()) return status;
     status = checks.validate(table, values);
     if (!status.isOk()) return status;
     status = tupleMutations.planUpdate(
-        table, lockedRows.before(), values, logicalRowId, rowAccess.length());
+        table, lockedRows.before(), values, logicalRowId, rowBuffer.length());
     if (!status.isOk()) return status;
-    status = preflightMutation(table, rowAccess.length());
+    status = tupleMutations.preflight(session, table);
     if (status.isOk()) status = tupleMutations.protect(session, table);
     if (status.isOk()) status = foreignKeyChecks.checkUpdate(
         table, lockedRows.before(), values, logicalRowId);
@@ -322,7 +317,7 @@ public final class RelationalDescriptorTableAccess {
   private StatusCode stageUpdate(TableDescriptor table, long logicalRowId) {
     StatusCode status = lockedRows.retain();
     return status.isOk() ? tupleMutations.stage(
-        session, table, logicalRowId, rowAccess.bytes(), rowAccess.length()) : status;
+        session, table, logicalRowId, rowBuffer.bytes(), rowBuffer.length()) : status;
   }
 
   private StatusCode releaseCurrent(StatusCode original) {
@@ -336,16 +331,6 @@ public final class RelationalDescriptorTableAccess {
         session, table, lockedRows.before(), logicalRowId, foreignKeyChecks);
   }
 
-  private StatusCode logicalRowId(
-      TableDescriptor table, SqlValueAccess primaryValues,
-      RelationalRowIdentityResult result) {
-    return primaryAccess.resolve(session, table, primaryValues, result);
-  }
-
-  private StatusCode validateResolvedPrimary(
-      TableDescriptor table, SqlValueAccess values) {
-    return primaryAccess.validateResolved(table, values);
-  }
 
   private TableDescriptor validTable(
       SchemaPin pin, SqlMutationValues values) {

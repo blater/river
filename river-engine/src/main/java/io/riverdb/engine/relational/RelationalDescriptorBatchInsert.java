@@ -75,7 +75,7 @@ public final class RelationalDescriptorBatchInsert {
     if (!status.isOk()) return status;
     status = tupleMutations.planInsert(table, values, logicalRowId, rowBuffer.length());
     if (!status.isOk()) return status;
-    status = tupleMutations.preflightSingleRow(session, table, rowBuffer.length());
+    status = tupleMutations.preflight(session, table);
     if (!status.isOk()) return status;
     return tupleMutations.validateInsert(session, table, logicalRowId);
   }

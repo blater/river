@@ -80,8 +80,10 @@ final class IndexedTupleGraphReclaimer {
   }
 
   private boolean owned(int pageId, long keyId) {
+    int kind = pages.payloadKind(pageId);
     return pages.isPresent(pageId)
-        && pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
+        && (kind == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
+            || kind == PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW)
         && pages.ownerKeyId(pageId) == keyId;
   }
 }

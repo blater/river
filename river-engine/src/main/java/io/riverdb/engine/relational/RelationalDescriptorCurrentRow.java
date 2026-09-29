@@ -59,7 +59,7 @@ final class RelationalDescriptorCurrentRow {
     if (status == StatusCode.CONFLICT && !clustered) {
       status = primary.fetchCurrentByIdentity(session, table, rowId, destination);
     }
-    if (status.isOk()) {
+    if (status.isOk() && (!clustered || table.primaryKey() != null)) {
       status = cursor.tupleBounds().recheck(destination);
       if (status.isOk() && !cursor.tupleBounds().matches()) status = StatusCode.CONFLICT;
     }
