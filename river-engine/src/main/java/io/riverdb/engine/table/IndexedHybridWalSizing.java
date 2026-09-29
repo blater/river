@@ -85,6 +85,8 @@ final class IndexedHybridWalSizing {
       IndexedTupleIntentJournal intents, int descriptor) {
     StatusCode status = measureTupleMutations(
         intents, descriptor, IndexedRelationalMutation.TUPLE_DELETE);
+    if (status.isOk()) status = measureTupleMutations(
+        intents, descriptor, IndexedRelationalMutation.TUPLE_REPLACE);
     return status.isOk() ? measureTupleMutations(
         intents, descriptor, IndexedRelationalMutation.TUPLE_INSERT) : status;
   }
@@ -98,7 +100,8 @@ final class IndexedHybridWalSizing {
           && intents.operationAt(mutation) == operation) {
         status = addItem(
             IndexedRelationalWalCodec.MUTATION_ITEM_BYTES
-                + intents.payloadLengthAt(mutation));
+                + intents.payloadLengthAt(mutation)
+                + intents.valueLengthAt(mutation));
       }
     }
     return status;

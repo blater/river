@@ -12,6 +12,8 @@ final class IndexedRelationalTupleApply {
   private final IndexedTupleGraphReclaimer reclaimer;
   private final ByteBuffer key =
       ByteBuffer.allocate(TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
+  private final ByteBuffer value =
+      ByteBuffer.allocate(io.riverdb.storage.heap.HeapPage.MAXIMUM_ROW_BYTES);
 
   IndexedRelationalTupleApply(
       IndexedTableKernel table, IndexedPageSet pageSet, IndexedTupleRegistryState roots) {
@@ -34,7 +36,7 @@ final class IndexedRelationalTupleApply {
     StatusCode status = registry.load(source, operation);
     int descriptor = source.suboperationDescriptorAt(operation);
     if (status.isOk()) status = prepare(source, operation, descriptor);
-    if (status.isOk()) status = applyMutations(source, operation);
+    if (status.isOk()) status = applyMutations(source, operation, memberSequence);
     if (status.isOk()) status = validateResult(source, operation);
     if (status.isOk()) status = stageAndCleanup(
         source, operation, descriptor, memberSequence);
@@ -66,17 +68,27 @@ final class IndexedRelationalTupleApply {
   }
 
   private StatusCode applyMutations(
-      IndexedRelationalMutationBuffer source, int operation) {
+      IndexedRelationalMutationBuffer source, int operation, long memberSequence) {
     int first = source.suboperationFirstMutationAt(operation);
     int end = first + source.suboperationMutationCountAt(operation);
     StatusCode status = StatusCode.OK;
     for (int mutation = first; status.isOk() && mutation < end; mutation++) {
-      int bytes = source.payloadLengthAt(mutation);
+      int bytes = source.tupleKeyLengthAt(mutation);
       key.position(0);
       key.limit(bytes);
-      source.copyPayloadTo(mutation, key, 0);
-      status = source.operationAt(mutation) == IndexedRelationalMutationBuffer.TUPLE_INSERT
-          ? session.insert(key) : session.delete(key);
+      source.copyTupleKeyTo(mutation, key, 0);
+      int valueLength = source.tupleValueLengthAt(mutation);
+      value.clear();
+      value.limit(valueLength);
+      if (valueLength > 0) source.copyTupleValueTo(mutation, value, 0);
+      int kind = source.operationAt(mutation);
+      status = kind == IndexedRelationalMutationBuffer.TUPLE_INSERT
+          ? valueLength == 0 ? session.insert(key)
+              : session.insertValue(key, value, 0, valueLength, 0, 0, memberSequence)
+          : kind == IndexedRelationalMutationBuffer.TUPLE_REPLACE
+              ? session.replaceValue(key, value, 0, valueLength, 0, 0,
+                  memberSequence)
+              : session.delete(key);
     }
     return status;
   }

@@ -10,6 +10,7 @@ public final class IndexedRelationalMutation {
   public static final int BASE_DELETE = IndexedRelationalMutationBuffer.BASE_DELETE;
   public static final int TUPLE_INSERT = IndexedRelationalMutationBuffer.TUPLE_INSERT;
   public static final int TUPLE_DELETE = IndexedRelationalMutationBuffer.TUPLE_DELETE;
+  public static final int TUPLE_REPLACE = IndexedRelationalMutationBuffer.TUPLE_REPLACE;
   public static final int SCALAR_INSERT = IndexedRelationalMutationBuffer.SCALAR_INSERT;
   public static final int SCALAR_UPDATE = IndexedRelationalMutationBuffer.SCALAR_UPDATE;
   public static final int SCALAR_DELETE = IndexedRelationalMutationBuffer.SCALAR_DELETE;
@@ -98,6 +99,14 @@ public final class IndexedRelationalMutation {
     return buffer.appendTuple(
         suboperation, ownerObjectId, operation, descriptorOrdinal,
         logicalRowId, source, sourceOffset, length);
+  }
+
+  public StatusCode appendTuple(
+      int suboperation, long ownerObjectId, int operation, int descriptorOrdinal,
+      long logicalRowId, ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength) {
+    return buffer.appendTuple(suboperation, ownerObjectId, operation, descriptorOrdinal,
+        logicalRowId, key, keyOffset, keyLength, value, valueOffset, valueLength);
   }
 
   public StatusCode appendScalar(

@@ -44,7 +44,8 @@ final class IndexedTupleScanMerge {
       if (comparison <= 0 && position < count) {
         int intent = ordinals[position++];
         if (comparison == 0) committed = false;
-        if (intents.operationAt(intent) == IndexedRelationalMutation.TUPLE_INSERT) {
+        if (intents.operationAt(intent) == IndexedRelationalMutation.TUPLE_INSERT
+            || intents.operationAt(intent) == IndexedRelationalMutation.TUPLE_REPLACE) {
           result.setPending(intents.logicalRowIdAt(intent));
           return StatusCode.OK;
         }

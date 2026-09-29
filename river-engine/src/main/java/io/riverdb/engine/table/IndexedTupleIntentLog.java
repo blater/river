@@ -49,7 +49,7 @@ class IndexedTupleIntentLog extends IndexedTupleIntentView {
     int entryChunks = Math.max(columns.chunks(), requiredEntryChunks);
     int payloadChunks = Math.max(payload.chunks(), requiredPayloadChunks);
     int indexCapacity = Math.max(keyIndexCapacity(), requiredIndexCapacity);
-    long bytes = 9L * Integer.BYTES * entryChunks * IndexedTupleIntentColumns.SIZE;
+    long bytes = 12L * Integer.BYTES * entryChunks * IndexedTupleIntentColumns.SIZE;
     bytes += 2L * Long.BYTES * entryChunks * IndexedTupleIntentColumns.SIZE;
     bytes += (long) indexCapacity * Integer.BYTES;
     bytes += (long) payloadChunks * IndexedTupleIntentPayload.SIZE;
@@ -60,12 +60,25 @@ class IndexedTupleIntentLog extends IndexedTupleIntentView {
   void append(
       int operation, int descriptor, long logicalRowId,
       ByteBuffer key, int offset, int length) {
+    append(operation, descriptor, logicalRowId, key, offset, length, null, 0, 0);
+  }
+
+  void append(
+      int operation, int descriptor, long logicalRowId,
+      ByteBuffer key, int offset, int length,
+      ByteBuffer value, int valueOffset, int valueLength) {
     payload.copyFrom(payloadBytes, key, offset, length);
+    if (valueLength > 0) {
+      payload.copyFrom(payloadBytes + length, value, valueOffset, valueLength);
+    }
     setOperation(count, operation);
+    setRawOperation(count, operation);
     setDescriptor(count, descriptor);
     setLogicalRowId(count, logicalRowId);
     setOffset(count, payloadBytes);
     setLength(count, length);
+    setValueOffset(count, payloadBytes + length);
+    setValueLength(count, valueLength);
     int hash = hash(descriptor, logicalRowId, payloadBytes, length);
     setKeyHash(count, hash);
     int first = count;
@@ -78,15 +91,17 @@ class IndexedTupleIntentLog extends IndexedTupleIntentView {
       }
       if (keyHashAt(previous) == hash && sameKey(count, previous)) {
         first = firstEntryAt(previous);
-      setActive(previous, false);
+        setActive(previous, false);
         setIndex(slot, count);
         break;
       }
       slot = (slot + 1) & keyIndexMask();
     }
     setFirstEntry(count, first);
-    setActive(count, operationAt(first) == operation);
-    payloadBytes += length;
+    setOperation(count, effectiveOperation(
+        rawOperationAt(first), operation, valueLength));
+    setActive(count, activeOperation(operationAt(count)));
+    payloadBytes += length + valueLength;
     count++;
   }
 
@@ -95,10 +110,13 @@ class IndexedTupleIntentLog extends IndexedTupleIntentView {
         || retainedBytes < 0 || retainedBytes > payloadBytes) return;
     for (int index = retained; index < count; index++) {
       setOperation(index, 0);
+      setRawOperation(index, 0);
       setDescriptor(index, 0);
       setLogicalRowId(index, 0);
       setOffset(index, 0);
       setLength(index, 0);
+      setValueOffset(index, 0);
+      setValueLength(index, 0);
       setFirstEntry(index, 0);
       setKeyHash(index, 0);
       setActive(index, false);
@@ -131,9 +149,29 @@ class IndexedTupleIntentLog extends IndexedTupleIntentView {
         slot = (slot + 1) & keyIndexMask();
       }
       setFirstEntry(index, first);
-      setActive(index, operationAt(first) == operationAt(index));
+      int effective = effectiveOperation(
+          rawOperationAt(first), rawOperationAt(index), valueLengthAt(index));
+      setOperation(index, effective);
+      setActive(index, activeOperation(effective));
     }
   }
+
+  private static int effectiveOperation(int first, int latest, int valueLength) {
+    if (first == IndexedRelationalMutation.TUPLE_INSERT) {
+      return latest == IndexedRelationalMutation.TUPLE_DELETE
+          ? 0 : IndexedRelationalMutation.TUPLE_INSERT;
+    }
+    if (first == IndexedRelationalMutation.TUPLE_DELETE) {
+      return latest == IndexedRelationalMutation.TUPLE_INSERT
+          ? valueLength == 0 ? 0 : IndexedRelationalMutation.TUPLE_REPLACE
+          : IndexedRelationalMutation.TUPLE_DELETE;
+    }
+    return latest == IndexedRelationalMutation.TUPLE_DELETE
+        ? IndexedRelationalMutation.TUPLE_DELETE
+        : IndexedRelationalMutation.TUPLE_REPLACE;
+  }
+
+  private static boolean activeOperation(int operation) { return operation != 0; }
 
   void release() {
     releaseStorage();

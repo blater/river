@@ -44,7 +44,7 @@ final class IndexedHybridTupleCompiler {
     long heap = kernel.operationRowCount();
     int tupleRoot = registry.rootPageId();
     long generation = registry.generation();
-    StatusCode status = deltas.apply(intents, descriptor, tupleRoot);
+    StatusCode status = deltas.apply(intents, descriptor, tupleRoot, memberSequence);
     if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
     status = registry.stage(

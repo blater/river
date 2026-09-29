@@ -32,12 +32,13 @@ final class IndexedRelationalWalMutationDecoder {
     int descriptor = FormatBytes.getInt(source, offset + 16);
     int suboperation = FormatBytes.getInt(source, offset + 20);
     int payloadLength = FormatBytes.getInt(source, offset + 24);
+    int tupleKeyLength = FormatBytes.getInt(source, offset + 28);
     if (!validEnvelope(source, offset, itemBytes, mutation, ordinal, payloadLength)) {
       return StatusCode.CORRUPTION;
     }
     int payloadOffset = offset + IndexedRelationalWalCodec.MUTATION_ITEM_BYTES;
     StatusCode status = append(
-        source, offset, payloadOffset, payloadLength, operation, descriptor,
+        source, offset, payloadOffset, payloadLength, tupleKeyLength, operation, descriptor,
         suboperation);
     if (status.isOk()) decodedPayloadBytes += payloadLength;
     return status;
@@ -50,13 +51,14 @@ final class IndexedRelationalWalMutationDecoder {
       int ordinal, int payloadLength) {
     return ordinal == mutation && payloadLength >= 0
         && source.get(offset + 13) == 0 && source.get(offset + 14) == 0
-        && source.get(offset + 15) == 0 && FormatBytes.getInt(source, offset + 28) == 0
+        && source.get(offset + 15) == 0
         && itemBytes == IndexedRelationalWalCodec.MUTATION_ITEM_BYTES + payloadLength
         && decodedPayloadBytes <= totalPayloadBytes - payloadLength;
   }
 
   private StatusCode append(
       ByteBuffer source, int offset, int payloadOffset, int payloadLength,
+      int tupleKeyLength,
       int operation, int descriptor, int suboperation) {
     long logicalRowId = FormatBytes.getLong(source, offset + 32);
     long previousRowId = FormatBytes.getLong(source, offset + 40);
@@ -65,7 +67,7 @@ final class IndexedRelationalWalMutationDecoder {
     if (operation >= IndexedRelationalMutationBuffer.BASE_INSERT
         && operation <= IndexedRelationalMutationBuffer.BASE_DELETE) {
       long expectedSpace = CatalogKeyspace.relationalBaseRowSpace(ownerObjectId);
-      return descriptor == -1 && space == expectedSpace
+      return descriptor == -1 && tupleKeyLength == 0 && space == expectedSpace
           ? destination.appendBase(
               suboperation, ownerObjectId, operation, logicalRowId, previousRowId,
               source, payloadOffset, payloadLength)
@@ -73,7 +75,8 @@ final class IndexedRelationalWalMutationDecoder {
     }
     if (operation >= IndexedRelationalMutationBuffer.SCALAR_INSERT
         && operation <= IndexedRelationalMutationBuffer.SCALAR_DELETE) {
-      return descriptor == IndexedRelationalMutationBuffer.SCALAR_SUBOPERATION
+      return tupleKeyLength == 0
+              && descriptor == IndexedRelationalMutationBuffer.SCALAR_SUBOPERATION
               && ownerObjectId == 0
           ? destination.appendScalar(
               suboperation, operation, space, logicalRowId, previousRowId,
@@ -81,11 +84,14 @@ final class IndexedRelationalWalMutationDecoder {
           : StatusCode.CORRUPTION;
     }
     if (descriptor < 0 || descriptor >= descriptorCount
-        || space != CatalogKeyspace.relationalIndexSpace(destination.keyIdAt(descriptor))) {
+        || space != CatalogKeyspace.relationalIndexSpace(destination.keyIdAt(descriptor))
+        || tupleKeyLength <= 0 || tupleKeyLength > payloadLength) {
       return StatusCode.CORRUPTION;
     }
     return destination.appendTuple(
         suboperation, ownerObjectId, operation, descriptor,
-        logicalRowId, source, payloadOffset, payloadLength);
+        logicalRowId, source, payloadOffset, tupleKeyLength,
+        payloadLength == tupleKeyLength ? null : source,
+        payloadOffset + tupleKeyLength, payloadLength - tupleKeyLength);
   }
 }

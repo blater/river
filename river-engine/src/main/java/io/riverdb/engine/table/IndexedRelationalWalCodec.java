@@ -9,7 +9,7 @@ final class IndexedRelationalWalCodec {
   static final int WAL_FORMAT_ID = 1003;
   static final int WAL_FORMAT_VERSION = 1;
   static final long MAGIC = 0x314c41574c455252L;
-  static final int VERSION = 6;
+  static final int VERSION = 7;
   static final int HEADER_BYTES = 128;
   static final int DESCRIPTOR_ITEM = 1;
   static final int SUBOPERATION_ITEM = 2;
@@ -146,7 +146,7 @@ final class IndexedRelationalWalCodec {
     digest = mixInt(digest, source.suboperationOrdinalAt(mutation));
     int payloadBytes = source.payloadLengthAt(mutation);
     digest = mixInt(digest, payloadBytes);
-    digest = mixInt(digest, 0);
+    digest = mixInt(digest, source.tupleKeyLengthAt(mutation));
     digest = mixLong(digest, source.logicalRowIdAt(mutation));
     digest = mixLong(digest, source.previousRowIdAt(mutation));
     digest = mixLong(digest, source.ownerObjectIdAt(mutation));
@@ -280,7 +280,7 @@ final class IndexedRelationalWalCodec {
     FormatBytes.putInt(target, offset + 16, source.descriptorOrdinalAt(mutation));
     FormatBytes.putInt(target, offset + 20, source.suboperationOrdinalAt(mutation));
     FormatBytes.putInt(target, offset + 24, payloadBytes);
-    FormatBytes.putInt(target, offset + 28, 0);
+    FormatBytes.putInt(target, offset + 28, source.tupleKeyLengthAt(mutation));
     FormatBytes.putLong(target, offset + 32, source.logicalRowIdAt(mutation));
     FormatBytes.putLong(target, offset + 40, source.previousRowIdAt(mutation));
     FormatBytes.putLong(target, offset + 48, source.ownerObjectIdAt(mutation));

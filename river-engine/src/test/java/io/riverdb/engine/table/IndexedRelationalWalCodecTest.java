@@ -31,6 +31,49 @@ final class IndexedRelationalWalCodecTest {
   private static volatile long allocationGuard;
 
   @Test
+  void tupleValueAndKeyBoundarySurviveLogicalWalRoundTrip() {
+    int[] parts = {
+        SqlTypeDescriptor.varchar(255), SqlTypeDescriptor.varchar(255),
+        SqlTypeDescriptor.varchar(250)
+    };
+    ByteBuffer key = physicalTuple(parts, 9, 'a');
+    ByteBuffer row = ByteBuffer.wrap(new byte[] {11, 22, 33, 44});
+    IndexedRelationalMutationBuffer source =
+        new IndexedRelationalMutationBuffer(1, 1, parts.length);
+    requireOk(source.reserve(1, 1, parts.length, key.remaining() + row.remaining()));
+    requireOk(source.appendDescriptor(
+        OWNER_OBJECT_ID, 1_000, 1_000, descriptorHash(parts),
+        parts, 0, parts.length));
+    requireOk(source.appendSuboperation(
+        OWNER_OBJECT_ID, 0, 0, 1, 4, 4, SCALAR_ROOT, SCALAR_ROOT,
+        NEXT_PAGE, NEXT_PAGE, 1, 2, 0, 1,
+        IndexedRelationalMutation.REGISTRY_READY,
+        IndexedRelationalMutation.REGISTRY_READY, 0, 0));
+    requireOk(source.appendTuple(
+        0, OWNER_OBJECT_ID, IndexedRelationalMutation.TUPLE_REPLACE,
+        0, 9, key, 0, key.remaining(), row, 0, row.remaining()));
+    requireOk(source.seal());
+    IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
+    requireOk(plan.plan(TRANSACTION_ID, OPERATION_ID, source));
+    ByteBuffer encoded = ByteBuffer.allocate(plan.payloadBytesAt(0));
+    requireOk(IndexedRelationalWalCodec.encode(plan, 0, encoded));
+    encoded.flip();
+    IndexedRelationalMutationBuffer decoded =
+        new IndexedRelationalMutationBuffer(1, 1, TupleKeyCodec.MAX_INDEX_KEY_PARTS);
+    IndexedRelationalWalDecoder decoder = new IndexedRelationalWalDecoder(decoded);
+    requireOk(decoder.decode(encoded, TRANSACTION_ID, 1));
+    check(decoder.complete(), "tuple value WAL decoder did not complete");
+    check(decoded.operationAt(0) == IndexedRelationalMutation.TUPLE_REPLACE,
+        "tuple replacement operation lost");
+    check(decoded.tupleKeyLengthAt(0) == key.remaining()
+            && decoded.tupleValueLengthAt(0) == row.remaining(),
+        "tuple key/value boundary lost");
+    ByteBuffer copy = ByteBuffer.allocate(row.remaining());
+    decoded.copyTupleValueTo(0, copy, 0);
+    check(copy.equals(row), "tuple row value changed in WAL round trip");
+  }
+
+  @Test
   void primaryPlusSixtyFourUpdateRoundTripsBelow430KiB() {
     int[] descriptors = {
         SqlTypeDescriptor.varchar(255),

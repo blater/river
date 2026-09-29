@@ -96,7 +96,8 @@ final class IndexedHybridLogicalSizing {
     if (payloadTotal < 0) return StatusCode.RESOURCE_EXHAUSTED;
     for (int mutation = 0; mutation < intents.mutationCount(); mutation++) {
       if (intents.activeAt(mutation)) {
-        payloadTotal += intents.payloadLengthAt(mutation);
+        payloadTotal += (long) intents.payloadLengthAt(mutation)
+            + intents.valueLengthAt(mutation);
         if (payloadTotal > Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
       }
     }

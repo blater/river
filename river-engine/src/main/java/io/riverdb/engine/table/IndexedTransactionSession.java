@@ -136,6 +136,16 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
         logicalRowId, key, offset, length);
   }
 
+  public StatusCode appendTupleMutation(
+      int operation, long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape, long logicalRowId,
+      ByteBuffer key, int offset, int length,
+      ByteBuffer value, int valueOffset, int valueLength) {
+    return state.tupleAccess.append(
+        operation, ownerObjectId, keyId, schemaId, shape,
+        logicalRowId, key, offset, length, value, valueOffset, valueLength);
+  }
+
   /** Reserves an atomic tuple-index lifecycle batch before its first request is staged. */
   public StatusCode preflightTupleIndexLifecycles(int additional) {
     return state.tupleAccess.preflightLifecycles(additional);

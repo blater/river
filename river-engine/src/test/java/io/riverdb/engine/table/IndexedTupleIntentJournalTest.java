@@ -13,6 +13,37 @@ import org.junit.jupiter.api.Test;
 
 final class IndexedTupleIntentJournalTest {
   @Test
+  void retainsLatestRowValueAcrossCoalescingAndSavepointRollback() {
+    TupleShape shape = shape();
+    ByteBuffer key = physicalKey(1, 7);
+    ByteBuffer initial = ByteBuffer.wrap(new byte[] {1, 2});
+    ByteBuffer updated = ByteBuffer.wrap(new byte[] {3, 4, 5});
+    IndexedTupleIntentJournal journal = new IndexedTupleIntentJournal();
+    int firstBytes = key.remaining() + initial.remaining();
+    assertEquals(StatusCode.OK, journal.reserve(
+        0, 2, 1, firstBytes + key.remaining() + updated.remaining()));
+    assertEquals(StatusCode.OK, journal.append(
+        IndexedRelationalMutation.TUPLE_INSERT, 1, 1, 1, shape,
+        1, key, 0, key.remaining(), initial, 0, initial.remaining()));
+    assertEquals(StatusCode.OK, journal.append(
+        IndexedRelationalMutation.TUPLE_REPLACE, 1, 1, 1, shape,
+        1, key, 0, key.remaining(), updated, 0, updated.remaining()));
+    assertFalse(journal.activeAt(0));
+    assertTrue(journal.activeAt(1));
+    assertEquals(IndexedRelationalMutation.TUPLE_INSERT, journal.operationAt(1));
+    ByteBuffer copy = ByteBuffer.allocate(updated.remaining());
+    journal.copyValueTo(1, copy, 0);
+    assertEquals(updated, copy);
+
+    journal.truncate(1, 1, firstBytes);
+    assertTrue(journal.activeAt(0));
+    assertEquals(IndexedRelationalMutation.TUPLE_INSERT, journal.operationAt(0));
+    copy = ByteBuffer.allocate(initial.remaining());
+    journal.copyValueTo(0, copy, 0);
+    assertEquals(initial, copy);
+  }
+
+  @Test
   void maintainsNetActiveStateAcrossReinsertAndSavepointTruncate() {
     TupleShape.Result shape = new TupleShape.Result();
     assertEquals(
