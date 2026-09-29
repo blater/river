@@ -40,6 +40,12 @@ Focused tests passed:
   grouped force. With that force held, an earlier unchanged clustered row
   completes a read-only transaction while a changed row waits for durability.
   Both replacement values survive a WAL-only reopen and a second reopen.
+- `IndexedRelationalWalCommitTest.valueGrowthSplitKeepsOldLeafAndIndependentReadDurableDuringHeldForce`:
+  a value-only update grows from 8,000 to 10,000 bytes and replaces the root
+  while the group force is held. The root's membership sequence stays fixed,
+  a pinned old cursor reads its original 8,000-byte row, an unchanged second
+  row completes a durable read, and the changed row waits for force. Both
+  current rows survive WAL-only reopen.
 - `IndexedPageCacheEvictionTest.pinnedOldGenerationReportsPressureThenProgressesAfterRelease`:
   a held older tuple page generation keeps a two-frame cache from publishing
   another generation. Publication returns `RETRY`, preserves the old bytes,
@@ -55,6 +61,6 @@ classes reduced it to 262.889. Its shallow analysis remains incomplete, so
 the score is a review trigger, not a correctness result.
 
 The crash-image test covers WAL replay of a reclamation decision and later
-reuse without a page flush. The ticket still requires held-force/long-history
-behavior, write-path costs and an independent final durable-format review
-before promotion.
+reuse without a page flush. The value-growth test covers the held-force root
+split and an old pinned leaf. Write-path costs and an independent final
+durable-format review remain before promotion.

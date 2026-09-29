@@ -474,3 +474,8 @@ version. Open returns `CORRUPTION` and every database file remains byte-identica
 The [clustered write-lock evidence](../delivery/evidence/2026-09-29-tic-erebor-clustered-write-lock.md)
 records the New Order/Payment lock regression found by the clean check, its
 tuple-key protection fix and the focused concurrency results.
+The [identity routing audit](../delivery/evidence/2026-09-29-tic-erebor-identity-routing.md)
+records direct primary/secondary routes and the logical mapping-mutation
+counts. It explicitly leaves physical map costs and final independent review
+open; the owner-accepted Stock Level throughput figures do not close those
+separate promotion gates.

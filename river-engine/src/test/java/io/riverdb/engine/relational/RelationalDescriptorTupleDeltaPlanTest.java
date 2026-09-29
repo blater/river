@@ -84,6 +84,29 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   }
 
   @Test
+  void nonKeyUpdateReplacesOnlyClusteredValueWithoutIdentityMutation() {
+    ColumnDescriptorSet columns = columns(
+        new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT},
+        new CharSequence[] {"id", "indexed", "payload"});
+    KeyDescriptor primary = key(30, KeyDescriptor.KIND_PRIMARY, true, columns, 0);
+    KeyDescriptor secondary = key(10, KeyDescriptor.KIND_SECONDARY, false, columns, 1);
+    TableDescriptor table = table(columns, primary, new KeyDescriptor[] {secondary});
+    SqlMutationValues before = values(table, 1, 10, 20);
+    SqlMutationValues after = values(table, 1, 10, 21);
+    RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
+
+    assertEquals(StatusCode.OK, plan.update(table, before, after, 7, 64));
+    assertEquals(3, plan.keyCount());
+    assertEquals(1, plan.mutationCount());
+    assertFalse(plan.primaryChanged());
+    for (int index = 0; index < plan.keyCount(); index++) {
+      assertFalse(plan.changedAt(index));
+    }
+    assertEquals(KeyDescriptor.KIND_PRIMARY, plan.keyAt(plan.primaryIndex()).kind());
+  }
+
+  @Test
   void failedPreparationPublishesNothingAndScrubsThePreviousPlan() {
     TableDescriptor table = threeKeyTable();
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
@@ -209,13 +232,17 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   }
 
   private static SqlMutationValues threeValues(long id, long first, long second) {
+    return values(threeKeyTable(), id, first, second);
+  }
+
+  private static SqlMutationValues values(
+      TableDescriptor table, long first, long second, long third) {
     SqlMutationValues values = new SqlMutationValues();
-    TableDescriptor table = threeKeyTable();
     assertEquals(StatusCode.OK, values.reserve(table, 0));
     assertEquals(StatusCode.OK, values.begin(table, null));
-    assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, id));
-    assertEquals(StatusCode.OK, values.setFixed(1, SqlTypeDescriptor.BIGINT, first));
-    assertEquals(StatusCode.OK, values.setFixed(2, SqlTypeDescriptor.BIGINT, second));
+    assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, first));
+    assertEquals(StatusCode.OK, values.setFixed(1, SqlTypeDescriptor.BIGINT, second));
+    assertEquals(StatusCode.OK, values.setFixed(2, SqlTypeDescriptor.BIGINT, third));
     return values;
   }
 

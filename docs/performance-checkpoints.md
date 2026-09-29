@@ -29,6 +29,10 @@ records 5,332 commits in ten measured seconds with zero retries, failed
 outcomes or cleanup residue. The host was in low power mode, so this is a
 correctness workload result and does not establish the cost of the added
 tuple-key lock or a new performance baseline.
+The [identity routing audit](delivery/evidence/2026-09-29-tic-erebor-identity-routing.md)
+records zero map lookups on primary/secondary reads and zero map mutations on
+non-key updates through the implemented routes. Extra map page, copy, WAL and
+history costs have not been isolated; final independent review remains open.
 
 ## Baseline stats
 

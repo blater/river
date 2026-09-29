@@ -533,6 +533,120 @@ final class IndexedRelationalWalCommitTest {
   }
 
   @Test
+  void valueGrowthSplitKeepsOldLeafAndIndependentReadDurableDuringHeldForce(
+      @TempDir Path root) throws Exception {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory, false);
+    IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
+    requireOk(IndexedTableStore.create(
+        directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    requireOk(IndexedTable.create(created.store(), tableResult));
+    int[] descriptor = {SqlTypeDescriptor.BIGINT};
+    long hash = descriptorHash(descriptor);
+    IndexedCommitResult rootCommit = new IndexedCommitResult();
+    requireOk(commitRelationalQuiescent(created.store(),
+        TRANSACTION_ID, liveRootMutation(
+            descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
+            0, 5, 0, 1, 0, 1,
+            IndexedRelationalMutation.REGISTRY_ABSENT,
+            IndexedRelationalMutation.REGISTRY_BUILDING, 0, TRANSACTION_ID, 5, 6),
+        rootCommit));
+    requireOk(commitRelationalQuiescent(created.store(),
+        TRANSACTION_ID + 1, liveRootMutation(
+            descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
+            5, 5, 1, 2, 1, 2,
+            IndexedRelationalMutation.REGISTRY_BUILDING,
+            IndexedRelationalMutation.REGISTRY_READY, TRANSACTION_ID, 0, 6, 6),
+        rootCommit));
+
+    IndexedTable table = tableResult.table();
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext direct = context(manager, table, null, vacuum);
+    for (int row = 1; row <= 2; row++) {
+      IndexedTransactionSession seed = session(direct, 12_000);
+      prepareTupleValueMutation(
+          seed, descriptor, IndexedRelationalMutation.TUPLE_INSERT,
+          row, 990 + row, 8_000, 100 + row);
+      requireOk(seed.commit(new TransactionOutcome()));
+      requireOk(seed.close());
+    }
+    TupleIndexRootRecord before = registryRecord(created.store(), 1_000);
+    check(before.rootPageId() == 5, "seed rows split before value growth");
+    long oldSequence = created.store().currentCommitSequence();
+    ByteBuffer oldKey = genericFixedTuple(991);
+    TupleBTreeScanBounds oldBounds = new TupleBTreeScanBounds();
+    requireOk(oldBounds.setExact(
+        oldKey, 0, oldKey.remaining(), shape(descriptor), TupleBTreeScanBounds.FORWARD));
+    IndexedTupleScanCursor oldCursor = new IndexedTupleScanCursor();
+    IndexedTupleIntentJournal oldIntents = new IndexedTupleIntentJournal(1, 1, 1);
+    requireOk(created.store().beginTupleScanAt(
+        oldSequence, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
+        0, shape(descriptor), oldBounds, oldIntents, oldCursor));
+
+    IndexedGroupCommitCoordinator coordinator =
+        new IndexedGroupCommitCoordinator(manager, table, 0);
+    IndexedSessionContext grouped = context(manager, table, coordinator, vacuum);
+    IndexedTransactionSession growth = session(grouped, 12_000);
+    prepareTupleValueMutation(
+        growth, descriptor, IndexedRelationalMutation.TUPLE_REPLACE,
+        1, 991, 10_000, 301);
+    ForcedGroupFixture.HeldForce heldForce =
+        new ForcedGroupFixture.HeldForce(ForcedGroupFixture.walFile(wal));
+    ForcedGroupFixture.replaceWalFile(wal, heldForce);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    TransactionOutcome growthOutcome = new TransactionOutcome();
+    try {
+      Future<StatusCode> committed = executor.submit(() -> growth.commit(growthOutcome));
+      heldForce.awaitEntered();
+      TupleIndexRootRecord split = registryRecord(created.store(), 1_000);
+      check(split.rootPageId() != before.rootPageId()
+              && split.membershipSequence() == before.membershipSequence(),
+          "value-only root split changed membership or retained the old root");
+      IndexedTupleScanResult oldRow = new IndexedTupleScanResult();
+      requireOk(created.store().nextTupleScan(oldCursor, oldIntents, oldRow));
+      check(oldRow.logicalRowId() == 1 && oldRow.valueLength() == 8_000
+              && oldRow.page().getLong(oldRow.valueOffset()) == 101,
+          "old cursor lost its coherent row during value-growth split");
+      IndexedTransactionSession independent = session(grouped, 12_000);
+      readTupleAndAwaitDurability(independent, descriptor, 992, 2, 8_000, 102);
+      requireOk(independent.close());
+      IndexedTransactionSession dependent = session(grouped, 12_000);
+      Future<StatusCode> dependentRead = executor.submit(() ->
+          readTupleAndAwaitDurability(dependent, descriptor, 991, 1, 10_000, 301));
+      assertThrows(TimeoutException.class, () -> dependentRead.get(100, TimeUnit.MILLISECONDS));
+      heldForce.release();
+      requireOk(dependentRead.get());
+      requireOk(dependent.close());
+      requireOk(committed.get());
+      check(growthOutcome.state() == TransactionState.COMMITTED,
+          "value-growth commit did not complete after force");
+    } finally {
+      heldForce.release();
+      executor.shutdownNow();
+      requireOk(created.store().closeTupleScan(oldCursor));
+    }
+    requireOk(growth.close());
+    requireOk(coordinator.close());
+    assertTupleValueLength(created.store(), descriptor, 991, 1, 10_000, 301);
+    assertTupleValueLength(created.store(), descriptor, 992, 2, 8_000, 102);
+    crashWal(wal);
+    requireOk(directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory, true);
+    IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
+    requireOk(IndexedTableStore.openExisting(
+        directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
+    assertTupleValueLength(reopened.store(), descriptor, 991, 1, 10_000, 301);
+    assertTupleValueLength(reopened.store(), descriptor, 992, 2, 8_000, 102);
+    requireOk(reopened.store().close());
+    requireOk(wal.close());
+    requireOk(directory.close());
+  }
+
+  @Test
   void tupleLeafSplitPublishesInsideTwoMemberHybridGroupAndLeavesStoreReusable(
       @TempDir Path root) throws Exception {
     NioIoCounters counters = new NioIoCounters();
@@ -800,6 +914,41 @@ final class IndexedRelationalWalCommitTest {
         IndexedRelationalMutation.TUPLE_REPLACE,
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), rowId,
         key, 0, key.remaining(), payload, 0, payload.remaining()));
+  }
+
+  private static void prepareTupleValueMutation(
+      IndexedTransactionSession session, int[] descriptor, int operation,
+      long rowId, long indexKey, int valueLength, long value) {
+    ByteBuffer key = physicalFixedTuple(rowId, indexKey);
+    ByteBuffer payload = ByteBuffer.allocate(valueLength);
+    payload.putLong(0, value);
+    requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
+    requireOk(session.preflightTupleMutations(
+        1, 1, key.remaining() + payload.remaining()));
+    requireOk(session.protectTupleKeyForWrite(1_000, key, 0, key.remaining()));
+    requireOk(session.appendTupleMutation(
+        operation, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), rowId,
+        key, 0, key.remaining(), payload, 0, payload.remaining()));
+  }
+
+  private static void assertTupleValueLength(
+      IndexedTableStore store, int[] descriptor, long indexKey, long rowId,
+      int valueLength, long value) {
+    ByteBuffer key = genericFixedTuple(indexKey);
+    TupleBTreeScanBounds bounds = new TupleBTreeScanBounds();
+    requireOk(bounds.setExact(
+        key, 0, key.remaining(), shape(descriptor), TupleBTreeScanBounds.FORWARD));
+    IndexedTupleScanCursor cursor = new IndexedTupleScanCursor();
+    IndexedTupleIntentJournal intents = new IndexedTupleIntentJournal(1, 1, 1);
+    requireOk(store.beginTupleScanAt(
+        store.currentCommitSequence(), OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
+        0, shape(descriptor), bounds, intents, cursor));
+    IndexedTupleScanResult result = new IndexedTupleScanResult();
+    requireOk(store.nextTupleScan(cursor, intents, result));
+    check(result.logicalRowId() == rowId && result.valueLength() == valueLength
+            && result.page().getLong(result.valueOffset()) == value,
+        "tuple value growth did not retain the row for " + rowId);
+    requireOk(store.closeTupleScan(cursor));
   }
 
   private static void assertTupleValue(
