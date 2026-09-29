@@ -3,6 +3,7 @@ package io.riverdb.engine.relational;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
@@ -27,6 +28,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class RelationalClusteredReadAllocationTest {
+  private static final int ZERO_WARMUP_BATCHES = 10;
+  private static final int MAXIMUM_POINT_WARMUP_BATCHES = 100;
+  private static final int VERIFICATION_BATCHES = 5;
   private static volatile long readGuard;
 
   @Test
@@ -34,7 +38,12 @@ final class RelationalClusteredReadAllocationTest {
       throws ReflectiveOperationException {
     Assumptions.assumeTrue(ManagementFactory.getThreadMXBean() instanceof ThreadMXBean);
     ThreadMXBean allocations = (ThreadMXBean) ManagementFactory.getThreadMXBean();
+    Assumptions.assumeTrue(allocations.isThreadAllocatedMemorySupported());
     allocations.setThreadAllocatedMemoryEnabled(true);
+    // Graal can resolve these nullable binding types after initial point warmup.
+    // Their one-time class loading is setup, outside the steady-state read contract.
+    Class.forName(StoredTableRowIntegerFilter.class.getName());
+    Class.forName(StoredTableColumnSelection.class.getName());
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK, RelationalDatabase.create(databaseRequest(8), root,
         DatabaseIncarnation.of(503, 509), WalGeneration.of(1), 8, opened));
@@ -61,12 +70,21 @@ final class RelationalClusteredReadAllocationTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     StoredTableRowView row = new StoredTableRowView();
     IndexedTupleScanResult point = row.pointRow();
-    for (int warm = 0; warm < 5; warm++) readPoints(session, table, row);
     long thread = Thread.currentThread().threadId();
-    long before = allocations.getThreadAllocatedBytes(thread);
-    readPoints(session, table, row);
-    long pointBytes = allocations.getThreadAllocatedBytes(thread) - before;
-    assertEquals(0, pointBytes, "warmed primary point bytes");
+    int consecutiveZero = 0;
+    long pointBytes = -1;
+    for (int warm = 0; warm < MAXIMUM_POINT_WARMUP_BATCHES
+        && consecutiveZero < ZERO_WARMUP_BATCHES; warm++) {
+      pointBytes = pointBytes(allocations, thread, session, table, row);
+      consecutiveZero = pointBytes == 0 ? consecutiveZero + 1 : 0;
+    }
+    assertEquals(ZERO_WARMUP_BATCHES, consecutiveZero,
+        "primary point warmup did not stabilize; last bytes=" + pointBytes);
+    // Verification never retries an allocating batch or chooses a minimum sample.
+    for (int batch = 0; batch < VERIFICATION_BATCHES; batch++) {
+      pointBytes = pointBytes(allocations, thread, session, table, row);
+      assertEquals(0, pointBytes, "warmed primary point bytes, batch " + batch);
+    }
     Field bytes = StoredTableRowView.class.getDeclaredField("bytes");
     bytes.setAccessible(true);
     assertSame(point.page(), bytes.get(row), "point row must borrow its selected leaf bytes");
@@ -79,29 +97,48 @@ final class RelationalClusteredReadAllocationTest {
       assertEquals(StatusCode.OK, bounds.set(key, null, 0, true, null, 0, true,
           TupleBTreeScanBounds.FORWARD));
       RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+      consecutiveZero = 0;
       for (int iteration = 0; iteration < 100; iteration++) {
         assertEquals(StatusCode.OK, database.services().descriptors().open(tableId, table, detail));
         assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
             table, bounds, LockMode.SHARED, cursor));
-        readScan(session, cursor, row, identity);
+        long scanBytes = scanBytes(allocations, thread, session, cursor, row, identity);
+        consecutiveZero = scanBytes == 0 ? consecutiveZero + 1 : 0;
         assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
       }
-      assertEquals(StatusCode.OK, database.services().descriptors().open(tableId, table, detail));
-      assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
-          table, bounds, LockMode.SHARED, cursor));
-      before = allocations.getThreadAllocatedBytes(thread);
-      readScan(session, cursor, row, identity);
-      long scanBytes = allocations.getThreadAllocatedBytes(thread) - before;
-      assertEquals(0, scanBytes, "warmed scan bytes for key " + key.keyId());
-      assertSame(key == primary ? cursor.tupleRow().page() : point.page(), bytes.get(row),
-          "scan row must borrow its selected primary leaf bytes");
-      assertEquals(StatusCode.CONFLICT, session.descriptorRows().nextScan(cursor, row, identity));
-      assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
-      System.out.println("clustered_read key=" + key.keyId() + " point_bytes=" + pointBytes
-          + " scan_rows=64 scan_bytes=" + scanBytes);
+      assertTrue(consecutiveZero >= ZERO_WARMUP_BATCHES,
+          "scan warmup did not stabilize for key " + key.keyId());
+      for (int batch = 0; batch < VERIFICATION_BATCHES; batch++) {
+        assertEquals(StatusCode.OK, database.services().descriptors().open(tableId, table, detail));
+        assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
+            table, bounds, LockMode.SHARED, cursor));
+        long scanBytes = scanBytes(allocations, thread, session, cursor, row, identity);
+        assertEquals(0, scanBytes, "warmed scan bytes for key " + key.keyId() + ", batch " + batch);
+        assertSame(key == primary ? cursor.tupleRow().page() : point.page(), bytes.get(row),
+            "scan row must borrow its selected primary leaf bytes");
+        assertEquals(StatusCode.CONFLICT, session.descriptorRows().nextScan(cursor, row, identity));
+        assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+        System.out.println("clustered_read key=" + key.keyId() + " point_bytes=" + pointBytes
+            + " scan_rows=64 scan_bytes=" + scanBytes + " batch=" + batch);
+      }
     }
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static long pointBytes(ThreadMXBean allocations, long thread,
+      RelationalSession session, SchemaPin table, StoredTableRowView row) {
+    long before = allocations.getThreadAllocatedBytes(thread);
+    readPoints(session, table, row);
+    return allocations.getThreadAllocatedBytes(thread) - before;
+  }
+
+  private static long scanBytes(ThreadMXBean allocations, long thread,
+      RelationalSession session, RelationalDescriptorScanCursor cursor,
+      StoredTableRowView row, RelationalRowIdentityResult identity) {
+    long before = allocations.getThreadAllocatedBytes(thread);
+    readScan(session, cursor, row, identity);
+    return allocations.getThreadAllocatedBytes(thread) - before;
   }
 
   private static void readPoints(RelationalSession session, SchemaPin table, StoredTableRowView row) {
