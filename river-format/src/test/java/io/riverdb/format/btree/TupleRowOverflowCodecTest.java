@@ -26,7 +26,16 @@ final class TupleRowOverflowCodecTest {
         page.get(TupleRowOverflowCodec.HEADER_BYTES + value.limit() - 1));
     assertEquals(StatusCode.CORRUPTION,
         TupleRowOverflowCodec.validate(page, 0, 82, header));
-    FormatBytes.putLong(page, 24, 1);
+    assertEquals(StatusCode.OK, TupleRowOverflowCodec.retire(page, 0, 81, 7, header));
+    assertEquals(7, header.retiredAtCommitSequence());
+    assertEquals((byte) 7, page.get(TupleRowOverflowCodec.HEADER_BYTES));
+    assertEquals((byte) 9,
+        page.get(TupleRowOverflowCodec.HEADER_BYTES + value.limit() - 1));
+    assertEquals(StatusCode.CONFLICT,
+        TupleRowOverflowCodec.retire(page, 0, 81, 8, header));
+    assertEquals(StatusCode.OK, TupleRowOverflowCodec.validate(page, 0, 81, header));
+    assertEquals(7, header.retiredAtCommitSequence());
+    FormatBytes.putLong(page, 24, -1);
     assertEquals(StatusCode.CORRUPTION,
         TupleRowOverflowCodec.validate(page, 0, 0, header));
   }

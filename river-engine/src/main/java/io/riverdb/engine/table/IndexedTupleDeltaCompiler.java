@@ -77,7 +77,7 @@ final class IndexedTupleDeltaCompiler {
       load(intents, index);
       int valueLength = loadValue(intents, index);
       StatusCode status = operation == IndexedRelationalMutation.TUPLE_DELETE
-          ? tuples.delete(key)
+          ? tuples.delete(key, modificationSequence)
           : operation == IndexedRelationalMutation.TUPLE_REPLACE
               ? tuples.replaceValue(key, value, 0, valueLength, 0, 0,
                   modificationSequence)

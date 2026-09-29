@@ -212,6 +212,17 @@ final class IndexedPageFrameCache {
         pageId, writable, state.changedPageCapacity(), result);
   }
 
+  StatusCode pinTupleOverflowOperationPage(
+      int pageId, boolean writable, long ownerKeyId, IndexedOperationPage result) {
+    if (ownerKeyId <= 0 || !identityMatches(
+        pageId, PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW, ownerKeyId)) {
+      lastStatus = StatusCode.CORRUPTION;
+      return lastStatus;
+    }
+    return operationPins.pin(
+        pageId, writable, state.changedPageCapacity(), result);
+  }
+
   StatusCode pinScalarOperationPage(
       int pageId, boolean writable, IndexedOperationPage result) {
     if (!identityMatches(

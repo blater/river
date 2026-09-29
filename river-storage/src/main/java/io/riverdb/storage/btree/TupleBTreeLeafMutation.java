@@ -93,11 +93,15 @@ final class TupleBTreeLeafMutation {
       workspace.mutation.reset();
       return equality < 0 ? StatusCode.INVARIANT_BROKEN : StatusCode.CONFLICT;
     }
-    return TupleBTreePageCodec.replacePreparedLeafValue(
+    int removedPageId = workspace.leaf.overflowPageId();
+    long removedGeneration = workspace.leaf.overflowGeneration();
+    status = TupleBTreePageCodec.replacePreparedLeafValue(
         page, start, schemaId, shape, key, keyOffset, keyLength,
         value, valueOffset, valueLength,
         overflowPageId, overflowGeneration, modificationSequence,
         index, workspace.mutation);
+    if (status.isOk()) workspace.removedValue(removedPageId, removedGeneration);
+    return status;
   }
 
   static StatusCode delete(
@@ -125,8 +129,12 @@ final class TupleBTreeLeafMutation {
       workspace.mutation.reset();
       return StatusCode.CONFLICT;
     }
-    return TupleBTreePageCodec.deletePreparedLeaf(
+    int removedPageId = workspace.leaf.overflowPageId();
+    long removedGeneration = workspace.leaf.overflowGeneration();
+    status = TupleBTreePageCodec.deletePreparedLeaf(
         page, start, schemaId, shape, deletion, workspace.mutation);
+    if (status.isOk()) workspace.removedValue(removedPageId, removedGeneration);
+    return status;
   }
 
   private static int equalAt(

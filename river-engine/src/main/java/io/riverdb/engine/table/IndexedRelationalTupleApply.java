@@ -88,7 +88,7 @@ final class IndexedRelationalTupleApply {
           : kind == IndexedRelationalMutationBuffer.TUPLE_REPLACE
               ? session.replaceValue(key, value, 0, valueLength, 0, 0,
                   memberSequence)
-              : session.delete(key);
+              : session.delete(key, memberSequence);
     }
     return status;
   }

@@ -67,4 +67,11 @@ public final class TupleBTreeTreeWorkspace {
     split.reset();
     graph.reset();
   }
+
+  void clearRemovedValue() {
+    page.clearRemovedValue();
+  }
+
+  public int removedOverflowPageId() { return page.removedOverflowPageId(); }
+  public long removedOverflowGeneration() { return page.removedOverflowGeneration(); }
 }

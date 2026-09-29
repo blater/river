@@ -5,6 +5,9 @@ import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.btree.TupleBTreePageProvider;
 import io.riverdb.storage.btree.TupleBTreePageReference;
 import io.riverdb.format.btree.TupleBTreePageValidationProof;
+import io.riverdb.format.btree.TupleRowOverflowCodec;
+import io.riverdb.format.btree.TupleRowOverflowHeader;
+import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
 /** Operation-scoped native PageSet provider for one tuple index. */
@@ -16,6 +19,8 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   private final IndexedOperationPage firstPage = new IndexedOperationPage();
   private final IndexedOperationPage secondPage = new IndexedOperationPage();
   private final IndexedOperationPage overflowPage = new IndexedOperationPage();
+  private final IndexedOperationPage retirementPage = new IndexedOperationPage();
+  private final TupleRowOverflowHeader retirementHeader = new TupleRowOverflowHeader();
   private TupleBTreePageReference firstReference;
   private TupleBTreePageReference secondReference;
   private int plannedPages;
@@ -63,7 +68,8 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   StatusCode finish(StatusCode operation) {
     if (!active) return StatusCode.INVARIANT_BROKEN;
     StatusCode status = operation;
-    if (firstReference != null || secondReference != null || overflowPage.attached()) {
+    if (firstReference != null || secondReference != null
+        || overflowPage.attached() || retirementPage.attached()) {
       status = StatusCode.INVARIANT_BROKEN;
     } else if (status.isOk() && plannedPages >= 0 && allocatedPages != plannedPages) {
       status = StatusCode.INVARIANT_BROKEN;
@@ -84,7 +90,7 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   boolean reusable() {
     return !active && !root.active() && !metadata.attached()
         && firstReference == null && secondReference == null
-        && !overflowPage.attached();
+        && !overflowPage.attached() && !retirementPage.attached();
   }
 
   StatusCode releaseRetained() {
@@ -223,6 +229,28 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
     return !active || !overflowPage.attached()
         ? StatusCode.INVALID_EXTERNAL_INPUT
         : pages.releaseOperationPage(overflowPage);
+  }
+
+  StatusCode retireOverflow(
+      int pageId, long generation, long logicalRowId, long removingCommitSequence) {
+    if (!active || pageId <= 0 || generation <= 0 || logicalRowId <= 0
+        || retirementPage.attached()
+        || pages.payloadKind(pageId) != PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW
+        || pages.ownerKeyId(pageId) != root.keyId()) {
+      return StatusCode.CORRUPTION;
+    }
+    StatusCode status = pages.pinTupleOverflowOperationPage(
+        pageId, true, root.keyId(), retirementPage);
+    if (!status.isOk()) return status;
+    if (retirementPage.durableGeneration() != generation) {
+      status = StatusCode.CORRUPTION;
+    } else {
+      status = TupleRowOverflowCodec.retire(
+          retirementPage.payload(), 0, logicalRowId,
+          removingCommitSequence, retirementHeader);
+    }
+    StatusCode released = pages.releaseOperationPage(retirementPage);
+    return status.isOk() ? released : status;
   }
 
   @Override

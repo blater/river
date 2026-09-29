@@ -58,6 +58,7 @@ final class TupleBTreeMutation {
   static StatusCode delete(
       TupleBTree tree, ByteBuffer key, int offset, int length,
       TupleBTreeTreeWorkspace workspace) {
+    workspace.clearRemovedValue();
     StatusCode status = TupleBTreeKeyInput.copy(
         tree, key, offset, length, workspace);
     if (!status.isOk()) return status;
@@ -78,6 +79,7 @@ final class TupleBTreeMutation {
       ByteBuffer value, int valueOffset, int valueLength,
       int overflowPageId, long overflowGeneration, long modificationSequence,
       TupleBTreeTreeWorkspace workspace) {
+    workspace.clearRemovedValue();
     if (overflowPageId == 0
         && !io.riverdb.format.btree.TupleBTreePageCodec.inlineEligible(length, valueLength)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

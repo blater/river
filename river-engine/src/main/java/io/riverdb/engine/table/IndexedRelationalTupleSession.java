@@ -106,6 +106,16 @@ final class IndexedRelationalTupleSession {
         this.overflowPageId == 0 ? value : null,
         this.overflowPageId == 0 ? valueOffset : 0, valueLength,
         this.overflowPageId, this.overflowGeneration, modificationSequence, workspace);
+    int removedPageId = workspace.removedOverflowPageId();
+    long removedGeneration = workspace.removedOverflowGeneration();
+    if (status.isOk() && removedPageId != 0
+        && (removedPageId != this.overflowPageId
+            || removedGeneration != this.overflowGeneration)) {
+      status = provider.retireOverflow(
+          removedPageId, removedGeneration,
+          TupleKeyCodec.logicalRowId(key, key.position(), key.remaining()),
+          modificationSequence);
+    }
     return finish(status);
   }
 
@@ -129,10 +139,16 @@ final class IndexedRelationalTupleSession {
     return status.isOk() ? released : status;
   }
 
-  StatusCode delete(ByteBuffer key) {
+  StatusCode delete(ByteBuffer key, long modificationSequence) {
     StatusCode status = provider.begin(0);
     if (!status.isOk()) return status;
     status = tree.delete(key, key.position(), key.remaining(), workspace);
+    if (status.isOk() && workspace.removedOverflowPageId() != 0) {
+      status = provider.retireOverflow(
+        workspace.removedOverflowPageId(), workspace.removedOverflowGeneration(),
+        TupleKeyCodec.logicalRowId(key, key.position(), key.remaining()),
+        modificationSequence);
+    }
     return finish(status);
   }
 

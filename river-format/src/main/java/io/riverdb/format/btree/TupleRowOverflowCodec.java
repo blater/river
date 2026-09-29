@@ -5,7 +5,7 @@ import io.riverdb.format.FormatBytes;
 import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
-/** Immutable one-page row value addressed by a tuple leaf's page ID and generation. */
+/** One-page row value addressed by a tuple leaf's page ID and durable generation. */
 public final class TupleRowOverflowCodec {
   public static final int VERSION = 1;
   public static final int HEADER_BYTES = 32;
@@ -47,14 +47,29 @@ public final class TupleRowOverflowCodec {
     result.reset();
     int length = FormatBytes.getInt(source, start + 12);
     long rowId = FormatBytes.getLong(source, start + 16);
+    long retiredAt = FormatBytes.getLong(source, start + 24);
     if (FormatBytes.getLong(source, start) != MAGIC
         || FormatBytes.getInt(source, start + 8) != VERSION
         || rowId <= 0 || expectedLogicalRowId > 0 && rowId != expectedLogicalRowId
-        || length <= 0 || length > MAX_VALUE_BYTES
-        || FormatBytes.getLong(source, start + 24) != 0) {
+        || length <= 0 || length > MAX_VALUE_BYTES || retiredAt < 0) {
       return StatusCode.CORRUPTION;
     }
-    result.set(rowId, length);
+    result.set(rowId, length, retiredAt);
+    return StatusCode.OK;
+  }
+
+  /** Stages the reference-removal sequence without changing the old generation's row bytes. */
+  public static StatusCode retire(
+      ByteBuffer target, int start, long expectedLogicalRowId,
+      long removingCommitSequence, TupleRowOverflowHeader header) {
+    if (target == null || target.isReadOnly() || removingCommitSequence <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = validate(target, start, expectedLogicalRowId, header);
+    if (!status.isOk()) return status;
+    if (header.retiredAtCommitSequence() != 0) return StatusCode.CONFLICT;
+    FormatBytes.putLong(target, start + 24, removingCommitSequence);
+    header.set(header.logicalRowId(), header.valueLength(), removingCommitSequence);
     return StatusCode.OK;
   }
 }
