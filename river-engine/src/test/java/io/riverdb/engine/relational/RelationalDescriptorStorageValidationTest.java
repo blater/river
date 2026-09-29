@@ -65,9 +65,9 @@ final class RelationalDescriptorStorageValidationTest {
   private static long insert(RelationalDatabase database, SchemaPin pin, long primaryKey) {
     RelationalSession session = session(database);
     TransactionOutcome outcome = new TransactionOutcome();
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(1, 1, 0, 0));
-    assertEquals(StatusCode.OK, values.clearForSize(1));
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(pin.descriptor(), 0));
+    assertEquals(StatusCode.OK, values.begin(pin.descriptor(), null));
     assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, primaryKey));
     RelationalRowIdentityResult result = new RelationalRowIdentityResult();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
@@ -79,9 +79,9 @@ final class RelationalDescriptorStorageValidationTest {
   private static void deletePrimaryTuple(
       RelationalDatabase database, SchemaPin pin,
       long primaryKey, long logicalRowId) {
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(1, 1, 0, 0));
-    assertEquals(StatusCode.OK, values.clearForSize(1));
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(pin.descriptor(), 0));
+    assertEquals(StatusCode.OK, values.begin(pin.descriptor(), null));
     assertEquals(StatusCode.OK,
         values.setFixed(0, SqlTypeDescriptor.BIGINT, primaryKey));
     RelationalTupleKeyEncoder encoder = new RelationalTupleKeyEncoder();

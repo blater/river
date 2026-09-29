@@ -73,6 +73,12 @@ final class SqlBlockRowSortKeyCodec {
         required += SqlTypeDescriptor.isWideDecimal(descriptor) ? 16 : 8;
         continue;
       }
+      if (row.hasUtf8(column)) {
+        int length = row.utf8Length(column);
+        if (length < 0) return -1;
+        required += Integer.BYTES + length;
+        continue;
+      }
       text.set(row, column);
       int length = Utf8Text.encodedLength(text, Utf8Text.MAXIMUM_SCALARS);
       text.clear();
@@ -91,6 +97,14 @@ final class SqlBlockRowSortKeyCodec {
     if (SqlTypeDescriptor.typeId(descriptor) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       if (SqlTypeDescriptor.isWideDecimal(descriptor)) bytes.bytes().putLong(row.highValue(column));
       bytes.bytes().putLong(row.value(column));
+      return;
+    }
+    if (row.hasUtf8(column)) {
+      int length = row.utf8Length(column);
+      bytes.bytes().putInt(length);
+      for (int index = 0; index < length; index++) {
+        bytes.bytes().put(row.utf8ByteAt(column, index));
+      }
       return;
     }
     text.set(row, column);

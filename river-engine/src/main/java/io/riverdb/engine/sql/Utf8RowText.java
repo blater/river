@@ -12,10 +12,20 @@ final class Utf8RowText {
       int offset,
       int length,
       char[] target) {
+    return decode(source, offset, length, target, 0);
+  }
+
+  static int decode(
+      HeapRowResult source,
+      int offset,
+      int length,
+      char[] target,
+      int targetOffset) {
     if (source == null || target == null || offset < 0 || length < 0
-        || offset > source.length() - length) return -1;
+        || offset > source.length() - length || targetOffset < 0
+        || targetOffset > target.length) return -1;
     int input = 0;
-    int output = 0;
+    int output = targetOffset;
     while (input < length) {
       int first = Byte.toUnsignedInt(source.getByte(offset + input++));
       int continuation = continuation(first);
@@ -36,7 +46,7 @@ final class Utf8RowText {
         target[output++] = Character.lowSurrogate(scalar);
       }
     }
-    return output;
+    return output - targetOffset;
   }
 
   private static int continuation(int first) {

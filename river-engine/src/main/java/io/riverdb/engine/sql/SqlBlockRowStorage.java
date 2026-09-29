@@ -3,6 +3,8 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.column.ColumnBitSet;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.base.text.BoundedByteSource;
+import java.nio.ByteBuffer;
 
 /** Geometrically retained primitive block-row lanes with lazy text scratch. */
 final class SqlBlockRowStorage {
@@ -58,6 +60,7 @@ final class SqlBlockRowStorage {
   }
   void value(int column, long high, long value) {
     if (valid(column)) {
+      if (text.hasValue(column)) text.clearValue(column);
       highValues[column] = high;
       values[column] = value;
     }
@@ -65,6 +68,7 @@ final class SqlBlockRowStorage {
   boolean isNull(int column) { return nulls.get(column); }
   void setNull(int column) {
     if (valid(column)) {
+      if (text.hasValue(column)) text.clearValue(column);
       highValues[column] = 0;
       values[column] = 0;
       nulls.set(column);
@@ -95,9 +99,40 @@ final class SqlBlockRowStorage {
   }
 
   char[] text(int column) {
-    if (valid(column) && text.existing(column) == null) prepareText(column);
-    return valid(column) ? text.existing(column) : null;
+    if (!valid(column)) return null;
+    char[] characters = text.text(column);
+    if (characters == null) status = text.readStatus();
+    return characters;
   }
+
+  StatusCode setUtf8(
+      int column, BoundedByteSource source, int offset, int length) {
+    if (!valid(column)) return status.isOk()
+        ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+    StatusCode stored = text.setUtf8(column, source, offset, length);
+    if (!stored.isOk()) status = stored;
+    return stored;
+  }
+
+  StatusCode setUtf8(int column, ByteBuffer source, int offset, int length) {
+    if (!valid(column)) return status.isOk()
+        ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+    StatusCode stored = text.setUtf8(column, source, offset, length);
+    if (!stored.isOk()) status = stored;
+    return stored;
+  }
+
+  StatusCode setUtf8(int column, byte[] source, int offset, int length) {
+    if (!valid(column)) return status.isOk()
+        ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+    StatusCode stored = text.setUtf8(column, source, offset, length);
+    if (!stored.isOk()) status = stored;
+    return stored;
+  }
+
+  boolean hasUtf8(int column) { return text.hasUtf8(column); }
+  byte[] utf8(int column) { return text.utf8(column); }
+  int utf8Length(int column) { return text.utf8Length(column); }
 
   StatusCode copyFrom(SqlBlockRowStorage source) {
     return SqlBlockRowStorageCopy.copy(source, this);

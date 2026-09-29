@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
 import io.riverdb.engine.relational.RelationalRowIdentityResult;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.StoredTableRowView;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.sql.SqlCommand;
@@ -13,7 +14,7 @@ final class SqlDescriptorAggregateExecution {
   private final RelationalSession session;
   private final RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
   private final RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
-  private final SqlDescriptorMutationValues values = new SqlDescriptorMutationValues();
+  private final StoredTableRowView values = new StoredTableRowView();
   private final SqlDescriptorPredicate predicate = new SqlDescriptorPredicate();
   private final SqlDescriptorScalarAggregate aggregate;
 
@@ -40,9 +41,7 @@ final class SqlDescriptorAggregateExecution {
 
   private StatusCode prepare(
       SqlCommand command, SchemaPin pin, TableDescriptor table) {
-    StatusCode status = values.reserve(table);
-    if (!status.isOk()) return status;
-    status = predicate.prepare(command, table);
+    StatusCode status = predicate.prepare(command, table);
     if (!status.isOk()) return status;
     status = aggregate.prepare(command, table, null);
     if (!status.isOk()) return status;
@@ -54,13 +53,13 @@ final class SqlDescriptorAggregateExecution {
   private StatusCode scanRows() {
     while (true) {
       StatusCode status = session.descriptorRows().nextScan(
-          cursor, values.fetched(), identity);
+          cursor, values, identity, null, null);
       if (status == StatusCode.CONFLICT) return status;
       if (!status.isOk()) return status;
-      status = predicate.evaluate(values.fetched());
+      status = predicate.evaluate(values);
       if (!status.isOk()) return status;
       if (predicate.matched()) {
-        status = aggregate.accumulate(values.fetched());
+        status = aggregate.accumulate(values);
         if (!status.isOk()) return status;
       }
     }
@@ -77,6 +76,7 @@ final class SqlDescriptorAggregateExecution {
   private StatusCode closeCursor() {
     StatusCode status = cursor.isActive()
         ? session.descriptorRows().closeScan(cursor) : StatusCode.OK;
+    if (status.isOk()) values.reset();
     return status.isOk() ? cursor.reset() : status;
   }
 }

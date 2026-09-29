@@ -126,8 +126,7 @@ final class SqlUniversalJoinOrderedRoot {
     target.clearValue(targetColumn);
     int descriptor = shape.rootTypeDescriptor(rootColumn);
     if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      return target.setText(
-          targetColumn, source.text(sourceColumn), 0, source.textLength(sourceColumn));
+      return source.copyTextTo(sourceColumn, target, targetColumn);
     }
     if (SqlTypeDescriptor.isWideDecimal(descriptor)) {
       target.setDecimal128(

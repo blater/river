@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalDescriptorIndexBounds;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.sql.SqlComparison;
 import io.riverdb.storage.btree.TupleBTreeScanBounds;
 
@@ -13,7 +14,7 @@ final class SqlDescriptorSubqueryRangeWriter {
       SqlDescriptorSubqueryIndexPlan plan,
       SqlDescriptorPrimaryValues lower,
       SqlDescriptorPrimaryValues upper,
-      SqlDescriptorValueSource outer,
+      SqlValueAccess outer,
       RelationalDescriptorIndexBounds bounds) {
     empty = false;
     boolean lowRange = false;
@@ -56,7 +57,7 @@ final class SqlDescriptorSubqueryRangeWriter {
       SqlDescriptorSubqueryIndexPlan plan,
       SqlDescriptorSubqueryIndexBinding binding,
       SqlDescriptorPrimaryValues target,
-      SqlDescriptorValueSource outer) {
+      SqlValueAccess outer) {
     if (binding.nullValue(outer)) {
       empty = true;
       return StatusCode.OK;

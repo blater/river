@@ -1,12 +1,13 @@
 package io.riverdb.engine.sql;
 
-import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
 import io.riverdb.engine.relational.RelationalLockedCandidateResult;
 import io.riverdb.engine.relational.RelationalRowIdentityResult;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.SqlValueAccess;
+import io.riverdb.engine.relational.StoredTableRowView;
 import io.riverdb.engine.schema.cache.SchemaPin;
 
 /** Retained resources and primitive mode flags shared by descriptor scan phases. */
@@ -17,7 +18,7 @@ final class SqlDescriptorScanContext {
   final RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
   final RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
   final RelationalLockedCandidateResult lockedCandidate = new RelationalLockedCandidateResult();
-  final SqlDescriptorMutationValues values = new SqlDescriptorMutationValues();
+  final StoredTableRowView view = new StoredTableRowView();
   final SqlDescriptorProjection projection = new SqlDescriptorProjection();
   final SqlDescriptorPredicate predicate = new SqlDescriptorPredicate();
   final SqlDescriptorBoundPredicate boundPredicate;
@@ -39,7 +40,7 @@ final class SqlDescriptorScanContext {
       SqlBoundPredicateEvaluator predicateEvaluator) {
     session = owner;
     ordered = new SqlDescriptorOrderedRows(shapeBudget);
-    boundPredicate = new SqlDescriptorBoundPredicate(predicateEvaluator, shapeBudget);
+    boundPredicate = new SqlDescriptorBoundPredicate(predicateEvaluator);
     subqueries = new SqlDescriptorSubqueryExecution(
         owner,
         shapeBudget,
@@ -49,7 +50,7 @@ final class SqlDescriptorScanContext {
     scalar = new SqlDescriptorScalarAggregate(temporal, shapeBudget);
   }
 
-  StatusCode evaluatePredicate(SqlValueBuffer row) {
+  StatusCode evaluatePredicate(SqlValueAccess row) {
     return boundPredicate.active()
         ? boundPredicate.evaluate(row) : predicate.evaluate(row);
   }

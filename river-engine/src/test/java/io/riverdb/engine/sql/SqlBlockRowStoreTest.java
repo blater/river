@@ -43,6 +43,7 @@ final class SqlBlockRowStoreTest {
     assertEquals(StatusCode.OK, codec.encode(source, schema, 0));
     assertTrue(codec.buffer().remaining() > 8_192);
     assertEquals(StatusCode.OK, codec.decode(decoded, schema, 0));
+    assertTrue(decoded.hasUtf8(0));
     assertEquals(text.length, decoded.textLength(0));
     for (int index = 0; index < text.length; index++) {
       assertEquals(text[index], decoded.textCharacter(0, index));

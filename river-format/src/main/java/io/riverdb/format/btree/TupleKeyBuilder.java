@@ -1,6 +1,7 @@
 package io.riverdb.format.btree;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.BoundedByteSource;
 import io.riverdb.base.tuple.TupleEncodingSize;
 import io.riverdb.base.type.ExactDecimal128;
 import io.riverdb.base.type.SqlTypeDescriptor;
@@ -117,6 +118,60 @@ public final class TupleKeyBuilder {
     }
     TupleKeyCodec.putBigEndianInt(target, cursor, 0);
     cursor += Integer.BYTES;
+    count++;
+    return StatusCode.OK;
+  }
+
+  /** Checks canonical UTF-8 and encodes each scalar directly from the source. */
+  public StatusCode addUtf8(
+      int descriptor, BoundedByteSource source, int offset, int length) {
+    if (!canAdd(descriptor)
+        || SqlTypeDescriptor.typeId(descriptor) != SqlTypeDescriptor.TYPE_ID_VARCHAR
+        || source == null || offset < 0 || length < 0
+        || offset > source.length() - length) return StatusCode.INVALID_EXTERNAL_INPUT;
+    int end = offset + length;
+    int scalars = 0;
+    int output = cursor;
+    if (output - start > maximumBytes - 2 || target.limit() - output < 2) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    target.put(output++, (byte) SqlTypeDescriptor.TYPE_ID_VARCHAR);
+    target.put(output++, (byte) TupleKeyCodec.PRESENT_VALUE);
+    for (int index = offset; index < end;) {
+      int first = source.getByte(index++) & 0xff;
+      int width = first < 0x80 ? 1
+          : first >= 0xc2 && first <= 0xdf ? 2
+          : first >= 0xe0 && first <= 0xef ? 3
+          : first >= 0xf0 && first <= 0xf4 ? 4 : 0;
+      if (width == 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+      if (index > end - (width - 1)) return StatusCode.INVALID_EXTERNAL_INPUT;
+      int scalar = width == 1 ? first
+          : first & (width == 2 ? 0x1f : width == 3 ? 0x0f : 0x07);
+      for (int following = 1; following < width; following++) {
+        int continuation = source.getByte(index++) & 0xff;
+        if ((continuation & 0xc0) != 0x80) return StatusCode.INVALID_EXTERNAL_INPUT;
+        scalar = scalar << 6 | continuation & 0x3f;
+      }
+      if (width > 1 && (scalar < (width == 2 ? 0x80 : width == 3 ? 0x800 : 0x10000)
+          || scalar > Character.MAX_CODE_POINT
+          || scalar >= Character.MIN_SURROGATE
+              && scalar <= Character.MAX_SURROGATE)) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (++scalars > SqlTypeDescriptor.parameterOne(descriptor)) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (output - start > maximumBytes - 2 * Integer.BYTES
+          || target.limit() - output < 2 * Integer.BYTES) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      TupleKeyCodec.putBigEndianInt(target, output, scalar + 1);
+      output += Integer.BYTES;
+    }
+    if (output - start > maximumBytes - Integer.BYTES
+        || target.limit() - output < Integer.BYTES) return StatusCode.RESOURCE_EXHAUSTED;
+    TupleKeyCodec.putBigEndianInt(target, output, 0);
+    cursor = output + Integer.BYTES;
     count++;
     return StatusCode.OK;
   }

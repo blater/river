@@ -1,16 +1,18 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import java.nio.ByteBuffer;
 
 /** Reusable retained tuple and result publication for descriptor set execution. */
 final class SqlDescriptorSetKey {
-  private final SqlBlockRow row = new SqlBlockRow();
-  private final char[] text = new char[Utf8Text.MAXIMUM_BUFFER_CHARACTERS];
+  private final SqlBlockRow row;
   private ByteBuffer aggregateText;
   private byte[] aggregateBytes;
+
+  SqlDescriptorSetKey(SqlSessionShapeBudget budget) {
+    row = new SqlBlockRow(budget);
+  }
 
   StatusCode capture(SqlBlockRow source) { return row.copyFrom(source); }
 
@@ -57,7 +59,10 @@ final class SqlDescriptorSetKey {
       if (row.nullValue(column)) result.setProjectedNull(part);
       else if (SqlTypeDescriptor.typeId(shape.descriptors()[part])
           == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        status = result.setTextAt(part, row.text(column), row.textLength(column));
+        status = row.hasUtf8(column)
+            ? result.setUtf8At(
+                part, row.utf8Slice(column), 0, row.utf8Length(column))
+            : result.setTextAt(part, row.text(column), row.textLength(column));
       } else if (SqlTypeDescriptor.isWideDecimal(shape.descriptors()[part])) {
         result.setProjectedDecimal128(part, row.highValue(column), row.value(column));
       } else result.setProjectedValue(part, row.value(column));
@@ -94,6 +99,9 @@ final class SqlDescriptorSetKey {
   }
 
   private boolean sameText(SqlBlockRow candidate, int column) {
+    if (row.hasUtf8(column) && candidate.hasUtf8(column)) {
+      return SqlBlockRow.compareUtf8(row, column, candidate, column) == 0;
+    }
     for (int index = 0; index < row.textLength(column); index++) {
       if (row.textCharacter(column, index) != candidate.textCharacter(column, index)) return false;
     }
@@ -106,13 +114,8 @@ final class SqlDescriptorSetKey {
       SqlAggregateAccumulatorSet accumulators,
       int invocation) {
     if (aggregateText == null) return StatusCode.CORRUPTION;
-    int characters = Utf8Text.decode(
-        aggregateText,
-        accumulators.textOffset(invocation),
-        accumulators.textLength(invocation),
-        text,
-        0);
-    return characters < 0
-        ? StatusCode.CORRUPTION : result.setTextAt(projection, text, 0, characters);
+    return result.setUtf8At(
+        projection, aggregateText,
+        accumulators.textOffset(invocation), accumulators.textLength(invocation));
   }
 }

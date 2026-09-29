@@ -8,7 +8,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.StoredTableRowView;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
@@ -89,7 +89,7 @@ final class SqlDescriptorInsertBatchTest {
         session.resolveDescriptor("batched", pin, new StatusDetail(128)));
     RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
     assertEquals(StatusCode.OK, session.descriptorRows().beginScan(pin, cursor));
-    SqlValueBuffer values = new SqlValueBuffer();
+    StoredTableRowView values = new StoredTableRowView();
     RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
     long prior = 0;
     int rows = 0;

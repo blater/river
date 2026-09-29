@@ -3,7 +3,8 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlNumericTypeRules;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlMutationValues;
+import io.riverdb.engine.relational.StoredTableRowView;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
@@ -12,8 +13,8 @@ import java.nio.ByteBuffer;
 /** Reusable descriptor-shaped input, fetched row, and scalar-copy state. */
 final class SqlDescriptorMutationValues {
   private static final ByteBuffer EMPTY_TEXT_BYTES = ByteBuffer.allocate(0);
-  private final SqlValueBuffer fetched = new SqlValueBuffer();
-  private final SqlValueBuffer mutation = new SqlValueBuffer();
+  private final StoredTableRowView fetched = new StoredTableRowView();
+  private final SqlMutationValues mutation = new SqlMutationValues();
   private ByteBuffer commandText = EMPTY_TEXT_BYTES;
   private final SqlDescriptorNumericAssignment numeric =
       new SqlDescriptorNumericAssignment();
@@ -23,21 +24,18 @@ final class SqlDescriptorMutationValues {
     mutation.reset();
     int textBytes = maximumTextBytes(table);
     if (textBytes < 0) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = fetched.reserve(
-        table.columnCount(), table.columnCount(), textBytes, textBytes);
-    return status.isOk() ? mutation.reserve(
-        table.columnCount(), table.columnCount(), textBytes, textBytes) : status;
+    return mutation.reserve(table, textBytes);
   }
 
-  SqlValueBuffer fetched() { return fetched; }
-  SqlValueBuffer mutation() { return mutation; }
+  StoredTableRowView fetched() { return fetched; }
+  SqlMutationValues mutation() { return mutation; }
 
   StatusCode buildInsert(
       SqlCommand command, TableDescriptor table,
       SqlDescriptorColumnMapping columns,
       SqlRowProjectionEvaluator expressions,
       int row) {
-    StatusCode status = mutation.clearForSize(table.columnCount());
+    StatusCode status = mutation.begin(table, null);
     for (int column = 0; status.isOk() && column < table.columnCount(); column++) {
       int source = columns.sourceAt(column);
       status = source < 0
@@ -59,11 +57,11 @@ final class SqlDescriptorMutationValues {
   StatusCode buildUpdate(
       SqlCommand command, TableDescriptor table, SqlDescriptorColumnMapping columns,
       SqlRowProjectionEvaluator expressions) {
-    StatusCode status = mutation.clearForSize(table.columnCount());
+    StatusCode status = mutation.begin(table, fetched);
     for (int column = 0; status.isOk() && column < table.columnCount(); column++) {
       int source = columns.sourceAt(column);
       status = source < 0
-          ? mutation.copyTrusted(column, fetched, column)
+          ? StatusCode.OK
           : command.updateHasExpression(source)
               ? assignExpression(command, source, column, table, expressions)
               : assign(command, 0, source, column, table, false);
@@ -97,9 +95,8 @@ final class SqlDescriptorMutationValues {
       return StatusCode.DATATYPE_MISMATCH;
     }
     return SqlNumericTypeRules.isNumeric(target)
-        ? numeric.assign(
-            mutation, column,
-            expressions.resultHighValue(), expressions.resultValue(),
+        ? assignNumeric(
+            column, expressions.resultHighValue(), expressions.resultValue(),
             supplied, target)
         : SqlTypeDescriptor.typeId(target) == SqlTypeDescriptor.TYPE_ID_VARCHAR
             ? StatusCode.FEATURE_NOT_SUPPORTED
@@ -145,7 +142,7 @@ final class SqlDescriptorMutationValues {
   private StatusCode assignValue(
       SqlCommand command, int column, long high, long value, int supplied, int target) {
     if (SqlNumericTypeRules.isNumeric(target)) {
-      return numeric.assign(mutation, column, high, value, supplied, target);
+      return assignNumeric(column, high, value, supplied, target);
     }
     if (SqlTypeDescriptor.typeId(target) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       return mutation.setFixed(column, target, value);
@@ -161,6 +158,15 @@ final class SqlDescriptorMutationValues {
     int bytes = command.copyText(value, commandText);
     return bytes < 0 ? StatusCode.INVALID_EXTERNAL_INPUT
         : mutation.setTextBytes(column, target, commandText, 0, bytes);
+  }
+
+  private StatusCode assignNumeric(
+      int column, long high, long low, int supplied, int target) {
+    StatusCode status = numeric.assign(high, low, supplied, target);
+    if (!status.isOk()) return status;
+    return SqlTypeDescriptor.isWideDecimal(target)
+        ? mutation.setDecimal128(column, target, numeric.high(), numeric.low())
+        : mutation.setFixed(column, target, numeric.low());
   }
 
   private StatusCode assignInsertExpression(

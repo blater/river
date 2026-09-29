@@ -2,7 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlQuery;
@@ -45,15 +45,15 @@ final class SqlDescriptorSubqueryProjection {
         ? StatusCode.FEATURE_NOT_SUPPORTED : StatusCode.OK;
   }
 
-  boolean isNull(SqlValueBuffer values) {
+  boolean isNull(SqlValueAccess values) {
     return nullProjection || column >= 0 && values.isNull(column);
   }
 
-  long value(SqlValueBuffer values) {
+  long value(SqlValueAccess values) {
     return column < 0 ? 0 : values.valueAt(column);
   }
 
-  long highValue(SqlValueBuffer values) {
+  long highValue(SqlValueAccess values) {
     return column < 0 ? 0 : values.highValueAt(column);
   }
 

@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 
 /** One retained literal or outer-row supplier for a subquery index bound. */
 final class SqlDescriptorSubqueryIndexBinding {
@@ -16,13 +17,13 @@ final class SqlDescriptorSubqueryIndexBinding {
 
   StatusCode assign(
       SqlDescriptorPrimaryValues target, int column, int descriptor,
-      SqlDescriptorValueSource outer) {
+      SqlValueAccess outer) {
     byte kind = bindings.kind(leaf, left);
     if (kind == SqlDescriptorCorrelatedBindings.OUTER) {
       int source = bindings.column(leaf, left);
       if (outer == null || outer.isNull(source)) return StatusCode.CONFLICT;
       return target.assign(column, bindings.descriptor(leaf, left), descriptor,
-          outer.highValue(source), outer.value(source));
+          outer.highValueAt(source), outer.valueAt(source));
     }
     return kind == SqlDescriptorCorrelatedBindings.LITERAL
         ? target.assign(column, bindings.descriptor(leaf, left), descriptor,
@@ -30,7 +31,7 @@ final class SqlDescriptorSubqueryIndexBinding {
         : StatusCode.CONFLICT;
   }
 
-  boolean nullValue(SqlDescriptorValueSource outer) {
+  boolean nullValue(SqlValueAccess outer) {
     byte kind = bindings.kind(leaf, left);
     return kind == SqlDescriptorCorrelatedBindings.NULL
         || kind == SqlDescriptorCorrelatedBindings.OUTER

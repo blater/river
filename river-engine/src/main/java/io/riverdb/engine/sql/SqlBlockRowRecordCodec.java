@@ -143,6 +143,15 @@ final class SqlBlockRowRecordCodec {
       record.putShort((short) 0);
       return StatusCode.OK;
     }
+    if (source.hasUtf8(column)) {
+      int length = source.utf8Length(column);
+      if (length < 0 || length > 0xffff) return StatusCode.CORRUPTION;
+      record.putShort((short) length);
+      for (int index = 0; index < length; index++) {
+        record.put(source.utf8ByteAt(column, index));
+      }
+      return StatusCode.OK;
+    }
     text.set(source, column);
     int lengthPosition = record.position();
     record.putShort((short) 0);
@@ -183,7 +192,8 @@ final class SqlBlockRowRecordCodec {
         bytes += Long.BYTES;
       }
       if (schema.varchar(column) && !source.nullValue(column)) {
-        bytes += (long) source.textLength(column) * 4;
+        bytes += source.hasUtf8(column) ? source.utf8Length(column)
+            : (long) source.textLength(column) * 4;
       }
     }
     return bytes > MAXIMUM_RECORD_BYTES ? -1 : (int) bytes;
@@ -198,18 +208,8 @@ final class SqlBlockRowRecordCodec {
     if (record.position() > record.limit() - TRAILER_BYTES - encoded) {
       return StatusCode.CORRUPTION;
     }
-    if (encoded == 0) {
-      destination.setTextLength(column, 0);
-      return StatusCode.OK;
-    }
-    int requiredCharacters = Utf8Text.decodedLength(record, record.position(), encoded);
-    if (requiredCharacters < 0) return StatusCode.CORRUPTION;
-    StatusCode prepared = destination.prepareText(column, requiredCharacters);
-    if (!prepared.isOk()) return prepared;
-    int characters = Utf8Text.decode(
-        record, record.position(), encoded, destination.text(column), 0);
-    if (characters < 0) return StatusCode.CORRUPTION;
-    destination.setTextLength(column, characters);
+    StatusCode stored = destination.setUtf8(column, record, record.position(), encoded);
+    if (!stored.isOk()) return stored;
     record.position(record.position() + encoded);
     return StatusCode.OK;
   }

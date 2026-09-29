@@ -2,7 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
@@ -141,6 +141,23 @@ final class SqlRowExpressionEvaluator {
     return blockColumn(source, column, descriptor);
   }
 
+  StatusCode predicateDescriptorNode(
+      SqlCommand command,
+      int operator,
+      long operandHigh,
+      long operand,
+      int descriptor,
+      SqlTemporalZonePlan zone,
+      SqlValueAccess source) {
+    if (operator == SqlScalarExpression.COLUMN) {
+      return descriptorColumn(source, (int) operand, descriptor);
+    }
+    return leaf(operator)
+        ? leaf(command, operator, operandHigh, operand, descriptor, 0, null, null)
+        : binaryOperator(operator) ? arithmetic.binary(operator, descriptor)
+        : arithmetic.unary(operator, operand, descriptor, zone);
+  }
+
   StatusCode finishPredicateOperand(SqlPredicateOperand result) {
     if (size != 1) {
       reset();
@@ -192,7 +209,7 @@ final class SqlRowExpressionEvaluator {
       SqlBoundProjectionPrograms programs,
       int expression,
       SqlTemporalZonePlan zone,
-      SqlValueBuffer source) {
+      SqlValueAccess source) {
     size = 0;
     text.clear();
     StatusCode status = StatusCode.OK;
@@ -249,6 +266,35 @@ final class SqlRowExpressionEvaluator {
                       programs.descriptor(projection, node),
                       zone);
     }
+    return projectBlockResult(status, projection, result);
+  }
+
+  StatusCode evaluateDescriptorBlock(
+      SqlCommand command,
+      SqlBoundProjectionPrograms programs,
+      int projection,
+      SqlTemporalZonePlan zone,
+      SqlValueAccess source,
+      SqlBlockRow result) {
+    size = 0;
+    text.clear();
+    StatusCode status = StatusCode.OK;
+    for (int node = 0;
+        status.isOk() && node < programs.nodeCount(projection); node++) {
+      status = predicateDescriptorNode(
+          command,
+          programs.operator(projection, node),
+          programs.operandHigh(projection, node),
+          programs.operand(projection, node),
+          programs.descriptor(projection, node),
+          zone,
+          source);
+    }
+    return projectBlockResult(status, projection, result);
+  }
+
+  private StatusCode projectBlockResult(
+      StatusCode status, int projection, SqlBlockRow result) {
     if (!status.isOk() || size != 1) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
@@ -309,7 +355,7 @@ final class SqlRowExpressionEvaluator {
   }
 
   private StatusCode descriptorColumn(
-      SqlValueBuffer source, int column, int descriptor) {
+      SqlValueAccess source, int column, int descriptor) {
     if (source == null || column < 0 || column >= source.count()
         || size >= values.length) return StatusCode.INVALID_EXTERNAL_INPUT;
     nulls[size] = source.isNull(column);
@@ -318,7 +364,7 @@ final class SqlRowExpressionEvaluator {
     descriptors[size] = descriptor;
     if (!nulls[size]
         && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      StatusCode status = text.loadValueBuffer(source, column);
+      StatusCode status = text.loadValue(source, column);
       if (!status.isOk()) return status;
     }
     size++;

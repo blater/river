@@ -69,7 +69,7 @@ final class SqlBlockAggregatePublisher {
       destination.setDecimal128(output, groupKey.highValue(group), groupKey.value(group));
     } else destination.setValue(output, groupKey.value(group));
     return schema.varchar(output)
-        ? destination.setText(output, groupKey.text(group), 0, groupKey.textLength(group))
+        ? groupKey.copyTextTo(group, destination, output)
         : StatusCode.OK;
   }
 }

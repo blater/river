@@ -176,9 +176,18 @@ final class SqlAggregateAccumulatorSet {
       SqlBlockRow row, int invocation, int kind, int lane) {
     int candidate = textSlotCount * TableSchema.MAXIMUM_ROW_BYTES;
     for (int index = 0; index < candidateLength; index++) text[candidate + index] = 0;
-    int length = Utf8Text.encode(
-        row.text(lane), 0, row.textLength(lane),
-        Utf8Text.MAXIMUM_SCALARS, text, candidate);
+    int length;
+    if (row.hasUtf8(lane)) {
+      length = row.utf8Length(lane);
+      if (length > TableSchema.MAXIMUM_ROW_BYTES) return StatusCode.RESOURCE_EXHAUSTED;
+      for (int index = 0; index < length; index++) {
+        text[candidate + index] = row.utf8ByteAt(lane, index);
+      }
+    } else {
+      length = Utf8Text.encode(
+          row.text(lane), 0, row.textLength(lane),
+          Utf8Text.MAXIMUM_SCALARS, text, candidate);
+    }
     if (length < 0) return StatusCode.CORRUPTION;
     candidateLength = length;
     acceptTextCandidate(invocation, kind, candidate, length);

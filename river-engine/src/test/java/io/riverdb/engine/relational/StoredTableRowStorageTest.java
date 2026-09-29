@@ -2,6 +2,7 @@ package io.riverdb.engine.relational;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
@@ -27,11 +28,84 @@ final class StoredTableRowStorageTest {
   private static volatile long allocationGuard;
 
   @Test
+  void borrowedViewReadsSelectedValuesAndUtf8WithoutValueLanes() {
+    int text = SqlTypeDescriptor.varchar(8);
+    TableDescriptor table = table(
+        new int[] {SqlTypeDescriptor.BIGINT, text, SqlTypeDescriptor.BOOLEAN},
+        new boolean[] {false, true, false});
+    SqlMutationValues input = values(table, 32);
+    assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.BIGINT, -19));
+    assertEquals(StatusCode.OK, input.setText(1, text, "A£河🌊"));
+    assertEquals(StatusCode.OK, input.setFixed(2, SqlTypeDescriptor.BOOLEAN, 1));
+    Encoded encoded = encode(table, input);
+    ByteBuffer source = ByteBuffer.wrap(encoded.bytes).asReadOnlyBuffer();
+    StoredTableColumnSelection selected = new StoredTableColumnSelection();
+    assertEquals(StatusCode.OK, selected.selectNone(table.columnCount()));
+    selected.select(0);
+    selected.select(1);
+    StoredTableRowView view = new StoredTableRowView();
+    assertEquals(StatusCode.OK, view.bind(
+        table, source, START, encoded.length, null, selected));
+    assertEquals(-19, view.valueAt(0));
+    assertEquals(0, view.descriptorAt(2));
+    int offset = view.textByteOffsetAt(1);
+    int length = view.textByteLengthAt(1);
+    byte[] utf8 = new byte[length];
+    for (int index = 0; index < length; index++) {
+      utf8[index] = view.textSource(1).getByte(offset + index);
+    }
+    assertEquals("A£河🌊", new String(utf8, StandardCharsets.UTF_8));
+    view.reset();
+    assertEquals(0, view.count());
+  }
+
+  @Test
+  void mutationOverlayRetainsUnchangedTextAndEncodesChangedValues() {
+    int text = SqlTypeDescriptor.varchar(8);
+    TableDescriptor table = table(
+        new int[] {SqlTypeDescriptor.BIGINT, text, SqlTypeDescriptor.INTEGER},
+        new boolean[] {false, false, false});
+    SqlMutationValues original = values(table, 32);
+    assertEquals(StatusCode.OK, original.setFixed(0, SqlTypeDescriptor.BIGINT, 7));
+    assertEquals(StatusCode.OK, original.setText(1, text, "多🙂"));
+    assertEquals(StatusCode.OK, original.setFixed(2, SqlTypeDescriptor.INTEGER, 4));
+    SqlMutationValues changed = new SqlMutationValues();
+    assertEquals(StatusCode.OK, changed.reserve(table, 32));
+    assertEquals(StatusCode.OK, changed.begin(table, original));
+    assertSame(original.textSource(1), changed.textSource(1));
+    assertEquals(original.textByteOffsetAt(1), changed.textByteOffsetAt(1));
+    assertEquals(StatusCode.OK, changed.setFixed(2, SqlTypeDescriptor.INTEGER, 9));
+    ByteBuffer encoded = ByteBuffer.allocate(table.encodedMaximumRowBytes());
+    StoredTableRowEncodeResult length = new StoredTableRowEncodeResult();
+    assertEquals(StatusCode.OK, StoredTableRowEncoder.encode(
+        table, changed, encoded, 0, length));
+    StoredTableRowView decoded = new StoredTableRowView();
+    assertEquals(StatusCode.OK, decoded.bind(
+        table, encoded.asReadOnlyBuffer(), 0, length.length(), null, null));
+    assertEquals(7, decoded.valueAt(0));
+    assertEquals(9, decoded.valueAt(2));
+    byte[] utf8 = new byte[decoded.textByteLengthAt(1)];
+    copyTextBytes(decoded, 1, utf8);
+    assertEquals("多🙂", new String(utf8, StandardCharsets.UTF_8));
+    assertEquals(4, original.valueAt(2));
+
+    assertEquals(StatusCode.OK, changed.begin(table, original));
+    assertEquals(4, changed.valueAt(2));
+    assertEquals(StatusCode.OK, changed.setTextBytes(
+        1, text, ByteBuffer.wrap("".getBytes(StandardCharsets.UTF_8)), 0, 0));
+    assertEquals(0, changed.textByteLengthAt(1));
+    assertEquals(StatusCode.OK, changed.setNull(2, SqlTypeDescriptor.INTEGER));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, StoredTableRowEncoder.encode(
+        table, changed, encoded, 0, length));
+  }
+
+
+  @Test
   void rowStartsWithNullBitmapAndContainsOnlyColumnData() {
     TableDescriptor table = table(
         new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BOOLEAN,
           SqlTypeDescriptor.varchar(4)}, new boolean[] {false, true, true});
-    SqlValueBuffer input = values(3, 8);
+    SqlMutationValues input = values(table, 8);
     assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.BIGINT, 42));
     assertEquals(StatusCode.OK, input.setNull(1, SqlTypeDescriptor.BOOLEAN));
     assertEquals(StatusCode.OK, input.setText(2, SqlTypeDescriptor.varchar(4), "ab"));
@@ -40,13 +114,13 @@ final class StoredTableRowStorageTest {
     assertEquals(20, row.length);
     assertArrayEquals(HexFormat.of().parseHex("022a000000000000000012000000020000006162"),
         Arrays.copyOfRange(row.bytes, START, START + row.length));
-    SqlValueBuffer output = values(3, 8);
+    StoredTableRowView output = new StoredTableRowView();
     assertEquals(StatusCode.OK, decodeTrusted(
         table, ByteBuffer.wrap(row.bytes), START, row.length, output));
     assertEquals(42, output.valueAt(0));
     assertEquals(true, output.isNull(1));
-    assertEquals('a', output.textByteAt(2, 0));
-    assertEquals('b', output.textByteAt(2, 1));
+    assertEquals('a', textByteAt(output, 2, 0));
+    assertEquals('b', textByteAt(output, 2, 1));
   }
 
   @Test
@@ -55,17 +129,16 @@ final class StoredTableRowStorageTest {
     TableDescriptor table = table(
         new int[] {SqlTypeDescriptor.SMALLINT, text},
         new boolean[] {true, false});
-    SqlValueBuffer input = values(2, 16);
+    SqlMutationValues input = values(table, 16);
     assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.SMALLINT, 40));
     assertEquals(StatusCode.OK, input.setText(1, text, "yes"));
     Encoded encoded = encode(table, input);
-    SqlValueBuffer output = values(2, 16);
-    assertEquals(StatusCode.OK, output.setFixed(0, SqlTypeDescriptor.SMALLINT, 7));
+    StoredTableRowView output = new StoredTableRowView();
     StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
     assertEquals(StatusCode.OK, filter.configure(0, SqlComparison.LESS_THAN, 30));
     assertEquals(StatusCode.CONFLICT, decodeTrusted(
         table, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
-    assertEquals(7, output.valueAt(0));
+    assertEquals(0, output.count());
 
     byte[] corrupt = encoded.bytes.clone();
     int textSlot = START + table.fixedOffsetAt(1);
@@ -73,13 +146,13 @@ final class StoredTableRowStorageTest {
     corrupt[textStart] = (byte) 0xc0;
     assertEquals(StatusCode.CONFLICT, decodeTrusted(
         table, ByteBuffer.wrap(corrupt), START, encoded.length, output, filter));
-    assertEquals(7, output.valueAt(0));
+    assertEquals(0, output.count());
 
     assertEquals(StatusCode.OK, filter.configure(0, SqlComparison.LESS_OR_EQUAL, 40));
     assertEquals(StatusCode.OK, decodeTrusted(
         table, ByteBuffer.wrap(corrupt), START, encoded.length, output, filter));
     assertEquals(40, output.valueAt(0));
-    assertEquals(0xc0, output.textByteAt(1, 0));
+    assertEquals(0xc0, textByteAt(output, 1, 0));
   }
 
   @Test
@@ -87,23 +160,22 @@ final class StoredTableRowStorageTest {
     int text = SqlTypeDescriptor.varchar(4);
     TableDescriptor table = table(
         new int[] {SqlTypeDescriptor.BIGINT, text}, new boolean[] {false, false});
-    SqlValueBuffer input = values(2, 16);
+    SqlMutationValues input = values(table, 16);
     assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.BIGINT, 4));
     assertEquals(StatusCode.OK, input.setText(1, text, "safe"));
     Encoded encoded = encode(table, input);
-    SqlValueBuffer output = values(2, 16);
-    assertEquals(StatusCode.OK, output.setFixed(0, SqlTypeDescriptor.BIGINT, 9));
+    StoredTableRowView output = new StoredTableRowView();
     StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
 
     assertEquals(StatusCode.OK, filter.configure(2, SqlComparison.EQUAL, 4));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
         table, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
-    assertEquals(9, output.valueAt(0));
+    assertEquals(0, output.count());
 
     assertEquals(StatusCode.OK, filter.configure(1, SqlComparison.EQUAL, 4));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
         table, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
-    assertEquals(9, output.valueAt(0));
+    assertEquals(0, output.count());
 
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
         filter.configure(0, SqlComparison.IN, 4));
@@ -113,7 +185,7 @@ final class StoredTableRowStorageTest {
         filter.configure(-1, SqlComparison.EQUAL, 4));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decodeTrusted(
         table, ByteBuffer.wrap(encoded.bytes), START, encoded.length, output, filter));
-    assertEquals(9, output.valueAt(0));
+    assertEquals(0, output.count());
   }
 
   @Test
@@ -122,19 +194,18 @@ final class StoredTableRowStorageTest {
     TableDescriptor table = table(
         new int[] {SqlTypeDescriptor.SMALLINT, text, SqlTypeDescriptor.BOOLEAN},
         new boolean[] {false, false, false});
-    SqlValueBuffer input = values(3, 16);
+    SqlMutationValues input = values(table, 16);
     assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.SMALLINT, 40));
     assertEquals(StatusCode.OK, input.setText(1, text, "yes"));
     assertEquals(StatusCode.OK, input.setFixed(2, SqlTypeDescriptor.BOOLEAN, 1));
     Encoded encoded = encode(table, input);
-    SqlValueBuffer output = values(3, 16);
+    StoredTableRowView output = new StoredTableRowView();
 
     assertEquals(StatusCode.OK, decodeTrusted(
         table, ByteBuffer.wrap(encoded.bytes), START, encoded.length,
         output, null, false));
     assertEquals(40, output.valueAt(0));
     assertEquals(0, output.descriptorAt(1));
-    assertEquals(0, output.textBytesUsed());
     assertEquals(1, output.valueAt(2));
 
     byte[] corrupt = encoded.bytes.clone();
@@ -163,7 +234,7 @@ final class StoredTableRowStorageTest {
     TableDescriptor table = table(
         new int[] {SqlTypeDescriptor.SMALLINT, text, SqlTypeDescriptor.INTEGER},
         new boolean[] {false, false, false});
-    SqlValueBuffer input = values(3, 16);
+    SqlMutationValues input = values(table, 16);
     assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.SMALLINT, 40));
     assertEquals(StatusCode.OK, input.setText(1, text, "wide"));
     assertEquals(StatusCode.OK, input.setFixed(2, SqlTypeDescriptor.INTEGER, 91));
@@ -171,10 +242,10 @@ final class StoredTableRowStorageTest {
     StoredTableColumnSelection selected = new StoredTableColumnSelection();
     assertEquals(StatusCode.OK, selected.selectNone(table.columnCount()));
     selected.select(2);
-    SqlValueBuffer output = values(3, 0);
-    assertEquals(StatusCode.OK, StoredTableRowDecoder.decode(
-        table, ByteBuffer.wrap(encoded.bytes), START, encoded.length,
-        output, null, selected));
+    StoredTableRowView output = new StoredTableRowView();
+    assertEquals(StatusCode.OK, output.bind(
+        table, ByteBuffer.wrap(encoded.bytes).asReadOnlyBuffer(), START, encoded.length,
+        null, selected));
     assertEquals(0, output.descriptorAt(0));
     assertEquals(0, output.descriptorAt(1));
     assertEquals(SqlTypeDescriptor.INTEGER, output.descriptorAt(2));
@@ -183,13 +254,13 @@ final class StoredTableRowStorageTest {
     byte[] corrupt = encoded.bytes.clone();
     int slot = START + table.fixedOffsetAt(1);
     FormatBytes.putInt(ByteBuffer.wrap(corrupt), slot, Integer.MAX_VALUE);
-    assertEquals(StatusCode.OK, StoredTableRowDecoder.decode(
-        table, ByteBuffer.wrap(corrupt), START, encoded.length,
-        output, null, selected));
+    assertEquals(StatusCode.OK, output.bind(
+        table, ByteBuffer.wrap(corrupt).asReadOnlyBuffer(), START, encoded.length,
+        null, selected));
     selected.select(1);
-    assertEquals(StatusCode.CORRUPTION, StoredTableRowDecoder.decode(
-        table, ByteBuffer.wrap(corrupt), START, encoded.length,
-        output, null, selected));
+    assertEquals(StatusCode.CORRUPTION, output.bind(
+        table, ByteBuffer.wrap(corrupt).asReadOnlyBuffer(), START, encoded.length,
+        null, selected));
   }
 
   @Test
@@ -198,7 +269,7 @@ final class StoredTableRowStorageTest {
         new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BOOLEAN,
           SqlTypeDescriptor.DATE, SqlTypeDescriptor.varchar(4)},
         new boolean[] {false, true, true, true});
-    SqlValueBuffer input = values(4, 32);
+    SqlMutationValues input = values(table, 32);
     assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.BIGINT, -19));
     assertEquals(StatusCode.OK, input.setNull(1, SqlTypeDescriptor.BOOLEAN));
     assertEquals(StatusCode.OK, input.setFixed(2, SqlTypeDescriptor.DATE, 0));
@@ -213,14 +284,14 @@ final class StoredTableRowStorageTest {
     assertEquals(ByteOrder.BIG_ENDIAN, row.order());
     assertEquals(10, FormatBytes.getInt(row, START + table.fixedOffsetAt(3) + 4));
 
-    SqlValueBuffer output = values(4, 32);
+    StoredTableRowView output = new StoredTableRowView();
     assertEquals(StatusCode.OK,
         decodeTrusted(table, row, START, encoded.length(), output));
     assertEquals(-19, output.valueAt(0));
     assertEquals(true, output.isNull(1));
     assertEquals(0, output.valueAt(2));
     byte[] text = new byte[10];
-    assertEquals(StatusCode.OK, output.copyTextBytes(3, text, 0));
+    copyTextBytes(output, 3, text);
     assertEquals("A£河🌊", new String(text, StandardCharsets.UTF_8));
     assertEquals(2, row.position());
     assertEquals(200, row.limit());
@@ -230,8 +301,9 @@ final class StoredTableRowStorageTest {
   void preservesDestinationOnEveryEncodePreflightFailure() {
     TableDescriptor table = table(
         new int[] {SqlTypeDescriptor.BIGINT}, new boolean[] {false});
-    SqlValueBuffer wrong = values(1, 0);
-    assertEquals(StatusCode.OK, wrong.setFixed(0, SqlTypeDescriptor.BOOLEAN, 1));
+    SqlMutationValues wrong = values(table, 0);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        wrong.setFixed(0, SqlTypeDescriptor.BOOLEAN, 1));
     byte[] bytes = new byte[64];
     Arrays.fill(bytes, (byte) 0x5a);
     byte[] before = bytes.clone();
@@ -241,7 +313,7 @@ final class StoredTableRowStorageTest {
         StoredTableRowEncoder.encode(table, wrong, ByteBuffer.wrap(bytes), 0, result));
     assertArrayEquals(before, bytes);
     assertEquals(0, result.length());
-    SqlValueBuffer right = values(1, 0);
+    SqlMutationValues right = values(table, 0);
     assertEquals(StatusCode.OK, right.setFixed(0, SqlTypeDescriptor.BIGINT, 1));
     ByteBuffer shortTarget = ByteBuffer.wrap(bytes).limit(table.encodedMaximumRowBytes() - 1);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED,
@@ -252,7 +324,7 @@ final class StoredTableRowStorageTest {
   @Test
   void trustsContentOutsideRequiredStructuralMetadata() {
     TableDescriptor table = table(9, SqlTypeDescriptor.BOOLEAN, true);
-    SqlValueBuffer input = values(9, 0);
+    SqlMutationValues input = values(table, 0);
     for (int index = 0; index < 9; index++) {
       StatusCode status = index == 7
           ? input.setNull(index, SqlTypeDescriptor.BOOLEAN)
@@ -260,8 +332,7 @@ final class StoredTableRowStorageTest {
       assertEquals(StatusCode.OK, status);
     }
     Encoded row = encode(table, input);
-    SqlValueBuffer output = values(9, 0);
-    assertEquals(StatusCode.OK, output.setFixed(0, SqlTypeDescriptor.BOOLEAN, 1));
+    StoredTableRowView output = new StoredTableRowView();
 
     byte[] corrupt = row.bytes.clone();
     corrupt[START + 1] |= (byte) 0x80;
@@ -286,11 +357,11 @@ final class StoredTableRowStorageTest {
   void rejectsTextBoundsWhileTrustingStoredContent() {
     int varchar = SqlTypeDescriptor.varchar(4);
     TableDescriptor table = table(new int[] {varchar, varchar}, new boolean[] {true, true});
-    SqlValueBuffer input = values(2, 32);
+    SqlMutationValues input = values(table, 32);
     assertEquals(StatusCode.OK, input.setText(0, varchar, "ab"));
     assertEquals(StatusCode.OK, input.setText(1, varchar, "£"));
     Encoded row = encode(table, input);
-    SqlValueBuffer output = values(2, 32);
+    StoredTableRowView output = new StoredTableRowView();
 
     byte[] corrupt = row.bytes.clone();
     int firstSlot = START + table.fixedOffsetAt(0);
@@ -298,7 +369,7 @@ final class StoredTableRowStorageTest {
         FormatBytes.getInt(ByteBuffer.wrap(corrupt), firstSlot) + 1);
     assertEquals(StatusCode.OK, decodeTrusted(
         table, ByteBuffer.wrap(corrupt), START, row.length, output));
-    assertEquals('b', output.textByteAt(0, 0));
+    assertEquals('b', textByteAt(output, 0, 0));
 
     corrupt = row.bytes.clone();
     FormatBytes.putInt(ByteBuffer.wrap(corrupt), firstSlot, row.length);
@@ -309,7 +380,7 @@ final class StoredTableRowStorageTest {
     corrupt[textStart] = (byte) 0xc0;
     assertEquals(StatusCode.OK, decodeTrusted(
         table, ByteBuffer.wrap(corrupt), START, row.length, output));
-    assertEquals(0xc0, output.textByteAt(0, 0));
+    assertEquals(0xc0, textByteAt(output, 0, 0));
 
     corrupt = row.bytes.clone();
     FormatBytes.putInt(ByteBuffer.wrap(corrupt), firstSlot + Integer.BYTES, -1);
@@ -328,37 +399,30 @@ final class StoredTableRowStorageTest {
   }
 
   @Test
-  void preservesDestinationWhenDecodeStorageIsInsufficient() {
+  void preservesPreviousViewWhenNewRowHasInvalidTextBounds() {
     int varchar = SqlTypeDescriptor.varchar(4);
     TableDescriptor table = table(new int[] {varchar, varchar}, new boolean[] {true, true});
-    SqlValueBuffer input = values(2, 16);
+    SqlMutationValues input = values(table, 16);
     assertEquals(StatusCode.OK, input.setText(0, varchar, "old"));
     assertEquals(StatusCode.OK, input.setText(1, varchar, "new"));
     Encoded row = encode(table, input);
 
-    SqlValueBuffer tooFewLanes = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, tooFewLanes.reserve(1, 1, 16, 16));
-    assertEquals(StatusCode.OK, tooFewLanes.clearForSize(1));
-    assertEquals(StatusCode.OK, tooFewLanes.setText(0, varchar, "keep"));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, decodeTrusted(
-        table, ByteBuffer.wrap(row.bytes), START, row.length, tooFewLanes));
-    assertEquals(1, tooFewLanes.count());
-    assertEquals(4, tooFewLanes.textByteLengthAt(0));
-
-    SqlValueBuffer tooLittleText = values(2, 1);
-    assertEquals(StatusCode.OK, tooLittleText.setNull(0, varchar));
-    assertEquals(StatusCode.OK, tooLittleText.setText(1, varchar, "x"));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, decodeTrusted(
-        table, ByteBuffer.wrap(row.bytes), START, row.length, tooLittleText));
-    assertEquals(true, tooLittleText.isNull(0));
-    assertEquals(1, tooLittleText.textByteLengthAt(1));
+    StoredTableRowView view = new StoredTableRowView();
+    assertEquals(StatusCode.OK, decodeTrusted(
+        table, ByteBuffer.wrap(row.bytes), START, row.length, view));
+    byte[] corrupt = row.bytes.clone();
+    FormatBytes.putInt(ByteBuffer.wrap(corrupt), START + table.fixedOffsetAt(1), row.length);
+    assertEquals(StatusCode.CORRUPTION, decodeTrusted(
+        table, ByteBuffer.wrap(corrupt), START, row.length, view));
+    assertEquals(3, view.textByteLengthAt(0));
+    assertEquals('n', textByteAt(view, 1, 0));
   }
 
   @Test
   void preservesNullOrdinalsAcrossByteAndWordBoundaries() {
     int count = 1_024;
     TableDescriptor table = table(count, SqlTypeDescriptor.BOOLEAN, true);
-    SqlValueBuffer input = values(count, 0);
+    SqlMutationValues input = values(table, 0);
     int[] boundaries = {0, 7, 8, 63, 64, 255, 1_023};
     for (int index = 0; index < count; index++) {
       boolean boundary = false;
@@ -368,7 +432,7 @@ final class StoredTableRowStorageTest {
           : input.setFixed(index, SqlTypeDescriptor.BOOLEAN, index & 1));
     }
     Encoded row = encode(table, input);
-    SqlValueBuffer output = values(count, 0);
+    StoredTableRowView output = new StoredTableRowView();
     assertEquals(StatusCode.OK, decodeTrusted(
         table, ByteBuffer.wrap(row.bytes), START, row.length, output));
     for (int boundary : boundaries) assertEquals(true, output.isNull(boundary));
@@ -387,7 +451,7 @@ final class StoredTableRowStorageTest {
     boolean[] nullable = new boolean[types.length];
     TableDescriptor table = table(types, nullable);
     assertEquals(HeapPage.MAXIMUM_ROW_BYTES, table.encodedMaximumRowBytes());
-    SqlValueBuffer input = values(types.length, 4_051 * 4);
+    SqlMutationValues input = values(table, 4_051 * 4);
     assertEquals(StatusCode.OK, input.setText(
         0, types[0], supplementaryText(4_051), 0, 4_051 * 2));
     assertEquals(StatusCode.OK, input.setFixed(1, SqlTypeDescriptor.BOOLEAN, 0));
@@ -398,7 +462,7 @@ final class StoredTableRowStorageTest {
     assertEquals(StatusCode.OK, StoredTableRowEncoder.encode(
         table, input, ByteBuffer.wrap(bytes), 0, result));
     assertEquals(HeapPage.MAXIMUM_ROW_BYTES, result.length());
-    SqlValueBuffer output = values(types.length, 4_051 * 4);
+    StoredTableRowView output = new StoredTableRowView();
     assertEquals(StatusCode.OK, decodeTrusted(
         table, ByteBuffer.wrap(bytes), 0, result.length(), output));
     assertEquals(1, output.valueAt(2));
@@ -416,7 +480,7 @@ final class StoredTableRowStorageTest {
     TableDescriptor table = table(types, new boolean[types.length]);
     for (int column = 0; column < types.length; column++) {
       for (int edge = 0; edge < 2; edge++) {
-        SqlValueBuffer input = values(types.length, 0);
+        SqlMutationValues input = values(table, 0);
         for (int index = 0; index < types.length; index++) {
           long value = edge == 0
               ? SqlValueDomain.minimumFixed(types[index])
@@ -424,7 +488,7 @@ final class StoredTableRowStorageTest {
           assertEquals(StatusCode.OK, input.setFixed(index, types[index], value));
         }
         Encoded row = encode(table, input);
-        SqlValueBuffer output = values(types.length, 0);
+        StoredTableRowView output = new StoredTableRowView();
         assertEquals(StatusCode.OK, decodeTrusted(
             table, ByteBuffer.wrap(row.bytes), START, row.length, output));
         for (int index = 0; index < types.length; index++) {
@@ -432,7 +496,7 @@ final class StoredTableRowStorageTest {
         }
       }
 
-      SqlValueBuffer valid = values(types.length, 0);
+      SqlMutationValues valid = values(table, 0);
       for (int index = 0; index < types.length; index++) {
         assertEquals(StatusCode.OK, valid.setFixed(
             index, types[index], SqlValueDomain.minimumFixed(types[index])));
@@ -442,8 +506,7 @@ final class StoredTableRowStorageTest {
       FormatBytes.putLong(ByteBuffer.wrap(corrupt),
           START + table.fixedOffsetAt(column),
           SqlValueDomain.exclusiveMaximumFixed(types[column]));
-      SqlValueBuffer output = values(types.length, 0);
-      assertEquals(StatusCode.OK, output.setFixed(0, types[0], 7));
+      StoredTableRowView output = new StoredTableRowView();
       assertEquals(StatusCode.OK, decodeTrusted(
           table, ByteBuffer.wrap(corrupt), START, row.length, output));
       assertEquals(SqlValueDomain.exclusiveMaximumFixed(types[column]),
@@ -457,13 +520,13 @@ final class StoredTableRowStorageTest {
     TableDescriptor table = table(
         new int[] {decimal, SqlTypeDescriptor.INTEGER}, new boolean[] {false, false});
     assertEquals(16, table.fixedWidthAt(0));
-    SqlValueBuffer input = values(2, 0);
+    SqlMutationValues input = values(table, 0);
     long high = 542_101_086_242_752_217L;
     long low = 68_739_955_140_067_328L;
     assertEquals(StatusCode.OK, input.setDecimal128(0, decimal, high, low));
     assertEquals(StatusCode.OK, input.setFixed(1, SqlTypeDescriptor.INTEGER, 7));
     Encoded row = encode(table, input);
-    SqlValueBuffer output = values(2, 0);
+    StoredTableRowView output = new StoredTableRowView();
     assertEquals(StatusCode.OK, decodeTrusted(
         table, ByteBuffer.wrap(row.bytes), START, row.length, output));
     assertEquals(high, output.highValueAt(0));
@@ -483,33 +546,31 @@ final class StoredTableRowStorageTest {
     int varchar = SqlTypeDescriptor.varchar(8);
     TableDescriptor table = table(
         new int[] {SqlTypeDescriptor.BIGINT, varchar}, new boolean[] {false, false});
-    SqlValueBuffer input = values(2, 16);
+    SqlMutationValues input = values(table, 16);
     assertEquals(StatusCode.OK, input.setFixed(0, SqlTypeDescriptor.BIGINT, 42));
     assertEquals(StatusCode.OK, input.setText(1, varchar, "river"));
-    SqlValueBuffer output = values(2, 16);
+    StoredTableRowView output = new StoredTableRowView();
     ByteBuffer row = ByteBuffer.allocate(128);
     StoredTableRowEncodeResult result = new StoredTableRowEncodeResult();
     assertEquals(StatusCode.OK,
         StoredTableRowEncoder.encode(table, input, row, 0, result));
     HeapRowResult fetched = new HeapRowResult();
     fetched.set(row, 1, 0, result.length());
-    RelationalDescriptorRowBuffer reader = new RelationalDescriptorRowBuffer();
-    assertEquals(StatusCode.OK, reader.reserve(result.length()));
-    exercise(reader, table, fetched, output, 300_000);
+    exercise(table, fetched, output, 300_000);
 
     long thread = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(thread);
-    exercise(reader, table, fetched, output, 100_000);
+    exercise(table, fetched, output, 100_000);
     long allocated = bean.getThreadAllocatedBytes(thread) - before;
     assertEquals(true, allocated <= 256, "warmed stored row read allocated: " + allocated);
     before = bean.getThreadAllocatedBytes(thread);
-    exercise(reader, table, fetched, output, 1_000_000);
+    exercise(table, fetched, output, 1_000_000);
     allocated = bean.getThreadAllocatedBytes(thread) - before;
     assertEquals(true, allocated <= 256, "longer stored row read allocated: " + allocated);
   }
 
   private static void assertCorruptPreserves(
-      TableDescriptor table, int length, byte[] bytes, SqlValueBuffer output) {
+      TableDescriptor table, int length, byte[] bytes, StoredTableRowView output) {
     int count = output.count();
     long first = output.valueAt(0);
     assertEquals(StatusCode.CORRUPTION, decodeTrusted(
@@ -520,19 +581,19 @@ final class StoredTableRowStorageTest {
 
   private static StatusCode decodeTrusted(
       TableDescriptor table, ByteBuffer source, int start, int length,
-      SqlValueBuffer output) {
+      StoredTableRowView output) {
     return decodeTrusted(table, source, start, length, output, null, true);
   }
 
   private static StatusCode decodeTrusted(
       TableDescriptor table, ByteBuffer source, int start, int length,
-      SqlValueBuffer output, StoredTableRowIntegerFilter filter) {
+      StoredTableRowView output, StoredTableRowIntegerFilter filter) {
     return decodeTrusted(table, source, start, length, output, filter, true);
   }
 
   private static StatusCode decodeTrusted(
       TableDescriptor table, ByteBuffer source, int start, int length,
-      SqlValueBuffer output, StoredTableRowIntegerFilter filter, boolean publishText) {
+      StoredTableRowView output, StoredTableRowIntegerFilter filter, boolean publishText) {
     StoredTableColumnSelection selection = null;
     if (!publishText) {
       selection = new StoredTableColumnSelection();
@@ -544,11 +605,10 @@ final class StoredTableRowStorageTest {
         }
       }
     }
-    return StoredTableRowDecoder.decode(
-        table, source, start, length, output, filter, selection);
+    return output.bind(table, source.asReadOnlyBuffer(), start, length, filter, selection);
   }
 
-  private static Encoded encode(TableDescriptor table, SqlValueBuffer input) {
+  private static Encoded encode(TableDescriptor table, SqlValueAccess input) {
     byte[] bytes = new byte[START + table.encodedMaximumRowBytes() + 1];
     StoredTableRowEncodeResult result = new StoredTableRowEncodeResult();
     assertEquals(StatusCode.OK, StoredTableRowEncoder.encode(
@@ -556,11 +616,25 @@ final class StoredTableRowStorageTest {
     return new Encoded(bytes, result.length());
   }
 
-  private static SqlValueBuffer values(int lanes, int textBytes) {
-    SqlValueBuffer result = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, result.reserve(lanes, 1_024, textBytes, textBytes));
-    assertEquals(StatusCode.OK, result.clearForSize(lanes));
+  private static SqlMutationValues values(TableDescriptor table, int textBytes) {
+    SqlMutationValues result = new SqlMutationValues();
+    assertEquals(StatusCode.OK, result.reserve(table, textBytes));
+    assertEquals(StatusCode.OK, result.begin(table, null));
     return result;
+  }
+
+  private static int textByteAt(SqlValueAccess values, int column, int index) {
+    int offset = values.textByteOffsetAt(column);
+    int length = values.textByteLengthAt(column);
+    return offset < 0 || index < 0 || index >= length ? -1
+        : Byte.toUnsignedInt(values.textSource(column).getByte(offset + index));
+  }
+
+  private static void copyTextBytes(SqlValueAccess values, int column, byte[] target) {
+    int offset = values.textByteOffsetAt(column);
+    for (int index = 0; index < target.length; index++) {
+      target[index] = values.textSource(column).getByte(offset + index);
+    }
   }
 
   private static TableDescriptor table(int count, int type, boolean nullable) {
@@ -594,10 +668,10 @@ final class StoredTableRowStorageTest {
   }
 
   private static void exercise(
-      RelationalDescriptorRowBuffer reader, TableDescriptor table,
-      HeapRowResult fetched, SqlValueBuffer output, int iterations) {
+      TableDescriptor table, HeapRowResult fetched,
+      StoredTableRowView output, int iterations) {
     for (int index = 0; index < iterations; index++) {
-      StatusCode status = reader.decode(table, fetched, output);
+      StatusCode status = output.bindFetched(table, fetched, null, null);
       if (!status.isOk()) throw new AssertionError(status);
       allocationGuard += output.valueAt(0) + output.textByteLengthAt(1);
     }

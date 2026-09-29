@@ -1,12 +1,13 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.tx.api.lock.LockMode;
 
 /** Opens the validated descriptor cursor selected for one subquery invocation. */
 final class SqlDescriptorSubqueryCursor {
   StatusCode open(
-      SqlDescriptorSubqueryFrameState state, SqlDescriptorValueSource outer) {
+      SqlDescriptorSubqueryFrameState state, SqlValueAccess outer) {
     StatusCode status = state.cursor.reset();
     if (status.isOk()) status = state.session.resolveDescriptor(
         state.command.tableName(), state.pin, state.detail);

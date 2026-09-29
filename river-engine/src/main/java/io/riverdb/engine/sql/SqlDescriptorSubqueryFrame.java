@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlComparison;
@@ -38,7 +39,7 @@ final class SqlDescriptorSubqueryFrame {
   }
 
   StatusCode evaluate(
-      boolean leftNull, long leftHigh, long left, SqlDescriptorValueSource outer) {
+      boolean leftNull, long leftHigh, long left, SqlValueAccess outer) {
     return invocation.evaluate(state, leftNull, leftHigh, left, outer);
   }
 

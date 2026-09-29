@@ -80,4 +80,92 @@ public final class Utf8Text {
     }
     return Integer.compare(leftLength, rightLength);
   }
+
+  /** Unicode-code-point order for two admitted UTF-8 slices. */
+  public static int compare(
+      BoundedByteSource left, int leftOffset, int leftLength,
+      BoundedByteSource right, int rightOffset, int rightLength) {
+    int common = Math.min(leftLength, rightLength);
+    for (int index = 0; index < common; index++) {
+      int compared = Integer.compare(
+          Byte.toUnsignedInt(left.getByte(leftOffset + index)),
+          Byte.toUnsignedInt(right.getByte(rightOffset + index)));
+      if (compared != 0) return compared;
+    }
+    return Integer.compare(leftLength, rightLength);
+  }
+
+  /** Counts UTF-16 units in UTF-8 that was validated before this call. */
+  public static int trustedUtf16Length(
+      BoundedByteSource source, int offset, int length) {
+    int characters = 0;
+    for (int index = 0; index < length;) {
+      int first = Byte.toUnsignedInt(source.getByte(offset + index));
+      int width = first < 0x80 ? 1 : first < 0xe0 ? 2 : first < 0xf0 ? 3 : 4;
+      characters += width == 4 ? 2 : 1;
+      index += width;
+    }
+    return characters;
+  }
+
+  /** Counts scalars in UTF-8 admitted by an earlier owner. */
+  public static int trustedScalarCount(
+      BoundedByteSource source, int offset, int length) {
+    int scalars = 0;
+    for (int index = 0; index < length; index++) {
+      if ((source.getByte(offset + index) & 0xc0) != 0x80) scalars++;
+    }
+    return scalars;
+  }
+
+  /** Reads one UTF-16 unit from UTF-8 that was validated before this call. */
+  public static char trustedUtf16Character(
+      BoundedByteSource source, int offset, int length, int target) {
+    int character = 0;
+    for (int index = 0; index < length;) {
+      int first = Byte.toUnsignedInt(source.getByte(offset + index));
+      int width = first < 0x80 ? 1 : first < 0xe0 ? 2 : first < 0xf0 ? 3 : 4;
+      if (width > length - index) return 0;
+      int scalar = width == 1 ? first : first & (0x7f >> width);
+      for (int byteIndex = 1; byteIndex < width; byteIndex++) {
+        scalar = scalar << 6
+            | Byte.toUnsignedInt(source.getByte(offset + index + byteIndex)) & 0x3f;
+      }
+      if (width < 4) {
+        if (character == target) return (char) scalar;
+        character++;
+      } else {
+        if (character == target) return Character.highSurrogate(scalar);
+        if (character + 1 == target) return Character.lowSurrogate(scalar);
+        character += 2;
+      }
+      index += width;
+    }
+    return 0;
+  }
+
+  /** Decodes admitted UTF-8 into a caller-owned UTF-16 buffer. */
+  public static int trustedDecode(
+      byte[] source, int offset, int length, char[] target, int targetOffset) {
+    int written = 0;
+    for (int index = 0; index < length;) {
+      int first = Byte.toUnsignedInt(source[offset + index]);
+      int width = first < 0x80 ? 1 : first < 0xe0 ? 2 : first < 0xf0 ? 3 : 4;
+      if (width > length - index) return -1;
+      int scalar = width == 1 ? first : first & (0x7f >> width);
+      for (int byteIndex = 1; byteIndex < width; byteIndex++) {
+        scalar = scalar << 6 | source[offset + index + byteIndex] & 0x3f;
+      }
+      if (width < 4) {
+        if (targetOffset + written >= target.length) return -1;
+        target[targetOffset + written++] = (char) scalar;
+      } else {
+        if (targetOffset + written > target.length - 2) return -1;
+        target[targetOffset + written++] = Character.highSurrogate(scalar);
+        target[targetOffset + written++] = Character.lowSurrogate(scalar);
+      }
+      index += width;
+    }
+    return written;
+  }
 }

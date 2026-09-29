@@ -20,7 +20,7 @@ final class RelationalDescriptorReferenceCheck {
   }
 
   StatusCode check(
-      TableDescriptor parent, SqlValueBuffer before, SqlValueBuffer after,
+      TableDescriptor parent, SqlValueAccess before, SqlValueAccess after,
       TableDescriptor child, long changedRowId) {
     for (int index = 0; index < child.foreignKeyCount(); index++) {
       KeyDescriptor foreign = child.foreignKeyAt(index);
@@ -65,7 +65,7 @@ final class RelationalDescriptorReferenceCheck {
   }
 
   private StatusCode changed(
-      KeyDescriptor target, SqlValueBuffer before, SqlValueBuffer after) {
+      KeyDescriptor target, SqlValueAccess before, SqlValueAccess after) {
     StatusCode status = beforeKey.encodeUser(target, before);
     if (!status.isOk()) return status;
     if (beforeKey.containsNull()) return StatusCode.CONFLICT;

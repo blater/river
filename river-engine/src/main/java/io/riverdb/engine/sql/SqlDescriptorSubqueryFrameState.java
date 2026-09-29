@@ -5,6 +5,7 @@ import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
 import io.riverdb.engine.relational.RelationalRowIdentityResult;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.StoredTableRowView;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.sql.SqlCommand;
 
@@ -15,8 +16,7 @@ final class SqlDescriptorSubqueryFrameState {
   final StatusDetail detail = new StatusDetail(128);
   final RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
   final RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
-  final SqlDescriptorSubqueryRowValues values;
-  final SqlDescriptorValueSource childSource = new SqlDescriptorValueSource();
+  final StoredTableRowView values = new StoredTableRowView();
   final SqlDescriptorCorrelatedPredicate predicate;
   final SqlDescriptorSubqueryIndexAccess index;
   final SqlDescriptorSubqueryProjection projection = new SqlDescriptorSubqueryProjection();
@@ -39,7 +39,6 @@ final class SqlDescriptorSubqueryFrameState {
     plan = subqueryPlan;
     cache = resultCache;
     edge = edgeIndex;
-    values = new SqlDescriptorSubqueryRowValues(budget);
     predicate = new SqlDescriptorCorrelatedPredicate(budget);
     index = new SqlDescriptorSubqueryIndexAccess(budget);
   }
@@ -51,6 +50,7 @@ final class SqlDescriptorSubqueryFrameState {
         ? session.descriptorRows().closeScan(cursor)
         : pin.isActive() ? pin.release() : StatusCode.OK;
     if (status.isOk()) status = cursor.reset();
+    if (status.isOk()) values.reset();
     return status;
   }
 

@@ -1,16 +1,13 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
 
 /** Reusable direct-column result shape and publisher for descriptor rows. */
 final class SqlDescriptorProjection {
-  private static final int MAXIMUM_TEXT_CHARS = Utf8Text.MAXIMUM_BUFFER_CHARACTERS;
-  private final char[] textChars = new char[MAXIMUM_TEXT_CHARS];
   private final SqlDescriptorColumnName descriptorName = new SqlDescriptorColumnName();
   private final SqlDescriptorProjectionShape shape;
 
@@ -25,7 +22,7 @@ final class SqlDescriptorProjection {
   }
 
   StatusCode publish(
-      SqlValueBuffer values,
+      SqlValueAccess values,
       long key,
       long commitSequence,
       SqlExecutionResult result) {
@@ -51,7 +48,7 @@ final class SqlDescriptorProjection {
   }
 
   StatusCode publishScan(
-      SqlValueBuffer values, long key, SqlScanRowResult result) {
+      SqlValueAccess values, long key, SqlScanRowResult result) {
     StatusCode status = result.beginProjected(key, shape.descriptors, shape.count);
     for (int index = 0; status.isOk() && index < shape.count; index++) {
       status = publishScanValue(result, values, index, shape.columns[index]);
@@ -77,7 +74,7 @@ final class SqlDescriptorProjection {
   boolean[] orderDescending() { return shape.descending; }
 
   private StatusCode publishValue(
-      SqlExecutionResult result, SqlValueBuffer values, int projection, int column) {
+      SqlExecutionResult result, SqlValueAccess values, int projection, int column) {
     if (column < 0 || values.isNull(column)) {
       result.setProjectedNull(projection);
       return StatusCode.OK;
@@ -92,12 +89,13 @@ final class SqlDescriptorProjection {
       result.setProjectedValue(projection, values.valueAt(column));
       return StatusCode.OK;
     }
-    int chars = values.copyTextChars(column, textChars, 0);
-    return chars < 0 ? StatusCode.CORRUPTION : result.setTextAt(projection, textChars, chars);
+    return result.setUtf8At(
+        projection, values.textSource(column),
+        values.textByteOffsetAt(column), values.textByteLengthAt(column));
   }
 
   private StatusCode publishScanValue(
-      SqlScanRowResult result, SqlValueBuffer values, int projection, int column) {
+      SqlScanRowResult result, SqlValueAccess values, int projection, int column) {
     if (column < 0 || values.isNull(column)) {
       result.setProjectedNull(projection);
       return StatusCode.OK;
@@ -112,8 +110,9 @@ final class SqlDescriptorProjection {
       result.setProjectedValue(projection, values.valueAt(column));
       return StatusCode.OK;
     }
-    int chars = values.copyTextChars(column, textChars, 0);
-    return chars < 0 ? StatusCode.CORRUPTION : result.setTextAt(projection, textChars, chars);
+    return result.setUtf8At(
+        projection, values.textSource(column),
+        values.textByteOffsetAt(column), values.textByteLengthAt(column));
   }
 
   private StatusCode publishScanValue(

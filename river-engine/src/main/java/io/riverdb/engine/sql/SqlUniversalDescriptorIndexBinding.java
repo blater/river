@@ -48,7 +48,11 @@ final class SqlUniversalDescriptorIndexBinding {
     }
     if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR
         && SqlTypeDescriptor.typeId(targetDescriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      return comparable(target.buffer().setText(
+      if (source.hasUtf8(sourceColumn)) {
+        return comparable(target.borrowAdmittedText(
+            targetColumn, descriptor, targetDescriptor, source, sourceColumn));
+      }
+      return comparable(target.setText(
           targetColumn, targetDescriptor, source.text(sourceColumn), 0,
           source.textLength(sourceColumn)));
     }

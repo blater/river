@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
 import io.riverdb.engine.relational.RelationalRowIdentityResult;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.StoredTableRowView;
 
 /** Drains one physical descriptor scan into retained row storage. */
 final class SqlDescriptorScanMaterializer {
@@ -12,7 +13,7 @@ final class SqlDescriptorScanMaterializer {
   static StatusCode materialize(
       RelationalSession session,
       RelationalDescriptorScanCursor cursor,
-      SqlDescriptorMutationValues values,
+      StoredTableRowView values,
       RelationalRowIdentityResult identity,
       SqlDescriptorPredicate predicate,
       SqlDescriptorBoundPredicate boundPredicate,
@@ -20,17 +21,17 @@ final class SqlDescriptorScanMaterializer {
       SqlDescriptorOrderedRows ordered) {
     StatusCode status = StatusCode.OK;
     while (status.isOk()) {
-      status = session.descriptorRows().nextScan(cursor, values.fetched(), identity);
+      status = session.descriptorRows().nextScan(cursor, values, identity, null, null);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         break;
       }
       if (status.isOk()) status = boundPredicate.active()
-          ? boundPredicate.evaluate(values.fetched()) : predicate.evaluate(values.fetched());
+          ? boundPredicate.evaluate(values) : predicate.evaluate(values);
       boolean matched = boundPredicate.active()
           ? boundPredicate.matched() : predicate.matched();
       if (status.isOk() && matched) {
-        status = ordered.append(values.fetched(), identity.logicalRowId());
+        status = ordered.append(values, identity.logicalRowId());
         if (status.isOk() && subqueries.active()) subqueries.parentAccepted();
       }
     }

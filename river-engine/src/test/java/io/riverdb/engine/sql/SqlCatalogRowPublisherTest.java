@@ -10,47 +10,37 @@ import java.lang.management.ManagementFactory;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
-final class SqlCatalogRowBufferTest {
+final class SqlCatalogRowPublisherTest {
   private static volatile long allocationGuard;
 
   @Test
-  void admitsOnlyTheBoundedCatalogShape() {
-    SqlCatalogRowBuffer row = new SqlCatalogRowBuffer();
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, row.reserve(-1, 0));
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, row.reserve(0, -1));
-    assertEquals(StatusCode.OK, row.reserve(5, 512));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, row.reserve(6, 512));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, row.reserve(5, 513));
-  }
-
-  @Test
-  void publishesTheFullSupplementaryCharacterBridge() {
-    SqlCatalogRowBuffer row = new SqlCatalogRowBuffer();
+  void publishesSupplementaryTextDirectlyIntoTheOwnedResult() {
+    SqlCatalogRowPublisher rows = new SqlCatalogRowPublisher();
     SqlPhysicalPlan plan = objectPlan();
     SqlScanRowResult result = new SqlScanRowResult();
     String objectName = "🌊".repeat(64);
     char[] actual = new char[128];
 
-    assertEquals(StatusCode.OK, row.reserve(2, 261));
-    assertEquals(StatusCode.OK, row.loadObject(plan, objectName, "TABLE"));
-    assertEquals(StatusCode.OK, row.publish(7, result));
+    assertEquals(StatusCode.OK, rows.object(plan, objectName, "TABLE", result));
     assertEquals(128, result.copyTextAt(0, actual, 0));
     assertEquals(objectName, new String(actual));
-    assertEquals(7, result.key());
+    assertEquals(0, result.key());
+    assertEquals(StatusCode.OK, rows.object(plan, "next", "VIEW", result));
+    assertEquals(4, result.copyTextAt(0, actual, 0));
+    assertEquals("next", new String(actual, 0, 4));
   }
 
   @Test
-  void warmedMaterializationAndPublicationDoNotAllocatePerRow() {
+  void warmedPublicationDoesNotAllocatePerRow() {
     ThreadMXBean bean = allocationBean();
-    SqlCatalogRowBuffer row = new SqlCatalogRowBuffer();
+    SqlCatalogRowPublisher rows = new SqlCatalogRowPublisher();
     SqlPhysicalPlan plan = objectPlan();
     SqlScanRowResult result = new SqlScanRowResult();
-    assertEquals(StatusCode.OK, row.reserve(2, 261));
-    exercise(row, plan, result, 10_000);
+    exercise(rows, plan, result, 10_000);
 
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
-    exercise(row, plan, result, 100_000);
+    exercise(rows, plan, result, 100_000);
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 256, "warmed catalog rows allocated: " + allocated);
   }
@@ -64,13 +54,10 @@ final class SqlCatalogRowBufferTest {
   }
 
   private static void exercise(
-      SqlCatalogRowBuffer row,
-      SqlPhysicalPlan plan,
-      SqlScanRowResult result,
-      int iterations) {
+      SqlCatalogRowPublisher rows, SqlPhysicalPlan plan,
+      SqlScanRowResult result, int iterations) {
     for (int index = 0; index < iterations; index++) {
-      allocationGuard += row.loadObject(plan, "river", "TABLE").stableCode();
-      allocationGuard += row.publish(index, result).stableCode();
+      allocationGuard += rows.object(plan, "river", "TABLE", result).stableCode();
       allocationGuard += result.key();
     }
   }

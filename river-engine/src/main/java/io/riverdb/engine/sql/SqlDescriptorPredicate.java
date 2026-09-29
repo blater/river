@@ -1,14 +1,13 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
 
 /** Bound direct-column fixed-value predicate for descriptor scans. */
 final class SqlDescriptorPredicate {
-  private final SqlDescriptorValueSource source = new SqlDescriptorValueSource();
   private final SqlDescriptorPredicateBindings bindings;
   private final SqlDescriptorPredicateEvaluation evaluation =
       new SqlDescriptorPredicateEvaluation();
@@ -36,12 +35,8 @@ final class SqlDescriptorPredicate {
     return status;
   }
 
-  StatusCode evaluate(SqlValueBuffer values) {
-    return evaluation.evaluate(source.use(values), match);
-  }
-
-  StatusCode evaluate(SqlBlockRow values) {
-    return evaluation.evaluate(source.use(values), match);
+  StatusCode evaluate(SqlValueAccess values) {
+    return evaluation.evaluate(values, match);
   }
 
   StatusCode prepareIndexCandidates(SqlCommand command, TableDescriptor table) {

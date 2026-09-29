@@ -14,7 +14,7 @@ final class StoredTableRowEncoder {
 
   static StatusCode encode(
       TableDescriptor table,
-      SqlValueBuffer values,
+      SqlValueAccess values,
       ByteBuffer target,
       int start,
       StoredTableRowEncodeResult result) {
@@ -35,14 +35,14 @@ final class StoredTableRowEncoder {
   }
 
   private static boolean validArguments(
-      TableDescriptor table, SqlValueBuffer values,
+      TableDescriptor table, SqlValueAccess values,
       ByteBuffer target, int start) {
     return table != null
         && values != null && values.count() == table.columnCount()
         && target != null && !target.isReadOnly() && start >= 0 && start <= target.limit();
   }
 
-  private static int checkedLength(TableDescriptor table, SqlValueBuffer values) {
+  private static int checkedLength(TableDescriptor table, SqlValueAccess values) {
     int count = table.columnCount();
     int length = fixedEnd(table);
     for (int index = 0; index < count; index++) {
@@ -60,16 +60,19 @@ final class StoredTableRowEncoder {
   }
 
   private static void writeBitmap(
-      TableDescriptor table, SqlValueBuffer values, ByteBuffer target, int start) {
+      TableDescriptor table, SqlValueAccess values, ByteBuffer target, int start) {
     for (int index = 0; index < table.nullBitmapBytes(); index++) {
-      long word = values.nullWord(index >>> 3);
-      target.put(start + index,
-          (byte) (word >>> ((index & 7) * Byte.SIZE)));
+      int bitmap = 0;
+      for (int bit = 0; bit < Byte.SIZE; bit++) {
+        int column = index * Byte.SIZE + bit;
+        if (column < table.columnCount() && values.isNull(column)) bitmap |= 1 << bit;
+      }
+      target.put(start + index, (byte) bitmap);
     }
   }
 
   private static void writeSlots(
-      TableDescriptor table, SqlValueBuffer values, ByteBuffer target, int start) {
+      TableDescriptor table, SqlValueAccess values, ByteBuffer target, int start) {
     int textOffset = fixedEnd(table);
     for (int index = 0; index < table.columnCount(); index++) {
       int slot = start + table.fixedOffsetAt(index);
@@ -77,11 +80,13 @@ final class StoredTableRowEncoder {
       if (values.isNull(index)) zero(target, slot, width);
       else if (isText(table.typeDescriptorAt(index))) {
         int length = values.textByteLengthAt(index);
+        int offset = values.textByteOffsetAt(index);
+        io.riverdb.base.text.BoundedByteSource source = values.textSource(index);
         FormatBytes.putInt(target, slot, textOffset);
         FormatBytes.putInt(target, slot + Integer.BYTES, length);
         for (int byteIndex = 0; byteIndex < length; byteIndex++) {
           target.put(start + textOffset + byteIndex,
-              (byte) values.textByteAt(index, byteIndex));
+              source.getByte(offset + byteIndex));
         }
         textOffset += length;
       } else if (SqlTypeDescriptor.isWideDecimal(table.typeDescriptorAt(index))) {

@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
@@ -63,7 +64,7 @@ final class SqlDescriptorSubqueryExecution {
 
   StatusCode evaluate(
       int edge, boolean leftNull, long leftHigh, long left,
-      SqlDescriptorValueSource outer) {
+      SqlValueAccess outer) {
     if (edge < 0 || edge >= count || frames[edge] == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

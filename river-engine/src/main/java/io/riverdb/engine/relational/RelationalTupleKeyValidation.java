@@ -9,7 +9,7 @@ final class RelationalTupleKeyValidation {
 
   static StatusCode validate(
       KeyDescriptor key,
-      SqlValueBuffer values,
+      SqlValueAccess values,
       int parts,
       long logicalRowId,
       boolean physical) {

@@ -13,24 +13,24 @@ final class RelationalDescriptorPrimaryAccess {
   private final IndexedTupleProbeResult probe = new IndexedTupleProbeResult();
   private final RelationalTupleKeyEncoder expectedEncoder = new RelationalTupleKeyEncoder();
   private final RelationalTupleKeyEncoder actualEncoder = new RelationalTupleKeyEncoder();
-  private final SqlValueBuffer scalarValues = new SqlValueBuffer();
+  private final SqlMutationValues scalarValues = new SqlMutationValues();
 
   StatusCode resolve(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer primaryValues, RelationalRowIdentityResult result) {
+      SqlValueAccess primaryValues, RelationalRowIdentityResult result) {
     return resolve(session, table, primaryValues, result, null);
   }
 
   StatusCode resolveSource(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer primaryValues, LockMode mode,
+      SqlValueAccess primaryValues, LockMode mode,
       RelationalRowIdentityResult result) {
     return resolve(session, table, primaryValues, result, mode);
   }
 
   private StatusCode resolve(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer primaryValues, RelationalRowIdentityResult result,
+      SqlValueAccess primaryValues, RelationalRowIdentityResult result,
       LockMode sourceMode) {
     result.reset();
     if (table.primaryKey() == null || primaryValues == null
@@ -54,7 +54,7 @@ final class RelationalDescriptorPrimaryAccess {
     return StatusCode.OK;
   }
 
-  StatusCode validateResolved(TableDescriptor table, SqlValueBuffer values) {
+  StatusCode validateResolved(TableDescriptor table, SqlValueAccess values) {
     StatusCode status = actualEncoder.encodeUser(table.primaryKey(), values);
     if (!status.isOk()) return status;
     if (expectedEncoder.length() != actualEncoder.length()) return StatusCode.CONFLICT;
@@ -73,15 +73,12 @@ final class RelationalDescriptorPrimaryAccess {
         || table.typeDescriptorAt(0) != SqlTypeDescriptor.BIGINT) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = scalarValues.reserve(table.columnCount(), table.columnCount(), 0, 0);
-    if (status.isOk()) status = scalarValues.clearForSize(table.columnCount());
-    for (int column = 0; status.isOk() && column < table.columnCount(); column++) {
-      status = column == 0
-          ? scalarValues.setFixed(column, table.typeDescriptorAt(column), primaryKey)
-          : scalarValues.setNull(column, table.typeDescriptorAt(column));
-    }
-    return status;
+    scalarValues.reset();
+    StatusCode status = scalarValues.reserve(table, 0);
+    if (status.isOk()) status = scalarValues.begin(table, null);
+    return status.isOk()
+        ? scalarValues.setFixed(0, table.typeDescriptorAt(0), primaryKey) : status;
   }
 
-  SqlValueBuffer scalarValues() { return scalarValues; }
+  SqlValueAccess scalarValues() { return scalarValues; }
 }

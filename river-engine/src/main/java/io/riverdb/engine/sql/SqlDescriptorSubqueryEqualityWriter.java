@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 
 /** Writes the common equality prefix into both reusable tuple bounds. */
 final class SqlDescriptorSubqueryEqualityWriter {
@@ -10,7 +11,7 @@ final class SqlDescriptorSubqueryEqualityWriter {
       SqlDescriptorSubqueryIndexPlan plan,
       SqlDescriptorPrimaryValues lower,
       SqlDescriptorPrimaryValues upper,
-      SqlDescriptorValueSource outer) {
+      SqlValueAccess outer) {
     empty = false;
     for (int part = 0; part < plan.equalParts(); part++) {
       int column = plan.key().columnOrdinalAt(part);

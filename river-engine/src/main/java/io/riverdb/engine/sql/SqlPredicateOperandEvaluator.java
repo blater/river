@@ -1,6 +1,8 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
@@ -17,6 +19,46 @@ final class SqlPredicateOperandEvaluator {
 
   void reset() {
     machine.reset();
+  }
+
+  StatusCode evaluateDescriptor(
+      SqlCommand command,
+      SqlBoundBooleanPredicateProgram programs,
+      int leaf,
+      int program,
+      SqlTemporalZonePlan zone,
+      SqlValueAccess source,
+      SqlPredicateOperand result) {
+    int nodes = programs.nodeCount(leaf, program);
+    if (nodes == 1 && programs.operator(leaf, program, 0) == SqlScalarExpression.COLUMN) {
+      int column = (int) programs.operand(leaf, program, 0);
+      if (column < 0 || column >= source.count()) return StatusCode.INVARIANT_BROKEN;
+      int descriptor = programs.descriptor(leaf, program, 0);
+      if (source.isNull(column)) {
+        result.setNull(descriptor);
+        return StatusCode.OK;
+      }
+      if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+        return result.setText(source, column, descriptor);
+      }
+      result.setValue(source.highValueAt(column), source.valueAt(column), descriptor, false);
+      return StatusCode.OK;
+    }
+    machine.beginPredicateOperand();
+    StatusCode status = StatusCode.OK;
+    for (int node = 0; status.isOk() && node < nodes; node++) {
+      status = machine.predicateDescriptorNode(
+          command,
+          programs.operator(leaf, program, node),
+          programs.operandHigh(leaf, program, node),
+          programs.operand(leaf, program, node),
+          programs.descriptor(leaf, program, node),
+          zone,
+          source);
+    }
+    if (status.isOk()) return machine.finishPredicateOperand(result);
+    machine.reset();
+    return status;
   }
 
   StatusCode evaluate(

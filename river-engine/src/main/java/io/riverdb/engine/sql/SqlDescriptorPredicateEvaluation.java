@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 
 /** Reusable descriptor predicate evaluator over either row representation. */
@@ -13,7 +14,7 @@ final class SqlDescriptorPredicateEvaluation {
     tree.prepare(program, bindings, subqueries);
   }
 
-  StatusCode evaluate(SqlDescriptorValueSource values, Match result) {
+  StatusCode evaluate(SqlValueAccess values, Match result) {
     return tree.evaluate(values, result);
   }
 

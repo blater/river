@@ -190,6 +190,15 @@ public final class SqlScanRowResult {
     return lanes.setUtf8(index, source, offset, length);
   }
 
+  StatusCode setUtf8At(
+      int index, io.riverdb.base.text.BoundedByteSource source, int offset, int length) {
+    return lanes.setUtf8(index, source, offset, length);
+  }
+
+  StatusCode setUtf8At(int index, java.nio.ByteBuffer source, int offset, int length) {
+    return lanes.setUtf8(index, source, offset, length);
+  }
+
   /** Legacy scalar row-key field; descriptor composite/keyless rows report zero. */
   public long key() { return key; }
   public long value() { return value; }

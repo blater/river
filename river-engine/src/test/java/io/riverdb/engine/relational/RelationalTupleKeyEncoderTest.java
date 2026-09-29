@@ -10,6 +10,7 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlApproximateNumeric;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.KeyDescriptor;
+import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.btree.TupleKeyCodec;
 import java.lang.management.ManagementFactory;
 import org.junit.jupiter.api.Assumptions;
@@ -28,9 +29,7 @@ final class RelationalTupleKeyEncoderTest {
     assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0, 1}, key));
 
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(2, 2, 0, 0));
-    assertEquals(StatusCode.OK, values.clearForSize(2));
+    SqlMutationValues values = values(columns.value(), 0);
     assertEquals(StatusCode.OK, values.setFixed(
         0, types[0], SqlApproximateNumeric.realBits(1.25f)));
     assertEquals(StatusCode.OK, values.setFixed(
@@ -61,9 +60,7 @@ final class RelationalTupleKeyEncoderTest {
         KeyDescriptor.KIND_SECONDARY, false, columns.value(),
         new int[] {1, 2}, key));
 
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(3, 3, 16, 16));
-    assertEquals(StatusCode.OK, values.clearForSize(3));
+    SqlMutationValues values = values(columns.value(), 16);
     assertEquals(StatusCode.OK, values.setFixed(0, types[0], 7));
     assertEquals(StatusCode.OK, values.setText(1, types[1], "Nørth"));
     assertEquals(StatusCode.OK, values.setNull(2, types[2]));
@@ -96,9 +93,8 @@ final class RelationalTupleKeyEncoderTest {
         KeyDescriptor.KIND_PRIMARY, true, columns.value(),
         new int[] {0, 1}, key));
 
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(2, 2, 4, 4));
-    assertEquals(StatusCode.OK, values.clearForSize(2));
+    TableDescriptor table = table(columns.value());
+    SqlMutationValues values = values(table, 4);
     assertEquals(StatusCode.OK, values.setNull(0, types[0]));
     assertEquals(StatusCode.OK, values.setText(1, types[1], "x"));
     RelationalTupleKeyEncoder encoder = new RelationalTupleKeyEncoder();
@@ -109,9 +105,10 @@ final class RelationalTupleKeyEncoderTest {
     assertFalse(encoder.containsNull());
     assertEquals(0, encoder.bytes().remaining());
 
-    assertEquals(StatusCode.OK, values.clearForSize(2));
+    assertEquals(StatusCode.OK, values.begin(table, null));
     assertEquals(StatusCode.OK, values.setFixed(0, types[0], 1));
-    assertEquals(StatusCode.OK, values.setFixed(1, SqlTypeDescriptor.BIGINT, 2));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        values.setFixed(1, SqlTypeDescriptor.BIGINT, 2));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         encoder.encodePhysical(key.value(), values, 1));
@@ -137,9 +134,7 @@ final class RelationalTupleKeyEncoderTest {
         KeyDescriptor.KIND_FOREIGN, false, columns.value(), new int[] {1, 0},
         -1, foreign, null));
 
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(2, 2, 0, 0));
-    assertEquals(StatusCode.OK, values.clearForSize(2));
+    SqlMutationValues values = values(columns.value(), 0);
     assertEquals(StatusCode.OK, values.setDecimal128(
         0, decimal, 542_101_086_242_752_217L, 68_739_955_140_067_328L));
     assertEquals(StatusCode.OK, values.setFixed(1, SqlTypeDescriptor.INTEGER, 9));
@@ -179,9 +174,7 @@ final class RelationalTupleKeyEncoderTest {
     KeyDescriptor.Result key = new KeyDescriptor.Result();
     assertEquals(StatusCode.OK, KeyDescriptor.createUnbound(
         KeyDescriptor.KIND_PRIMARY, true, columns.value(), ordinals, key));
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(count, count, 0, 0));
-    assertEquals(StatusCode.OK, values.clearForSize(count));
+    SqlMutationValues values = values(columns.value(), 0);
     for (int index = 0; index < count; index++) {
       assertEquals(StatusCode.OK, values.setFixed(index, types[index], index + 1L));
     }
@@ -198,5 +191,23 @@ final class RelationalTupleKeyEncoderTest {
     }
     long allocated = allocations.getThreadAllocatedBytes(thread) - before;
     assertEquals(0, allocated);
+  }
+
+  private static SqlMutationValues values(ColumnDescriptorSet columns, int textBytes) {
+    return values(table(columns), textBytes);
+  }
+
+  private static SqlMutationValues values(TableDescriptor table, int textBytes) {
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(table, textBytes));
+    assertEquals(StatusCode.OK, values.begin(table, null));
+    return values;
+  }
+
+  private static TableDescriptor table(ColumnDescriptorSet columns) {
+    TableDescriptor.Result result = new TableDescriptor.Result();
+    assertEquals(StatusCode.OK, TableDescriptor.create(
+        1, 1, 1, columns, null, null, null, result, null));
+    return result.value();
   }
 }

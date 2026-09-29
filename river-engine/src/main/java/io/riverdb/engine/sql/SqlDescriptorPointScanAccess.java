@@ -50,7 +50,8 @@ final class SqlDescriptorPointScanAccess {
   }
 
   StatusCode next(SqlDescriptorMutationValues values) {
-    return session.descriptorRows().nextScan(cursor, values.fetched(), identity);
+    return session.descriptorRows().nextScan(
+        cursor, values.fetched(), identity, null, null);
   }
 
   StatusCode lockCandidate(SqlDescriptorMutationValues values) {

@@ -2,10 +2,46 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.relational.SqlValueAccess;
 
 /** Evaluates one prepared projection set into a dynamically admitted block row. */
 final class SqlBlockRowProjection {
   private SqlBlockRowProjection() { }
+
+  static StatusCode projectDescriptor(
+      SqlValueAccess source,
+      SqlBlockRow result,
+      BoundSqlStatement bound,
+      SqlRowExpressionEvaluator expressions,
+      SqlProjectionZoneSet zones) {
+    StatusCode status = result.reset(bound.projectionPrograms.count());
+    for (int projection = 0;
+        status.isOk() && projection < bound.projectionPrograms.count(); projection++) {
+      int raw = bound.projectionPrograms.rawColumn(projection);
+      if (raw < 0) {
+        status = expressions.evaluateDescriptorBlock(
+            bound.command, bound.projectionPrograms, projection,
+            zones.get(projection), source, result);
+        continue;
+      }
+      if (raw >= source.count()) return StatusCode.INVARIANT_BROKEN;
+      if (source.isNull(raw)) {
+        result.setNull(projection);
+        continue;
+      }
+      int descriptor = bound.projectionPrograms.resultDescriptor(projection);
+      if (SqlTypeDescriptor.isWideDecimal(descriptor)) {
+        result.setDecimal128(projection, source.highValueAt(raw), source.valueAt(raw));
+      } else result.setValue(projection, source.valueAt(raw));
+      if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+        int length = source.textByteLengthAt(raw);
+        if (length < 0) return StatusCode.CORRUPTION;
+        status = result.setUtf8(
+            projection, source.textSource(raw), source.textByteOffsetAt(raw), length);
+      }
+    }
+    return status.isOk() ? result.status() : status;
+  }
 
   static StatusCode project(
       SqlBlockRow source,
@@ -44,7 +80,7 @@ final class SqlBlockRowProjection {
           } else result.setValue(projection, source.value(raw));
           if (SqlTypeDescriptor.typeId(descriptor)
               == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-            result.setText(projection, source.text(raw), 0, source.textLength(raw));
+            status = source.copyTextTo(raw, result, projection);
           }
         }
       } else {

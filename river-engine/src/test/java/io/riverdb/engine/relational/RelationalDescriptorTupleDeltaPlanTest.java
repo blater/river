@@ -22,7 +22,7 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   @Test
   void insertAndDeleteRetainEveryPhysicalIndexInKeyIdOrder() {
     TableDescriptor table = threeKeyTable();
-    SqlValueBuffer values = threeValues(1, 10, 20);
+    SqlMutationValues values = threeValues(1, 10, 20);
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
 
     assertEquals(StatusCode.OK, plan.insert(table, values, 91));
@@ -50,8 +50,8 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   @Test
   void updateSharesUnchangedKeysAndEmitsOnlyChangedBeforeAfterDeltas() {
     TableDescriptor table = threeKeyTable();
-    SqlValueBuffer before = threeValues(1, 10, 20);
-    SqlValueBuffer after = threeValues(1, 10, 21);
+    SqlMutationValues before = threeValues(1, 10, 20);
+    SqlMutationValues after = threeValues(1, 10, 21);
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
 
     assertEquals(StatusCode.OK, plan.update(table, before, after, 7));
@@ -75,9 +75,9 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     assertEquals(StatusCode.OK, plan.insert(table, threeValues(1, 2, 3), 1));
     assertTrue(plan.bytes().get(0) != 0);
 
-    SqlValueBuffer invalid = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, invalid.reserve(1, 1, 0, 0));
-    assertEquals(StatusCode.OK, invalid.clearForSize(1));
+    SqlMutationValues invalid = new SqlMutationValues();
+    assertEquals(StatusCode.OK, invalid.reserve(table, 0));
+    assertEquals(StatusCode.OK, invalid.begin(table, null));
     assertEquals(StatusCode.OK, invalid.setFixed(0, SqlTypeDescriptor.BIGINT, 1));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, plan.insert(table, invalid, 2));
     assertEquals(0, plan.keyCount());
@@ -107,9 +107,9 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   void enterpriseMaximumIndexesAndWideKeysFitTheSemanticEnvelope() {
     TableDescriptor table = maximumIndexTable();
     String text = "x".repeat(765);
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(1, 1, text.length(), text.length()));
-    assertEquals(StatusCode.OK, values.clearForSize(1));
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(table, text.length()));
+    assertEquals(StatusCode.OK, values.begin(table, null));
     assertEquals(StatusCode.OK,
         values.setText(0, SqlTypeDescriptor.varchar(765), text));
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
@@ -128,8 +128,8 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   void warmedMaximumPlanReuseAllocatesNoPerKeyObjects() {
     ThreadMXBean allocations = allocationBean();
     TableDescriptor table = maximumIndexTable();
-    SqlValueBuffer before = textValue("a".repeat(765));
-    SqlValueBuffer after = textValue("b".repeat(765));
+    SqlMutationValues before = textValue(table, "a".repeat(765));
+    SqlMutationValues after = textValue(table, "b".repeat(765));
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
     assertEquals(StatusCode.OK, plan.update(table, before, after, 1));
     assertEquals(StatusCode.OK, plan.update(table, after, before, 1));
@@ -192,20 +192,21 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     return result.value();
   }
 
-  private static SqlValueBuffer threeValues(long id, long first, long second) {
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(3, 3, 0, 0));
-    assertEquals(StatusCode.OK, values.clearForSize(3));
+  private static SqlMutationValues threeValues(long id, long first, long second) {
+    SqlMutationValues values = new SqlMutationValues();
+    TableDescriptor table = threeKeyTable();
+    assertEquals(StatusCode.OK, values.reserve(table, 0));
+    assertEquals(StatusCode.OK, values.begin(table, null));
     assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, id));
     assertEquals(StatusCode.OK, values.setFixed(1, SqlTypeDescriptor.BIGINT, first));
     assertEquals(StatusCode.OK, values.setFixed(2, SqlTypeDescriptor.BIGINT, second));
     return values;
   }
 
-  private static SqlValueBuffer textValue(String text) {
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(1, 1, text.length(), text.length()));
-    assertEquals(StatusCode.OK, values.clearForSize(1));
+  private static SqlMutationValues textValue(TableDescriptor table, String text) {
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(table, text.length()));
+    assertEquals(StatusCode.OK, values.begin(table, null));
     assertEquals(StatusCode.OK,
         values.setText(0, SqlTypeDescriptor.varchar(765), text));
     return values;

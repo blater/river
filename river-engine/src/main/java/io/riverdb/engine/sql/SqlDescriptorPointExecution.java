@@ -4,6 +4,8 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.relational.RelationalRowIdentityResult;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.SqlValueAccess;
+import io.riverdb.engine.relational.StoredTableRowView;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
@@ -17,6 +19,7 @@ final class SqlDescriptorPointExecution {
   private final StatusDetail detail = new StatusDetail(128);
   private final SqlDescriptorColumnMapping columns = new SqlDescriptorColumnMapping();
   private final SqlDescriptorMutationValues values = new SqlDescriptorMutationValues();
+  private final StoredTableRowView view = new StoredTableRowView();
   private final SqlDescriptorProjection projection = new SqlDescriptorProjection();
   private final SqlDescriptorPredicate predicate = new SqlDescriptorPredicate();
   private final SqlDescriptorPrimaryPredicate primary = new SqlDescriptorPrimaryPredicate();
@@ -37,7 +40,7 @@ final class SqlDescriptorPointExecution {
       SqlSessionShapeBudget shapeBudget) {
     session = relationalSession;
     this.expressions = expressions;
-    boundPredicate = new SqlDescriptorBoundPredicate(predicateEvaluator, shapeBudget);
+    boundPredicate = new SqlDescriptorBoundPredicate(predicateEvaluator);
     aggregates = new SqlDescriptorAggregateExecution(
         relationalSession, temporal, shapeBudget);
     insertExecution = new SqlDescriptorPointInsertExecution(
@@ -80,7 +83,7 @@ final class SqlDescriptorPointExecution {
 
   StatusCode prepareBoundPredicate() {
     return prepared && pin.isActive()
-        ? boundPredicate.prepare(pin.descriptor()) : StatusCode.CONFLICT;
+        ? boundPredicate.prepare() : StatusCode.CONFLICT;
   }
 
   int affectedRows() { return affectedRows; }
@@ -90,6 +93,7 @@ final class SqlDescriptorPointExecution {
 
   StatusCode close() {
     prepared = false;
+    view.reset();
     boundPredicate.reset();
     StatusCode status = scanExecution.close();
     StatusCode aggregateStatus = aggregates.close();
@@ -157,17 +161,18 @@ final class SqlDescriptorPointExecution {
     }
     StatusCode status = primary.bind(command, table);
     if (status == StatusCode.CONFLICT) return scanExecution.select(command, pin, result);
-    if (status.isOk()) status = values.reserve(table);
-    if (status.isOk()) status = command.isSelectForUpdate()
+    boolean forUpdate = command.isSelectForUpdate();
+    if (status.isOk() && forUpdate) status = values.reserve(table);
+    if (status.isOk()) status = forUpdate
         ? session.descriptorRows().fetchLockedCandidate(
             pin, primary.values(), values.fetched(), identity)
-        : session.descriptorRows().fetch(
-            pin, primary.values(), values.fetched(), identity);
+        : session.descriptorRows().fetch(pin, primary.values(), view, identity);
     if (status.isOk()) status = projection.prepare(command, table);
+    SqlValueAccess selected = forUpdate ? values.fetched() : view;
     if (status.isOk()) status = projection.publish(
-        values.fetched(), SqlDescriptorPublicRowKey.from(table, values.fetched()),
+        selected, SqlDescriptorPublicRowKey.from(table, selected),
         session.visibleCommitSequence(), result);
-    return command.isSelectForUpdate() ? finishLockedSelect(status) : status;
+    return forUpdate ? finishLockedSelect(status) : status;
   }
 
   private StatusCode finishLockedSelect(StatusCode original) {

@@ -10,19 +10,16 @@ import io.riverdb.tx.api.lock.LockMode;
 /** Owns one reusable descriptor-row candidate and its lock-protected current successor. */
 final class RelationalDescriptorCurrentRow {
   private final IndexedTransactionSession session;
-  private final RelationalDescriptorRowAccess rows;
   private final IndexedRowCandidate candidate = new IndexedRowCandidate();
   private final IndexedLockedRow locked = new IndexedLockedRow();
   private long logicalRowId;
 
-  RelationalDescriptorCurrentRow(
-      IndexedTransactionSession indexedSession, RelationalDescriptorRowAccess rowAccess) {
+  RelationalDescriptorCurrentRow(IndexedTransactionSession indexedSession) {
     session = indexedSession;
-    rows = rowAccess;
   }
 
   StatusCode lockPoint(
-      TableDescriptor table, long rowId, SqlValueBuffer destination) {
+      TableDescriptor table, long rowId, StoredTableRowView destination) {
     StatusCode status = reset();
     if (!status.isOk()) return status;
     status = session.fetchCandidateByKey(
@@ -33,7 +30,7 @@ final class RelationalDescriptorCurrentRow {
   }
 
   StatusCode lockPointCurrent(
-      TableDescriptor table, long rowId, SqlValueBuffer destination) {
+      TableDescriptor table, long rowId, StoredTableRowView destination) {
     StatusCode status = reset();
     if (!status.isOk()) return status;
     status = session.lockCurrentKeyCurrent(
@@ -42,7 +39,7 @@ final class RelationalDescriptorCurrentRow {
   }
 
   StatusCode lockScan(
-      RelationalDescriptorScanCursor cursor, SqlValueBuffer destination) {
+      RelationalDescriptorScanCursor cursor, StoredTableRowView destination) {
     StatusCode status = reset();
     if (!status.isOk()) return status;
     TableDescriptor table = cursor.descriptor();
@@ -73,13 +70,6 @@ final class RelationalDescriptorCurrentRow {
 
   boolean borrowed() { return locked.isAvailable(); }
 
-  StatusCode decodeTo(
-      TableDescriptor table, long rowId, SqlValueBuffer destination) {
-    return logicalRowId == rowId && locked.isAvailable()
-        ? rows.decode(table, locked.row(), destination)
-        : StatusCode.INVALID_EXTERNAL_INPUT;
-  }
-
   StatusCode retain() {
     StatusCode status = session.retainLocked(locked);
     if (status.isOk()) logicalRowId = 0;
@@ -100,9 +90,10 @@ final class RelationalDescriptorCurrentRow {
   }
 
   private StatusCode finish(
-      TableDescriptor table, long rowId, SqlValueBuffer destination, StatusCode status) {
+      TableDescriptor table, long rowId, StoredTableRowView destination, StatusCode status) {
     if (!status.isOk()) return status;
-    status = rows.decode(table, locked.row(), destination);
+    destination.reset();
+    status = destination.bindFetched(table, locked.row(), null, null);
     if (status.isOk()) logicalRowId = rowId;
     if (status.isOk()) return status;
     StatusCode released = session.releaseLocked(locked);

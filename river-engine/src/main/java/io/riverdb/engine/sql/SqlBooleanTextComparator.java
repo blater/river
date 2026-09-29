@@ -2,12 +2,20 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.sql.SqlCommand;
 
-/** Compares owned predicate text by Unicode scalar value without allocation. */
+/** Compares admitted UTF-8 or computed characters by Unicode scalar value. */
 final class SqlBooleanTextComparator {
   private SqlBooleanTextComparator() {
   }
 
   static int compare(SqlPredicateOperand left, SqlPredicateOperand right) {
+    if (left.hasBorrowedUtf8() && right.hasBorrowedUtf8()) {
+      int common = Math.min(left.borrowedByteLength(), right.borrowedByteLength());
+      for (int index = 0; index < common; index++) {
+        int compared = Integer.compare(left.borrowedByteAt(index), right.borrowedByteAt(index));
+        if (compared != 0) return compared;
+      }
+      return Integer.compare(left.borrowedByteLength(), right.borrowedByteLength());
+    }
     int leftIndex = 0;
     int rightIndex = 0;
     while (leftIndex < left.textLength() && rightIndex < right.textLength()) {
@@ -25,6 +33,15 @@ final class SqlBooleanTextComparator {
       SqlPredicateOperand left, SqlCommand source, long handle) {
     int byteLength = source.textByteLength(handle);
     if (byteLength < 0) return Integer.MIN_VALUE;
+    if (left.hasBorrowedUtf8()) {
+      int common = Math.min(left.borrowedByteLength(), byteLength);
+      for (int index = 0; index < common; index++) {
+        int compared = Integer.compare(
+            left.borrowedByteAt(index), Byte.toUnsignedInt(source.textByteAt(handle, index)));
+        if (compared != 0) return compared;
+      }
+      return Integer.compare(left.borrowedByteLength(), byteLength);
+    }
     int charIndex = 0;
     int byteIndex = 0;
     while (charIndex < left.textLength() && byteIndex < byteLength) {

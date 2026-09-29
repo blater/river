@@ -9,7 +9,6 @@ final class SqlDescriptorScalarAggregate {
   private final SqlDescriptorSetMaterialization materialization;
   private final SqlDescriptorAggregateShape shape = new SqlDescriptorAggregateShape();
   private final SqlAggregateAccumulatorSet accumulators;
-  private final SqlDescriptorBlockRowValues input;
   private final SqlBlockRow projected;
   private final SqlDescriptorHavingCount having;
   private final SqlDescriptorAggregateResult output = new SqlDescriptorAggregateResult();
@@ -20,7 +19,6 @@ final class SqlDescriptorScalarAggregate {
     accumulators = new SqlAggregateAccumulatorSet(shapeBudget);
     materialization = new SqlDescriptorSetMaterialization(
         SqlRetainedArrayAllocator.STANDARD, temporal, shapeBudget);
-    input = new SqlDescriptorBlockRowValues(shapeBudget);
     projected = new SqlBlockRow(shapeBudget);
     having = new SqlDescriptorHavingCount(temporal, shapeBudget);
   }
@@ -40,8 +38,6 @@ final class SqlDescriptorScalarAggregate {
     if (!status.isOk()) return status;
     status = SqlAggregateAccumulatorCapacity.reserve(accumulators, shape.bound());
     if (!status.isOk()) return status;
-    status = input.prepare(table);
-    if (!status.isOk()) return status;
     status = prepareProjected();
     if (!status.isOk()) return status;
     status = having.prepare(command, shape.bound(), materialization, 0);
@@ -54,9 +50,8 @@ final class SqlDescriptorScalarAggregate {
     return accumulators.reset(shape.bound());
   }
 
-  StatusCode accumulate(io.riverdb.engine.relational.SqlValueBuffer values) {
-    StatusCode status = input.load(values);
-    if (status.isOk()) status = materialization.project(input.row(), projected);
+  StatusCode accumulate(io.riverdb.engine.relational.SqlValueAccess values) {
+    StatusCode status = materialization.project(values, projected);
     return status.isOk()
         ? accumulators.accumulateBlock(shape.bound(), projected) : status;
   }
@@ -87,7 +82,6 @@ final class SqlDescriptorScalarAggregate {
     StatusCode cleared = accumulators.clear(shape.bound());
     if (status.isOk()) status = cleared;
     materialization.reset();
-    input.reset();
     return status;
   }
 

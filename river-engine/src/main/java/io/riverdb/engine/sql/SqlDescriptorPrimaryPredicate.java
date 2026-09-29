@@ -1,7 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
 
@@ -9,7 +9,7 @@ import io.riverdb.sql.SqlCommand;
 final class SqlDescriptorPrimaryPredicate {
   private final SqlDescriptorPrimaryBinding binding = new SqlDescriptorPrimaryBinding();
 
-  SqlValueBuffer values() { return binding.values(); }
+  SqlValueAccess values() { return binding.values(); }
 
   StatusCode bind(SqlCommand sql, TableDescriptor descriptor) {
     return binding.bind(sql, descriptor);

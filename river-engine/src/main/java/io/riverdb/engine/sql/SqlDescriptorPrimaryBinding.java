@@ -3,7 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
@@ -17,7 +17,7 @@ final class SqlDescriptorPrimaryBinding {
   private TableDescriptor table;
   private KeyDescriptor primary;
 
-  SqlValueBuffer values() { return values.buffer(); }
+  SqlValueAccess values() { return values.buffer(); }
 
   StatusCode bind(SqlCommand command, TableDescriptor descriptor) {
     reset();
@@ -26,30 +26,12 @@ final class SqlDescriptorPrimaryBinding {
     if (command == null || primary == null) return StatusCode.CONFLICT;
     int textBytes = primaryTextBytes();
     if (textBytes < 0) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = values.begin(table.columnCount(), textBytes, command);
+    StatusCode status = values.begin(table, textBytes, command);
     SqlBooleanPredicateProgram where = command.wherePredicates();
     if (status.isOk() && (!where.isAvailable()
         || where.leafCount() != primary.partCount())) status = StatusCode.CONFLICT;
     if (status.isOk()) status = programs.bind(where, command, table, primary, assigned, values);
-    if (status.isOk()) status = fillNonKeyNulls();
     return status;
-  }
-
-  private StatusCode fillNonKeyNulls() {
-    StatusCode status = StatusCode.OK;
-    for (int column = 0; status.isOk() && column < table.columnCount(); column++) {
-      if (partForColumn(column) < 0) {
-        status = values.buffer().setNull(column, table.typeDescriptorAt(column));
-      }
-    }
-    return status;
-  }
-
-  private int partForColumn(int column) {
-    for (int part = 0; part < primary.partCount(); part++) {
-      if (primary.columnOrdinalAt(part) == column) return part;
-    }
-    return -1;
   }
 
   private int primaryTextBytes() {

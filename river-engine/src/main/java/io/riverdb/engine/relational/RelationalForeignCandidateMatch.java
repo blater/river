@@ -10,7 +10,7 @@ final class RelationalForeignCandidateMatch {
   private final RelationalTupleKeyEncoder target = new RelationalTupleKeyEncoder();
 
   boolean matches(
-      TableDescriptor table, KeyDescriptor foreign, SqlValueBuffer values,
+      TableDescriptor table, KeyDescriptor foreign, SqlValueAccess values,
       RelationalTupleKeyEncoder source) {
     KeyDescriptor key = physicalKey(table, foreign.referencedKeyId());
     if (key == null) return false;

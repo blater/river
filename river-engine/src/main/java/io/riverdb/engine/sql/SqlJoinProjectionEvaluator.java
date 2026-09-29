@@ -190,11 +190,7 @@ final class SqlJoinProjectionEvaluator {
       result.setProjectedDecimal128(projection, value.highValue(), value.value());
     } else result.setProjectedValue(projection, value.value());
     if (!text()) return StatusCode.OK;
-    StatusCode status = result.beginTextAt(projection, value.textLength());
-    for (int index = 0; status.isOk() && index < value.textLength(); index++) {
-      result.setTextCharacterAt(projection, index, value.textCharacter(index));
-    }
-    return status.isOk() ? result.finishTextAt(projection) : status;
+    return value.copyTextTo(projection, result);
   }
 
   private StatusCode publish(int projection, SqlBlockRow result) {
@@ -206,15 +202,7 @@ final class SqlJoinProjectionEvaluator {
       result.setDecimal128(projection, value.highValue(), value.value());
     } else result.setValue(projection, value.value());
     if (!text()) return StatusCode.OK;
-    StatusCode status = result.prepareText(projection);
-    if (!status.isOk()) return status;
-    char[] target = result.text(projection);
-    if (target == null) return result.status();
-    for (int index = 0; index < value.textLength(); index++) {
-      target[index] = value.textCharacter(index);
-    }
-    result.setTextLength(projection, value.textLength());
-    return StatusCode.OK;
+    return value.copyTextTo(projection, result);
   }
 
   private boolean text() {

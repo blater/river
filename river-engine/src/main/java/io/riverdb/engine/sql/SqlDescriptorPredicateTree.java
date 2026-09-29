@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 
 /** Short-circuiting tree walk for SQL three-valued predicate evaluation. */
@@ -15,14 +16,14 @@ final class SqlDescriptorPredicateTree {
     leaf.prepare(source, bindings, subqueries);
   }
 
-  StatusCode evaluate(SqlDescriptorValueSource values, SqlDescriptorPredicateEvaluation.Match match) {
+  StatusCode evaluate(SqlValueAccess values, SqlDescriptorPredicateEvaluation.Match match) {
     leaf.begin();
     int result = program.isAvailable() ? evaluateNode(program.root(), values) : 1;
     match.set(result == 1);
     return leaf.status();
   }
 
-  private int evaluateNode(int node, SqlDescriptorValueSource values) {
+  private int evaluateNode(int node, SqlValueAccess values) {
     int operator = program.booleanOperator(node);
     if (operator == SqlBooleanPredicateProgram.BOOLEAN_LEAF) {
       return leaf.evaluate(program.booleanLeft(node), values);

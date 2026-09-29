@@ -99,6 +99,11 @@ public final class SqlExecutionResult {
     return lanes.setUtf8(index, source, offset, length);
   }
 
+  StatusCode setUtf8At(
+      int index, io.riverdb.base.text.BoundedByteSource source, int offset, int length) {
+    return lanes.setUtf8(index, source, offset, length);
+  }
+
   StatusCode setScalar(long scalar, long committedAt) {
     return setTypedScalar(scalar, SqlTypeDescriptor.BIGINT, committedAt);
   }

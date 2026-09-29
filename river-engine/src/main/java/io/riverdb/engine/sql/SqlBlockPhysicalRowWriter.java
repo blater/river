@@ -50,13 +50,25 @@ final class SqlBlockPhysicalRowWriter {
           bytes.putLong(table.highValueOffset(column), 0);
         }
       } else if (table.isVarchar(column)) {
-        text.set(source, column);
-        bytes.position(payload);
-        int length = Utf8Text.encode(
-            text,
-            io.riverdb.base.type.SqlTypeDescriptor.parameterOne(
-                table.typeDescriptor(column)), bytes);
-        text.clear();
+        int maximum = io.riverdb.base.type.SqlTypeDescriptor.parameterOne(
+            table.typeDescriptor(column));
+        int length;
+        if (source.hasUtf8(column)) {
+          length = source.utf8Length(column);
+          if (length < 0 || length > bytes.capacity() - payload
+              || Utf8Text.trustedScalarCount(
+                  source.utf8Slice(column), 0, length) > maximum) {
+            return StatusCode.CORRUPTION;
+          }
+          for (int index = 0; index < length; index++) {
+            bytes.put(payload + index, source.utf8ByteAt(column, index));
+          }
+        } else {
+          text.set(source, column);
+          bytes.position(payload);
+          length = Utf8Text.encode(text, maximum, bytes);
+          text.clear();
+        }
         if (length < 0) return StatusCode.CORRUPTION;
         bytes.putLong(slot, (long) payload << 32 | Integer.toUnsignedLong(length));
         payload += length;

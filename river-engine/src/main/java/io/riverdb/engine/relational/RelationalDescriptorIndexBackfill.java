@@ -15,7 +15,7 @@ public final class RelationalDescriptorIndexBackfill {
   private final RelationalDescriptorIndexBuildSession build;
   private final RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
   private final RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
-  private final SqlValueBuffer values = new SqlValueBuffer();
+  private final StoredTableRowView values = new StoredTableRowView();
   private final RelationalTupleKeyEncoder encoder = new RelationalTupleKeyEncoder();
   private boolean exhausted;
   private int batchRows;
@@ -59,7 +59,7 @@ public final class RelationalDescriptorIndexBackfill {
     batchRows = 0;
     StatusCode status = build.begin(BATCH_ROWS, maximumBatchBytes(key));
     while (status.isOk() && batchRows < BATCH_ROWS && !exhausted) {
-      status = rows.nextScan(cursor, values, identity);
+      status = rows.nextScan(cursor, values, identity, null, null);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         exhausted = true;

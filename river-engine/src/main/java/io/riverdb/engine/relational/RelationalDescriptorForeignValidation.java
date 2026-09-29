@@ -20,13 +20,13 @@ final class RelationalDescriptorForeignValidation {
   private final IndexedTupleProbeResult referencedProbe = new IndexedTupleProbeResult();
 
   StatusCode validate(
-      IndexedTransactionSession session, TableDescriptor table, SqlValueBuffer values) {
+      IndexedTransactionSession session, TableDescriptor table, SqlValueAccess values) {
     return validate(session, table, values, null);
   }
 
   StatusCode validateUpdate(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer before, SqlValueBuffer after) {
+      SqlValueAccess before, SqlValueAccess after) {
     StatusCode status = delta.prepare(table, before, after);
     if (status.isOk()) status = validate(session, table, after, delta);
     delta.reset();
@@ -35,7 +35,7 @@ final class RelationalDescriptorForeignValidation {
 
   private StatusCode validate(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer values, RelationalForeignKeyDelta changes) {
+      SqlValueAccess values, RelationalForeignKeyDelta changes) {
     StatusCode protectedKeys = protection.protect(session, table, values, changes);
     if (!protectedKeys.isOk()) return protectedKeys;
     for (int index = 0; index < table.foreignKeyCount(); index++) {

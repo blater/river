@@ -12,7 +12,7 @@ final class RelationalTupleKeyPartEncoder {
   StatusCode encode(
       TupleKeyBuilder builder,
       KeyDescriptor key,
-      SqlValueBuffer values,
+      SqlValueAccess values,
       int partCount,
       RelationalTupleKeyScratch scratch) {
     containsNull = false;
@@ -29,7 +29,7 @@ final class RelationalTupleKeyPartEncoder {
 
   private StatusCode encodePart(
       TupleKeyBuilder builder,
-      SqlValueBuffer values,
+      SqlValueAccess values,
       int column,
       int descriptor,
       RelationalTupleKeyScratch scratch) {
@@ -38,8 +38,9 @@ final class RelationalTupleKeyPartEncoder {
       return builder.addNull(descriptor);
     }
     if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      StatusCode status = scratch.copyText(values, column);
-      return status.isOk() ? builder.addText(descriptor, scratch.text()) : status;
+      return builder.addUtf8(
+          descriptor, values.textSource(column),
+          values.textByteOffsetAt(column), values.textByteLengthAt(column));
     }
     return SqlTypeDescriptor.isWideDecimal(descriptor)
         ? builder.addDecimal128(

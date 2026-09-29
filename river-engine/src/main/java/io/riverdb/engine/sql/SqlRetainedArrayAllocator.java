@@ -10,6 +10,7 @@ class SqlRetainedArrayAllocator {
   byte[] bytes(int capacity) { return new byte[capacity]; }
   char[] characters(int capacity) { return new char[capacity]; }
   char[][] characterLanes(int capacity) { return new char[capacity][]; }
+  byte[][] byteLanes(int capacity) { return new byte[capacity][]; }
   short[] shorts(int capacity) { return new short[capacity]; }
   int[] integers(int capacity) { return new int[capacity]; }
   long[] longs(int capacity) { return new long[capacity]; }

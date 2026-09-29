@@ -23,17 +23,17 @@ final class RelationalDescriptorTupleMutations {
     plan = new RelationalDescriptorTupleDeltaPlan();
   }
 
-  StatusCode planInsert(TableDescriptor table, SqlValueBuffer values, long logicalRowId) {
+  StatusCode planInsert(TableDescriptor table, SqlValueAccess values, long logicalRowId) {
     return plan.insert(table, values, logicalRowId);
   }
 
   StatusCode planUpdate(
-      TableDescriptor table, SqlValueBuffer before,
-      SqlValueBuffer after, long logicalRowId) {
+      TableDescriptor table, SqlValueAccess before,
+      SqlValueAccess after, long logicalRowId) {
     return plan.update(table, before, after, logicalRowId);
   }
 
-  StatusCode planDelete(TableDescriptor table, SqlValueBuffer values, long logicalRowId) {
+  StatusCode planDelete(TableDescriptor table, SqlValueAccess values, long logicalRowId) {
     return plan.delete(table, values, logicalRowId);
   }
 
@@ -46,14 +46,14 @@ final class RelationalDescriptorTupleMutations {
 
   StatusCode validateUpdate(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer before, SqlValueBuffer after, long logicalRowId) {
+      SqlValueAccess before, SqlValueAccess after, long logicalRowId) {
     StatusCode status = unique.validate(session, table, plan, logicalRowId);
     return status.isOk()
         ? foreignValidation.validateUpdate(session, table, before, after) : status;
   }
 
   StatusCode validateForeign(
-      IndexedTransactionSession session, TableDescriptor table, SqlValueBuffer values) {
+      IndexedTransactionSession session, TableDescriptor table, SqlValueAccess values) {
     return foreignValidation.validate(session, table, values);
   }
 
@@ -68,7 +68,7 @@ final class RelationalDescriptorTupleMutations {
 
   StatusCode prepareDelete(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer values, long logicalRowId,
+      SqlValueAccess values, long logicalRowId,
       RelationalDescriptorForeignKeyChecks foreignKeys) {
     StatusCode status = planDelete(table, values, logicalRowId);
     if (status.isOk()) status = preflightSingleRow(session, table, 1);

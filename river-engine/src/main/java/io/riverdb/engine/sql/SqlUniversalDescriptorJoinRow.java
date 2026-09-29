@@ -1,20 +1,18 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.relational.SqlValueBuffer;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
 import io.riverdb.engine.relational.RelationalRowIdentityResult;
 import io.riverdb.engine.relational.RelationalSession;
-import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.relational.StoredTableRowIntegerFilter;
 import io.riverdb.engine.relational.StoredTableColumnSelection;
+import io.riverdb.engine.relational.StoredTableRowView;
 
-/** Reusable decoded row for one streaming descriptor join role. */
+/** Reusable row for one streaming descriptor join role. */
 final class SqlUniversalDescriptorJoinRow {
   private final RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
-  private final SqlValueBuffer values = new SqlValueBuffer();
+  private final StoredTableRowView values = new StoredTableRowView();
   private final SqlBlockRow row = new SqlBlockRow();
   private final StoredTableColumnSelection selected = new StoredTableColumnSelection();
 
@@ -35,9 +33,6 @@ final class SqlUniversalDescriptorJoinRow {
   StatusCode prepare(TableDescriptor table) {
     StatusCode status = selected.selectNone(table.columnCount());
     if (status.isOk()) selected.selectAll();
-    if (status.isOk()) status = values.reserve(
-        table.columnCount(), table.columnCount(),
-        0, TableSchema.MAXIMUM_ROW_BYTES);
     if (status.isOk()) status = row.reset(table.columnCount());
     return status;
   }
@@ -53,45 +48,16 @@ final class SqlUniversalDescriptorJoinRow {
       TableDescriptor table, StoredTableRowIntegerFilter filter) {
     StatusCode status = session.descriptorRows().nextScan(
         cursor, values, identity, filter, selected);
-    if (status.isOk()) status = row.reset(table.columnCount());
-    for (int column = 0; status.isOk() && column < table.columnCount(); column++) {
-      if (selected.includes(column)) status = copy(table, column);
-      else row.setNull(column);
-    }
-    if (status.isOk()) row.setKey(SqlDescriptorPublicRowKey.from(table, values));
+    if (status.isOk()) status = row.borrow(values, selected);
+    if (status.isOk()) row.setKey(SqlDescriptorPublicRowKey.from(table, row));
     return status;
-  }
-
-  private StatusCode copy(TableDescriptor table, int column) {
-    if (values.isNull(column)) {
-      row.setNull(column);
-      return StatusCode.OK;
-    }
-    int type = table.typeDescriptorAt(column);
-    if (SqlTypeDescriptor.isWideDecimal(type)) {
-      row.setDecimal128(column, values.highValueAt(column), values.valueAt(column));
-    } else if (SqlTypeDescriptor.typeId(type) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      row.setValue(column, values.valueAt(column));
-    } else {
-      int bytes = values.textByteLengthAt(column);
-      if (bytes < 0) return StatusCode.CORRUPTION;
-      if (bytes == 0) {
-        row.setTextLength(column, 0);
-        return StatusCode.OK;
-      }
-      StatusCode status = row.prepareText(column, bytes);
-      if (!status.isOk()) return status;
-      int length = values.copyTextChars(column, row.text(column), 0);
-      if (length < 0) return StatusCode.CORRUPTION;
-      row.setTextLength(column, length);
-    }
-    return StatusCode.OK;
   }
 
   long key() { return identity.logicalRowId(); }
   long publicKey() { return row.key(); }
   SqlBlockRow row() { return row; }
   void reset() {
+    row.reset(0);
     values.reset();
     identity.reset();
     selected.selectAll();

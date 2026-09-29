@@ -152,13 +152,6 @@ final class SqlSortExecution {
           ? highs : allocator.longs(capacity);
       StatusCode status = projected.reserve(count);
       if (!status.isOk()) return status;
-      for (int projection = 0; projection < count; projection++) {
-        if (SqlTypeDescriptor.typeId(bound.projectionPrograms.resultDescriptor(projection))
-            == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-          status = projected.prepareText(projection);
-          if (!status.isOk()) return status;
-        }
-      }
       values = nextValues;
       highs = nextHighs;
       return StatusCode.OK;

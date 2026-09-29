@@ -27,12 +27,27 @@ final class SqlBlockRowValueComparator {
 
   private static int compareText(
       SqlBlockRow left, int leftColumn, SqlBlockRow right, int rightColumn) {
-    int common = Math.min(left.textLength(leftColumn), right.textLength(rightColumn));
-    for (int index = 0; index < common; index++) {
-      int compared = Character.compare(
-          left.textCharacter(leftColumn, index), right.textCharacter(rightColumn, index));
-      if (compared != 0) return compared;
+    if (left.hasUtf8(leftColumn) && right.hasUtf8(rightColumn)) {
+      return SqlBlockRow.compareUtf8(left, leftColumn, right, rightColumn);
     }
-    return Integer.compare(left.textLength(leftColumn), right.textLength(rightColumn));
+    int leftIndex = 0;
+    int rightIndex = 0;
+    while (leftIndex < left.textLength(leftColumn)
+        && rightIndex < right.textLength(rightColumn)) {
+      int leftScalar = scalar(left, leftColumn, leftIndex);
+      int rightScalar = scalar(right, rightColumn, rightIndex);
+      if (leftScalar != rightScalar) return Integer.compare(leftScalar, rightScalar);
+      leftIndex += Character.charCount(leftScalar);
+      rightIndex += Character.charCount(rightScalar);
+    }
+    return Integer.compare(
+        left.textLength(leftColumn) - leftIndex,
+        right.textLength(rightColumn) - rightIndex);
+  }
+
+  private static int scalar(SqlBlockRow row, int column, int index) {
+    char first = row.textCharacter(column, index);
+    return Character.isHighSurrogate(first)
+        ? Character.toCodePoint(first, row.textCharacter(column, index + 1)) : first;
   }
 }

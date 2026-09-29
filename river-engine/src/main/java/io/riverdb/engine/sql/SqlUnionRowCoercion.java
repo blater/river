@@ -3,15 +3,13 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.relational.SqlValueBuffer;
 
 /** Reusable lossless row coercion into the reconciled UNION schema. */
 final class SqlUnionRowCoercion {
   private final SqlDescriptorNumericAssignment numeric = new SqlDescriptorNumericAssignment();
-  private final SqlValueBuffer value = new SqlValueBuffer();
 
   StatusCode prepare() {
-    return value.reserve(1, 1, 0, 0);
+    return StatusCode.OK;
   }
 
   StatusCode convert(
@@ -35,8 +33,7 @@ final class SqlUnionRowCoercion {
       return StatusCode.OK;
     }
     if (SqlTypeDescriptor.typeId(to) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      return target.setText(
-          column, source.text(column), 0, source.textLength(column));
+      return source.copyTextTo(column, target, column);
     }
     if (!SqlNumericTypeRules.isNumeric(to) || from == to) {
       if (SqlTypeDescriptor.isWideDecimal(to)) {
@@ -44,15 +41,12 @@ final class SqlUnionRowCoercion {
       } else target.setValue(column, source.value(column));
       return StatusCode.OK;
     }
-    StatusCode status = value.clearForSize(1);
-    if (status.isOk()) {
-      status = numeric.assign(
-          value, 0, source.highValue(column), source.value(column), from, to);
-    }
+    StatusCode status = numeric.assign(
+        source.highValue(column), source.value(column), from, to);
     if (!status.isOk()) return status;
     if (SqlTypeDescriptor.isWideDecimal(to)) {
-      target.setDecimal128(column, value.highValueAt(0), value.valueAt(0));
-    } else target.setValue(column, value.valueAt(0));
+      target.setDecimal128(column, numeric.high(), numeric.low());
+    } else target.setValue(column, numeric.low());
     return StatusCode.OK;
   }
 }

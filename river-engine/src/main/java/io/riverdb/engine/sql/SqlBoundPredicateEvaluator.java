@@ -1,9 +1,10 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.relational.TableDefinition;
-import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlComparison;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Evaluates the predicates of the currently bound statement without allocating. */
@@ -94,17 +95,15 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
     return status;
   }
 
-  StatusCode evaluateBlock(SqlBlockRow source) {
+  StatusCode evaluateDescriptor(SqlValueAccess source) {
     matched = false;
-    StatusCode status = booleans.matchesBlock(
+    StatusCode status = booleans.matchesDescriptor(
         bound.command, bound.whereBoolean, source, booleanMatch);
     if (status.isOk()) matched = booleanMatch.matched();
     return status;
   }
 
   boolean matched() { return matched; }
-
-  SqlBoundBooleanPredicateProgram program() { return bound.whereBoolean; }
 
   boolean matchesJoinOn(int stage, SqlJoinRoleRows rows) {
     joinStatus = joinOn.get(stage).matchesJoin(

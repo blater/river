@@ -14,12 +14,7 @@ final class SqlJoinMergeKey {
   StatusCode prepare(int type) {
     descriptor = type;
     available = false;
-    StatusCode status = row.reset(1);
-    if (status.isOk()
-        && SqlTypeDescriptor.typeId(type) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      status = row.prepareText(0, SqlTypeDescriptor.parameterOne(type));
-    }
-    return status;
+    return row.reset(1);
   }
 
   StatusCode capture(SqlBlockRow source, int column) {
@@ -29,8 +24,7 @@ final class SqlJoinMergeKey {
     }
     if (status.isOk()
         && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      status = row.setText(
-          0, source.text(column), 0, source.textLength(column));
+      status = source.copyTextTo(column, row, 0);
     }
     if (status.isOk()) available = true;
     return status;

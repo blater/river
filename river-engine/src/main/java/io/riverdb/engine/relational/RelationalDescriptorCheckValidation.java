@@ -13,7 +13,7 @@ import io.riverdb.engine.schema.TableDescriptor;
 final class RelationalDescriptorCheckValidation {
   private final ExactDecimal128.Scratch scratch = new ExactDecimal128.Scratch();
 
-  StatusCode validate(TableDescriptor table, SqlValueBuffer values) {
+  StatusCode validate(TableDescriptor table, SqlValueAccess values) {
     for (int column = 0; column < table.columnCount(); column++) {
       int comparison = table.columns().checkComparisonAt(column);
       if (comparison == ColumnConstraintDescriptorSet.CHECK_NONE || values.isNull(column)) {
@@ -25,7 +25,7 @@ final class RelationalDescriptorCheckValidation {
     return StatusCode.OK;
   }
 
-  private int compare(TableDescriptor table, SqlValueBuffer values, int column) {
+  private int compare(TableDescriptor table, SqlValueAccess values, int column) {
     int actualType = table.typeDescriptorAt(column);
     int expectedType = table.columns().checkTypeAt(column);
     long actual = values.valueAt(column);

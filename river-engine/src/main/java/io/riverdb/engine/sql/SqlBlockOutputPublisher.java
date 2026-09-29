@@ -61,8 +61,11 @@ final class SqlBlockOutputPublisher {
     StatusCode status = StatusCode.OK;
     for (int column = 0; status.isOk() && column < count; column++) {
       if (schema.varchar(column) && !source.nullValue(column)) {
-        status = result.setTextAt(
-            column, source.text(column), 0, source.textLength(column));
+        status = source.hasUtf8(column)
+            ? result.setUtf8At(
+                column, source.utf8Slice(column), 0, source.utf8Length(column))
+            : result.setTextAt(
+                column, source.text(column), 0, source.textLength(column));
       }
     }
     return status;
@@ -73,7 +76,10 @@ final class SqlBlockOutputPublisher {
     StatusCode status = StatusCode.OK;
     for (int column = 0; status.isOk() && column < count; column++) {
       if (schema.varchar(column) && !source.nullValue(column)) {
-        status = result.setTextAt(column, source.text(column), source.textLength(column));
+        status = source.hasUtf8(column)
+            ? result.setUtf8At(
+                column, source.utf8Slice(column), 0, source.utf8Length(column))
+            : result.setTextAt(column, source.text(column), source.textLength(column));
       }
     }
     return status;

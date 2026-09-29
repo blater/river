@@ -19,10 +19,7 @@ final class SqlDescriptorSubqueryPreparation {
         child.tableName(), state.pin, state.detail);
     if (!status.isOk()) return status;
     TableDescriptor table = state.pin.descriptor();
-    status = state.values.reserve(table);
-    if (status.isOk()) {
-      status = state.predicate.prepare(child, table, outerCommand, outer);
-    }
+    status = state.predicate.prepare(child, table, outerCommand, outer);
     if (status.isOk() && state.predicate.bindings().correlated()) {
       state.cache.markCorrelated(state.edge);
     }

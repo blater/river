@@ -28,17 +28,17 @@ final class RelationalDescriptorTupleDeltaPlan {
     preparation = new RelationalDescriptorTupleDeltaPreparation(this, storage);
   }
 
-  StatusCode insert(TableDescriptor descriptor, SqlValueBuffer values, long logicalRowId) {
+  StatusCode insert(TableDescriptor descriptor, SqlValueAccess values, long logicalRowId) {
     return preparation.prepare(INSERT, descriptor, null, values, logicalRowId);
   }
 
-  StatusCode delete(TableDescriptor descriptor, SqlValueBuffer values, long logicalRowId) {
+  StatusCode delete(TableDescriptor descriptor, SqlValueAccess values, long logicalRowId) {
     return preparation.prepare(DELETE, descriptor, values, null, logicalRowId);
   }
 
   StatusCode update(
-      TableDescriptor descriptor, SqlValueBuffer before,
-      SqlValueBuffer after, long logicalRowId) {
+      TableDescriptor descriptor, SqlValueAccess before,
+      SqlValueAccess after, long logicalRowId) {
     return preparation.prepare(UPDATE, descriptor, before, after, logicalRowId);
   }
 

@@ -1,11 +1,14 @@
 package io.riverdb.format.btree;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.base.text.BoundedByteSource;
+import io.riverdb.base.text.Utf8TextArena;
 import io.riverdb.base.tuple.TupleOrder;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.base.type.SqlTypeDescriptor;
@@ -14,6 +17,57 @@ import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 final class TupleKeyCodecTest {
+  @Test
+  void admittedUtf8KeyMatchesCharacterKeyForEmptyAndUnicodeText() {
+    int descriptor = SqlTypeDescriptor.varchar(16);
+    Utf8TextArena text = new Utf8TextArena();
+    assertEquals(StatusCode.OK, text.reserve(64, 64));
+    ByteBuffer expected = ByteBuffer.allocate(128);
+    ByteBuffer actual = ByteBuffer.allocate(128);
+    TupleKeyBuilder characters = new TupleKeyBuilder();
+    TupleKeyBuilder utf8 = new TupleKeyBuilder();
+    for (String value : new String[] {"", "plain", "A£河🌊", "🌊🌊"}) {
+      text.reset();
+      assertEquals(StatusCode.OK, text.append(value, 16));
+      assertEquals(StatusCode.OK, characters.beginTuple(expected, 0, 1));
+      assertEquals(StatusCode.OK, characters.addText(descriptor, value));
+      assertEquals(StatusCode.OK, characters.finishTuple());
+      assertEquals(StatusCode.OK, utf8.beginTuple(actual, 0, 1));
+      assertEquals(StatusCode.OK, utf8.addUtf8(
+          descriptor, text, text.lastOffset(), text.lastLength()));
+      assertEquals(StatusCode.OK, utf8.finishTuple());
+      assertEquals(characters.keyBytes(), utf8.keyBytes());
+      byte[] characterBytes = new byte[characters.keyBytes()];
+      byte[] utf8Bytes = new byte[utf8.keyBytes()];
+      expected.get(0, characterBytes);
+      actual.get(0, utf8Bytes);
+      assertArrayEquals(characterBytes, utf8Bytes);
+    }
+  }
+
+  @Test
+  void utf8KeyRejectsMalformedExternalBytesBeforeEncoding() {
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    ByteBuffer target = ByteBuffer.allocate(128);
+    int descriptor = SqlTypeDescriptor.varchar(8);
+    byte[][] malformed = {
+        {(byte) 0xc0, (byte) 0x81},
+        {(byte) 0xe0, (byte) 0x80, (byte) 0x81},
+        {(byte) 0xed, (byte) 0xa0, (byte) 0x80},
+        {(byte) 0xf4, (byte) 0x90, (byte) 0x80, (byte) 0x80},
+        {(byte) 0xe2, (byte) 0x28, (byte) 0xa1}
+    };
+    for (byte[] bytes : malformed) {
+      BoundedByteSource source = new BoundedByteSource() {
+        @Override public int length() { return bytes.length; }
+        @Override public byte getByte(int index) { return bytes[index]; }
+      };
+      assertEquals(StatusCode.OK, builder.beginTuple(target, 0, 1));
+      assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+          builder.addUtf8(descriptor, source, 0, bytes.length));
+    }
+  }
+
   @Test
   void physicalMixedTupleOrdersByUserValuesThenLogicalIdentity() {
     int[] descriptors = {
