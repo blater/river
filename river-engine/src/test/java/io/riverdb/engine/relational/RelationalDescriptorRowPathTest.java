@@ -1239,6 +1239,16 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(100, row.valueAt(2));
     assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
     assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.descriptorRows().update(
+        table, 1, indexedPayloadValues(1, 10, 101)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, row));
+    assertEquals(101, row.valueAt(2));
+    assertEquals(StatusCode.CONFLICT,
+        session.descriptorRows().fetchByLogicalRowId(table, rowId, row));
+    assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, table.release());
     assertEquals(StatusCode.OK, database.close());
   }

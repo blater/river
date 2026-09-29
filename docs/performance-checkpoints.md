@@ -5,6 +5,21 @@ work. Full historical commands, individual samples, decisions and artifact IDs
 through 2026-09-16 are in the [checkpoint archive](performance-checkpoints-archive-2026-09-16.md).
 Diagnostic samples are not audited TPC-C results or general performance claims.
 
+## 2026-09-29 — Erebor clustered-row candidate diagnostic
+
+The [Stock Level candidate evidence](delivery/evidence/2026-09-29-tic-erebor-candidate-stock-level.md)
+records two interleaved short pairs and two reversed longer pairs against stable
+`2ada6350` and candidate `9f7684b6`, with installed JVM distributions and
+identical full Stock Level manifests. All eight artifacts passed invariants,
+retry/outcome accounting and owned cleanup. Candidate TPS was 1,470.727 and
+1,195.329 in short windows against adjacent controls of 1,208.132 and
+1,226.331. Longer controls were 1,291.724 and 847.209; candidates were
+1,334.272 and 1,249.105. The owner accepted these numbers for the local
+performance gate. The spread prevents an isolated read-path CPU claim, and
+the implementation remains unpromoted pending durable overflow reclamation,
+capacity/recovery proof and independent final review. No new baseline row is
+designated.
+
 ## Baseline stats
 
 Append a row when a measured run is designated as a new performance baseline.

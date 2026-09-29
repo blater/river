@@ -326,6 +326,15 @@ delay the clustered-layout decision.
   membership. If page MVCC supplies row visibility, expect no separate
   per-candidate row-version-directory read. Keep catalog/secondary/overflow
   counts separate instead of claiming every transaction-wide count becomes zero.
+- Enforce the ADR's
+  [identity-index access and maintenance budget](../adr/0015-clustered-relational-row-store.md#identity-index-access-and-maintenance-budget).
+  Report mapping lookups/mutations by operation: ordinary primary/secondary
+  reads and full scans perform zero separate map lookups; non-key updates
+  perform zero mapping mutations. Distinguish locked updates with a usable
+  locator from identity-only/moved-key successor resolution. Count map page,
+  copy, WAL and history costs separately. If Payment exercises that resolution,
+  include matched `sample payment` controls using the individual-family
+  configuration below; no additional worker/warehouse sweep is required.
 - Measure leaf occupancy distribution, height, splits, inline/overflow counts,
   current/historical frames, pinned
   frames, changed pages, staged copies, WAL bytes and checkpoint writes.
@@ -436,3 +445,20 @@ the ADR and delivery requirements, with the focused proof obligations above.
 The focused follow-up accepted the corrected design for implementation. Final
 code review and promotion retain their existing gates. No additional user
 approval or new prerequisite ticket is needed for this in-scope revision.
+
+Implementation progress review, 2026-09-29: the
+[source review at `53fde91a` plus pending read/overflow changes](../delivery/evidence/2026-09-29-tic-erebor-implementation-review.md)
+supports the direction and records I1–I4 for the implementing agent: correct
+value-bearing intent coalescing, reconcile foreground/replay membership policy,
+preserve latest own writes in open scans, and complete point-result borrowing.
+The report also identifies the remaining scalar-authority removal and overflow
+retirement/drop boundaries. Address these within this ticket before final
+review and acceptance measurements; this progress review is not promotion approval.
+
+Performance decision, 2026-09-29: the owner accepted the [interleaved Stock
+Level candidate numbers](../delivery/evidence/2026-09-29-tic-erebor-candidate-stock-level.md)
+as sufficient for this ticket's local throughput gate. Preserve their large
+variation in the evidence and do not treat them as an isolated CPU speedup or
+a cross-database claim. The correction applies to measurement acceptance;
+overflow reclamation, recovery, capacity, cleanup and independent final review
+remain promotion conditions.

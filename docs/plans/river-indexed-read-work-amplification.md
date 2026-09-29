@@ -3,6 +3,23 @@
 Date: 2026-09-28. Status: diagnosis and recommended design direction; no storage
 redesign is implemented or accepted by this document.
 
+## Current architecture decision — 2026-09-29
+
+[ADR 0015: Clustered relational row store](../adr/0015-clustered-relational-row-store.md)
+now owns the selected layout and access contracts, delivered through
+[tic-erebor](../tickets/tic-erebor.md). Its
+[identity-index rules](../adr/0015-clustered-relational-row-store.md#identity-index-access-and-maintenance-budget)
+keep ordinary primary/secondary reads off the separate locator map, use the
+identity tree itself as the row store for tables without a declared primary
+key, and constrain mapping maintenance and locked-update routing. These rules
+are part of the architecture and measured acceptance, not optional tuning.
+
+The diagnosis and alternatives below describe the earlier source/evidence
+boundary. They do not supersede the ADR or imply that the current replacement
+has passed its code, recovery or performance gates.
+
+## Original diagnosis
+
 River's current indexed-read path searches a SQL tuple index for a logical row
 identity, searches another tree for that row's version, locates a heap record,
 copies the record and publishes values before evaluating the query. It repeats

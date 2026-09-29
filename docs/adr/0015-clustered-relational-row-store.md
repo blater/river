@@ -129,6 +129,50 @@ primary rows need no relational key re-encoding or bounds recheck. Pending
 replacements, refetches after locking, and rows selected under a different
 snapshot retain the residual bound checks required by their source.
 
+### Identity-index access and maintenance budget
+
+An internal identity descriptor has two roles depending on the table. With no
+declared primary key, its tree is the canonical clustered row store; there is
+no second identity-to-locator tree. With a declared primary key, its tree holds
+only stable row ID to primary-locator mappings. Keep this distinction explicit
+in the owning APIs and in measurements.
+
+| Operation | Required route | Separate identity-map work |
+| --- | --- | --- |
+| Primary point/range read | Selected clustered leaf supplies the row. | Zero lookups. |
+| Full table scan or primary-row backfill | Scan the canonical clustered tree directly. | Zero lookups. |
+| Secondary read | Follow the entry's primary locator at the same snapshot. | Zero lookups. |
+| Identity-only read on a declared-primary table | Resolve identity to locator, then read the primary tree. | One mapping resolution when the caller has no usable locator. |
+| Identity-only read on a hidden-primary table | Derive its clustering key from the logical row ID. | No separate map exists. |
+| Locked/current-row access | After the existing protection, use a supplied locator if it still names the required current row; resolve stable identity when the locator is absent or no longer valid. | Conditional; do not route every update through the map. |
+| Non-key update on a declared-primary table | Replace the primary row value; preserve the unchanged identity mapping. | Zero mapping mutations. |
+| Insert/delete/primary-key move on a declared-primary table | Maintain the mapping atomically with the primary and affected secondary entries. | One logical mapping insert/delete/replacement, with physical page and WAL costs counted. |
+
+Checking a protected locator must preserve stable row identity, current-version
+and own-pending-write semantics. It must not accept an old-snapshot row as the
+current successor. Keep this decision in the existing row-access/locking owner;
+callers carry a usable locator rather than discarding it and recovering it by
+another tree search. Foreign-key and backfill callers that already hold the
+needed row or locator consume it directly. The map must not become a universal
+row-fetch adapter or a second row/version authority.
+
+Deriving the internal key ID from a reserved range of durable table IDs happens
+at descriptor construction/reopen. This does not require a per-row lookup or
+allocate a new durable identity on each open. The owning catalog admission must
+keep the ranges disjoint and handle exhaustion explicitly. Cheap descriptor
+identity derivation does not make the populated locator tree free: its entries,
+splits, WAL, checkpoint writes and retained page generations consume resources.
+
+Acceptance evidence must report identity-map lookups and mutations by operation
+and workload separately from primary/secondary work. Prove zero map accesses
+on ordinary primary and secondary reads, and zero map mutations on non-key
+updates. For locked updates, distinguish a supplied usable locator from an
+identity-only or moved-key successor request. Measure the actual extra changed
+pages, copied bytes, WAL bytes, history occupancy and CPU; logical mutation
+counts alone are insufficient. Use the ticket's New Order control and an
+affected Payment control when its current-row path exercises this map. A read
+gain does not excuse an unexplained repeated write-workload regression.
+
 ## Visibility, lifetime and pressure
 
 The selected leaf generation makes key and value coherent. Keep three distinct
