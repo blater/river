@@ -32,7 +32,11 @@ representation, projection analysis or parallel performance campaign.
 
 The header-removal implementation and validation are recorded in
 [the headerless-row review](../delivery/evidence/2026-09-28-tic-celeborn-headerless-rows.md).
-The wider read-lifetime/copy work remains outstanding.
+[tic-ent](tic-ent.md) completed the `SqlValueBuffer`, UTF-8 representation and
+borrowed-access replacement at `b6bc7e63`, tagged
+`perf-checkpoint-20260929-tic-ent-values`. The broader invariant-admission and
+storage-trust audit remains here; section 3 states the shared ownership
+requirements.
 
 The header-removal slice passed independent durable-format review, the clean
 integration build and matched Stock Level/New Order regression checks on
@@ -42,10 +46,11 @@ These checks do not close the wider ticket or claim a measured speedup.
 
 ## Baseline evidence and scope
 
-Source inspected: integrated `e3225ffd` on 2026-09-28. Start implementation from
-the latest accepted checkpoint and recheck these locations if source advances.
+Source inspected: integrated `e3225ffd` on 2026-09-28. The trace below records
+that earlier source; tic-ent has removed some of these classes and paths.
+Recheck current code before work on the remaining audit.
 
-- [StoredTableRowDecoder](../../river-engine/src/main/java/io/riverdb/engine/relational/StoredTableRowDecoder.java)
+- `StoredTableRowDecoder` (removed by tic-ent)
   and `StoredTableRowHeaderCodec` (removed in the implementation slice)
   repeat argument, range, identity and format checks across the internal call.
 - [RelationalDescriptorRowValidation](../../river-engine/src/main/java/io/riverdb/engine/relational/RelationalDescriptorRowValidation.java)

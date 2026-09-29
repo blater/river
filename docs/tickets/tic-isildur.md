@@ -39,6 +39,10 @@ work in [tic-72e5](tic-72e5.md).
    Simplify row transfer under explicit buffer ownership. Remove intermediate
    full-row materialization where a pin or bounded borrowed view permits it;
    otherwise copy only the required values before releasing the pin.
+   [Tic-ent](tic-ent.md) completed the value-representation and borrowed-access
+   replacement at `b6bc7e63`. Intermediate containers and conversion adapters
+   are removed across read and write consumers; copies remain at explicit
+   ownership boundaries. The wider tic-celeborn trust-boundary audit remains.
 
 ## Acceptance Criteria
 

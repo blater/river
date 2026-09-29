@@ -1,6 +1,6 @@
 # River delivery Kanban and priority queue
 
-## Current indexed-read frontier — 2026-09-28
+## Current indexed-read frontier — 2026-09-29
 
 [tic-isildur](tickets/tic-isildur.md) is the current user-directed performance
 epic under [tic-30c3](tickets/tic-30c3.md). Its first slice,
@@ -15,6 +15,13 @@ removes the extra scalar B-tree search and has passed its clean full build.
 The accepted full Stock Level checkpoint and adjacent controls use unchanged
 SQL, schema and indexes; New Order shows no repeated candidate regression.
 Separate full-workload copy/decode mechanism evidence remains in the epic.
+
+The header-removal slice of [tic-celeborn](tickets/tic-celeborn.md) is merged at
+`a2cdddb8`, tagged `perf-checkpoint-20260928-headerless-rows`.
+[tic-ent](tickets/tic-ent.md) completed the value-representation slice at
+`b6bc7e63`, tagged `perf-checkpoint-20260929-tic-ent-values`: `SqlValueBuffer`
+and the mandatory intermediate row and UTF-16 text conversions are removed.
+The broader invariant-admission and storage-trust audit remains in tic-celeborn.
 
 ## Current performance frontier — 2026-09-15
 
