@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static io.riverdb.engine.table.IndexedRelationalWalMutationFixtures.*;
 import static io.riverdb.engine.table.IndexedRelationalWalStorageFixtures.*;
 import static io.riverdb.engine.table.IndexedRelationalWalRegistryFixtures.*;
@@ -28,6 +29,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -366,12 +369,16 @@ final class IndexedRelationalWalCommitTest {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
+    IndexedTransactionSession seed = session(context(manager, table, null, vacuum), 128);
+    prepareHybrid(seed, descriptor, baseSpace, 3, 993);
+    requireOk(seed.commit(new TransactionOutcome()));
+    requireOk(seed.close());
     IndexedGroupCommitCoordinator coordinator =
         new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
     IndexedSessionContext context = context(manager, table, coordinator, vacuum);
     IndexedTransactionSession first = session(context, 128);
     IndexedTransactionSession second = session(context, 128);
-    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
     prepareHybrid(first, descriptor, baseSpace, 1, 991);
     prepareHybrid(second, descriptor, baseSpace, 2, 992);
     check(first.eligibleForCommitGroup(), "first hybrid transaction was not group eligible");
@@ -436,7 +443,7 @@ final class IndexedRelationalWalCommitTest {
     check(fetched.getLong(0) == 992, "second grouped hybrid row missing");
     assertTuple(created.store(), descriptor, 991, 1);
     assertTuple(created.store(), descriptor, 992, 2);
-    assertRecoveredRegistry(created.store(), 1_000, 5, OWNER_OBJECT_ID, 4, KEY_SCHEMA_ID);
+    assertRecoveredRegistry(created.store(), 1_000, 5, OWNER_OBJECT_ID, 5, KEY_SCHEMA_ID);
     IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
     requireOk(coordinator.copyTelemetry(telemetry));
     check(telemetry.stageCount(
@@ -446,6 +453,9 @@ final class IndexedRelationalWalCommitTest {
         "coordinator did not retain both requests");
     prepareTupleValueReplacement(first, descriptor, 1, 991, 9_101);
     prepareTupleValueReplacement(second, descriptor, 2, 992, 9_202);
+    ForcedGroupFixture.HeldForce heldForce =
+        new ForcedGroupFixture.HeldForce(ForcedGroupFixture.walFile(wal));
+    ForcedGroupFixture.replaceWalFile(wal, heldForce);
     CountDownLatch updateReady = new CountDownLatch(2);
     CountDownLatch updateStart = new CountDownLatch(1);
     TransactionOutcome firstUpdate = new TransactionOutcome();
@@ -459,16 +469,33 @@ final class IndexedRelationalWalCommitTest {
           () -> coordinatedCommit(second, secondUpdate, updateReady, updateStart));
       updateReady.await();
       updateStart.countDown();
+      heldForce.awaitEntered();
+      IndexedTransactionSession independent = session(context, 128);
+      readTupleAndAwaitDurability(independent, descriptor, 993, 3, 0, 0);
+      requireOk(independent.close());
+      IndexedTransactionSession dependent = session(context, 128);
+      ExecutorService readers = Executors.newSingleThreadExecutor();
+      try {
+        Future<StatusCode> dependentRead = readers.submit(() ->
+            readTupleAndAwaitDurability(dependent, descriptor, 991, 1, Long.BYTES, 9_101));
+        assertThrows(TimeoutException.class, () -> dependentRead.get(100, TimeUnit.MILLISECONDS));
+        heldForce.release();
+        requireOk(dependentRead.get());
+      } finally {
+        readers.shutdownNow();
+      }
+      requireOk(dependent.close());
       requireOk(firstCommit.get());
       requireOk(secondCommit.get());
     } finally {
+      heldForce.release();
       updates.shutdownNow();
     }
     check(counters.forceCalls() == updateForces + 1,
         "same-leaf replacements did not share one force");
     assertTupleValue(created.store(), descriptor, 991, 1, 9_101);
     assertTupleValue(created.store(), descriptor, 992, 2, 9_202);
-    assertRecoveredRegistry(created.store(), 1_000, 5, OWNER_OBJECT_ID, 4, KEY_SCHEMA_ID);
+    assertRecoveredRegistry(created.store(), 1_000, 5, OWNER_OBJECT_ID, 5, KEY_SCHEMA_ID);
     requireOk(coordinator.close());
 
     crashWal(wal);
@@ -484,7 +511,7 @@ final class IndexedRelationalWalCommitTest {
     assertTuple(reopened.store(), descriptor, 992, 2);
     assertTupleValue(reopened.store(), descriptor, 991, 1, 9_101);
     assertTupleValue(reopened.store(), descriptor, 992, 2, 9_202);
-    assertRecoveredRegistry(reopened.store(), 1_000, 5, OWNER_OBJECT_ID, 4, KEY_SCHEMA_ID);
+    assertRecoveredRegistry(reopened.store(), 1_000, 5, OWNER_OBJECT_ID, 5, KEY_SCHEMA_ID);
     requireOk(reopened.store().flush());
     requireOk(reopened.store().close());
     requireOk(wal.close());
@@ -794,6 +821,28 @@ final class IndexedRelationalWalCommitTest {
             && result.page().getLong(result.valueOffset()) == expectedValue,
         "grouped tuple replacement lost the row value for " + rowId);
     requireOk(store.closeTupleScan(cursor));
+  }
+
+  private static StatusCode readTupleAndAwaitDurability(
+      IndexedTransactionSession session, int[] descriptor,
+      long indexKey, long rowId, int valueLength, long value) {
+    requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
+    ByteBuffer key = genericFixedTuple(indexKey);
+    TupleBTreeScanBounds bounds = new TupleBTreeScanBounds();
+    requireOk(bounds.setExact(
+        key, 0, key.remaining(), shape(descriptor), TupleBTreeScanBounds.FORWARD));
+    IndexedTupleScanCursor cursor = new IndexedTupleScanCursor();
+    requireOk(session.beginTupleScan(
+        OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), bounds,
+        io.riverdb.tx.api.lock.LockMode.SHARED, cursor));
+    IndexedTupleScanResult result = new IndexedTupleScanResult();
+    requireOk(session.nextTupleScan(cursor, result));
+    check(result.logicalRowId() == rowId && result.valueLength() == valueLength
+            && (valueLength == 0 || result.page().getLong(result.valueOffset()) == value),
+        "tuple read returned the wrong row or value for " + rowId);
+    requireOk(session.closeTupleScan(cursor));
+    requireOk(session.commit(new TransactionOutcome()));
+    return session.awaitDurability();
   }
 
   @Test

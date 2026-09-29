@@ -37,7 +37,9 @@ Focused tests passed:
   the reclaimed page ID, generation and removal sequence survive encode/decode.
 - `IndexedRelationalWalCommitTest.concurrentHybridSessionsShareOneForceAndRecoverIndependentDecisions`:
   two different rows on the same tuple leaf receive value replacements in one
-  grouped force; both values survive a WAL-only reopen and a second reopen.
+  grouped force. With that force held, an earlier unchanged clustered row
+  completes a read-only transaction while a changed row waits for durability.
+  Both replacement values survive a WAL-only reopen and a second reopen.
 - `IndexedPageCacheEvictionTest.pinnedOldGenerationReportsPressureThenProgressesAfterRelease`:
   a held older tuple page generation keeps a two-frame cache from publishing
   another generation. Publication returns `RETRY`, preserves the old bytes,
