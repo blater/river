@@ -497,3 +497,19 @@ The four-worker three-retry mix exhausts deadlock retries on both stable and
 candidate; a matched ten-retry diagnostic passes with reconciled retries and
 cleanup. Owner/review resolution of that strict retry condition and updated
 independent durable-format/recovery/concurrency approval remain before promotion.
+
+Amended review response, 2026-09-29: the independent review of `867f6847`
+found retirement metadata eviction during link acquisition (F1/P1) and a
+nonrepeatable read-allocation warmup (F2/P2). `fb9772d2` holds operation pins
+across queue/free-stack changes and adds spill, pressure, abort/retry and
+spill-limited WAL-only recovery coverage. `4e08034d` initializes the late-loaded
+binding types traced in the exact 21,752-byte spike and requires stable
+zero-byte warmup followed by five exact-zero batches per read path. Three
+fresh-JVM allocation runs and all 52 affected tests pass. The latest clean
+full check passes all 1,136 engine tests. The
+[amended fix evidence](../delivery/evidence/2026-09-29-tic-erebor-promotion-fixes.md#amended-review-f1-retirement-metadata-ownership)
+and [updated handoff](../delivery/evidence/2026-09-29-tic-erebor-review-handoff.md)
+retain the investigation and promotion conditions. Independent follow-up
+approval and explicit resolution of the strict three-retry mixed run remain
+required. Prior measurement versions and the accepted Stock Level decision
+retain their original scope.

@@ -2103,3 +2103,26 @@ retry acceptance needs owner/review resolution. The previously accepted Stock
 Level decision stands with its original variation. No feature merge,
 checkpoint tag or new baseline is designated; the Baseline stats table remains
 unchanged.
+
+## 2026-09-29 — Erebor amended-review correctness checkpoint
+
+Branch `feature/tic-erebor-clustered-row-store`, ticket
+[`tic-erebor`](tickets/tic-erebor.md). The follow-up independent review at
+`867f6847` identified metadata-buffer reuse under staging pressure and
+intermittent allocation-test initialization. `fb9772d2` fixes the metadata pin
+lifetimes; `4e08034d` stabilizes setup/warmup without relaxing exact-zero
+verification. The [amended evidence](delivery/evidence/2026-09-29-tic-erebor-promotion-fixes.md#amended-review-f1-retirement-metadata-ownership)
+retains the deterministic regressions, two-frame pressure/abort/replay checks,
+four-frame WAL-only recovery, JFR class-loading diagnosis and slopmark review.
+
+All 52 affected tests and three fresh-JVM allocation runs pass. Each read path
+must pass five separate zero-byte batches and retain its primary-leaf borrow.
+The serial clean full check and server JAR checkpoint passed in 4m 51s, with
+all 1,136 engine tests passing; log `/private/tmp/erebor-followup/clean-check.log`.
+The source was committed unchanged after that clean check.
+
+This is a correctness checkpoint. No additional TPS campaign, benchmark
+baseline or promotion is designated. Prior physical-write/CPU and Stock Level
+samples retain their named versions and limitations. Independent follow-up
+review and owner resolution of the three-retry mixed-workload condition remain
+required before promotion.

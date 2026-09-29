@@ -69,7 +69,7 @@ preserves all primary values, stable identities, secondary locators and
 vacuum and drop/reuse tests retain their separately owned SCALAR coverage.
 Focused codec, recovery, commit and overflow-churn classes pass.
 
-## Final validation
+## Earlier validation
 
 The uninstrumented candidate at `0b2e7bbb` passed a serial clean full checkpoint
 in 4m 57s. Subsequent JFR measurement found excluded logical-head searches in
@@ -93,3 +93,131 @@ borrowing the selected primary leaf's actual buffer. Its XML is retained at
 Updated independent durable-format/recovery/concurrency review remains
 required. [Write-cost evidence](2026-09-29-tic-erebor-write-cost.md) is recorded
 separately; the owner's accepted Stock Level decision remains unchanged.
+
+## Amended review F1: retirement metadata ownership
+
+The independent follow-up reviewed `867f6847` and is retained at
+`/private/tmp/erebor-promotion-review-2/review.md`. Commit `fb9772d2` addresses
+its P1 finding. Queue append and drop unlinking now hold the root's operation
+pin throughout link acquisition and publication, and release it on success,
+corruption and resource pressure. The two free-stack release callers,
+`IndexedRetiredOverflowReclaimer` and `IndexedTupleGraphReclaimer`, also pin
+metadata through free-page staging. The tuple provider releases an existing
+allocation-root writable borrow before the queue takes ownership. The ordinary
+read routes and identity-map maintenance policy retain their existing owners.
+
+The operation allocator's production callers in tuple/overflow allocation,
+logical scalar splits and logical-head allocation already retain metadata
+pins through free-head and new-frame acquisition. Its ownership contract is
+now explicit, and retirement fixtures use the same pinned allocation contract.
+The reusable pin carriers add no allocation inside these queue operations.
+No format version or minimum resident-frame count changed.
+
+Four new regression tests exercise four current frames, **two staging frames**
+and fifteen active staged slots:
+
+- Append spills unrelated staged data while preserving root count/tail and the
+  overflow successor; abort restores both, and repeating the operation works.
+- A held unrelated staging pin forces `RESOURCE_EXHAUSTED`. Append publishes
+  no queue change; releasing the pin and aborting permits the identical retry.
+- Drop unlink/free-stack work succeeds after spilling, rejects insufficient
+  residency, and abort restores queue links, free state and original ownership.
+- Cross-owner reclamation and exact recovery replay retain the FIFO/free-stack
+  state after repeated staging spill. Abort restores the original queue.
+
+The new append/drop regressions failed before the ownership correction. Their
+retained result is `/private/tmp/erebor-followup/pressure-before.xml`.
+The actual relational reuse/recovery test now runs both its ordinary profile
+and a production-compiled four-staging-frame profile. It captures a closed,
+checkpointed database before the narrow-cache transaction, then copies only
+the new WAL decision. Reopen reconstructs both overflow rows and identity
+locators, and a checkpoint shows no remaining retired pages. This avoids
+copying transient sparse staging data into the crash fixture.
+
+## Amended review F2: repeatable steady-state allocation checks
+
+Commit `4e08034d` addresses the P2 finding without a byte allowance. Temporary
+JFR probes on GraalVM 25.0.4 reproduced the exact **21,752-byte** point-batch
+spike twice. With TLAB disabled for object attribution, allocation events show
+class-loader byte arrays, class objects, strings and resource-loading work.
+Class-load events in that batch name `StoredTableRowIntegerFilter` and
+`StoredTableColumnSelection`, reached from the primary row-binding path even
+though the measured point operation supplies null for both parameters. This
+is one-time type resolution; the trace does not establish a sustained
+per-row allocation or attribute every warmup byte to compilation.
+
+The test explicitly initializes those two types during setup. It warms the
+same allocation-counter/read helper used for verification until ten
+consecutive 10,000-point batches allocate zero bytes, with a maximum of 100
+warmup batches. Failure to stabilize fails the test. Scan warmup also measures
+its helper and requires at least ten consecutive zero-byte batches at the end
+of its existing 100-scan warmup. Each path then must pass **five separate
+exact-zero verification batches**. Verification does not retry an allocating
+batch or select a minimum. Primary and secondary scans still assert that the
+row view borrows its selected primary leaf buffer.
+
+In the initialized control probe, batches 4–39 were all zero and the two late
+parameter-class loads were absent from the read window. Other setup types
+loaded in batch zero. Raw recordings, temporary probe source, per-batch bytes
+and class-load events are retained in `/private/tmp/erebor-followup/`:
+
+- `allocation-probe.jfr`, `allocation-probe-deep.jfr` and their logs retain the
+  two original spike reproductions.
+- `allocation-probe-initialized.jfr` and its log retain the initialized control.
+- `allocation-summary.json` contains the paired batch values and loaded types.
+- `allocation-repeat-1.xml` through `allocation-repeat-3.xml` retain three
+  passing fresh-JVM runs of the final uninstrumented test. Every point and
+  primary/secondary scan verification batch measured zero bytes.
+
+The probes are outside the worktree and production distribution. TLAB/JFR
+options applied only to the temporary investigation, not the accepted test.
+
+## Latest integration checkpoint
+
+Final production/test source is `4e08034d`, containing F1 at `fb9772d2`.
+The source changes were committed without alteration after the serial clean check passed.
+All 52 affected tests passed with zero failures, errors or skips, covering the
+queue, cache, cancelled commits, overflow churn, logical WAL commit/recovery
+and actual read allocation. Logs and XML: `affected-passed.log` and
+`affected-results/` below `/private/tmp/erebor-followup/`.
+
+The final command used cached Gradle 9.7.0, the existing separate worktree
+caches, `--no-daemon --max-workers=1 clean check :river-server-app:jar`.
+It passed in **4m 51s**, with 156 actionable tasks: 102 executed, 52 from cache
+and two up to date. All **1,136 engine tests** passed, with zero failures,
+errors or skips. The log is `/private/tmp/erebor-followup/clean-check.log`;
+counts and focused final XML are `final-engine-counts.json` and `final-results/`
+in the same directory. `git diff --check` passed.
+
+The investigation also retains two fixture-only interruptions/failures:
+`focused.log` was stopped while a whole-file crash copy expanded sparse
+staging space; its owned temporary directory was removed, and the WAL-only
+fixture replaced that copy. `affected-final.log` records an optional direct
+publication attempt exceeding the four-current-frame retention budget; that
+extra fixture was removed because the real WAL-only recovery test supplies
+the durable boundary. The final affected and clean runs above include neither
+fixture problem.
+
+Slopmark's compact table-package capture has incomplete SHALLOW coverage:
+
+| Owner | Before | After |
+| --- | ---: | ---: |
+| Retirement queue | 26.027 | 28.707 |
+| Retired overflow reclaimer | 28.512 | 29.543 |
+| Tuple graph reclaimer | 25.492 | 31.871 |
+| Tuple page provider | 92.712 | 93.119 |
+| Operation allocator | 17.978 | 17.978 |
+| Frame cache | 264.687 | 264.687 |
+
+The graph-reclaimer increase prompted a responsibility review: it now retains
+its existing allocation metadata safely; queue selection, eligibility,
+resource policy and publication remain in their existing owners. No second
+allocator, queue or commit path was introduced. Raw captures are
+`/private/tmp/erebor-followup-slopmark-before-all.txt` and
+`/private/tmp/erebor-followup/slopmark-after.txt`.
+
+Decision: both amended findings are ready for independent follow-up review.
+No new workload campaign or throughput claim is made. The prior physical-cost
+and Stock Level evidence keep their original source versions and scope. The
+strict three-retry mixed-workload condition and independent durable/recovery/
+concurrency approval remain unresolved; no promotion is recorded.

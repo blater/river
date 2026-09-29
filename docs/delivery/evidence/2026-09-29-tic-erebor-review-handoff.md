@@ -2,7 +2,7 @@
 
 Date: 2026-09-29 UTC. Branch: `feature/tic-erebor-clustered-row-store`.
 Base: stable `origin/master` at `2ada6350`. Final production/test source:
-`46e5ab39c35004759f617d29961d777c7791636e`. This remains an unpromoted
+`4e08034d` (F1 at `fb9772d2`). This remains an unpromoted
 replacement; intermediate commits are not separate releases.
 
 ## Review findings addressed
@@ -36,16 +36,34 @@ implementation and focused validation:
   logical-head directory. Exact scalar/head boundary tests cover empty and
   populated directories and the first included head row.
 
+The amended independent review at `867f6847` is retained in
+`/private/tmp/erebor-promotion-review-2/review.md`. Its findings are addressed:
+
+- F1, `fb9772d2`: queue append/unlink and reclamation/free-stack publication
+  retain metadata pins through page acquisition. Two-staging-frame regressions
+  cover spill, pressure, abort/retry and exact replay. The real descriptor
+  reuse test also recovers from a checkpoint plus only the new WAL decision
+  with four staging frames.
+- F2, `4e08034d`: controlled JFR reproduced the exact 21,752-byte spike as late
+  parameter-type loading. Setup now initializes those types, the measured
+  helpers must reach consecutive zero-byte warmup batches, and five separate
+  verification batches per path must each allocate exactly zero. Leaf-buffer
+  identity assertions remain. Three fresh-JVM test runs passed.
+
+The [amended fix evidence](2026-09-29-tic-erebor-promotion-fixes.md#amended-review-f1-retirement-metadata-ownership)
+contains the allocation investigation, pressure fixtures and retained limits.
+
 The control major is 4, allocation-root version 5, overflow version 2 and
 relational logical-WAL version 9. [ADR 0015](../../adr/0015-clustered-relational-row-store.md)
 describes the current layout, ownership, retirement and pressure contracts.
 
 ## Validation and measurements
 
-The final serial clean `clean check :river-server-app:jar` passed in 4m 30s:
+The latest serial clean `clean check :river-server-app:jar` passed in 4m 51s:
 156 actionable tasks, 102 executed, 52 restored from cache and two up to date.
-All 1,131 engine tests passed, with no errors or skips. Log:
-`/private/tmp/erebor-promotion-final-clean-check.log`.
+All 1,136 engine tests passed, with no failures, errors or skips. Log:
+`/private/tmp/erebor-followup/clean-check.log`. Production/test changes were
+committed unchanged after this checkpoint.
 
 The [write-cost evidence](2026-09-29-tic-erebor-write-cost.md) contains actual
 map-owned page/copy/WAL/history/flush measurements, additional tuple-key
@@ -59,7 +77,9 @@ its original source versions and variation; it has not been rerun or relabelled.
 ## Promotion conditions
 
 Updated independent durable-format, recovery and concurrency review remains
-required by [AGENTS.md](../../../AGENTS.md). Review the new durable queue and
+required by [AGENTS.md](../../../AGENTS.md). The amended review explicitly
+withheld approval; it requires a focused follow-up on the metadata lifetimes,
+spill/pressure outcomes and allocation-test stabilization. Review the durable queue and
 exact cross-owner replay identities, checkpoint eligibility for staged links,
 old leaf/overflow pins, blocked-head pressure, group force dependencies,
 cancelled descriptor numbering/floors, and the migrated multi-chunk coverage.
