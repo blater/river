@@ -1887,3 +1887,95 @@ remaining representation transfers and full-workload copy/decode counts.
 Integration uses a merge commit and annotated tag
 `perf-checkpoint-20260928-headerless-rows`; retain the preceding checkpoint for
 reproduction and rollback. The Baseline stats table is unchanged.
+
+## 2026-09-29 — tic-ent borrowed descriptor values and UTF-8 execution
+
+Feature branch `feature/tic-ent-value-representation`, code commit `edc8bd7d`,
+starts from pushed checkpoint `a2cdddb8`. The control distribution at
+`/private/tmp/river-celeborn-dist` was built from `f3b0573e`; the production
+source in all relevant modules is identical between that commit and
+`a2cdddb8`. The candidate is `/private/tmp/river-ent-candidate`, assembled
+from the clean build's `:river-bench:installTps` output. Both distributions use
+the same GraalVM 25 launcher, `-Xmx1g`, and published River server lifecycle.
+The candidate engine JAR SHA-256 is
+`9952756dec648338e009fc3ef47dc9ec133020fff30143e6e6c624146ade2b12`;
+the control engine JAR SHA-256 is
+`481ee4ffc193c12316761f518802d81774e33abdea8b2f7041a49c7e4674b661`.
+
+The affected engine and format tests passed. A clean full `check` first reported
+a source-policy violation in the new malformed-key test; the test spelling was
+corrected, and `check :river-bench:installTps` then passed. A subsequent focused
+test of the added wide-row demand count passed. Independent ownership review
+checked borrowed index-bound lifetimes and the public write/read admission
+boundaries. `slopmark` on affected production modules found
+`SqlAggregateAccumulatorSet` at 169.0 before and 173.368 after, and
+`SqlRowExpressionEvaluator` at 160.7 before and 166.497 after. The changes
+stay within their existing aggregate and expression responsibilities.
+
+The focused runtime checks count zero source text-byte reads at a synchronous
+row borrow, exactly seven reads for a retained copy of seven UTF-8 bytes, and
+zero UTF-16 decoding on that byte path. A 672-column borrowed numeric row reads
+zero fields at bind and one field when the consumer requests it. Retained
+results own their required bytes. These counts cover the tested boundaries;
+they are not a whole-workload byte total. The previous descriptor JOIN route
+copied selected text into `SqlValueBuffer` and materialized it again in
+`SqlBlockRow`; both intermediate steps are removed. Existing real-path tests
+cover text JOIN bounds, Unicode ordering, spill, pending rows, older snapshots,
+rollback, recovery and resource failure.
+
+The unchanged harness at `5082670`, executable SHA-256
+`9d90e020ae212f920ea4927fa0304b3f262502f9364d4210adc4505d2ae9ec63`,
+ran on macOS/arm64 from 2026-09-29 01:55 to 02:25 UTC (02:55 to 03:25 BST).
+Each run used one worker and warehouse, seed 42, retry limit 3, READ COMMITTED,
+local durable WAL and loopback TLS. Stock Level used the full profile; New
+Order and the customer-text-projecting Order Status used sample data. The
+Stock Level short and text runs used 5s warmup and 30s or 20s measurement as
+shown. New Order used 5/20s. Longer Stock Level runs used 10/60s. The
+`A-B-B-A` order was serialized, with no builds or other owned workloads during
+measurement. Run IDs below are immutable directories under
+`/Users/blater/src/ingres/river-harness/runs/`.
+The exact `--river-version` for each row is in its artifact's
+`environment.json`: the table's build and sample code expand to
+`tic-ent-control-a2cdddb8-{stock,new,text}-{a1,a2,a3,a4}` or
+`tic-ent-candidate-{stock,new,text}-{b1,b2,b3,b4}`, with `stock-long` replacing
+`stock` for 10/60s runs. The anomalous short candidate was repeated with
+`tic-ent-candidate-stock-b2-rerun`.
+
+| Workload; warmup/measure | Build | TPS | p99 ms | Artifact ID |
+| --- | --- | ---: | ---: | --- |
+| full stock-level; 5/30s | A1 control | 1,543.894 | 0.872 | `river_harness_20260929_015554_940ab5bc` |
+| same | B1 candidate | 1,352.796 | 0.952 | `river_harness_20260929_015745_d13e31fb` |
+| same | B2 candidate | 1,259.828 | 1.075 | `river_harness_20260929_015946_36ca251c` |
+| same | A2 control | 1,338.293 | 1.307 | `river_harness_20260929_020152_ff29ee31` |
+| sample new-order; 5/20s | A1 control | 306.092 | 7.766 | `river_harness_20260929_020414_80fd923e` |
+| same | B1 candidate | 296.845 | 7.893 | `river_harness_20260929_020450_313e6537` |
+| same | B2 candidate | 305.047 | 7.524 | `river_harness_20260929_020527_e26e4063` |
+| same | A2 control | 293.249 | 7.348 | `river_harness_20260929_020604_fafbe9b7` |
+| sample order-status; 5/20s | A1 control | 11,504.679 | 0.201 | `river_harness_20260929_020646_6df85e5a` |
+| same | B1 candidate | 13,064.054 | 0.115 | `river_harness_20260929_020722_65917055` |
+| same | B2 candidate | 12,109.755 | 0.179 | `river_harness_20260929_020757_e1ee53a9` |
+| same | A2 control | 11,541.747 | 0.210 | `river_harness_20260929_020832_4805a0dd` |
+| full stock-level; 10/60s | A3 control | 1,237.074 | 1.640 | `river_harness_20260929_020913_1a5691cb` |
+| same | B3 candidate | 1,350.334 | 1.120 | `river_harness_20260929_021202_d34b6be5` |
+| same | B4 candidate | 1,364.595 | 0.910 | `river_harness_20260929_021449_8ed1307c` |
+| same | A4 control | 1,434.099 | 1.050 | `river_harness_20260929_021731_1db0a04f` |
+| full stock-level; 5/30s rerun | B2 candidate | 1,326.363 | 1.143 | `river_harness_20260929_022418_8b52a9c5` |
+
+All 17 reports passed, were eligible, and had equal comparison keys within
+each workload/window. Every invariant passed; failed transactions, unknown
+commits and retries were zero. Each run accounted for one measured-window
+cancellation, shut down gracefully through `river-stop`, and removed its owned
+database directory. The comparison keys are `1233ecf3...` for short Stock
+Level, `f7b5a6af...` for longer Stock Level, `fd1585b9...` for New Order, and
+`7ac8391e...` for Order Status; each full key is in its report.
+
+The short Stock Level sequence fell from 1,543.894 TPS at A1 to 1,338.293 at
+A2; candidate B2 at 1,259.828 was a low result. Its identical successful rerun
+reached 1,326.363 TPS. The longer follow-up put both
+candidates, 1,350.334–1,364.595, between the two controls,
+1,237.074–1,434.099, with no repeated candidate-specific decline. New Order
+control and candidate ranges also overlap. Order Status candidates were above
+both controls, but the short local samples and shared-host activity do not
+establish a general speedup. **Decision:** accept the architectural replacement
+and correctness evidence without designating a new TPS baseline or claiming a
+MariaDB ratio. The Baseline stats table remains unchanged.
