@@ -8,7 +8,7 @@ import io.riverdb.sql.SqlCommandType;
 /** Retained DISTINCT and grouped COUNT execution over one descriptor scan. */
 final class SqlDescriptorSetExecution {
   private final SqlDescriptorHavingCount having;
-  private final SqlDescriptorSetKey key = new SqlDescriptorSetKey();
+  private final SqlDescriptorSetKey key;
   private final SqlDescriptorSetShape shape;
   private final SqlDescriptorRunLength run = new SqlDescriptorRunLength();
   private final SqlAggregateAccumulatorSet accumulators;
@@ -20,6 +20,7 @@ final class SqlDescriptorSetExecution {
 
   SqlDescriptorSetExecution(
       SqlTemporalContext temporal, SqlSessionShapeBudget shapeBudget) {
+    key = new SqlDescriptorSetKey(shapeBudget);
     accumulators = new SqlAggregateAccumulatorSet(shapeBudget);
     having = new SqlDescriptorHavingCount(temporal, shapeBudget);
     shape = new SqlDescriptorSetShape(

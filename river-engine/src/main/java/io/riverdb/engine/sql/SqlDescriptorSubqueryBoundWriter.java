@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalDescriptorIndexBounds;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
 
@@ -15,7 +16,7 @@ final class SqlDescriptorSubqueryBoundWriter {
       new SqlDescriptorSubqueryEqualityWriter();
   private final SqlDescriptorSubqueryRangeWriter range =
       new SqlDescriptorSubqueryRangeWriter();
-  private int columns;
+  private TableDescriptor table;
   private int textBytes;
   private boolean empty;
 
@@ -27,10 +28,10 @@ final class SqlDescriptorSubqueryBoundWriter {
   StatusCode prepare(
       SqlDescriptorSubqueryIndexPlan plan, TableDescriptor table, SqlCommand command) {
     if (!plan.active()) return StatusCode.OK;
-    columns = table.columnCount();
+    this.table = table;
     textBytes = keyTextBytes(plan);
-    StatusCode status = lower.begin(columns, textBytes, command);
-    if (status.isOk()) status = upper.begin(columns, textBytes, command);
+    StatusCode status = lower.begin(table, textBytes, command);
+    if (status.isOk()) status = upper.begin(table, textBytes, command);
     lower.reset();
     upper.reset();
     return status;
@@ -38,10 +39,10 @@ final class SqlDescriptorSubqueryBoundWriter {
 
   StatusCode bind(
       SqlDescriptorSubqueryIndexPlan plan, TableDescriptor table,
-      SqlCommand command, SqlDescriptorValueSource outer) {
+      SqlCommand command, SqlValueAccess outer) {
     empty = false;
-    StatusCode status = lower.begin(columns, textBytes, command);
-    if (status.isOk()) status = upper.begin(columns, textBytes, command);
+    StatusCode status = lower.begin(table, textBytes, command);
+    if (status.isOk()) status = upper.begin(table, textBytes, command);
     if (status.isOk()) status = equality.bind(plan, lower, upper, outer);
     if (status.isOk() && !equality.empty()) {
       status = range.bind(plan, lower, upper, outer, bounds);
@@ -57,7 +58,7 @@ final class SqlDescriptorSubqueryBoundWriter {
     upper.reset();
     equality.reset();
     range.reset();
-    columns = 0;
+    table = null;
     textBytes = 0;
     empty = false;
   }

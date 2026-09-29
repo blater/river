@@ -37,9 +37,9 @@ final class SqlUniversalDescriptorBounds {
       TableDescriptor table, SqlCommand command,
       SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows,
       SqlNestedRowProvider ancestors, int bytes) {
-    StatusCode status = lower.begin(table.columnCount(), bytes, command);
+    StatusCode status = lower.begin(table, bytes, command);
     if (!status.isOk()) return status;
-    status = upper.begin(table.columnCount(), bytes, command);
+    status = upper.begin(table, bytes, command);
     if (!status.isOk()) return status;
     status = equality(choice, rows, ancestors);
     if (!status.isOk()) return status;

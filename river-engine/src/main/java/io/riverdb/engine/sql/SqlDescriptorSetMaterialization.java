@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
 
@@ -60,6 +61,10 @@ final class SqlDescriptorSetMaterialization {
 
   StatusCode project(SqlBlockRow source, SqlBlockRow result) {
     return evaluator.projectBlock(source, result);
+  }
+
+  StatusCode project(SqlValueAccess source, SqlBlockRow result) {
+    return evaluator.projectDescriptorBlock(source, result);
   }
 
   SqlBlockSchema schema() { return output; }

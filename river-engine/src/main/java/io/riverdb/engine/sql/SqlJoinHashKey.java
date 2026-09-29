@@ -21,6 +21,22 @@ final class SqlJoinHashKey {
       SqlBlockRow row, int column, int descriptor, int comparedDescriptor) {
     if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       long hash = OFFSET;
+      if (row.hasUtf8(column)) {
+        int length = row.utf8Length(column);
+        for (int index = 0; index < length;) {
+          int first = Byte.toUnsignedInt(row.utf8ByteAt(column, index));
+          int width = first < 0x80 ? 1 : first < 0xe0 ? 2 : first < 0xf0 ? 3 : 4;
+          if (width > length - index) break;
+          int scalar = width == 1 ? first : first & (0x7f >> width);
+          for (int byteIndex = 1; byteIndex < width; byteIndex++) {
+            scalar = scalar << 6
+                | Byte.toUnsignedInt(row.utf8ByteAt(column, index + byteIndex)) & 0x3f;
+          }
+          hash = mix(hash, scalar);
+          index += width;
+        }
+        return hash;
+      }
       int length = row.textLength(column);
       for (int index = 0; index < length; index++) {
         char first = row.textCharacter(column, index);

@@ -54,7 +54,7 @@ final class RelationalDescriptorIndexCursor {
 
   private StatusCode encode(
       RelationalTupleKeyEncoder encoder, TupleShape.Result shape,
-      SqlValueBuffer values, int parts) {
+      SqlValueAccess values, int parts) {
     shape.reset();
     if (parts == 0) return StatusCode.OK;
     StatusCode status = encoder.encodeUser(key, values, parts);
@@ -77,7 +77,7 @@ final class RelationalDescriptorIndexCursor {
     return descriptors;
   }
 
-  StatusCode recheck(SqlValueBuffer values) {
+  StatusCode recheck(SqlValueAccess values) {
     StatusCode status = candidate.encodeUser(key, values);
     matches = status.isOk() && inside(candidate, lower, lowerParts, lowerInclusive, false)
         && inside(candidate, upper, upperParts, upperInclusive, true);

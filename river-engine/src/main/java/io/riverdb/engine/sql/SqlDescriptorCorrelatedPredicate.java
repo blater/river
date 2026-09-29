@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
@@ -36,7 +37,7 @@ final class SqlDescriptorCorrelatedPredicate {
   }
 
   StatusCode evaluate(
-      SqlDescriptorValueSource child, SqlDescriptorValueSource outer) {
+      SqlValueAccess child, SqlValueAccess outer) {
     truth = evaluation.evaluate(program, bindings, child, outer);
     return StatusCode.OK;
   }

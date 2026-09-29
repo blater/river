@@ -73,13 +73,6 @@ final class SqlGroupedExecution {
     textCharacters = buffers.characters;
     status = projected.reserve(required);
     if (!status.isOk()) return status;
-    for (int projection = 0; projection < bound.projectionPrograms.count(); projection++) {
-      if (SqlTypeDescriptor.typeId(bound.projectionPrograms.resultDescriptor(projection))
-          == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        status = projected.prepareText(projection);
-        if (!status.isOk()) return status;
-      }
-    }
     status = scan.groupLookahead().reserve(required);
     if (status.isOk() && (SqlBinder.isGroupAggregate(query.root().type())
         || query.root().type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN)) {

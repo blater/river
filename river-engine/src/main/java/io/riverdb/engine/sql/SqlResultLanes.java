@@ -5,6 +5,7 @@ import io.riverdb.base.column.ColumnBitSet;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.text.BoundedByteSource;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
@@ -117,6 +118,15 @@ final class SqlResultLanes {
   }
 
   StatusCode setUtf8(int index, ByteBuffer source, int offset, int length) {
+    if (!isText(index) || source == null || offset < 0 || length < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = text.setUtf8(index, source, offset, length);
+    if (status.isOk()) publishText(index);
+    return status;
+  }
+
+  StatusCode setUtf8(int index, BoundedByteSource source, int offset, int length) {
     if (!isText(index) || source == null || offset < 0 || length < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

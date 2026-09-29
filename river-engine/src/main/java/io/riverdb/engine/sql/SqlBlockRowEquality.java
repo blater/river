@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+
 /** Exact nullable fixed/text equality for one retained block-row column. */
 final class SqlBlockRowEquality {
   private SqlBlockRowEquality() { }
@@ -7,6 +8,9 @@ final class SqlBlockRowEquality {
   static boolean same(SqlBlockRow left, SqlBlockRow right, int column) {
     if (left.nullValue(column) != right.nullValue(column)) return false;
     if (left.nullValue(column)) return true;
+    if (left.hasUtf8(column) && right.hasUtf8(column)) {
+      return SqlBlockRow.compareUtf8(left, column, right, column) == 0;
+    }
     int length = left.textLength(column);
     if (length != right.textLength(column)) return false;
     if (length == 0) {

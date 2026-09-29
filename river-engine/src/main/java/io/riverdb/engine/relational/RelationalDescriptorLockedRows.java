@@ -15,19 +15,19 @@ final class RelationalDescriptorLockedRows {
   private final RelationalDescriptorPrimaryAccess primary =
       new RelationalDescriptorPrimaryAccess();
   private final RelationalRowIdentityResult resolved = new RelationalRowIdentityResult();
-  private final SqlValueBuffer before = new SqlValueBuffer();
+  private final StoredTableRowView before = new StoredTableRowView();
 
   RelationalDescriptorLockedRows(
       IndexedTransactionSession indexedSession, RelationalDescriptorRowAccess rowAccess) {
     session = indexedSession;
     rows = rowAccess;
-    current = new RelationalDescriptorCurrentRow(indexedSession, rowAccess);
+    current = new RelationalDescriptorCurrentRow(indexedSession);
   }
 
   StatusCode lockPoint(
-      TableDescriptor table, SqlValueBuffer primaryValues) {
+      TableDescriptor table, SqlValueAccess primaryValues) {
+    before.reset();
     StatusCode status = rows.reserve(table);
-    if (status.isOk()) status = reserveBefore(table);
     boolean serializable = session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE;
     if (status.isOk()) status = serializable
         ? primary.resolveSource(
@@ -41,38 +41,36 @@ final class RelationalDescriptorLockedRows {
   }
 
   StatusCode lockPoint(
-      TableDescriptor table, SqlValueBuffer primaryValues,
-      SqlValueBuffer destination, RelationalRowIdentityResult result) {
+      TableDescriptor table, SqlValueAccess primaryValues,
+      StoredTableRowView destination, RelationalRowIdentityResult result) {
     if (result != null) result.reset();
     StatusCode status = lockPoint(table, primaryValues);
-    if (status.isOk()) status = current.decodeTo(
-        table, resolved.logicalRowId(), destination);
+    if (status.isOk()) destination.borrowFrom(before);
     status = finish(status);
     if (status.isOk() && result != null) result.set(resolved.logicalRowId());
     return status;
   }
 
   StatusCode lockScan(
-      RelationalDescriptorScanCursor cursor, SqlValueBuffer destination) {
+      RelationalDescriptorScanCursor cursor, StoredTableRowView destination) {
     TableDescriptor table = cursor.descriptor();
     StatusCode status = rows.reserve(table);
-    if (status.isOk()) status = reserveBefore(table);
+    if (status.isOk()) before.reset();
     if (status.isOk()) status = current.lockScan(cursor, before);
-    if (status.isOk()) status = current.decodeTo(
-        table, cursor.logicalRowId(), destination);
+    if (status.isOk()) destination.borrowFrom(before);
     return finish(status);
   }
 
   StatusCode lockLogical(
-      TableDescriptor table, long logicalRowId, SqlValueBuffer destination) {
+      TableDescriptor table, long logicalRowId, StoredTableRowView destination) {
     StatusCode status = rows.reserve(table);
-    if (status.isOk()) status = reserveBefore(table);
+    if (status.isOk()) before.reset();
     if (status.isOk()) status = current.lockPoint(table, logicalRowId, before);
-    if (status.isOk()) status = current.decodeTo(table, logicalRowId, destination);
+    if (status.isOk()) destination.borrowFrom(before);
     return finish(status);
   }
 
-  SqlValueBuffer before() { return before; }
+  SqlValueAccess before() { return before; }
   IndexedLockedRow locked() { return current.locked(); }
   long logicalRowId() { return current.logicalRowId(); }
   boolean borrowed() { return current.borrowed() || session.tupleSourceBorrowed(); }
@@ -88,14 +86,8 @@ final class RelationalDescriptorLockedRows {
     StatusCode currentStatus = current.borrowed() ? current.release() : StatusCode.OK;
     StatusCode sourceStatus = session.tupleSourceBorrowed()
         ? session.releaseTupleSource() : StatusCode.OK;
+    if (currentStatus.isOk() && sourceStatus.isOk()) before.reset();
     return currentStatus.isOk() ? sourceStatus : currentStatus;
-  }
-
-  private StatusCode reserveBefore(TableDescriptor table) {
-    before.reset();
-    return before.reserve(
-        table.columnCount(), table.columnCount(),
-        table.encodedMaximumRowBytes(), table.encodedMaximumRowBytes());
   }
 
   private StatusCode finish(StatusCode original) {

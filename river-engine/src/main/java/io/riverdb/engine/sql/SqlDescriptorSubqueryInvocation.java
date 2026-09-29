@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 
 /** Coordinates cache, cursor, candidate, and outcome phases for one invocation. */
 final class SqlDescriptorSubqueryInvocation {
@@ -10,7 +11,7 @@ final class SqlDescriptorSubqueryInvocation {
 
   StatusCode evaluate(
       SqlDescriptorSubqueryFrameState state,
-      boolean leftNull, long leftHigh, long left, SqlDescriptorValueSource outer) {
+      boolean leftNull, long leftHigh, long left, SqlValueAccess outer) {
     state.plan.invoke(state.edge);
     prepareLeft(state, leftNull, leftHigh, left);
     if (state.cache.enabled(state.edge) && state.cache.available(state.edge)) {
@@ -31,7 +32,7 @@ final class SqlDescriptorSubqueryInvocation {
   }
 
   private StatusCode scan(
-      SqlDescriptorSubqueryFrameState state, SqlDescriptorValueSource outer) {
+      SqlDescriptorSubqueryFrameState state, SqlValueAccess outer) {
     StatusCode status = cursor.open(state, outer);
     if (status.isOk()) status = candidates.scan(state, outer);
     StatusCode closed = state.finishScan();

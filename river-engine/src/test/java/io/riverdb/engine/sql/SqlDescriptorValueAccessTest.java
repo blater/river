@@ -8,7 +8,9 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.base.text.BoundedByteSource;
+import io.riverdb.engine.relational.SqlMutationValues;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.runtime.RiverRuntimeConfig;
 import io.riverdb.engine.runtime.SqlDatabaseRuntime;
 import io.riverdb.engine.runtime.SqlRuntimeLease;
@@ -24,47 +26,49 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-final class SqlDescriptorBlockRowValuesTest {
+final class SqlDescriptorValueAccessTest {
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x4445534352495054L, 0x4f52424c4f434b53L);
   private static final int COLUMN_COUNT = 672;
   private static final int REFERENCED_COLUMN = COLUMN_COUNT - 1;
 
   @Test
-  void computedPredicateRetainsOnlyReferencedWideTextLane(@TempDir Path root)
-      throws IOException {
-    SqlDatabaseRuntime runtime = runtime(root);
-    SqlRuntimeLeaseResult leaseResult = new SqlRuntimeLeaseResult();
-    assertEquals(StatusCode.OK, runtime.acquire(leaseResult));
-    SqlRuntimeLease lease = leaseResult.lease();
-    SqlSessionShapeBudget budget = new SqlSessionShapeBudget(lease);
-    SqlDescriptorBlockRowValues rows = new SqlDescriptorBlockRowValues(budget);
-
-    assertEquals(StatusCode.OK, rows.prepare(table(), predicate()));
-    assertTrue(budget.retainedBytes() < 100_000);
-    assertEquals(budget.retainedBytes(), lease.reservedBytes());
-
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(COLUMN_COUNT, COLUMN_COUNT, 4, 4));
-    assertEquals(StatusCode.OK, values.clearForSize(COLUMN_COUNT));
-    assertEquals(StatusCode.OK,
-        values.setNull(REFERENCED_COLUMN, SqlTypeDescriptor.varchar(1)));
-    assertEquals(StatusCode.OK, rows.load(values));
-    assertTrue(rows.row().nullValue(REFERENCED_COLUMN));
-
-    assertEquals(StatusCode.OK, values.clearForSize(COLUMN_COUNT));
+  void descriptorPredicateBorrowsWideTextWithoutDecoding() {
+    TableDescriptor descriptor = table();
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(descriptor, 4));
+    assertEquals(StatusCode.OK, values.begin(descriptor, null));
     assertEquals(StatusCode.OK,
         values.setText(REFERENCED_COLUMN, SqlTypeDescriptor.varchar(1), "🌊"));
-    assertEquals(StatusCode.OK, rows.load(values));
-    assertFalse(rows.row().nullValue(REFERENCED_COLUMN));
-    assertEquals(2, rows.row().textLength(REFERENCED_COLUMN));
-    assertEquals((char) 0xD83C, rows.row().textCharacter(REFERENCED_COLUMN, 0));
-    assertEquals((char) 0xDF0A, rows.row().textCharacter(REFERENCED_COLUMN, 1));
-
-    assertEquals(StatusCode.OK, lease.close());
-    assertEquals(0, runtime.reservedShapeBytes());
-    assertEquals(StatusCode.OK, runtime.prepareClose());
-    assertEquals(StatusCode.OK, runtime.completeClose());
+    SqlValueAccess noDecode = new SqlValueAccess() {
+      @Override public int count() { return values.count(); }
+      @Override public int descriptorAt(int column) { return values.descriptorAt(column); }
+      @Override public boolean isNull(int column) { return values.isNull(column); }
+      @Override public long valueAt(int column) { return values.valueAt(column); }
+      @Override public long highValueAt(int column) { return values.highValueAt(column); }
+      @Override public int textByteLengthAt(int column) {
+        return values.textByteLengthAt(column);
+      }
+      @Override public int textByteOffsetAt(int column) {
+        return values.textByteOffsetAt(column);
+      }
+      @Override public BoundedByteSource textSource(int column) {
+        return values.textSource(column);
+      }
+      @Override public int copyTextChars(int column, char[] target, int offset) {
+        throw new AssertionError("descriptor predicate decoded stored text");
+      }
+    };
+    SqlPredicateOperandEvaluator evaluator = new SqlPredicateOperandEvaluator(
+        new SqlExpressionEvaluator(), new SqlTemporalContext());
+    SqlPredicateOperand result = new SqlPredicateOperand();
+    assertEquals(StatusCode.OK, evaluator.evaluateDescriptor(
+        new SqlCommand(), predicate(), 0, SqlBooleanPredicateProgram.PROGRAM_LEFT,
+        null, noDecode, result));
+    assertTrue(result.hasBorrowedUtf8());
+    assertEquals(2, result.textLength());
+    assertEquals(0x1f30a, Character.toCodePoint(
+        result.textCharacter(0), result.textCharacter(1)));
   }
 
   @Test
@@ -77,11 +81,12 @@ final class SqlDescriptorBlockRowValuesTest {
     SqlSessionShapeBudget budget = new SqlSessionShapeBudget(lease);
     SqlDescriptorOrderedRows ordered = new SqlDescriptorOrderedRows(budget);
 
-    assertEquals(StatusCode.OK, ordered.begin(table(), 0, false));
+    TableDescriptor descriptor = table();
+    assertEquals(StatusCode.OK, ordered.begin(descriptor, 0, false));
     long preparedBytes = budget.retainedBytes();
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(COLUMN_COUNT, COLUMN_COUNT, 0, 0));
-    assertEquals(StatusCode.OK, values.clearForSize(COLUMN_COUNT));
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(descriptor, 0));
+    assertEquals(StatusCode.OK, values.begin(descriptor, null));
     for (int column = 0; column < COLUMN_COUNT; column++) {
       assertEquals(StatusCode.OK,
           values.setNull(column, SqlTypeDescriptor.varchar(1)));
@@ -99,7 +104,7 @@ final class SqlDescriptorBlockRowValuesTest {
     for (int column = 0; column < COLUMN_COUNT; column++) orderColumns[column] = column;
     assertEquals(
         StatusCode.OK,
-        ordered.begin(table(), orderColumns, directions, COLUMN_COUNT));
+        ordered.begin(descriptor, orderColumns, directions, COLUMN_COUNT));
     for (int row = 0; row < 128; row++) {
       assertEquals(StatusCode.OK, ordered.append(values, row + 1));
     }

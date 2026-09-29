@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlComparison;
 
@@ -22,7 +23,7 @@ final class SqlDescriptorSpecialPredicate {
   }
 
   int evaluate(
-      int test, int leaf, int column, SqlDescriptorValueSource values) {
+      int test, int leaf, int column, SqlValueAccess values) {
     status = StatusCode.OK;
     if (test == SqlBooleanPredicateProgram.TEST_NULL) {
       return truth(values.isNull(column), program.leafNegated(leaf));
@@ -31,7 +32,7 @@ final class SqlDescriptorSpecialPredicate {
       return truth(truthValue(leaf, column, values), program.leafNegated(leaf));
     }
     if (test == SqlBooleanPredicateProgram.TEST_BOOLEAN) {
-      return values.isNull(column) ? -1 : values.value(column) != 0 ? 1 : 0;
+      return values.isNull(column) ? -1 : values.valueAt(column) != 0 ? 1 : 0;
     }
     if (values.isNull(column)) return -1;
     return test == SqlBooleanPredicateProgram.TEST_MEMBERSHIP
@@ -43,17 +44,17 @@ final class SqlDescriptorSpecialPredicate {
   StatusCode status() { return status; }
 
   private boolean truthValue(
-      int leaf, int column, SqlDescriptorValueSource values) {
+      int leaf, int column, SqlValueAccess values) {
     SqlComparison comparison = bindings.comparison(leaf);
     return comparison == null
         ? values.isNull(column)
         : !values.isNull(column)
             && (comparison == SqlComparison.EQUAL
-                ? values.value(column) != 0 : values.value(column) == 0);
+                ? values.valueAt(column) != 0 : values.valueAt(column) == 0);
   }
 
   private int membership(
-      int leaf, int column, SqlDescriptorValueSource values) {
+      int leaf, int column, SqlValueAccess values) {
     boolean unknown = false;
     for (int member = 0; member < program.leafMemberCount(leaf); member++) {
       if (program.memberNull(leaf, member)) {
@@ -72,7 +73,7 @@ final class SqlDescriptorSpecialPredicate {
   }
 
   private int between(
-      int leaf, int column, SqlDescriptorValueSource values) {
+      int leaf, int column, SqlValueAccess values) {
     int lowerDescriptor = program.programDescriptor(
         leaf, SqlBooleanPredicateProgram.PROGRAM_LOWER, 0);
     int upperDescriptor = program.programDescriptor(
@@ -90,7 +91,7 @@ final class SqlDescriptorSpecialPredicate {
   private int compareProgram(
       int leaf,
       int column,
-      SqlDescriptorValueSource values,
+      SqlValueAccess values,
       int side,
       int descriptor) {
     int compared = literals.compare(

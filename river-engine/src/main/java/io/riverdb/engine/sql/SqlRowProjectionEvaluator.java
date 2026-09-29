@@ -155,6 +155,13 @@ final class SqlRowProjectionEvaluator {
         source, result, bound, columns, expressions, zones);
   }
 
+  StatusCode projectDescriptorBlock(
+      io.riverdb.engine.relational.SqlValueAccess source, SqlBlockRow result) {
+    if (bound == null || source == null || result == null) return StatusCode.CONFLICT;
+    return SqlBlockRowProjection.projectDescriptor(
+        source, result, bound, expressions, zones);
+  }
+
   StatusCode projectBlock(SqlBlockRow source, SqlBlockRow result, int block) {
     if (bound == null || source == null || result == null) return StatusCode.CONFLICT;
     return SqlBlockRowProjection.project(
@@ -227,7 +234,7 @@ final class SqlRowProjectionEvaluator {
   }
 
   StatusCode evaluateDescriptorMutation(
-      int expression, io.riverdb.engine.relational.SqlValueBuffer source) {
+      int expression, io.riverdb.engine.relational.SqlValueAccess source) {
     if (bound == null
         || expression < 0
         || expression >= bound.projectionPrograms.mutationCount()) {

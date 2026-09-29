@@ -1,7 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 
@@ -9,7 +9,7 @@ import io.riverdb.engine.schema.TableDescriptor;
 final class SqlDescriptorPublicRowKey {
   private SqlDescriptorPublicRowKey() { }
 
-  static long from(TableDescriptor table, SqlValueBuffer row) {
+  static long from(TableDescriptor table, SqlValueAccess row) {
     int column = scalarBigintPrimaryColumn(table);
     return column < 0 || row.isNull(column) ? 0 : row.valueAt(column);
   }

@@ -1,8 +1,6 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
-import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedTransactionSession;
@@ -11,14 +9,11 @@ import io.riverdb.tx.api.lock.LockMode;
 /** Owns bounded allocation-free descriptor scans for its transaction session. */
 final class RelationalDescriptorScanAccess {
   private final IndexedTransactionSession session;
-  private final RelationalDescriptorRowAccess rowAccess;
   private final RelationalDescriptorScanRegistry active =
       new RelationalDescriptorScanRegistry();
 
-  RelationalDescriptorScanAccess(
-      IndexedTransactionSession indexedSession, RelationalDescriptorRowAccess rows) {
+  RelationalDescriptorScanAccess(IndexedTransactionSession indexedSession) {
     session = indexedSession;
-    rowAccess = rows;
   }
 
   StatusCode begin(
@@ -69,42 +64,26 @@ final class RelationalDescriptorScanAccess {
 
   StatusCode next(
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
-      SqlValueBuffer destination, RelationalRowIdentityResult result) {
-    return next(owner, cursor, destination, result, null);
-  }
-
-  StatusCode next(
-      RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
-      SqlValueBuffer destination, RelationalRowIdentityResult result,
-      StoredTableRowIntegerFilter filter) {
-    return next(owner, cursor, destination, result, filter, null);
-  }
-
-  StatusCode next(
-      RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor,
-      SqlValueBuffer destination, RelationalRowIdentityResult result,
+      StoredTableRowView destination, RelationalRowIdentityResult result,
       StoredTableRowIntegerFilter filter, StoredTableColumnSelection selection) {
     if (cursor == null || destination == null || result == null || !cursor.matches(owner)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
+    destination.reset();
     TableDescriptor table = cursor.descriptor();
     if (selection != null && !selection.matches(table.columnCount())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = cursor.prepareSelection(selection, filter);
     if (!status.isOk()) return status;
-    status = reserveRow(table, destination, selection);
-    if (!status.isOk()) return status;
     while (true) {
       status = nextPhysical(cursor);
       if (!status.isOk()) return status;
       long logicalRowId = cursor.logicalRowId();
       status = cursor.isTuplePhysical()
-          ? rowAccess.fetch(
-              session, table, logicalRowId, destination, filter, selection)
-          : rowAccess.decode(
-              table, cursor.row().row(), destination, filter, selection);
+          ? fetchView(table, logicalRowId, destination, filter, selection)
+          : destination.bindFetched(table, cursor.row().row(), filter, selection);
       if (status == StatusCode.CONFLICT && cursor.isTuplePhysical()) continue;
       if (status == StatusCode.CONFLICT && filter != null) continue;
       if (!status.isOk()) return status;
@@ -118,15 +97,15 @@ final class RelationalDescriptorScanAccess {
     }
   }
 
-  private StatusCode reserveRow(
-      TableDescriptor table, SqlValueBuffer destination,
-      StoredTableColumnSelection selection) {
-    int textBytes = maximumTextBytes(table, selection);
-    if (textBytes < 0) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = destination.reserve(
-        table.columnCount(), SqlShapeLimits.MAX_TABLE_COLUMNS,
-        textBytes, TableSchema.MAXIMUM_ROW_BYTES);
-    return status.isOk() ? rowAccess.reserve(table) : status;
+  private StatusCode fetchView(
+      TableDescriptor table, long logicalRowId, StoredTableRowView destination,
+      StoredTableRowIntegerFilter filter, StoredTableColumnSelection selection) {
+    destination.fetched().retentionProjection(selection == null ? null : selection.projection());
+    StatusCode status = session.fetchByKey(
+        RelationalDescriptorKeyspace.baseRows(table.tableId()),
+        logicalRowId, destination.fetched());
+    return status.isOk()
+        ? destination.bindFetched(table, destination.fetched(), filter, selection) : status;
   }
 
   private StatusCode nextPhysical(RelationalDescriptorScanCursor cursor) {
@@ -174,18 +153,4 @@ final class RelationalDescriptorScanAccess {
     return cleanup.isOk() ? original : cleanup;
   }
 
-  private static int maximumTextBytes(
-      TableDescriptor table, StoredTableColumnSelection selection) {
-    long bytes = 0;
-    int selected = selection == null ? table.columnCount() : selection.count();
-    for (int position = 0; position < selected; position++) {
-      int index = selection == null ? position : selection.columnAt(position);
-      int descriptor = table.typeDescriptorAt(index);
-      if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        bytes += SqlTypeDescriptor.parameterOne(descriptor) * 4L;
-        if (bytes > TableSchema.MAXIMUM_ROW_BYTES) return -1;
-      }
-    }
-    return (int) bytes;
-  }
 }

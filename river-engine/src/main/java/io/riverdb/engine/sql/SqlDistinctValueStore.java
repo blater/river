@@ -72,7 +72,7 @@ final class SqlDistinctValueStore {
       candidate.setDecimal128(0, source.highValue(lane), source.value(lane));
     }
     if (status.isOk() && key.isText()) {
-      status = candidate.setText(0, source.text(lane), 0, source.textLength(lane));
+      status = source.copyTextTo(lane, candidate, 0);
     }
     return status.isOk() ? addCandidate() : status;
   }
@@ -166,8 +166,7 @@ final class SqlDistinctValueStore {
   }
 
   private StatusCode prepareRows() {
-    StatusCode status = resetRows();
-    return status.isOk() && key.isText() ? prepareTextRows() : status;
+    return resetRows();
   }
 
   private StatusCode resetRows() {
@@ -175,14 +174,6 @@ final class SqlDistinctValueStore {
     if (status.isOk()) status = probe.reset(1);
     if (status.isOk()) status = last.reset(1);
     if (status.isOk()) status = copied.reset(1);
-    return status;
-  }
-
-  private StatusCode prepareTextRows() {
-    StatusCode status = candidate.prepareText(0);
-    if (status.isOk()) status = probe.prepareText(0);
-    if (status.isOk()) status = last.prepareText(0);
-    if (status.isOk()) status = copied.prepareText(0);
     return status;
   }
 

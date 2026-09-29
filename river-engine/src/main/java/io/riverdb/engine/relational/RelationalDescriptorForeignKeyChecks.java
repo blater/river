@@ -29,13 +29,13 @@ final class RelationalDescriptorForeignKeyChecks {
   }
 
   StatusCode checkUpdate(
-      TableDescriptor parent, SqlValueBuffer before, SqlValueBuffer after,
+      TableDescriptor parent, SqlValueAccess before, SqlValueAccess after,
       long changedRowId) {
     return scan(parent, before, after, changedRowId);
   }
 
   StatusCode checkDelete(
-      TableDescriptor parent, SqlValueBuffer before, long changedRowId) {
+      TableDescriptor parent, SqlValueAccess before, long changedRowId) {
     return scan(parent, before, null, changedRowId);
   }
 
@@ -44,7 +44,7 @@ final class RelationalDescriptorForeignKeyChecks {
   }
 
   private StatusCode scan(
-      TableDescriptor parent, SqlValueBuffer before, SqlValueBuffer after,
+      TableDescriptor parent, SqlValueAccess before, SqlValueAccess after,
       long changedRowId) {
     StatusCode status = cursor.reset();
     if (status.isOk()) status = session.beginScan(

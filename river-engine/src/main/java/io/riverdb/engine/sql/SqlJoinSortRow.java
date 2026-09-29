@@ -33,10 +33,19 @@ final class SqlJoinSortRow {
         continue;
       }
       int offset = bytes.position();
-      text.set(source, column);
-      int encoded = Utf8Text.encode(text, Utf8Text.MAXIMUM_SCALARS, bytes);
-      if (encoded < 0) {
+      int encoded;
+      if (source.hasUtf8(column)) {
+        encoded = source.utf8Length(column);
+        if (encoded < 0 || encoded > bytes.remaining()) return StatusCode.RESOURCE_EXHAUSTED;
+        for (int index = 0; index < encoded; index++) {
+          bytes.put(source.utf8ByteAt(column, index));
+        }
+      } else {
+        text.set(source, column);
+        encoded = Utf8Text.encode(text, Utf8Text.MAXIMUM_SCALARS, bytes);
         text.clear();
+      }
+      if (encoded < 0) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
       bytes.putLong(column * Long.BYTES, (long) offset << 32 | encoded);

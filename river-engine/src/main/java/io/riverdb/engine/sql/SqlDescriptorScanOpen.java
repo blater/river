@@ -19,7 +19,7 @@ final class SqlDescriptorScanOpen {
     if (status.isOk() && context.scalarAggregate) status = aggregateRows();
     else if (status.isOk() && context.materialized) {
       status = SqlDescriptorScanMaterializer.materialize(
-          context.session, context.cursor, context.values, context.identity,
+          context.session, context.cursor, context.view, context.identity,
           context.predicate, context.boundPredicate, context.subqueries, context.ordered);
     }
     if (status.isOk()) context.active = true;
@@ -30,14 +30,14 @@ final class SqlDescriptorScanOpen {
     StatusCode status = StatusCode.OK;
     while (status.isOk()) {
       status = context.session.descriptorRows().nextScan(
-          context.cursor, context.values.fetched(), context.identity);
+          context.cursor, context.view, context.identity, null, null);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         break;
       }
-      if (status.isOk()) status = context.evaluatePredicate(context.values.fetched());
+      if (status.isOk()) status = context.evaluatePredicate(context.view);
       if (status.isOk() && context.predicateMatched()) {
-        status = context.scalar.accumulate(context.values.fetched());
+        status = context.scalar.accumulate(context.view);
       }
     }
     StatusCode closed = context.cursor.isActive()

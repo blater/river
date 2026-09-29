@@ -12,9 +12,6 @@ import io.riverdb.engine.schema.TableDescriptor;
 final class SqlCatalogScanExecution {
   private static final String TABLE_TYPE = "TABLE";
   private static final String VIEW_TYPE = "VIEW";
-  private static final int MAX_NAME_BYTES = 64 * 4;
-  private static final int MAX_OBJECT_TYPE_BYTES = 5;
-  private static final int MAX_TYPE_NAME_BYTES = 48;
 
   private final RelationalSession session;
   private final SqlPhysicalPlan plan;
@@ -23,7 +20,7 @@ final class SqlCatalogScanExecution {
   private final CatalogIndexResult index = new CatalogIndexResult();
   private final TableDefinition columns;
   private final SqlCatalogDescriptorResolution descriptors;
-  private final SqlCatalogRowBuffer row = new SqlCatalogRowBuffer();
+  private final SqlCatalogRowPublisher row = new SqlCatalogRowPublisher();
   private final SqlTypeNameFormatter typeName = new SqlTypeNameFormatter();
   private final SqlDescriptorCatalogIndexes descriptorIndexes =
       new SqlDescriptorCatalogIndexes();
@@ -44,7 +41,6 @@ final class SqlCatalogScanExecution {
 
   StatusCode beginObjects() {
     StatusCode status = plan.beginResult(2);
-    if (status.isOk()) status = reserveRow(2, MAX_NAME_BYTES + MAX_OBJECT_TYPE_BYTES);
     if (!status.isOk()) return status;
     status = session.beginCatalogObjectScan(scan.catalogObjects());
     if (!status.isOk()) return status;
@@ -57,7 +53,6 @@ final class SqlCatalogScanExecution {
     descriptorTable = null;
     descriptors.reset();
     StatusCode status = plan.beginResult(5);
-    if (status.isOk()) status = reserveRow(5, MAX_NAME_BYTES * 2);
     if (!status.isOk()) return status;
     status = session.beginCatalogIndexScan(tableName, scan.catalogIndexes());
     if (!status.isOk()) status = descriptors.resolve(tableName, status);
@@ -81,7 +76,6 @@ final class SqlCatalogScanExecution {
     descriptors.reset();
     columnIndex = 0;
     StatusCode status = plan.beginResult(4);
-    if (status.isOk()) status = reserveRow(4, MAX_NAME_BYTES + MAX_TYPE_NAME_BYTES);
     if (!status.isOk()) return status;
     status = session.resolveTable(tableName, columns);
     if (!status.isOk()) status = descriptors.resolve(tableName, status);
@@ -98,11 +92,12 @@ final class SqlCatalogScanExecution {
     StatusCode status = session.nextCatalogObject(scan.catalogObjects(), object);
     if (!status.isOk()) return status;
     if (!object.isAvailable()) return StatusCode.CONFLICT;
-    status = row.loadObject(
+    status = row.object(
         plan,
         object,
-        object.type() == CatalogObjectResult.TABLE ? TABLE_TYPE : VIEW_TYPE);
-    return status.isOk() ? publish(cursor, result, 0) : status;
+        object.type() == CatalogObjectResult.TABLE ? TABLE_TYPE : VIEW_TYPE,
+        result);
+    return publish(cursor, status);
   }
 
   StatusCode nextIndex(SqlScanCursor cursor, SqlScanRowResult result) {
@@ -110,8 +105,8 @@ final class SqlCatalogScanExecution {
     StatusCode status = session.nextCatalogIndex(scan.catalogIndexes(), index);
     if (!status.isOk()) return status;
     if (!index.isAvailable()) return StatusCode.CONFLICT;
-    status = row.loadIndex(plan, index);
-    return status.isOk() ? publish(cursor, result, 0) : status;
+    status = row.index(plan, index, result);
+    return publish(cursor, status);
   }
 
   StatusCode nextColumn(SqlScanCursor cursor, SqlScanRowResult result) {
@@ -125,26 +120,23 @@ final class SqlCatalogScanExecution {
     StatusCode status = length < 0
         ? StatusCode.CORRUPTION
         : descriptorTable == null
-            ? row.loadColumn(plan, columns, column, typeName.text(), length)
-            : row.loadColumn(plan, descriptorTable, column, typeName.text(), length);
-    return status.isOk() ? publish(cursor, result, column) : status;
+            ? row.column(plan, columns, column, typeName.text(), length, result)
+            : row.column(plan, descriptorTable, column, typeName.text(), length, result);
+    return publish(cursor, status);
   }
 
   private StatusCode nextDescriptorIndex(
       SqlScanCursor cursor, SqlScanRowResult result) {
-    StatusCode status = descriptorIndexes.next(plan, row);
-    return status.isOk()
-        ? publish(cursor, result, descriptorIndexes.publishedPart()) : status;
+    StatusCode status = descriptorIndexes.next();
+    if (status.isOk()) status = row.index(
+        plan, descriptorTable, descriptorIndexes.key(), descriptorIndexes.publishedPart(),
+        descriptorIndexes.primary(), descriptorIndexes.publishedPart(), result);
+    return publish(cursor, status);
   }
 
-  private StatusCode publish(SqlScanCursor cursor, SqlScanRowResult result, long key) {
-    StatusCode status = row.publish(key, result);
+  private StatusCode publish(SqlScanCursor cursor, StatusCode status) {
     if (status.isOk()) cursor.rowReturned();
     return status;
-  }
-
-  private StatusCode reserveRow(int columns, int textBytes) {
-    return row.reserve(columns, textBytes);
   }
 
   StatusCode close() {

@@ -13,7 +13,7 @@ final class RelationalForeignKeyDelta {
   private int count;
 
   StatusCode prepare(
-      TableDescriptor table, SqlValueBuffer beforeValues, SqlValueBuffer afterValues) {
+      TableDescriptor table, SqlValueAccess beforeValues, SqlValueAccess afterValues) {
     if (table == null || beforeValues == null || afterValues == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

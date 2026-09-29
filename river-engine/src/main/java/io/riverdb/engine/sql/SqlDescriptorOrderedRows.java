@@ -1,17 +1,18 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.SqlValueBuffer;
 import io.riverdb.engine.relational.RelationalLockedCandidateResult;
+import io.riverdb.engine.relational.SqlValueAccess;
+import io.riverdb.engine.relational.StoredTableRowView;
 import io.riverdb.engine.schema.TableDescriptor;
 
 /** Retained descriptor-row materialization for one bounded ordered scan. */
 final class SqlDescriptorOrderedRows {
   private final SqlBlockSchema schema;
-  private final SqlDescriptorBlockRowValues input;
+  private final SqlBlockRow input;
   private final SqlBlockRow output;
   private final SqlBlockRowStore store;
-  private final SqlValueBuffer current = new SqlValueBuffer();
+  private final StoredTableRowView current = new StoredTableRowView();
   private final RelationalLockedCandidateResult lockedCandidate =
       new RelationalLockedCandidateResult();
   private TableDescriptor table;
@@ -20,7 +21,7 @@ final class SqlDescriptorOrderedRows {
 
   SqlDescriptorOrderedRows(SqlSessionShapeBudget budget) {
     schema = new SqlBlockSchema(budget);
-    input = new SqlDescriptorBlockRowValues(budget);
+    input = new SqlBlockRow(budget);
     output = new SqlBlockRow(budget);
     store = new SqlBlockRowStore(budget);
   }
@@ -38,8 +39,7 @@ final class SqlDescriptorOrderedRows {
     schema.setColumn(descriptor.columnCount(), "", io.riverdb.base.type.SqlTypeDescriptor.BIGINT,
         false);
     status = schema.status();
-    if (status.isOk()) status = input.prepare(descriptor, true);
-    if (status.isOk()) status = reserveCurrent(descriptor);
+    if (status.isOk()) status = input.reset(descriptor.columnCount() + 1);
     if (status.isOk()) status = output.reset(descriptor.columnCount() + 1);
     if (status.isOk()) status = store.begin(schema, orderColumn, descending);
     if (!status.isOk()) close();
@@ -59,8 +59,7 @@ final class SqlDescriptorOrderedRows {
     schema.setColumn(descriptor.columnCount(), "", io.riverdb.base.type.SqlTypeDescriptor.BIGINT,
         false);
     status = schema.status();
-    if (status.isOk()) status = input.prepare(descriptor, true);
-    if (status.isOk()) status = reserveCurrent(descriptor);
+    if (status.isOk()) status = input.reset(descriptor.columnCount() + 1);
     if (status.isOk()) status = output.reset(descriptor.columnCount() + 1);
     if (status.isOk()) status = store.begin(schema, orderColumns, descending, count);
     if (!status.isOk()) close();
@@ -77,19 +76,19 @@ final class SqlDescriptorOrderedRows {
     if (!status.isOk()) return status;
     table = descriptor;
     materialization = setMaterialization;
-    status = prepareInput(descriptor);
-    if (status.isOk()) status = output.reset(setMaterialization.laneCount());
+    status = output.reset(setMaterialization.laneCount());
     if (status.isOk()) status = store.begin(
         setMaterialization.schema(), orderColumns, descending, count);
     if (!status.isOk()) close();
     return status;
   }
 
-  StatusCode append(SqlValueBuffer values, long logicalRowId) {
-    StatusCode status = input.load(values, logicalRowId);
-    if (!status.isOk()) return status;
-    if (materialization == null) return store.append(input.row());
-    status = materialization.project(input.row(), output);
+  StatusCode append(SqlValueAccess values, long logicalRowId) {
+    if (materialization == null) {
+      StatusCode status = input.borrow(values, logicalRowId);
+      return status.isOk() ? store.append(input) : status;
+    }
+    StatusCode status = materialization.project(values, output);
     return status.isOk() ? store.append(output) : status;
   }
 
@@ -114,7 +113,7 @@ final class SqlDescriptorOrderedRows {
   }
 
   SqlBlockRow row() { return output; }
-  SqlValueBuffer currentValues() { return current; }
+  SqlValueAccess currentValues() { return current; }
   boolean candidateLocked() { return lockedCandidate.isLocked(); }
 
   StatusCode lockCurrent(io.riverdb.engine.relational.RelationalSession session) {
@@ -123,9 +122,9 @@ final class SqlDescriptorOrderedRows {
     StatusCode status = session.descriptorRows().lockLogicalCandidate(
         table, rowId, current, lockedCandidate);
     if (status.isOk() && !lockedCandidate.isLocked()) return status;
-    if (status.isOk()) status = input.load(current, rowId);
+    if (status.isOk() && materialization == null) status = input.borrow(current, rowId);
     if (status.isOk()) status = materialization == null
-        ? output.copyFrom(input.row()) : materialization.project(input.row(), output);
+        ? output.copyFrom(input) : materialization.project(current, output);
     if (!status.isOk() && session.descriptorRows().currentBorrowed()) {
       StatusCode release = session.descriptorRows().releaseCurrent();
       if (!release.isOk()) status = release;
@@ -151,23 +150,11 @@ final class SqlDescriptorOrderedRows {
       schema.reset();
       table = null;
       materialization = null;
-      input.reset();
+      input.reset(0);
       current.reset();
       next = 0;
     }
     return status;
   }
 
-  private StatusCode prepareInput(TableDescriptor descriptor) {
-    schema.set(descriptor.columnCount());
-    StatusCode status = schema.status();
-    if (status.isOk()) status = input.prepare(descriptor);
-    return status.isOk() ? reserveCurrent(descriptor) : status;
-  }
-
-  private StatusCode reserveCurrent(TableDescriptor descriptor) {
-    return current.reserve(
-        descriptor.columnCount(), descriptor.columnCount(),
-        descriptor.encodedMaximumRowBytes(), descriptor.encodedMaximumRowBytes());
-  }
 }

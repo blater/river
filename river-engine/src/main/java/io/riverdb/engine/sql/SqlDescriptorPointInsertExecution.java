@@ -45,7 +45,7 @@ final class SqlDescriptorPointInsertExecution {
     if (status.isOk() && table.foreignKeyCount() > 0
         && command.insertRowCount() > 1) {
       for (int row = 0; status.isOk() && row < command.insertRowCount(); row++) {
-        status = inserts.validateForeignKeys(batch, pin, row, values.mutation());
+        status = inserts.validateForeignKeys(batch, pin, row);
       }
     }
     batch.reset();

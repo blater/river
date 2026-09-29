@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
+import io.riverdb.base.text.BoundedByteSource;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
@@ -40,6 +41,56 @@ final class RelationalDescriptorRowPathTest {
   private static final int[] NULL_ORDINALS = {7, 8, 63, 64, 255, 1_023};
 
   @Test
+  void malformedExternalTextKeyCannotDeleteCanonicalRow(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin pin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        textPrimaryDescriptor(), pin, new StatusDetail(128)));
+    int descriptor = SqlTypeDescriptor.varchar(8);
+    SqlMutationValues valid = new SqlMutationValues();
+    assertEquals(StatusCode.OK, valid.reserve(pin.descriptor(), 8));
+    assertEquals(StatusCode.OK, valid.begin(pin.descriptor(), null));
+    assertEquals(StatusCode.OK, valid.setText(0, descriptor, Character.toString((char) 1)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK,
+        session.descriptorRows().insert(pin, valid, new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    byte[] overlong = {(byte) 0xc0, (byte) 0x81};
+    SqlValueAccess forged = new SqlValueAccess() {
+      @Override public int count() { return 1; }
+      @Override public int descriptorAt(int column) { return descriptor; }
+      @Override public boolean isNull(int column) { return false; }
+      @Override public long valueAt(int column) { return 0; }
+      @Override public long highValueAt(int column) { return 0; }
+      @Override public int textByteLengthAt(int column) { return overlong.length; }
+      @Override public int textByteOffsetAt(int column) { return 0; }
+      @Override public BoundedByteSource textSource(int column) {
+        return new BoundedByteSource() {
+          @Override public int length() { return overlong.length; }
+          @Override public byte getByte(int index) { return overlong[index]; }
+        };
+      }
+      @Override public int copyTextChars(int column, char[] target, int offset) {
+        throw new AssertionError("invalid text key was decoded");
+      }
+    };
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.descriptorRows().delete(pin, forged));
+    assertEquals(0, session.indexedSession().pendingMutationCount());
+    StoredTableRowView fetched = new StoredTableRowView();
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(pin, valid, fetched));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, pin.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void foreignPublishedPinCannotAccessRowsDespiteCollidingIds(@TempDir Path root)
       throws java.io.IOException {
     RelationalDatabaseOpenResult firstOpen = new RelationalDatabaseOpenResult();
@@ -65,8 +116,8 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(foreign.tableId(), local.tableId());
     RelationalSession session = session(second);
     TransactionOutcome outcome = new TransactionOutcome();
-    SqlValueBuffer values = values(41, NULL_ORDINALS);
-    SqlValueBuffer fetched = emptyValues();
+    SqlMutationValues values = values(41, NULL_ORDINALS);
+    StoredTableRowView fetched = emptyValues();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
         session.descriptorRows().insert(
@@ -101,7 +152,7 @@ final class RelationalDescriptorRowPathTest {
     long objectId = table.tableId();
 
     RelationalSession session = session(database);
-    SqlValueBuffer input = values(10, NULL_ORDINALS);
+    SqlMutationValues input = values(10, NULL_ORDINALS);
     RelationalRowIdentityResult first = new RelationalRowIdentityResult();
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
@@ -116,7 +167,7 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(2, committed.logicalRowId());
     assertEquals(StatusCode.OK, session.commit(outcome));
 
-    SqlValueBuffer fetched = emptyValues();
+    StoredTableRowView fetched = emptyValues();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.CONFLICT,
         session.descriptorRows().fetchByLogicalRowId(table, 1, fetched));
@@ -212,7 +263,7 @@ final class RelationalDescriptorRowPathTest {
         session.descriptorRows().insert(table, values(88, NULL_ORDINALS), victim));
     assertEquals(StatusCode.OK, session.commit(outcome));
 
-    SqlValueBuffer primaryValues = values(77, NULL_ORDINALS);
+    SqlMutationValues primaryValues = values(77, NULL_ORDINALS);
     RelationalTupleKeyEncoder encoder = new RelationalTupleKeyEncoder();
     assertEquals(StatusCode.OK, encoder.encodePhysical(
         table.descriptor().primaryKey(), primaryValues, inserted.logicalRowId()));
@@ -241,7 +292,7 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.CONFLICT, session.descriptorRows().delete(table, 77));
     assertEquals(StatusCode.OK, session.abort(outcome));
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    SqlValueBuffer surviving = emptyValues();
+    StoredTableRowView surviving = emptyValues();
     assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 88, surviving));
     assertEquals(88, surviving.valueAt(0));
     assertEquals(StatusCode.OK, session.commit(outcome));
@@ -250,7 +301,7 @@ final class RelationalDescriptorRowPathTest {
   }
 
   @Test
-  void scanAdmissionGrowsCallerBufferBeforeConsumingTheFirstRow(@TempDir Path root) {
+  void scanViewReadsWideRowWithoutCallerValueLanes(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
@@ -270,11 +321,7 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
     assertEquals(StatusCode.OK, session.descriptorRows().beginScan(table, cursor));
-    SqlValueBuffer destination = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, destination.reserve(1, 1, 4, 4));
-    assertEquals(StatusCode.OK, destination.clearForSize(1));
-    assertEquals(StatusCode.OK,
-        destination.setText(0, SqlTypeDescriptor.varchar(1), "x"));
+    StoredTableRowView destination = new StoredTableRowView();
     RelationalRowIdentityResult result = new RelationalRowIdentityResult();
     assertEquals(StatusCode.OK,
         session.descriptorRows().nextScan(cursor, destination, result));
@@ -307,9 +354,9 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.OK, session.descriptorRows().update(
         table, 41, values(41, new int[] {8, 64, 255})));
-    SqlValueBuffer key = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, key.reserve(1, 1, 0, 0));
-    assertEquals(StatusCode.OK, key.clearForSize(1));
+    SqlMutationValues key = new SqlMutationValues();
+    assertEquals(StatusCode.OK, key.reserve(table.descriptor(), 0));
+    assertEquals(StatusCode.OK, key.begin(table.descriptor(), null));
     assertEquals(StatusCode.OK, key.setFixed(0, SqlTypeDescriptor.BIGINT, 41));
     RelationalDescriptorIndexBounds bounds = new RelationalDescriptorIndexBounds();
     assertEquals(StatusCode.OK, bounds.set(
@@ -318,7 +365,7 @@ final class RelationalDescriptorRowPathTest {
     RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
     assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
         table, bounds, LockMode.SHARED, cursor));
-    SqlValueBuffer destination = emptyValues();
+    StoredTableRowView destination = emptyValues();
     StoredTableColumnSelection selected = new StoredTableColumnSelection();
     assertEquals(StatusCode.OK, selected.selectNone(COLUMN_COUNT));
     selected.select(63);
@@ -360,7 +407,7 @@ final class RelationalDescriptorRowPathTest {
     selected.select(0);
     StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
     assertEquals(StatusCode.OK, filter.configure(2, SqlComparison.EQUAL, 66));
-    SqlValueBuffer destination = new SqlValueBuffer();
+    StoredTableRowView destination = new StoredTableRowView();
     assertEquals(StatusCode.OK, session.descriptorRows().nextScan(
         cursor, destination, new RelationalRowIdentityResult(), filter, selected));
     assertEquals(42, destination.valueAt(0));
@@ -424,7 +471,7 @@ final class RelationalDescriptorRowPathTest {
         objectId, table, new StatusDetail(128)));
     session = session(database);
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    SqlValueBuffer fetched = emptyValues();
+    StoredTableRowView fetched = emptyValues();
     assertEquals(StatusCode.CONFLICT, session.descriptorRows().fetch(table, 51, fetched));
     assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 52, fetched));
     assertEquals(StatusCode.OK, session.commit(outcome));
@@ -461,7 +508,7 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(2, session.indexedSession().pendingTupleMutationCount());
     assertEquals(StatusCode.OK, session.commit(outcome));
 
-    SqlValueBuffer fetched = indexedPayloadValues(0, 0, 0);
+    StoredTableRowView fetched = emptyValues();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, fetched));
     assertEquals(11, fetched.valueAt(1));
@@ -495,8 +542,8 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK,
         session.descriptorRows().update(table, 101, values(102, NULL_ORDINALS)));
     assertEquals(StatusCode.OK, session.createSavepoint(statement));
-    SqlValueBuffer batchFirst = values(201, NULL_ORDINALS);
-    SqlValueBuffer batchSecond = values(202, NULL_ORDINALS);
+    SqlMutationValues batchFirst = values(201, NULL_ORDINALS);
+    SqlMutationValues batchSecond = values(202, NULL_ORDINALS);
     assertEquals(StatusCode.OK, inserts.begin(batch, table, 2));
     RelationalRowIdentityResult staged = new RelationalRowIdentityResult();
     assertEquals(StatusCode.OK, inserts.insert(batch, table, batchFirst, staged));
@@ -504,7 +551,7 @@ final class RelationalDescriptorRowPathTest {
         batch, table, batchSecond, new RelationalRowIdentityResult()));
     assertEquals(StatusCode.OK, session.rollbackToSavepoint(statement));
     batch.reset();
-    SqlValueBuffer fetched = emptyValues();
+    StoredTableRowView fetched = emptyValues();
     assertEquals(StatusCode.CONFLICT, session.descriptorRows().fetch(table, 101, fetched));
     assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 102, fetched));
     assertEquals(StatusCode.CONFLICT, session.descriptorRows().fetch(table, 201, fetched));
@@ -565,7 +612,7 @@ final class RelationalDescriptorRowPathTest {
     assertTrue(table.isPublished());
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    SqlValueBuffer fetched = emptyValues();
+    StoredTableRowView fetched = emptyValues();
     assertEquals(StatusCode.CONFLICT,
         session.descriptorRows().fetchByLogicalRowId(table, 1, fetched));
     assertEquals(StatusCode.OK,
@@ -640,8 +687,8 @@ final class RelationalDescriptorRowPathTest {
     batch.reset();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.OK, inserts.begin(batch, table, 2));
-    SqlValueBuffer first = values(81, NULL_ORDINALS);
-    SqlValueBuffer second = values(82, NULL_ORDINALS);
+    SqlMutationValues first = values(81, NULL_ORDINALS);
+    SqlMutationValues second = values(82, NULL_ORDINALS);
     RelationalRowIdentityResult firstId = new RelationalRowIdentityResult();
     RelationalRowIdentityResult secondId = new RelationalRowIdentityResult();
     assertEquals(StatusCode.OK,
@@ -670,7 +717,7 @@ final class RelationalDescriptorRowPathTest {
     RelationalDescriptorBatchInsert inserts = session.descriptorRows().batchInsert();
     RelationalDescriptorInsertBatch batch = new RelationalDescriptorInsertBatch();
     TransactionOutcome outcome = new TransactionOutcome();
-    SqlValueBuffer admitted = textValues(91, "a");
+    SqlMutationValues admitted = textValues(91, "a");
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.OK, inserts.begin(batch, table, 1));
@@ -699,9 +746,9 @@ final class RelationalDescriptorRowPathTest {
     SchemaPin table = new SchemaPin();
     assertEquals(StatusCode.OK, database.services().descriptors().create(
         textDescriptor(), table, new StatusDetail(128)));
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(2, 2, 8, 8));
-    assertEquals(StatusCode.OK, values.clearForSize(2));
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(table.descriptor(), 8));
+    assertEquals(StatusCode.OK, values.begin(table.descriptor(), null));
     assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, 1));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
         values.setTextBytes(1, SqlTypeDescriptor.varchar(64),
@@ -741,10 +788,10 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, oversized.selectNone(3));
     oversized.selectAll();
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.descriptorRows().nextScan(
-        cursor, new SqlValueBuffer(), new RelationalRowIdentityResult(), null, oversized));
+        cursor, new StoredTableRowView(), new RelationalRowIdentityResult(), null, oversized));
     StoredTableRowIntegerFilter filter = new StoredTableRowIntegerFilter();
     assertEquals(StatusCode.OK, filter.configure(2, SqlComparison.EQUAL, 1));
-    SqlValueBuffer output = new SqlValueBuffer();
+    StoredTableRowView output = new StoredTableRowView();
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.descriptorRows().nextScan(
         cursor, output, new RelationalRowIdentityResult(), filter));
     assertEquals(0, output.count());
@@ -759,9 +806,11 @@ final class RelationalDescriptorRowPathTest {
     return opened.session();
   }
 
-  private static SqlValueBuffer values(long key, int[] nullOrdinals) {
-    SqlValueBuffer values = emptyValues();
-    assertEquals(StatusCode.OK, values.clearForSize(COLUMN_COUNT));
+  private static SqlMutationValues values(long key, int[] nullOrdinals) {
+    SqlMutationValues values = new SqlMutationValues();
+    TableDescriptor table = wideDescriptor();
+    assertEquals(StatusCode.OK, values.reserve(table, 0));
+    assertEquals(StatusCode.OK, values.begin(table, null));
     assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, key));
     for (int ordinal = 1; ordinal < COLUMN_COUNT; ordinal++) {
       assertEquals(StatusCode.OK, contains(nullOrdinals, ordinal)
@@ -771,14 +820,10 @@ final class RelationalDescriptorRowPathTest {
     return values;
   }
 
-  private static SqlValueBuffer emptyValues() {
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(COLUMN_COUNT, COLUMN_COUNT, 0, 0));
-    return values;
-  }
+  private static StoredTableRowView emptyValues() { return new StoredTableRowView(); }
 
   private static void assertWideValues(
-      SqlValueBuffer values, long key, int[] nullOrdinals) {
+      SqlValueAccess values, long key, int[] nullOrdinals) {
     assertEquals(COLUMN_COUNT, values.count());
     assertEquals(key, values.valueAt(0));
     assertFalse(values.isNull(0));
@@ -830,6 +875,21 @@ final class RelationalDescriptorRowPathTest {
     return table.value();
   }
 
+  private static TableDescriptor textPrimaryDescriptor() {
+    ColumnDescriptorSet.Result columns = new ColumnDescriptorSet.Result();
+    assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
+        new int[] {SqlTypeDescriptor.varchar(8)}, new CharSequence[] {"id"},
+        new boolean[] {false}, columns));
+    KeyDescriptor.Result primary = new KeyDescriptor.Result();
+    assertEquals(StatusCode.OK, KeyDescriptor.create(
+        1, KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0},
+        0, primary, null));
+    TableDescriptor.Result table = new TableDescriptor.Result();
+    assertEquals(StatusCode.OK, TableDescriptor.create(
+        1, 1, 1, columns.value(), primary.value(), null, null, table, null));
+    return table.value();
+  }
+
   private static TableDescriptor indexedPayloadDescriptor() {
     ColumnDescriptorSet.Result columns = new ColumnDescriptorSet.Result();
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
@@ -855,11 +915,12 @@ final class RelationalDescriptorRowPathTest {
     return table.value();
   }
 
-  private static SqlValueBuffer indexedPayloadValues(
+  private static SqlMutationValues indexedPayloadValues(
       long id, long indexedValue, long payload) {
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(3, 3, 0, 0));
-    assertEquals(StatusCode.OK, values.clearForSize(3));
+    SqlMutationValues values = new SqlMutationValues();
+    TableDescriptor table = indexedPayloadDescriptor();
+    assertEquals(StatusCode.OK, values.reserve(table, 0));
+    assertEquals(StatusCode.OK, values.begin(table, null));
     assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, id));
     assertEquals(StatusCode.OK,
         values.setFixed(1, SqlTypeDescriptor.BIGINT, indexedValue));
@@ -868,10 +929,11 @@ final class RelationalDescriptorRowPathTest {
     return values;
   }
 
-  private static SqlValueBuffer textValues(long key, CharSequence text) {
-    SqlValueBuffer values = new SqlValueBuffer();
-    assertEquals(StatusCode.OK, values.reserve(2, 2, 256, 256));
-    assertEquals(StatusCode.OK, values.clearForSize(2));
+  private static SqlMutationValues textValues(long key, CharSequence text) {
+    SqlMutationValues values = new SqlMutationValues();
+    TableDescriptor table = textDescriptor();
+    assertEquals(StatusCode.OK, values.reserve(table, 256));
+    assertEquals(StatusCode.OK, values.begin(table, null));
     assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, key));
     assertEquals(StatusCode.OK,
         values.setText(1, SqlTypeDescriptor.varchar(64), text));

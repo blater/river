@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.type.ExactDecimal128;
 import io.riverdb.base.type.SqlNumericTypeRules;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlComparison;
 
@@ -14,15 +15,15 @@ final class SqlDescriptorCorrelatedEvaluation {
   int evaluate(
       SqlBooleanPredicateProgram source,
       SqlDescriptorCorrelatedBindings sourceBindings,
-      SqlDescriptorValueSource child,
-      SqlDescriptorValueSource outer) {
+      SqlValueAccess child,
+      SqlValueAccess outer) {
     program = source;
     bindings = sourceBindings;
     return program.isAvailable() ? node(program.root(), child, outer) : 1;
   }
 
   private int node(
-      int node, SqlDescriptorValueSource child, SqlDescriptorValueSource outer) {
+      int node, SqlValueAccess child, SqlValueAccess outer) {
     int operator = program.booleanOperator(node);
     if (operator == SqlBooleanPredicateProgram.BOOLEAN_LEAF) {
       return leaf(program.booleanLeft(node), child, outer);
@@ -39,7 +40,7 @@ final class SqlDescriptorCorrelatedEvaluation {
   }
 
   private int leaf(
-      int leaf, SqlDescriptorValueSource child, SqlDescriptorValueSource outer) {
+      int leaf, SqlValueAccess child, SqlValueAccess outer) {
     byte leftKind = bindings.leftKind(leaf);
     int leftColumn = bindings.leftColumn(leaf);
     if (program.leafTest(leaf) == SqlBooleanPredicateProgram.TEST_NULL) {
@@ -55,7 +56,7 @@ final class SqlDescriptorCorrelatedEvaluation {
 
   private int membership(
       int leaf, byte kind, int column,
-      SqlDescriptorValueSource child, SqlDescriptorValueSource outer) {
+      SqlValueAccess child, SqlValueAccess outer) {
     if (SqlDescriptorCorrelatedValue.isNull(kind, column, child, outer)) return -1;
     return SqlDescriptorCorrelatedMembership.evaluate(
         program, leaf,
@@ -68,7 +69,7 @@ final class SqlDescriptorCorrelatedEvaluation {
 
   private int comparison(
       int leaf, byte leftKind, int leftColumn,
-      SqlDescriptorValueSource child, SqlDescriptorValueSource outer) {
+      SqlValueAccess child, SqlValueAccess outer) {
     byte rightKind = bindings.rightKind(leaf);
     int rightColumn = bindings.rightColumn(leaf);
     if (SqlDescriptorCorrelatedValue.isNull(leftKind, leftColumn, child, outer)
@@ -82,7 +83,7 @@ final class SqlDescriptorCorrelatedEvaluation {
 
   private int compareValues(
       int leaf, byte leftKind, int leftColumn, byte rightKind, int rightColumn,
-      SqlDescriptorValueSource child, SqlDescriptorValueSource outer) {
+      SqlValueAccess child, SqlValueAccess outer) {
     long left = SqlDescriptorCorrelatedValue.value(
         leftKind, leftColumn, bindings.leftValue(leaf), child, outer);
     long right = SqlDescriptorCorrelatedValue.value(

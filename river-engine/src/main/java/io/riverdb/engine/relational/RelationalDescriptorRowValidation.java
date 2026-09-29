@@ -4,28 +4,27 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.storage.heap.HeapRowResult;
 
-/** Reusable full-row decoder using the table's admitted physical layout. */
+/** Reusable full-row view using the table's admitted physical layout. */
 final class RelationalDescriptorRowValidation {
-  private final RelationalDescriptorRowBuffer rows = new RelationalDescriptorRowBuffer();
-  private final SqlValueBuffer values = new SqlValueBuffer();
+  private final StoredTableRowView values = new StoredTableRowView();
   private TableDescriptor current;
 
   StatusCode begin(TableDescriptor descriptor) {
     current = descriptor;
-    StatusCode status = RelationalDescriptorShapeValidation.reserve(descriptor, values);
-    return status.isOk() ? rows.reserve(descriptor.encodedMaximumRowBytes()) : status;
+    return RelationalDescriptorShapeValidation.validate(descriptor);
   }
 
   StatusCode decode(HeapRowResult row) {
     values.reset();
-    return rows.decode(current, row, values);
+    return values.bindFetched(current, row, null, null);
   }
 
-  SqlValueBuffer values() {
+  SqlValueAccess values() {
     return values;
   }
 
   void complete() {
+    values.reset();
     current = null;
   }
 }

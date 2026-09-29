@@ -5,6 +5,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.text.Utf8TextArena;
+import io.riverdb.base.text.BoundedByteSource;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
@@ -41,6 +42,13 @@ final class SqlResultTextLanes {
 
   StatusCode setUtf8(
       int index, ByteBuffer source, int offset, int length) {
+    StatusCode status = arena.appendTrusted(source, offset, length);
+    if (status.isOk()) publish(index);
+    return status;
+  }
+
+  StatusCode setUtf8(
+      int index, BoundedByteSource source, int offset, int length) {
     StatusCode status = arena.appendTrusted(source, offset, length);
     if (status.isOk()) publish(index);
     return status;

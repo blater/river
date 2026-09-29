@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal128;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 
 /** Compares one descriptor-row column with a bound scalar literal. */
@@ -22,13 +23,13 @@ final class SqlDescriptorLiteralComparison {
   int compare(
       int leaf,
       int column,
-      SqlDescriptorValueSource values,
+      SqlValueAccess values,
       long literalHigh,
       long literal,
       int descriptor) {
     status = StatusCode.OK;
     if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      status = values.text(column, bindings.columnDescriptor(leaf), text);
+      status = text.setText(values, column, bindings.columnDescriptor(leaf));
       if (!status.isOk()) return 0;
       int compared = SqlBooleanTextComparator.compareLiteral(
           text, bindings.command(), literal);
@@ -39,15 +40,15 @@ final class SqlDescriptorLiteralComparison {
     if (SqlNumericTypeRules.isNumeric(columnDescriptor)
         && SqlNumericTypeRules.isNumeric(descriptor)) {
       return SqlNumericComparison.compare(
-          values.highValue(column),
-          values.value(column),
+          values.highValueAt(column),
+          values.valueAt(column),
           columnDescriptor,
           literalHigh,
           literal,
           descriptor,
           decimalScratch);
     }
-    return Long.compare(values.value(column), literal);
+    return Long.compare(values.valueAt(column), literal);
   }
 
   StatusCode status() { return status; }

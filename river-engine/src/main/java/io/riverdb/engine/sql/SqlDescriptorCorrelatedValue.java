@@ -1,12 +1,14 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.engine.relational.SqlValueAccess;
+
 /** Reads one literal, child, or outer operand from a bound correlation. */
 final class SqlDescriptorCorrelatedValue {
   private SqlDescriptorCorrelatedValue() { }
 
   static boolean isNull(
       byte kind, int column,
-      SqlDescriptorValueSource child, SqlDescriptorValueSource outer) {
+      SqlValueAccess child, SqlValueAccess outer) {
     return kind == SqlDescriptorCorrelatedBindings.NULL
         || kind == SqlDescriptorCorrelatedBindings.CHILD && child.isNull(column)
         || kind == SqlDescriptorCorrelatedBindings.OUTER && outer.isNull(column);
@@ -14,16 +16,16 @@ final class SqlDescriptorCorrelatedValue {
 
   static long value(
       byte kind, int column, long literal,
-      SqlDescriptorValueSource child, SqlDescriptorValueSource outer) {
-    return kind == SqlDescriptorCorrelatedBindings.CHILD ? child.value(column)
-        : kind == SqlDescriptorCorrelatedBindings.OUTER ? outer.value(column) : literal;
+      SqlValueAccess child, SqlValueAccess outer) {
+    return kind == SqlDescriptorCorrelatedBindings.CHILD ? child.valueAt(column)
+        : kind == SqlDescriptorCorrelatedBindings.OUTER ? outer.valueAt(column) : literal;
   }
 
   static long high(
       byte kind, int column, long literal,
-      SqlDescriptorValueSource child, SqlDescriptorValueSource outer) {
-    return kind == SqlDescriptorCorrelatedBindings.CHILD ? child.highValue(column)
+      SqlValueAccess child, SqlValueAccess outer) {
+    return kind == SqlDescriptorCorrelatedBindings.CHILD ? child.highValueAt(column)
         : kind == SqlDescriptorCorrelatedBindings.OUTER
-            ? outer.highValue(column) : literal;
+            ? outer.highValueAt(column) : literal;
   }
 }

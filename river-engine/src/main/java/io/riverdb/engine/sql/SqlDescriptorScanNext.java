@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 
 /** Publishes one direct, materialized, set, or aggregate descriptor result row. */
 final class SqlDescriptorScanNext {
@@ -20,20 +21,21 @@ final class SqlDescriptorScanNext {
 
   private StatusCode stream(SqlScanCursor cursor, SqlScanRowResult result) {
     while (!cursor.limitReached()) {
+      SqlValueAccess row = context.view;
       StatusCode status = context.session.descriptorRows().nextScan(
-          context.cursor, context.values.fetched(), context.identity);
+          context.cursor, context.view, context.identity, null, null);
       if (!status.isOk()) return status;
-      status = context.evaluatePredicate(context.values.fetched());
+      status = context.evaluatePredicate(row);
       if (!status.isOk()) return status;
       if (!context.predicateMatched()) continue;
       if (context.forUpdate) {
         status = context.session.descriptorRows().lockScannedCandidate(
-            context.cursor, context.values.fetched(), context.lockedCandidate);
+            context.cursor, context.view, context.lockedCandidate);
         if (!status.isOk()) return status;
         if (!context.lockedCandidate.isLocked()) {
           continue;
         }
-        status = context.evaluatePredicate(context.values.fetched());
+        status = context.evaluatePredicate(context.view);
         if (!status.isOk()) return release(status);
         if (!context.predicateMatched()) {
           status = release(StatusCode.OK);
@@ -43,9 +45,7 @@ final class SqlDescriptorScanNext {
       }
       if (context.subqueries.active()) context.subqueries.parentAccepted();
       status = context.projection.publishScan(
-          context.values.fetched(),
-          SqlDescriptorPublicRowKey.from(
-              context.cursor.descriptor(), context.values.fetched()), result);
+          row, SqlDescriptorPublicRowKey.from(context.cursor.descriptor(), row), result);
       if (context.forUpdate) {
         if (status.isOk()) status = context.session.descriptorRows().retainCurrent();
         else status = release(status);

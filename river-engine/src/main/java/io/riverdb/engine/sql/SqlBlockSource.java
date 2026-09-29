@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
 
-/** Owns the physical cursor and copies rows before the first block boundary. */
+/** Owns the physical cursor and borrows its current row for synchronous evaluation. */
 final class SqlBlockSource {
   private final io.riverdb.engine.relational.RelationalSession session;
   private final BoundSqlStatement bound;
@@ -72,7 +72,7 @@ final class SqlBlockSource {
       StatusCode status = session.nextScan(cursor, result);
       if (!status.isOk()) return status;
       if (bound.executableQuery.edgeCount() == 0) {
-        return physical.read(result.key(), result.row(), bound.table, row);
+        return physical.borrow(result.key(), result.row(), bound.table, row);
       }
       status = predicates.evaluate(result.key(), result.row());
       if (!status.isOk()) return status;

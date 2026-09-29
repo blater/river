@@ -10,7 +10,7 @@ final class RelationalDescriptorPin {
   }
 
   static TableDescriptor validTable(
-      RelationalSession owner, SchemaPin pin, SqlValueBuffer values) {
+      RelationalSession owner, SchemaPin pin, SqlValueAccess values) {
     TableDescriptor table = validTable(owner, pin);
     return table != null && values != null && values.count() == table.columnCount()
         ? table : null;

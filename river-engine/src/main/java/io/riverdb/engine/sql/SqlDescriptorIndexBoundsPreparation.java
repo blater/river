@@ -18,8 +18,8 @@ final class SqlDescriptorIndexBoundsPreparation {
       SqlCommand command, TableDescriptor table,
       SqlDescriptorPredicateBindings bindings, SqlDescriptorIndexChoice choice) {
     int textBytes = table.encodedMaximumRowBytes();
-    StatusCode status = lower.begin(table.columnCount(), textBytes, command);
-    if (status.isOk()) status = upper.begin(table.columnCount(), textBytes, command);
+    StatusCode status = lower.begin(table, textBytes, command);
+    if (status.isOk()) status = upper.begin(table, textBytes, command);
     if (status.isOk()) status = equality(bindings, choice);
     return status.isOk() ? range(bindings, choice) : status;
   }

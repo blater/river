@@ -24,7 +24,7 @@ final class RelationalDescriptorTupleDeltaPreparation {
 
   StatusCode prepare(
       int operation, TableDescriptor table,
-      SqlValueBuffer before, SqlValueBuffer after, long logicalRowId) {
+      SqlValueAccess before, SqlValueAccess after, long logicalRowId) {
     plan.reset();
     encoder.clear();
     mutations = 0;
@@ -63,8 +63,8 @@ final class RelationalDescriptorTupleDeltaPreparation {
   }
 
   private StatusCode encode(
-      int index, int operation, SqlValueBuffer before,
-      SqlValueBuffer after, long logicalRowId) {
+      int index, int operation, SqlValueAccess before,
+      SqlValueAccess after, long logicalRowId) {
     KeyDescriptor key = storage.keyAt(index);
     StatusCode status = encodeBefore(index, key, operation, before, logicalRowId);
     if (!status.isOk()) return status;
@@ -83,7 +83,7 @@ final class RelationalDescriptorTupleDeltaPreparation {
   }
 
   private StatusCode encodeBefore(
-      int index, KeyDescriptor key, int operation, SqlValueBuffer before, long logicalRowId) {
+      int index, KeyDescriptor key, int operation, SqlValueAccess before, long logicalRowId) {
     if (operation == RelationalDescriptorTupleDeltaPlan.INSERT) return StatusCode.OK;
     StatusCode status = encoder.encodePhysical(key, before, logicalRowId);
     if (status.isOk()) storage.copyBefore(index, encoder.bytes(), encoder.length());
@@ -118,18 +118,18 @@ final class RelationalDescriptorTupleDeltaPreparation {
 
   private static boolean valid(
       int operation, TableDescriptor table,
-      SqlValueBuffer before, SqlValueBuffer after, long rowId) {
+      SqlValueAccess before, SqlValueAccess after, long rowId) {
     if (table == null || rowId <= 0) return false;
     return validBuffer(before, table) && validBuffer(after, table)
         && validOperation(operation, before, after);
   }
 
-  private static boolean validBuffer(SqlValueBuffer values, TableDescriptor table) {
+  private static boolean validBuffer(SqlValueAccess values, TableDescriptor table) {
     return values == null || values.count() == table.columnCount();
   }
 
   private static boolean validOperation(
-      int operation, SqlValueBuffer before, SqlValueBuffer after) {
+      int operation, SqlValueAccess before, SqlValueAccess after) {
     if (operation == RelationalDescriptorTupleDeltaPlan.INSERT) {
       return before == null && after != null;
     }

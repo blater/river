@@ -7,8 +7,8 @@ import io.riverdb.storage.btree.TupleBTreeScanBounds;
 /** Borrowed descriptor values admitted and copied by one caller-owned scan cursor. */
 public final class RelationalDescriptorIndexBounds {
   private KeyDescriptor key;
-  private SqlValueBuffer lower;
-  private SqlValueBuffer upper;
+  private SqlValueAccess lower;
+  private SqlValueAccess upper;
   private int lowerParts;
   private int upperParts;
   private int direction;
@@ -16,8 +16,8 @@ public final class RelationalDescriptorIndexBounds {
   private boolean upperInclusive;
 
   public StatusCode set(
-      KeyDescriptor descriptor, SqlValueBuffer low, int lowParts, boolean lowInclusive,
-      SqlValueBuffer high, int highParts, boolean highInclusive, int scanDirection) {
+      KeyDescriptor descriptor, SqlValueAccess low, int lowParts, boolean lowInclusive,
+      SqlValueAccess high, int highParts, boolean highInclusive, int scanDirection) {
     if (descriptor == null || descriptor.keyId() <= 0
         || lowParts < 0 || lowParts > descriptor.partCount()
         || highParts < 0 || highParts > descriptor.partCount()
@@ -38,8 +38,8 @@ public final class RelationalDescriptorIndexBounds {
   }
 
   KeyDescriptor key() { return key; }
-  SqlValueBuffer lower() { return lower; }
-  SqlValueBuffer upper() { return upper; }
+  SqlValueAccess lower() { return lower; }
+  SqlValueAccess upper() { return upper; }
   int lowerParts() { return lowerParts; }
   int upperParts() { return upperParts; }
   int direction() { return direction; }

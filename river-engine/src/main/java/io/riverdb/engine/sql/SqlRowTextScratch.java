@@ -3,7 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.LocalTemporalCast;
-import io.riverdb.engine.relational.SqlValueBuffer;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -30,7 +30,7 @@ final class SqlRowTextScratch implements CharSequence {
     return StatusCode.OK;
   }
 
-  StatusCode loadValueBuffer(SqlValueBuffer source, int column) {
+  StatusCode loadValue(SqlValueAccess source, int column) {
     clear();
     StatusCode capacity = reserveCharacters(source.textByteLengthAt(column));
     if (!capacity.isOk()) return capacity;

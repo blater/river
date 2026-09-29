@@ -18,7 +18,7 @@ final class SqlDescriptorCatalogIndexes {
     publishedPart = 0;
   }
 
-  StatusCode next(SqlPhysicalPlan plan, SqlCatalogRowBuffer row) {
+  StatusCode next() {
     while (index < table.secondaryKeyCount()) {
       boolean primary = index < 0;
       KeyDescriptor key = primary ? table.primaryKey() : table.secondaryKeyAt(index);
@@ -29,10 +29,14 @@ final class SqlDescriptorCatalogIndexes {
         continue;
       }
       publishedPart = part++;
-      return row.loadIndex(plan, table, key, publishedPart, primary);
+      return StatusCode.OK;
     }
     return StatusCode.CONFLICT;
   }
 
   int publishedPart() { return publishedPart; }
+  boolean primary() { return index < 0; }
+  KeyDescriptor key() {
+    return primary() ? table.primaryKey() : table.secondaryKeyAt(index);
+  }
 }

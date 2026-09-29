@@ -13,16 +13,16 @@ final class RelationalTupleKeyEncoder {
   private int length;
   private boolean containsNull;
 
-  StatusCode encodeUser(KeyDescriptor key, SqlValueBuffer values) {
+  StatusCode encodeUser(KeyDescriptor key, SqlValueAccess values) {
     return encode(key, values, key == null ? 0 : key.partCount(), 0, false);
   }
 
-  StatusCode encodeUser(KeyDescriptor key, SqlValueBuffer values, int parts) {
+  StatusCode encodeUser(KeyDescriptor key, SqlValueAccess values, int parts) {
     return encode(key, values, parts, 0, false);
   }
 
   StatusCode encodePhysical(
-      KeyDescriptor key, SqlValueBuffer values, long logicalRowId) {
+      KeyDescriptor key, SqlValueAccess values, long logicalRowId) {
     return encode(key, values, key == null ? 0 : key.partCount(), logicalRowId, true);
   }
 
@@ -42,7 +42,7 @@ final class RelationalTupleKeyEncoder {
   }
 
   private StatusCode encode(
-      KeyDescriptor key, SqlValueBuffer values, int parts,
+      KeyDescriptor key, SqlValueAccess values, int parts,
       long logicalRowId, boolean physical) {
     length = 0;
     containsNull = false;
@@ -50,7 +50,7 @@ final class RelationalTupleKeyEncoder {
     StatusCode status = RelationalTupleKeyValidation.validate(
         key, values, parts, logicalRowId, physical);
     if (!status.isOk()) return status;
-    status = scratch.reserve(key, values, parts, physical);
+    status = scratch.reserve(key, physical);
     if (!status.isOk()) return status;
     ByteBuffer bytes = scratch.prepare();
     status = physical

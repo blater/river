@@ -18,6 +18,7 @@ public final class RelationalDescriptorBatchInsert {
       new RelationalDescriptorTupleMutations();
   private final RelationalDescriptorCheckValidation checks =
       new RelationalDescriptorCheckValidation();
+  private final StoredTableRowView foreignValidationRow = new StoredTableRowView();
 
   RelationalDescriptorBatchInsert(
       RelationalSession relationalSession,
@@ -41,10 +42,11 @@ public final class RelationalDescriptorBatchInsert {
 
   public StatusCode insert(
       RelationalDescriptorInsertBatch batch, SchemaPin pin,
-      SqlValueBuffer values, RelationalRowIdentityResult result) {
+      SqlMutationValues values, RelationalRowIdentityResult result) {
     if (!active() || batch == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     TableDescriptor table = RelationalDescriptorPin.validTable(owner, pin, values);
-    if (table == null || !batch.canAdmit(table, session.transaction().transactionId())) {
+    if (table == null || values == null || !values.boundTo(table)
+        || !batch.canAdmit(table, session.transaction().transactionId())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int row = batch.nextRow();
@@ -65,7 +67,7 @@ public final class RelationalDescriptorBatchInsert {
   }
 
   private StatusCode prepareRow(
-      TableDescriptor table, SqlValueBuffer values, long logicalRowId) {
+      TableDescriptor table, SqlValueAccess values, long logicalRowId) {
     StatusCode status = rowBuffer.reserve(table.encodedMaximumRowBytes());
     if (!status.isOk()) return status;
     status = rowBuffer.encode(table, values);
@@ -81,15 +83,15 @@ public final class RelationalDescriptorBatchInsert {
 
 
   public StatusCode validateForeignKeys(
-      RelationalDescriptorInsertBatch batch, SchemaPin pin, int row,
-      SqlValueBuffer values) {
-    if (!active() || batch == null || values == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    TableDescriptor table = RelationalDescriptorPin.validTable(owner, pin, values);
+      RelationalDescriptorInsertBatch batch, SchemaPin pin, int row) {
+    if (!active() || batch == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    TableDescriptor table = RelationalDescriptorPin.validTable(owner, pin);
     if (table == null || !batch.belongsTo(session.transaction().transactionId())
         || !batch.rowAdmitted(table, row)) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = owner.descriptorRows().fetchByLogicalRowId(
-        pin, batch.logicalRowId(row), values);
-    return status.isOk() ? tupleMutations.validateForeign(session, table, values) : status;
+        pin, batch.logicalRowId(row), foreignValidationRow);
+    return status.isOk()
+        ? tupleMutations.validateForeign(session, table, foreignValidationRow) : status;
   }
 
   private boolean active() {

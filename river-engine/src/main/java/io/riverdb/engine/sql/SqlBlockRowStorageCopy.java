@@ -12,6 +12,12 @@ final class SqlBlockRowStorageCopy {
     for (int column = 0; column < source.count(); column++) {
       if (source.isNull(column)) target.setNull(column);
       else target.value(column, source.highValue(column), source.value(column));
+      if (source.hasUtf8(column)) {
+        status = target.setUtf8(
+            column, source.utf8(column), 0, source.utf8Length(column));
+        if (!status.isOk()) return status;
+        continue;
+      }
       int length = source.textLength(column);
       if (length > 0) {
         char[] text = source.existingText(column);

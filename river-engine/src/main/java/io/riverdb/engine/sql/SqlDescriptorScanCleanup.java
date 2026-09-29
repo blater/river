@@ -26,6 +26,7 @@ final class SqlDescriptorScanCleanup {
     context.materialized = false;
     context.scalarAggregate = false;
     context.forUpdate = false;
+    context.view.reset();
     context.boundPredicate.reset();
     context.predicate.reset();
     context.sets.reset();

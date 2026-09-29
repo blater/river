@@ -50,12 +50,6 @@ final class SqlJoinSortInput {
     if (!status.isOk()) return status;
     status = encoded.prepare();
     if (!status.isOk()) return status;
-    for (int column = 0; column < columns; column++) {
-      if (isText(column)) {
-        status = row.prepareText(column);
-        if (!status.isOk()) return status;
-      }
-    }
     int keyColumn = bound.sortKeyProjection;
     status = workspace.begin(
         bound.table,

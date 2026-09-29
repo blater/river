@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalDescriptorIndexBounds;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
 
@@ -33,7 +34,7 @@ final class SqlDescriptorSubqueryIndexAccess {
     return writer.prepare(plan, descriptor, source);
   }
 
-  StatusCode bind(SqlDescriptorValueSource outer) {
+  StatusCode bind(SqlValueAccess outer) {
     if (!active()) return StatusCode.OK;
     return writer.bind(plan, table, command, outer);
   }

@@ -28,6 +28,41 @@ final class SqlTrustedStoredValueTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void directDescriptorScanProjectsUtf8EmptyAndNullText(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSession sql = session(database);
+    SqlExecutionResult completion = new SqlExecutionResult();
+    execute(sql, completion, "CREATE TABLE direct_text ("
+        + "id BIGINT PRIMARY KEY,label VARCHAR(8))");
+    execute(sql, completion, "INSERT INTO direct_text VALUES "
+        + "(1,'多🙂'),(2,''),(3,NULL)");
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    char[] characters = new char[16];
+    assertEquals(StatusCode.OK, sql.beginScan("SELECT label FROM direct_text", cursor));
+    assertEquals(StatusCode.OK, sql.nextScan(cursor, row));
+    assertEquals("多🙂", new String(characters, 0, row.copyTextAt(0, characters, 0)));
+    assertEquals(StatusCode.OK, sql.nextScan(cursor, row));
+    assertEquals(0, row.copyTextAt(0, characters, 0));
+    assertEquals(StatusCode.OK, sql.nextScan(cursor, row));
+    assertEquals(true, row.isNull(0));
+    assertEquals(StatusCode.CONFLICT, sql.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, sql.closeScan(cursor, completion));
+
+    assertEquals(StatusCode.OK, sql.beginScan(
+        "SELECT id FROM direct_text WHERE label='多🙂'", cursor));
+    assertEquals(StatusCode.OK, sql.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, sql.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, sql.closeScan(cursor, completion));
+    assertEquals(StatusCode.OK, sql.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void numericUpdatesRetainTextThroughPendingWritesRollbackAndRestart(
       @TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
@@ -163,19 +198,27 @@ final class SqlTrustedStoredValueTest {
     HeapRowResult damaged = new HeapRowResult();
     damaged.set(bytes, fetched.rowId(), 0, fetched.length());
 
-    SqlBlockPhysicalRowDecoding decoder = new SqlBlockPhysicalRowDecoding();
+    SqlBlockPhysicalRowReader reader = new SqlBlockPhysicalRowReader();
     SqlBlockRow row = new SqlBlockRow();
     SqlBoundBlockPlans plans = blockPlans(raw,
         "SELECT quantity FROM (SELECT quantity,label FROM block_values) block_source");
     assertEquals(false, plans.physicalColumnLive(2));
-    assertEquals(StatusCode.OK, decoder.prepare(table, row, plans));
-    assertEquals(StatusCode.OK, decoder.read(1, damaged, table, row));
+    assertEquals(StatusCode.OK, reader.prepare(table, row, plans));
+    assertEquals(StatusCode.OK, reader.borrow(1, damaged, table, row));
     assertEquals(5, row.value(1));
     plans = blockPlans(raw,
         "SELECT q FROM (SELECT quantity AS q,label AS l FROM block_values) block_source");
     assertEquals(false, plans.physicalColumnLive(2));
-    assertEquals(StatusCode.OK, decoder.prepare(table, row, plans));
-    assertEquals(StatusCode.OK, decoder.read(1, damaged, table, row));
+    assertEquals(StatusCode.OK, reader.prepare(table, row, plans));
+    assertEquals(StatusCode.OK, reader.borrow(1, damaged, table, row));
+
+    plans = blockPlans(raw,
+        "SELECT label FROM (SELECT label FROM block_values) block_source");
+    assertEquals(StatusCode.OK, reader.prepare(table, row, plans));
+    assertEquals(StatusCode.OK, reader.borrow(1, fetched, table, row));
+    char[] offsetText = new char[8];
+    int copied = row.borrowedValues().copyTextChars(2, offsetText, 2);
+    assertEquals("多🙂", new String(offsetText, 2, copied));
 
     String[] requiredText = {
       "SELECT label FROM (SELECT label FROM block_values) block_source",
@@ -199,10 +242,32 @@ final class SqlTrustedStoredValueTest {
     for (String query : requiredText) {
       plans = blockPlans(raw, query);
       assertEquals(true, plans.physicalColumnLive(2), query);
-      assertEquals(StatusCode.OK, decoder.prepare(table, row, plans), query);
-      assertEquals(StatusCode.CORRUPTION,
-          decoder.read(1, damaged, table, row), query);
+      assertEquals(StatusCode.OK, reader.prepare(table, row, plans), query);
+      assertEquals(StatusCode.OK, reader.borrow(1, damaged, table, row), query);
+      assertEquals(true, row.hasUtf8(2), query);
+      assertEquals((byte) 0xc0, row.utf8ByteAt(2, 0), query);
     }
+    SqlBlockPhysicalRowWriter writer = new SqlBlockPhysicalRowWriter();
+    assertEquals(StatusCode.OK, writer.prepare());
+    assertEquals(StatusCode.OK, writer.write(row, table));
+    int writtenTextOffset = (int) (writer.row().getLong(table.valueOffset(2)) >>> 32);
+    assertEquals((byte) 0xc0, writer.row().getByte(writtenTextOffset));
+    SqlBlockRow retained = new SqlBlockRow();
+    assertEquals(StatusCode.OK, reader.read(1, damaged, table, retained));
+    ByteBuffer replacement = ByteBuffer.allocate(fetched.length());
+    assertEquals(StatusCode.OK, fetched.copyTo(replacement));
+    replacement.flip();
+    damaged.set(replacement, fetched.rowId(), 0, fetched.length());
+    assertEquals((byte) 0xc0, retained.utf8ByteAt(2, 0));
+    replacement.putLong(table.valueOffset(2),
+        ((long) (fetched.length() + 1) << 32) | 2);
+    assertEquals(StatusCode.CORRUPTION, reader.borrow(1, damaged, table, row));
+    assertEquals(0, row.count());
+    plans = blockPlans(raw,
+        "SELECT quantity FROM (SELECT quantity,label FROM block_values) block_source");
+    assertEquals(StatusCode.OK, reader.prepare(table, row, plans));
+    assertEquals(StatusCode.OK, reader.borrow(1, damaged, table, row));
+    assertEquals(5, row.value(1));
     assertEquals(StatusCode.OK, raw.abort(outcome));
     assertEquals(StatusCode.OK, raw.close());
     assertEquals(StatusCode.OK, database.close());

@@ -19,13 +19,13 @@ final class RelationalForeignTupleProtection {
   }
 
   StatusCode protect(
-      IndexedTransactionSession session, TableDescriptor table, SqlValueBuffer values) {
+      IndexedTransactionSession session, TableDescriptor table, SqlValueAccess values) {
     return protect(session, table, values, null);
   }
 
   StatusCode protect(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer values, RelationalForeignKeyDelta changes) {
+      SqlValueAccess values, RelationalForeignKeyDelta changes) {
     long afterKeyId = 0;
     for (int protectedIds = 0; protectedIds < table.foreignKeyCount(); protectedIds++) {
       long keyId = nextKeyId(table, changes, afterKeyId);
@@ -39,7 +39,7 @@ final class RelationalForeignTupleProtection {
 
   private StatusCode protectKey(
       IndexedTransactionSession session, TableDescriptor table,
-      SqlValueBuffer values, RelationalForeignKeyDelta changes, long keyId) {
+      SqlValueAccess values, RelationalForeignKeyDelta changes, long keyId) {
     int previous = -1;
     for (int count = 0; count < table.foreignKeyCount(); count++) {
       StatusCode status = selectNext(table, values, changes, keyId, previous);
@@ -56,7 +56,7 @@ final class RelationalForeignTupleProtection {
   }
 
   private StatusCode selectNext(
-        TableDescriptor table, SqlValueBuffer values, RelationalForeignKeyDelta changes,
+        TableDescriptor table, SqlValueAccess values, RelationalForeignKeyDelta changes,
       long keyId, int previous) {
     nextIndex = -1;
     StatusCode status = previous < 0 ? StatusCode.OK
@@ -70,7 +70,7 @@ final class RelationalForeignTupleProtection {
   }
 
   private StatusCode considerCandidate(
-      TableDescriptor table, SqlValueBuffer values, RelationalForeignKeyDelta changes,
+      TableDescriptor table, SqlValueAccess values, RelationalForeignKeyDelta changes,
       long keyId, int previous, int index) {
     if (changes != null && !changes.changedAt(index)) return StatusCode.OK;
     KeyDescriptor foreign = table.foreignKeyAt(index);
@@ -90,7 +90,7 @@ final class RelationalForeignTupleProtection {
   }
 
   private StatusCode chooseCandidate(
-      TableDescriptor table, SqlValueBuffer values, int index) {
+      TableDescriptor table, SqlValueAccess values, int index) {
     StatusCode status = best.encodeUser(table.foreignKeyAt(nextIndex), values);
     if (!status.isOk()) return status;
     int compared = compare(encoder, best);

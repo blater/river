@@ -1,22 +1,22 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.SqlValueAccess;
 
 /** Consumes accepted descriptor rows and updates one subquery outcome/cache. */
 final class SqlDescriptorSubqueryCandidates {
   StatusCode scan(
-      SqlDescriptorSubqueryFrameState state, SqlDescriptorValueSource outer) {
+      SqlDescriptorSubqueryFrameState state, SqlValueAccess outer) {
     long accepted = 0;
     long limit = state.command.rowLimit();
     StatusCode status = StatusCode.OK;
     while (status.isOk() && !state.index.empty() && accepted < limit) {
       status = state.session.descriptorRows().nextScan(
-          state.cursor, state.values.values(), state.identity);
+          state.cursor, state.values, state.identity, null, null);
       if (status == StatusCode.CONFLICT) return StatusCode.OK;
       if (!status.isOk()) return status;
       state.plan.candidate(state.edge);
-      state.childSource.use(state.values.values());
-      status = state.predicate.evaluate(state.childSource, outer);
+      status = state.predicate.evaluate(state.values, outer);
       if (!status.isOk() || !state.predicate.matched()) continue;
       accepted++;
       accept(state);
@@ -30,9 +30,9 @@ final class SqlDescriptorSubqueryCandidates {
   private void accept(SqlDescriptorSubqueryFrameState state) {
     state.plan.accept(state.edge);
     state.outcome.accept(
-        state.projection.isNull(state.values.values()),
-        state.projection.highValue(state.values.values()),
-        state.projection.value(state.values.values()));
+        state.projection.isNull(state.values),
+        state.projection.highValue(state.values),
+        state.projection.value(state.values));
     if (state.caching && state.kind != io.riverdb.sql.SqlQuery.SUBQUERY_EXISTS) {
       prepareCandidate(state);
       if (!state.cache.append(state.edge, state.candidateOperand)) {
@@ -43,12 +43,12 @@ final class SqlDescriptorSubqueryCandidates {
   }
 
   private void prepareCandidate(SqlDescriptorSubqueryFrameState state) {
-    if (state.projection.isNull(state.values.values())) {
+    if (state.projection.isNull(state.values)) {
       state.candidateOperand.setNull(state.childDescriptor);
     } else {
       state.candidateOperand.setValue(
-          state.projection.highValue(state.values.values()),
-          state.projection.value(state.values.values()), state.childDescriptor, false);
+          state.projection.highValue(state.values),
+          state.projection.value(state.values), state.childDescriptor, false);
     }
   }
 }

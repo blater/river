@@ -60,7 +60,7 @@ final class SqlDescriptorScanPreparation {
     StatusCode status = context.boundPredicate.prepareBinding(table, bound.table);
     if (status.isOk()) status = binder.bindDataCommand(command, query, bound);
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
-    if (status.isOk()) status = context.boundPredicate.prepare(table);
+    if (status.isOk()) status = context.boundPredicate.prepare();
     if (status.isOk()) context.predicate.reset();
     return status;
   }

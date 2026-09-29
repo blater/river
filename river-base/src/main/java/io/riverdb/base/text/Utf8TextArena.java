@@ -11,7 +11,7 @@ import java.nio.ByteBuffer;
  * one byte or copy into caller-owned storage. Capacity is retained by {@link #reset()} so an
  * owner can warm the arena once and use it without per-value allocation.</p>
  */
-public final class Utf8TextArena {
+public final class Utf8TextArena implements BoundedByteSource {
   private static final int INITIAL_GROWTH = 8;
   private static final byte[] EMPTY_BYTES = new byte[0];
   private static final ByteBuffer EMPTY_VIEW = ByteBuffer.wrap(EMPTY_BYTES);
@@ -27,6 +27,12 @@ public final class Utf8TextArena {
   public int used() {
     return used;
   }
+
+  @Override
+  public int length() { return used; }
+
+  @Override
+  public byte getByte(int offset) { return bytes[offset]; }
 
   /** Retained byte-array capacity. */
   public int capacity() {

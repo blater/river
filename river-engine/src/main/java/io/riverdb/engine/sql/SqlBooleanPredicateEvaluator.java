@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.relational.SqlValueAccess;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
@@ -28,6 +29,7 @@ final class SqlBooleanPredicateEvaluator {
   private HeapRowResult physicalRow;
   private TableDefinition table;
   private SqlBlockRow blockRow;
+  private SqlValueAccess descriptorRow;
   private boolean block;
   private boolean join;
   private SqlJoinRoleRows joinRows;
@@ -157,6 +159,25 @@ final class SqlBooleanPredicateEvaluator {
     table = null;
     blockRow = row;
     block = true;
+    StatusCode status = evaluateNode(bound.root());
+    if (status.isOk()) result.matched = truth == TRUE;
+    clearEvaluation();
+    return status;
+  }
+
+  StatusCode matchesDescriptor(
+      SqlCommand source,
+      SqlBoundBooleanPredicateProgram bound,
+      SqlValueAccess row,
+      Match result) {
+    result.matched = false;
+    if (!bound.available()) {
+      result.matched = true;
+      return StatusCode.OK;
+    }
+    command = source;
+    programs = bound;
+    descriptorRow = row;
     StatusCode status = evaluateNode(bound.root());
     if (status.isOk()) result.matched = truth == TRUE;
     clearEvaluation();
@@ -447,6 +468,10 @@ final class SqlBooleanPredicateEvaluator {
           joinRows,
           result);
     }
+    if (descriptorRow != null) {
+      return expressions.evaluateDescriptor(
+          command, programs, leaf, program, zone, descriptorRow, result);
+    }
     return expressions.evaluate(
         command,
         programs,
@@ -497,6 +522,7 @@ final class SqlBooleanPredicateEvaluator {
     physicalRow = null;
     table = null;
     blockRow = null;
+    descriptorRow = null;
     block = false;
     join = false;
     joinRows = null;
