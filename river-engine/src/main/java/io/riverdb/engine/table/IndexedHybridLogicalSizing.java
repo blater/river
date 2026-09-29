@@ -66,14 +66,16 @@ final class IndexedHybridLogicalSizing {
         partTotal += lifecycle.shapeAt(index).partCount();
       }
       for (int descriptor = 0; descriptor < intents.descriptorCount(); descriptor++) {
+        if (!intents.activeDescriptorAt(descriptor)) continue;
         if (lifecycleIndex(intents, lifecycle, descriptor) >= 0) continue;
         if (descriptors == Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
         descriptors++;
         partTotal += intents.shapeAt(descriptor).partCount();
       }
     } else {
-      descriptors = intents.descriptorCount();
-      for (int descriptor = 0; descriptor < descriptors; descriptor++) {
+      for (int descriptor = 0; descriptor < intents.descriptorCount(); descriptor++) {
+        if (!intents.activeDescriptorAt(descriptor)) continue;
+        descriptors++;
         partTotal += intents.shapeAt(descriptor).partCount();
       }
     }

@@ -158,6 +158,12 @@ final class IndexedTupleIntentJournal {
   int payloadLengthAt(int index) { return entries.payloadLengthAt(index); }
   int valueLengthAt(int index) { return entries.valueLengthAt(index); }
   boolean activeAt(int index) { return entries.activeAt(index); }
+  boolean activeDescriptorAt(int descriptor) {
+    for (int index = 0; index < entries.count(); index++) {
+      if (entries.activeAt(index) && entries.descriptorAt(index) == descriptor) return true;
+    }
+    return false;
+  }
   StatusCode descriptorStatus(
       long owner, long keyId, long schemaId, TupleShape shape) {
     return descriptors.status(owner, keyId, schemaId, shape);

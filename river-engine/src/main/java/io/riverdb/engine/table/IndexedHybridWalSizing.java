@@ -73,6 +73,7 @@ final class IndexedHybridWalSizing {
     StatusCode status = StatusCode.OK;
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
+      if (!intents.activeDescriptorAt(descriptor)) continue;
       if (!excludeLifecycle
           || IndexedHybridLogicalSizing.lifecycleIndex(intents, lifecycle, descriptor) < 0) {
         status = addDescriptor(intents.shapeAt(descriptor).partCount());

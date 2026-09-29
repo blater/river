@@ -110,6 +110,7 @@ final class IndexedHybridMutationCompiler {
     StatusCode status = StatusCode.OK;
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
+      if (!intents.activeDescriptorAt(descriptor)) continue;
       if (IndexedHybridLogicalSizing.lifecycleIndex(intents, batch, descriptor) < 0) {
         status = descriptors.append(intents, descriptor, compiled[0]);
       }
@@ -126,7 +127,7 @@ final class IndexedHybridMutationCompiler {
     for (int index = 0; status.isOk() && index < batch.count(); index++) {
       int descriptor = IndexedHybridLogicalSizing.intentDescriptor(
           intents, batch.keyIdAt(index));
-      if (descriptor < 0) {
+      if (descriptor < 0 || !intents.activeDescriptorAt(descriptor)) {
         status = lifecycle.compile(
             batch, index, compiled[0], firstMutation, memberSequence);
       } else {
@@ -140,6 +141,7 @@ final class IndexedHybridMutationCompiler {
     int outputDescriptor = batch.count();
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
+      if (!intents.activeDescriptorAt(descriptor)) continue;
       if (IndexedHybridLogicalSizing.lifecycleIndex(intents, batch, descriptor) >= 0) continue;
       status = tuples.compile(
           intents, descriptor, compiled[0], outputDescriptor,
@@ -177,10 +179,12 @@ final class IndexedHybridMutationCompiler {
   private StatusCode compileDmlTuples(
       IndexedTupleIntentJournal intents, int firstMutation, int suboperation) {
     StatusCode status = StatusCode.OK;
+    int outputDescriptor = 0;
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
+      if (!intents.activeDescriptorAt(descriptor)) continue;
       status = tuples.compile(
-          intents, descriptor, compiled[0], descriptor,
+          intents, descriptor, compiled[0], outputDescriptor++,
           suboperation, firstMutation, memberSequence, oldestVisibleCommitSequence);
       firstMutation += tuples.count(intents, descriptor);
       suboperation++;
