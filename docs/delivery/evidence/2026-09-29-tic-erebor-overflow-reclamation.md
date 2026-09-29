@@ -38,6 +38,10 @@ Focused tests passed:
 - `IndexedRelationalWalCommitTest.concurrentHybridSessionsShareOneForceAndRecoverIndependentDecisions`:
   two different rows on the same tuple leaf receive value replacements in one
   grouped force; both values survive a WAL-only reopen and a second reopen.
+- `IndexedPageCacheEvictionTest.pinnedOldGenerationReportsPressureThenProgressesAfterRelease`:
+  a held older tuple page generation keeps a two-frame cache from publishing
+  another generation. Publication returns `RETRY`, preserves the old bytes,
+  then succeeds once the old pin is released.
 
 `./gradlew --no-daemon :river-engine:test` passed after the final pre-allocation
 reclamation order, frame-owner extraction and prepared-member test. The

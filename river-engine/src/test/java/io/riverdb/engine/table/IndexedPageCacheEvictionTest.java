@@ -78,6 +78,59 @@ final class IndexedPageCacheEvictionTest {
   }
 
   @Test
+  void pinnedOldGenerationReportsPressureThenProgressesAfterRelease(@TempDir Path root) {
+    NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
+    assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
+        root, new FatalStateFence(), new NioIoCounters(), 8, directoryResult));
+    NioDurableDirectory directory = directoryResult.directory();
+    DirectoryOperationResult pageFile = new DirectoryOperationResult();
+    DirectoryOperationResult stagingFile = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
+    IndexedPageSet pages = new IndexedPageSet(
+        pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
+        DatabasePageCacheTestPlan.geometry(2, 2, 2));
+
+    ByteBuffer first = pages.stageNew(1, 2, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, 41);
+    assertNotNull(first);
+    first.putInt(0, 11);
+    publishPrepared(pages, Long.MAX_VALUE, 1, 2, 1);
+    pages.resetChanges();
+    IndexedPageGenerationPin old = new IndexedPageGenerationPin();
+    assertEquals(StatusCode.OK, pages.pinPageAt(1, 1, old));
+
+    ByteBuffer second = pages.stageExisting(1, 2);
+    assertNotNull(second);
+    second.putInt(0, 22);
+    publishPrepared(pages, 1, 2, 3, 2);
+    pages.resetChanges();
+
+    ByteBuffer third = pages.stageExisting(1, 2);
+    assertNotNull(third);
+    third.putInt(0, 33);
+    assertEquals(StatusCode.OK, pages.beginPreparedBatch());
+    assertEquals(StatusCode.RETRY, pages.freezeChangedPages(0, 1));
+    pages.cancelPreparedBatch();
+    pages.clearStagedFlags();
+    pages.resetChanges();
+    assertEquals(11, old.payload().getInt(0));
+    assertEquals(StatusCode.OK, pages.unpinPage(old));
+
+    third = pages.stageExisting(1, 2);
+    assertNotNull(third);
+    third.putInt(0, 33);
+    publishPrepared(pages, 2, 3, 4, 3);
+    pages.resetChanges();
+    IndexedPageGenerationPin current = new IndexedPageGenerationPin();
+    assertEquals(StatusCode.OK, pages.pinPageAt(1, 3, current));
+    assertEquals(33, current.payload().getInt(0));
+    assertEquals(StatusCode.OK, pages.unpinPage(current));
+    assertEquals(StatusCode.OK, pageFile.file().close());
+    assertEquals(StatusCode.OK, stagingFile.file().close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
   void releasesTheExactPreparedGenerationAfterALaterSamePageFreeze(
       @TempDir Path root) {
     NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
