@@ -19,6 +19,11 @@ final class IndexedOperationPageAllocation {
     return allocate(pages, metadata, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, owner, result);
   }
 
+  static StatusCode tupleOverflow(
+      IndexedPageSet pages, ByteBuffer metadata, long owner, IndexedOperationPage result) {
+    return allocate(pages, metadata, PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW, owner, result);
+  }
+
   static StatusCode logicalHead(
       IndexedPageSet pages, ByteBuffer metadata, long owner,
       IndexedOperationPage result) {
@@ -41,6 +46,8 @@ final class IndexedOperationPageAllocation {
           pages.pinNewScalarOperationPage(pageId, result);
       case PageCodec.PAYLOAD_KIND_TUPLE_BTREE ->
           pages.pinNewTupleOperationPage(pageId, owner, result);
+      case PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW ->
+          pages.pinNewTupleOverflowPage(pageId, owner, result);
       case PageCodec.PAYLOAD_KIND_LOGICAL_HEAD ->
           pages.pinNewLogicalHeadOperationPage(pageId, owner, result);
       default -> StatusCode.INVALID_EXTERNAL_INPUT;

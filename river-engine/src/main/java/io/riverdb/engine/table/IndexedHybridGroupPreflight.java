@@ -126,7 +126,7 @@ final class IndexedHybridGroupPreflight {
 
   private StatusCode validateVersions(IndexedPreparedLogicalCommit prepared) {
     int actual = IndexedVersionOperation.required(compiler.mutation().buffer());
-    return actual < 0 || actual != prepared.admittedVersionOperations()
+    return actual < 0 || actual > prepared.admittedVersionOperations()
         ? StatusCode.INVARIANT_BROKEN : StatusCode.OK;
   }
 

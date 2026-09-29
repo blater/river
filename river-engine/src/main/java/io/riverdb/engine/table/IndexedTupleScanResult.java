@@ -56,4 +56,9 @@ public final class IndexedTupleScanResult {
     overflowGeneration = overflowVersion;
     modificationSequence = modifiedAt;
   }
+
+  void bindOverflow(ByteBuffer pinnedOverflowPayload, int offset) {
+    page = pinnedOverflowPayload;
+    valueOffset = offset;
+  }
 }

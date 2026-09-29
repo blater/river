@@ -128,6 +128,7 @@ final class IndexedPageFrameCache {
         frame.access = ++accessClock;
         result.set(
             slot, pageId, frame.validFromCommitSequence, frame.pageGeneration,
+            frame.durableGeneration,
             frame.payload, frame.payloadKind, frame.ownerKeyId);
         return setStatus(StatusCode.OK);
       }
@@ -523,6 +524,13 @@ final class IndexedPageFrameCache {
       markCapacityPressure(lastStatus);
       return null;
     }
+    if (current != null && current.durableGeneration == Long.MAX_VALUE) {
+      releaseStagingFrame(pageId);
+      rollbackAdmission(pageId, false);
+      lastStatus = StatusCode.FENCED;
+      return null;
+    }
+    staging.durableGeneration = current == null ? 1 : current.durableGeneration + 1;
     staging.rememberIdentity(
         current == null ? PageCodec.PAYLOAD_KIND_SCALAR_BTREE : current.payloadKind,
         current == null ? PageCodec.SCALAR_OWNER_KEY_ID : current.ownerKeyId);

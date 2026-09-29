@@ -38,6 +38,8 @@ final class IndexedTupleRegistryState {
 
   StatusCode stage(
       IndexedRelationalMutationBuffer source, int operation, long memberSequence) {
+    if (source.resultingGenerationAt(operation)
+        == source.expectedGenerationAt(operation)) return StatusCode.OK;
     int descriptor = source.suboperationDescriptorAt(operation);
     long prior = membershipSequences.get(descriptor);
     StatusCode status = writer.stage(

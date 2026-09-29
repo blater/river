@@ -12,10 +12,36 @@ import io.riverdb.format.btree.TupleBTreePageHeader;
 import io.riverdb.format.btree.TupleBTreePageValidationProof;
 import io.riverdb.format.btree.TupleBTreeLeafEntry;
 import io.riverdb.format.btree.TupleKeyBuilder;
+import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 
 final class IndexedPageFrameValidationTest {
+  @Test
+  void recycledPageReceivesNextDurableGeneration() {
+    io.riverdb.engine.runtime.DatabasePageCachePlan config =
+        io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(4, 4, 4);
+    IndexedPageState state = new IndexedPageState(config);
+    IndexedPageFrameCache cache = new IndexedPageFrameCache(
+        null, null, DatabaseIncarnation.of(1, 2), WalGeneration.of(1), state, config);
+    int pageId = PageCodec.FIRST_ALLOCATABLE_PAGE_ID;
+    assertEquals(StatusCode.OK, state.installPresent(pageId));
+    assertEquals(StatusCode.OK,
+        state.setIdentity(pageId, PageCodec.PAYLOAD_KIND_FREE, 0));
+    IndexedPageFrame free = new IndexedPageFrame();
+    free.pageId = pageId;
+    free.durableGeneration = 7;
+    free.identity(PageCodec.PAYLOAD_KIND_FREE, 0);
+    cache.currentFrames[0] = free;
+    cache.currentMap.put(pageId, 0);
+
+    ByteBuffer staged = cache.stageNew(
+        pageId, state.changedPageCapacity(),
+        PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW, 23);
+    assertEquals(true, staged != null);
+    assertEquals(8, cache.stagingFrame(pageId).durableGeneration);
+  }
+
   @Test
   void exactCopyTransfersValidationIntoOneExclusiveWritableBorrow() {
     TupleShape shape = shape();

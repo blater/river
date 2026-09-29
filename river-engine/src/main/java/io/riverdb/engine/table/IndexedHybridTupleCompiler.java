@@ -47,9 +47,10 @@ final class IndexedHybridTupleCompiler {
     StatusCode status = deltas.apply(intents, descriptor, tupleRoot, memberSequence);
     if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
-    status = registry.stage(
-        resultingRoot, false, 0, memberSequence,
-        deltas.count(intents, descriptor) > 0);
+    boolean membershipChanged = deltas.membershipChanged(intents, descriptor);
+    boolean stageRegistry = membershipChanged || resultingRoot != tupleRoot;
+    if (stageRegistry) status = registry.stage(
+        resultingRoot, false, 0, memberSequence, membershipChanged);
     if (!status.isOk()) return status;
     ByteBuffer resulting = metadata();
     if (resulting == null) return StatusCode.CORRUPTION;
@@ -57,7 +58,8 @@ final class IndexedHybridTupleCompiler {
         intents.ownerAt(descriptor), outputDescriptor,
         firstMutation, deltas.count(intents, descriptor),
         tupleRoot, resultingRoot, scalarRoot, BTreeRootPage.rootPageId(resulting),
-        nextPage, BTreeRootPage.nextPageId(resulting), generation, generation + 1,
+        nextPage, BTreeRootPage.nextPageId(resulting), generation,
+        stageRegistry ? generation + 1 : generation,
         heap, kernel.operationRowCount(), TupleIndexRootRecordCodec.STATE_READY,
         TupleIndexRootRecordCodec.STATE_READY, 0, 0);
     return status.isOk()

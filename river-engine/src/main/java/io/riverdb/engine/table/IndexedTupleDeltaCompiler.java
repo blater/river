@@ -59,6 +59,16 @@ final class IndexedTupleDeltaCompiler {
     return count;
   }
 
+  boolean membershipChanged(IndexedTupleIntentJournal intents, int descriptor) {
+    for (int index = 0; index < intents.mutationCount(); index++) {
+      if (!intents.activeAt(index) || intents.descriptorAt(index) != descriptor) continue;
+      int operation = intents.operationAt(index);
+      if (operation == IndexedRelationalMutation.TUPLE_INSERT
+          || operation == IndexedRelationalMutation.TUPLE_DELETE) return true;
+    }
+    return false;
+  }
+
   private StatusCode applyOperation(
       IndexedTupleIntentJournal intents, int descriptor, int operation,
       long modificationSequence) {

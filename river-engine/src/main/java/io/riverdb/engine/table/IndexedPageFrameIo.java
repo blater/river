@@ -5,6 +5,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.page.PageHeader;
+import io.riverdb.format.FormatBytes;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
@@ -45,7 +46,7 @@ final class IndexedPageFrameIo {
       IndexedPageFrame frame, DatabaseIncarnation database, WalGeneration generation,
       long start, long end, CRC32C checksum) {
     return PageCodec.encode(
-        database, generation, frame.pageId, 1, start, end,
+        database, generation, frame.pageId, frame.durableGeneration, start, end,
         frame.payloadKind,
         frame.ownerKeyId,
         frame.payloadKind == PageCodec.PAYLOAD_KIND_FREE
@@ -93,6 +94,7 @@ final class IndexedPageFrameIo {
       return status.isOk() ? StatusCode.CORRUPTION : status;
     }
     frame.identity(identityHeader.payloadKind(), identityHeader.ownerKeyId());
+    frame.durableGeneration = identityHeader.pageGeneration();
     frame.recordStart = identityHeader.recordStart();
     frame.recordEnd = identityHeader.recordEnd();
     return StatusCode.OK;
@@ -120,6 +122,7 @@ final class IndexedPageFrameIo {
 
   StatusCode writeStaged(IndexedPageFrame frame) {
     if (stagingFile == null) return StatusCode.RESOURCE_EXHAUSTED;
+    FormatBytes.putLong(frame.page, 56, frame.durableGeneration);
     StatusCode status = write(
         stagingFile,
         frame,
@@ -138,6 +141,8 @@ final class IndexedPageFrameIo {
     if (!status.isOk()) return status;
     if (io.bytesTransferred() != PageCodec.PAGE_BYTES) return StatusCode.CORRUPTION;
     frame.prepare();
+    frame.durableGeneration = FormatBytes.getLong(frame.page, 56);
+    if (frame.durableGeneration <= 0) return StatusCode.CORRUPTION;
     return StatusCode.OK;
   }
 

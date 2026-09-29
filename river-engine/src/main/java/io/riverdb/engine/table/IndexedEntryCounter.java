@@ -22,6 +22,7 @@ final class IndexedEntryCounter {
     for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
       if (!pages.isPresent(pageId)
           || pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
+          || pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW
           || pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_FREE) continue;
       if (pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_LOGICAL_HEAD) {
         StatusCode status = pages.pinCurrentPage(pageId);

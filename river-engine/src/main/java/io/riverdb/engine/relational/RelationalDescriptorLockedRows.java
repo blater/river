@@ -45,7 +45,7 @@ final class RelationalDescriptorLockedRows {
       StoredTableRowView destination, RelationalRowIdentityResult result) {
     if (result != null) result.reset();
     StatusCode status = lockPoint(table, primaryValues);
-    if (status.isOk()) destination.borrowFrom(before);
+    if (status.isOk()) status = destination.borrowFrom(before);
     status = finish(status);
     if (status.isOk() && result != null) result.set(resolved.logicalRowId());
     return status;
@@ -57,7 +57,7 @@ final class RelationalDescriptorLockedRows {
     StatusCode status = rows.reserve(table);
     if (status.isOk()) before.reset();
     if (status.isOk()) status = current.lockScan(cursor, before);
-    if (status.isOk()) destination.borrowFrom(before);
+    if (status.isOk()) status = destination.borrowFrom(before);
     return finish(status);
   }
 
@@ -66,7 +66,7 @@ final class RelationalDescriptorLockedRows {
     StatusCode status = rows.reserve(table);
     if (status.isOk()) before.reset();
     if (status.isOk()) status = current.lockPoint(table, logicalRowId, before);
-    if (status.isOk()) destination.borrowFrom(before);
+    if (status.isOk()) status = destination.borrowFrom(before);
     return finish(status);
   }
 

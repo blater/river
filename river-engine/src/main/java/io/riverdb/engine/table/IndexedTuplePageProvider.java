@@ -15,6 +15,7 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   private final IndexedOperationPage metadata = new IndexedOperationPage();
   private final IndexedOperationPage firstPage = new IndexedOperationPage();
   private final IndexedOperationPage secondPage = new IndexedOperationPage();
+  private final IndexedOperationPage overflowPage = new IndexedOperationPage();
   private TupleBTreePageReference firstReference;
   private TupleBTreePageReference secondReference;
   private int plannedPages;
@@ -62,7 +63,7 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   StatusCode finish(StatusCode operation) {
     if (!active) return StatusCode.INVARIANT_BROKEN;
     StatusCode status = operation;
-    if (firstReference != null || secondReference != null) {
+    if (firstReference != null || secondReference != null || overflowPage.attached()) {
       status = StatusCode.INVARIANT_BROKEN;
     } else if (status.isOk() && plannedPages >= 0 && allocatedPages != plannedPages) {
       status = StatusCode.INVARIANT_BROKEN;
@@ -82,7 +83,8 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
 
   boolean reusable() {
     return !active && !root.active() && !metadata.attached()
-        && firstReference == null && secondReference == null;
+        && firstReference == null && secondReference == null
+        && !overflowPage.attached();
   }
 
   StatusCode releaseRetained() {
@@ -198,6 +200,29 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
       status = attach(result, page, true);
     }
     return status;
+  }
+
+  StatusCode allocateOverflow() {
+    if (!active || plannedPages >= 0 || overflowPage.attached()
+        || allocatedPages >= maximumNewPages) return StatusCode.RESOURCE_EXHAUSTED;
+    if (!metadata.attached()) {
+      StatusCode status = pages.pinScalarOperationPage(
+          IndexedTableKernel.ROOT_META_PAGE_ID, true, metadata);
+      if (!status.isOk()) return status;
+    }
+    StatusCode status = admitAllocation(1);
+    if (status.isOk()) status = IndexedOperationPageAllocation.tupleOverflow(
+        pages, metadata.payload(), root.keyId(), overflowPage);
+    if (status.isOk()) allocatedPages++;
+    return status;
+  }
+
+  IndexedOperationPage overflowPage() { return overflowPage; }
+
+  StatusCode releaseOverflow() {
+    return !active || !overflowPage.attached()
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : pages.releaseOperationPage(overflowPage);
   }
 
   @Override

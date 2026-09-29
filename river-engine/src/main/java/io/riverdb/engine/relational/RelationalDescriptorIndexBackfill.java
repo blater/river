@@ -17,6 +17,7 @@ public final class RelationalDescriptorIndexBackfill {
   private final RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
   private final StoredTableRowView values = new StoredTableRowView();
   private final RelationalTupleKeyEncoder encoder = new RelationalTupleKeyEncoder();
+  private final RelationalTupleKeyEncoder locator = new RelationalTupleKeyEncoder();
   private boolean exhausted;
   private int batchRows;
 
@@ -57,7 +58,7 @@ public final class RelationalDescriptorIndexBackfill {
 
   private StatusCode stageBatch(TableDescriptor table, KeyDescriptor key) {
     batchRows = 0;
-    StatusCode status = build.begin(BATCH_ROWS, maximumBatchBytes(key));
+    StatusCode status = build.begin(BATCH_ROWS, maximumBatchBytes(table, key));
     while (status.isOk() && batchRows < BATCH_ROWS && !exhausted) {
       status = rows.nextScan(cursor, values, identity, null, null);
       if (status == StatusCode.CONFLICT) {
@@ -78,10 +79,16 @@ public final class RelationalDescriptorIndexBackfill {
     if (status.isOk()) {
       status = encoder.encodePhysical(key, values, identity.logicalRowId());
     }
+    if (status.isOk() && table.primaryKey() != null) {
+      status = locator.encodePhysical(
+          table.primaryKey(), values, identity.logicalRowId());
+    }
     if (status.isOk()) status = session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT,
         table.tableId(), key.keyId(), key.keyId(), key.shape(),
-        identity.logicalRowId(), encoder.bytes(), 0, encoder.length());
+        identity.logicalRowId(), encoder.bytes(), 0, encoder.length(),
+        table.primaryKey() == null ? null : locator.bytes(), 0,
+        table.primaryKey() == null ? 0 : locator.length());
     if (status.isOk()) batchRows++;
     return status;
   }
@@ -100,8 +107,10 @@ public final class RelationalDescriptorIndexBackfill {
     return build == null ? StatusCode.OK : build.close();
   }
 
-  private static int maximumBatchBytes(KeyDescriptor key) {
-    int bytes = key.shape().maximumPhysicalEncodedBytes();
+  private static int maximumBatchBytes(TableDescriptor table, KeyDescriptor key) {
+    int bytes = key.shape().maximumPhysicalEncodedBytes()
+        + (table.primaryKey() == null ? 0
+            : table.primaryKey().shape().maximumPhysicalEncodedBytes());
     return bytes <= Integer.MAX_VALUE / BATCH_ROWS ? bytes * BATCH_ROWS : -1;
   }
 

@@ -22,9 +22,11 @@ public final class RelationalDescriptorTableAccess {
       new RelationalDescriptorCheckValidation();
   private final RelationalDescriptorForeignKeyChecks foreignKeyChecks;
   private final RelationalDescriptorRowAccess rowAccess = new RelationalDescriptorRowAccess();
+  private final RelationalDescriptorPointViews pointViews =
+      new RelationalDescriptorPointViews();
   private final RelationalDescriptorLockedRows lockedRows;
   private final RelationalDescriptorPrimaryAccess primaryAccess =
-      new RelationalDescriptorPrimaryAccess();
+      new RelationalDescriptorPrimaryAccess(pointViews);
   private final RelationalDescriptorScanAccess scanAccess;
   private final RelationalRowIdentityResult resolved = new RelationalRowIdentityResult();
 
@@ -34,7 +36,7 @@ public final class RelationalDescriptorTableAccess {
       RelationalDatabaseServices databaseServices) {
     owner = relationalSession;
     session = indexedSession;
-    scanAccess = new RelationalDescriptorScanAccess(indexedSession);
+    scanAccess = new RelationalDescriptorScanAccess(indexedSession, pointViews);
     lockedRows = new RelationalDescriptorLockedRows(indexedSession, rowAccess);
     foreignKeyChecks = new RelationalDescriptorForeignKeyChecks(
         relationalSession, indexedSession, databaseServices);
@@ -105,13 +107,7 @@ public final class RelationalDescriptorTableAccess {
     TableDescriptor table = validDescriptor(pin);
     if (table == null || table.primaryKey() == null
         || primaryKey == null || destination == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    StatusCode status = logicalRowId(table, primaryKey, resolved);
-    if (!status.isOk()) return status;
-    long logicalRowId = resolved.logicalRowId();
-    status = rowAccess.fetch(session, table, logicalRowId, destination);
-    if (status.isOk()) status = validateResolvedPrimary(table, destination);
-    if (status.isOk() && result != null) result.set(logicalRowId);
-    return status;
+    return primaryAccess.fetch(session, table, primaryKey, destination, result);
   }
 
   /** Resolves a point candidate and decodes its logical-row-lock-protected current row. */
@@ -285,7 +281,8 @@ public final class RelationalDescriptorTableAccess {
   public boolean currentBorrowed() { return lockedRows.borrowed(); }
 
   StatusCode closeActiveScan() {
-    return scanAccess.closeActive(this);
+    StatusCode status = scanAccess.closeActive(this);
+    return status.isOk() ? pointViews.closeAll() : status;
   }
 
   StatusCode closeSession() {

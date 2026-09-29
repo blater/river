@@ -11,6 +11,7 @@ final class IndexedPageFrame {
   ByteBuffer payload;
   int pageId;
   long pageGeneration;
+  long durableGeneration = 1;
   boolean dirty;
   long recordStart;
   long recordEnd;
@@ -95,6 +96,7 @@ final class IndexedPageFrame {
       return;
     }
     page.put(0, source.page, 0, PageCodec.HEADER_BYTES);
+    durableGeneration = source.durableGeneration;
     StatusCode copied = validation.copyPayloadFrom(
         source.validation, source.pageGeneration,
         payload, pageGeneration);

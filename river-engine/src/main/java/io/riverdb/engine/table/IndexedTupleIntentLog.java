@@ -162,9 +162,9 @@ class IndexedTupleIntentLog extends IndexedTupleIntentView {
           ? 0 : IndexedRelationalMutation.TUPLE_INSERT;
     }
     if (first == IndexedRelationalMutation.TUPLE_DELETE) {
-      return latest == IndexedRelationalMutation.TUPLE_INSERT
-          ? valueLength == 0 ? 0 : IndexedRelationalMutation.TUPLE_REPLACE
-          : IndexedRelationalMutation.TUPLE_DELETE;
+      return latest == IndexedRelationalMutation.TUPLE_DELETE
+          ? IndexedRelationalMutation.TUPLE_DELETE
+          : valueLength == 0 ? 0 : IndexedRelationalMutation.TUPLE_REPLACE;
     }
     return latest == IndexedRelationalMutation.TUPLE_DELETE
         ? IndexedRelationalMutation.TUPLE_DELETE

@@ -7,6 +7,8 @@ import io.riverdb.engine.table.IndexedScanCursor;
 import io.riverdb.engine.table.IndexedScanResult;
 import io.riverdb.engine.table.IndexedTupleScanCursor;
 import io.riverdb.engine.table.IndexedTupleScanResult;
+import io.riverdb.storage.heap.HeapPage;
+import java.nio.ByteBuffer;
 
 /** Caller-owned scan state for one pinned catalog-v2 table generation. */
 public final class RelationalDescriptorScanCursor {
@@ -14,6 +16,7 @@ public final class RelationalDescriptorScanCursor {
   private final IndexedScanResult row = new IndexedScanResult();
   private final IndexedTupleScanCursor tupleIndexed = new IndexedTupleScanCursor();
   private final IndexedTupleScanResult tupleRow = new IndexedTupleScanResult();
+  private final ByteBuffer pendingRow = ByteBuffer.allocate(HeapPage.MAXIMUM_ROW_BYTES);
   private final RelationalDescriptorIndexCursor tupleBounds =
       new RelationalDescriptorIndexCursor();
   private final SchemaPin schema = new SchemaPin();
@@ -52,6 +55,7 @@ public final class RelationalDescriptorScanCursor {
 
   IndexedTupleScanCursor tupleIndexed() { return tupleIndexed; }
   IndexedTupleScanResult tupleRow() { return tupleRow; }
+  ByteBuffer pendingRow() { return pendingRow; }
   RelationalDescriptorIndexCursor tupleBounds() { return tupleBounds; }
   StatusCode prepareSelection(
       StoredTableColumnSelection selection, StoredTableRowIntegerFilter filter) {

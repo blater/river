@@ -653,12 +653,12 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode createSavepoint(IndexedSavepoint savepoint) {
-    return state.savepoints.create(savepoint, hasActiveScans());
+    return state.savepoints.create(savepoint, state.cursors.scalarCount() != 0);
   }
 
   /** Rolls back pending mutations but deliberately retains acquired locks until transaction end. */
   public StatusCode rollbackToSavepoint(IndexedSavepoint savepoint) {
-    return state.savepoints.rollback(savepoint, hasActiveScans());
+    return state.savepoints.rollback(savepoint, state.cursors.scalarCount() != 0);
   }
 
   public StatusCode releaseSavepoint(IndexedSavepoint savepoint) {

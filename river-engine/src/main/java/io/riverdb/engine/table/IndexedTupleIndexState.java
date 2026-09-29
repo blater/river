@@ -11,6 +11,7 @@ public final class IndexedTupleIndexState {
   private long descriptorHash;
   private long privateOwner;
   private long generation;
+  private long membershipSequence;
   private final int[] descriptors =
       new int[io.riverdb.format.btree.TupleKeyCodec.MAX_INDEX_KEY_PARTS];
   private int descriptorCount;
@@ -25,6 +26,7 @@ public final class IndexedTupleIndexState {
   public long descriptorHash() { return descriptorHash; }
   public long privateOwner() { return privateOwner; }
   public long generation() { return generation; }
+  public long membershipSequence() { return membershipSequence; }
   public int descriptorCount() { return descriptorCount; }
   public int descriptorAt(int index) {
     return index >= 0 && index < descriptorCount ? descriptors[index] : 0;
@@ -43,6 +45,7 @@ public final class IndexedTupleIndexState {
     descriptorHash = hash;
     privateOwner = buildOwner;
     generation = valueGeneration;
+    membershipSequence = record == null ? 0 : record.membershipSequence();
     descriptorCount = record == null ? 0 : record.descriptorCount();
     for (int index = 0; index < descriptors.length; index++) {
       descriptors[index] = index < descriptorCount ? record.descriptorAt(index) : 0;

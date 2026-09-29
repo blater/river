@@ -9,11 +9,14 @@ import io.riverdb.tx.api.lock.LockMode;
 /** Owns bounded allocation-free descriptor scans for its transaction session. */
 final class RelationalDescriptorScanAccess {
   private final IndexedTransactionSession session;
+  private final RelationalDescriptorPrimaryAccess primary;
   private final RelationalDescriptorScanRegistry active =
       new RelationalDescriptorScanRegistry();
 
-  RelationalDescriptorScanAccess(IndexedTransactionSession indexedSession) {
+  RelationalDescriptorScanAccess(
+      IndexedTransactionSession indexedSession, RelationalDescriptorPointViews pointViews) {
     session = indexedSession;
+    primary = new RelationalDescriptorPrimaryAccess(pointViews);
   }
 
   StatusCode begin(
@@ -70,7 +73,8 @@ final class RelationalDescriptorScanAccess {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    destination.reset();
+    StatusCode reset = destination.reset();
+    if (!reset.isOk()) return reset;
     TableDescriptor table = cursor.descriptor();
     if (selection != null && !selection.matches(table.columnCount())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -81,13 +85,21 @@ final class RelationalDescriptorScanAccess {
       status = nextPhysical(cursor);
       if (!status.isOk()) return status;
       long logicalRowId = cursor.logicalRowId();
-      status = cursor.isTuplePhysical()
-          ? fetchView(table, logicalRowId, destination, filter, selection)
-          : destination.bindFetched(table, cursor.row().row(), filter, selection);
+      boolean primaryLeaf = cursor.isTuplePhysical()
+          && cursor.tupleBounds().key() == table.primaryKey();
+      status = primaryLeaf
+          ? bindPrimaryLeaf(table, cursor, destination, filter, selection)
+          : cursor.isTuplePhysical()
+              ? table.primaryKey() == null
+                  ? fetchView(table, logicalRowId, destination, filter, selection)
+                  : fetchSecondaryLocator(
+                      table, cursor, destination, filter, selection)
+              : destination.bindFetched(table, cursor.row().row(), filter, selection);
       if (status == StatusCode.CONFLICT && cursor.isTuplePhysical()) continue;
       if (status == StatusCode.CONFLICT && filter != null) continue;
       if (!status.isOk()) return status;
-      if (cursor.isTuplePhysical()) {
+      if (cursor.isTuplePhysical()
+          && (!primaryLeaf || cursor.tupleRow().pending())) {
         status = cursor.tupleBounds().recheck(destination);
         if (!status.isOk()) return status;
         if (!cursor.tupleBounds().matches()) continue;
@@ -95,6 +107,42 @@ final class RelationalDescriptorScanAccess {
       result.set(logicalRowId);
       return StatusCode.OK;
     }
+  }
+
+  private StatusCode fetchSecondaryLocator(
+      TableDescriptor table, RelationalDescriptorScanCursor cursor,
+      StoredTableRowView destination, StoredTableRowIntegerFilter filter,
+      StoredTableColumnSelection selection) {
+    var row = cursor.tupleRow();
+    if (row.valueLength() <= 0 || row.valueLength() > cursor.pendingRow().capacity()) {
+      return StatusCode.CORRUPTION;
+    }
+    if (row.pending()) {
+      row.copyPendingValueTo(cursor.pendingRow(), 0);
+      return primary.fetchLocator(
+          session, table, cursor.pendingRow(), 0, row.valueLength(),
+          row.logicalRowId(), destination, filter, selection);
+    }
+    return primary.fetchLocator(
+        session, table, row.page(), row.valueOffset(), row.valueLength(),
+        row.logicalRowId(), destination, filter, selection);
+  }
+
+  private static StatusCode bindPrimaryLeaf(
+      TableDescriptor table, RelationalDescriptorScanCursor cursor,
+      StoredTableRowView destination, StoredTableRowIntegerFilter filter,
+      StoredTableColumnSelection selection) {
+    var row = cursor.tupleRow();
+    if (row.valueLength() <= 0 || row.valueLength() > cursor.pendingRow().capacity()) {
+      return StatusCode.CORRUPTION;
+    }
+    if (row.pending()) {
+      row.copyPendingValueTo(cursor.pendingRow(), 0);
+      return destination.bindPinned(
+          table, cursor.pendingRow(), 0, row.valueLength(), filter, selection);
+    }
+    return destination.bindPinned(
+        table, row.page(), row.valueOffset(), row.valueLength(), filter, selection);
   }
 
   private StatusCode fetchView(

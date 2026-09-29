@@ -51,9 +51,11 @@ final class IndexedPublishingTupleCompiler {
     if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
     boolean building = lifecycle.appendsBuilding(lifecycleIndex);
-    status = registry.stage(
+    boolean membershipChanged = deltas.membershipChanged(intents, descriptor) || !building;
+    boolean stageRegistry = membershipChanged || resultingRoot != tupleRoot;
+    if (stageRegistry) status = registry.stage(
         resultingRoot, building, lifecycle.privateOwnerAt(lifecycleIndex),
-        memberSequence, deltas.count(intents, descriptor) > 0 || !building);
+        memberSequence, membershipChanged);
     if (!status.isOk()) return status;
     ByteBuffer resulting = metadata();
     if (resulting == null) return StatusCode.CORRUPTION;
@@ -61,7 +63,8 @@ final class IndexedPublishingTupleCompiler {
         intents.ownerAt(descriptor), lifecycleIndex, firstMutation,
         deltas.count(intents, descriptor), tupleRoot, resultingRoot,
         scalarRoot, BTreeRootPage.rootPageId(resulting), nextPage,
-        BTreeRootPage.nextPageId(resulting), generation, generation + 1,
+        BTreeRootPage.nextPageId(resulting), generation,
+        stageRegistry ? generation + 1 : generation,
         heap, kernel.operationRowCount(), TupleIndexRootRecordCodec.STATE_BUILDING,
         building ? TupleIndexRootRecordCodec.STATE_BUILDING
             : TupleIndexRootRecordCodec.STATE_READY,

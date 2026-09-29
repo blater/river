@@ -124,6 +124,12 @@ final class IndexedPageSet {
         pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_TUPLE_BTREE,
         ownerKeyId, result);
   }
+  StatusCode pinNewTupleOverflowPage(
+      int pageId, long ownerKeyId, IndexedOperationPage result) {
+    return cache.pinNewOperationPage(
+        pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW,
+        ownerKeyId, result);
+  }
   StatusCode pinNewLogicalHeadOperationPage(
       int pageId, long ownerObjectId, IndexedOperationPage result) {
     return cache.pinNewOperationPage(

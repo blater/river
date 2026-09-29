@@ -4,6 +4,8 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.format.btree.TupleKeyCodec;
+import io.riverdb.format.btree.TupleBTreePageCodec;
+import io.riverdb.format.btree.TupleRowOverflowCodec;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.storage.btree.TupleBTree;
 import io.riverdb.storage.btree.TupleBTreeInsertPreflightResult;
@@ -21,6 +23,8 @@ final class IndexedRelationalTupleSession {
   private final TupleBTreeInsertPreflightResult preflight =
       new TupleBTreeInsertPreflightResult();
   private final TupleBTreeValidationResult validation = new TupleBTreeValidationResult();
+  private int overflowPageId;
+  private long overflowGeneration;
 
   IndexedRelationalTupleSession(IndexedPageSet pages) {
     root = new IndexedTupleRootState(1, 1, 0);
@@ -80,9 +84,13 @@ final class IndexedRelationalTupleSession {
       int overflowPageId, long overflowGeneration, long modificationSequence) {
     StatusCode status = provider.beginVariableAllocation();
     if (!status.isOk()) return status;
+    status = prepareValue(
+        key, value, valueOffset, valueLength, overflowPageId, overflowGeneration);
+    if (!status.isOk()) return finish(status);
     status = tree.insert(key, key.position(), key.remaining(),
-        value, valueOffset, valueLength, overflowPageId,
-        overflowGeneration, modificationSequence, workspace);
+        this.overflowPageId == 0 ? value : null,
+        this.overflowPageId == 0 ? valueOffset : 0, valueLength,
+        this.overflowPageId, this.overflowGeneration, modificationSequence, workspace);
     return finish(status);
   }
 
@@ -91,10 +99,34 @@ final class IndexedRelationalTupleSession {
       int overflowPageId, long overflowGeneration, long modificationSequence) {
     StatusCode status = provider.beginVariableAllocation();
     if (!status.isOk()) return status;
+    status = prepareValue(
+        key, value, valueOffset, valueLength, overflowPageId, overflowGeneration);
+    if (!status.isOk()) return finish(status);
     status = tree.replaceValue(key, key.position(), key.remaining(),
-        value, valueOffset, valueLength, overflowPageId,
-        overflowGeneration, modificationSequence, workspace);
+        this.overflowPageId == 0 ? value : null,
+        this.overflowPageId == 0 ? valueOffset : 0, valueLength,
+        this.overflowPageId, this.overflowGeneration, modificationSequence, workspace);
     return finish(status);
+  }
+
+  private StatusCode prepareValue(
+      ByteBuffer key, ByteBuffer value, int valueOffset, int valueLength,
+      int suppliedOverflowPageId, long suppliedOverflowGeneration) {
+    overflowPageId = suppliedOverflowPageId;
+    overflowGeneration = suppliedOverflowGeneration;
+    if (suppliedOverflowPageId != 0 || TupleBTreePageCodec.inlineEligible(
+        key.remaining(), valueLength)) return StatusCode.OK;
+    StatusCode status = provider.allocateOverflow();
+    if (!status.isOk()) return status;
+    IndexedOperationPage page = provider.overflowPage();
+    overflowPageId = page.pageId();
+    overflowGeneration = page.durableGeneration();
+    status = TupleRowOverflowCodec.encode(
+        page.payload(), 0,
+        TupleKeyCodec.logicalRowId(key, key.position(), key.remaining()),
+        value, valueOffset, valueLength);
+    StatusCode released = provider.releaseOverflow();
+    return status.isOk() ? released : status;
   }
 
   StatusCode delete(ByteBuffer key) {
