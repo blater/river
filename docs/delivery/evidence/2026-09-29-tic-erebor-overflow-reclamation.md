@@ -13,6 +13,15 @@ suboperation records its exact page ID, generation and retirement sequence;
 replay applies the same free-stack update before tuple mutations and registry publication.
 Normal inline primary and secondary reads never enter this scan.
 
+The one-page reclamation bound can make a large overflow-changing transaction
+return `RESOURCE_EXHAUSTED` at page-ID exhaustion even when several retired
+pages are eligible. A caller can retry as smaller transactions, but an atomic
+large transaction has no automatic progress path through those pages. The
+existing tests do not exercise that address-capacity boundary. Final review
+must decide whether this bound satisfies the ticket's capacity contract; if
+not, the logical WAL representation must carry multiple exact reclamations
+before promotion.
+
 Focused tests passed:
 
 - `RelationalDescriptorRowPathTest.retiredOverflowWaitsForOldLeafThenReusesAfterCheckpoint`:

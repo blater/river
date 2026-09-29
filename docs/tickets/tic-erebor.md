@@ -479,3 +479,6 @@ records direct primary/secondary routes and the logical mapping-mutation
 counts. It explicitly leaves physical map costs and final independent review
 open; the owner-accepted Stock Level throughput figures do not close those
 separate promotion gates.
+The [final review handoff](../delivery/evidence/2026-09-29-tic-erebor-review-handoff.md)
+lists the tested boundaries and the remaining physical write-cost and
+overflow capacity questions. No final independent code approval is recorded.
