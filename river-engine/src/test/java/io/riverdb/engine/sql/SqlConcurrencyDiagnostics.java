@@ -72,13 +72,13 @@ final class SqlConcurrencyDiagnostics {
         System.out.println("attempt_tag=" + (101 + owner) + " resource_digest=" + digest
             + " blocker_resource_digest=" + snapshot.edges().blockingResourceDigestAt(edge));
       }
-      if (expected.length == 3 && expected[2].held().equals("null")) {
-        assertEquals(digests.get(1), digests.get(2), "same row1 KEY resource");
-        assertNotEquals(digests.get(0), digests.get(1), "row2 tuple resource differs");
-      } else {
-        assertEquals(expected.length, new java.util.HashSet<>(digests.values()).size(),
-            "distinct scheduler resources (including distinct KEY/TUPLE_KEY scopes for conversion)");
-      }
+      int resources = expected.length == 2
+          && expected[0].scope().equals("TUPLE_KEY")
+          && expected[1].scope().equals("TUPLE_KEY")
+          && expected[0].held().equals("SHARED")
+          && expected[1].held().equals("SHARED") ? 1 : expected.length;
+      assertEquals(resources, new java.util.HashSet<>(digests.values()).size(),
+          "scheduler resources");
     } catch (ReflectiveOperationException failure) {
       throw new AssertionError("cannot read existing scheduler resource snapshot", failure);
     }

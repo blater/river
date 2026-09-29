@@ -596,6 +596,21 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return state.lockWait.acquireKey(transaction, space, key, mode);
   }
 
+  /** Borrows the existing logical-row lock without resolving a scalar heap row. */
+  public StatusCode borrowTupleRowLock(
+      long space, long key, IndexedLockedRow result) {
+    if (transaction.state() != TransactionState.ACTIVE
+        || !OrderedKey.isFiniteSpace(space) || key <= 0 || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = result.reset();
+    if (status.isOk()) status = state.lockWait.acquireBorrowedKey(
+        transaction, space, key, LockMode.EXCLUSIVE, result.lock());
+    if (status.isOk()) result.set(
+        this, transaction.transactionGeneration(), space, key, 0, 0, -1);
+    return status;
+  }
+
   /** Borrows the current uninterrupted successor of one snapshot-selected logical key. */
   public StatusCode lockCurrentKey(long space, long key, HeapRowResult result) {
     return deliverRead(state.currentRows.lockCurrentKey(space, key, result));
@@ -641,6 +656,16 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       IndexedTupleScanCursor cursor) {
     return state.tupleScans.begin(
         ownerObjectId, keyId, schemaId, shape, bounds, serializableSourceMode, cursor);
+  }
+
+  /** Opens the current tuple generation after the caller has protected its logical row. */
+  public StatusCode beginCurrentTupleScan(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      io.riverdb.storage.btree.TupleBTreeScanBounds bounds,
+      IndexedTupleScanCursor cursor) {
+    return state.tupleScans.beginCurrent(
+        ownerObjectId, keyId, schemaId, shape, bounds, cursor);
   }
 
   public StatusCode nextTupleScan(

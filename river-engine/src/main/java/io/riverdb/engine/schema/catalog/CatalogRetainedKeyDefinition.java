@@ -70,6 +70,7 @@ final class CatalogRetainedKeyDefinition {
   }
 
   private static boolean contains(TableDescriptor table, long keyId) {
+    if (table.identityKey().keyId() == keyId) return true;
     if (table.primaryKey() != null && table.primaryKey().keyId() == keyId) return true;
     for (int index = 0; index < table.secondaryKeyCount(); index++) {
       if (table.secondaryKeyAt(index).keyId() == keyId) return true;

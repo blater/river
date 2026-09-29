@@ -2,7 +2,6 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.TableDescriptor;
-import io.riverdb.engine.table.IndexedLockedRow;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.lock.LockMode;
@@ -10,33 +9,29 @@ import io.riverdb.tx.api.lock.LockMode;
 /** Owns the canonical before-image bound to one borrowed current-row capability. */
 final class RelationalDescriptorLockedRows {
   private final IndexedTransactionSession session;
-  private final RelationalDescriptorRowAccess rows;
   private final RelationalDescriptorCurrentRow current;
-  private final RelationalDescriptorPrimaryAccess primary =
-      new RelationalDescriptorPrimaryAccess();
+  private final RelationalDescriptorPrimaryAccess primary;
   private final RelationalRowIdentityResult resolved = new RelationalRowIdentityResult();
   private final StoredTableRowView before = new StoredTableRowView();
 
   RelationalDescriptorLockedRows(
-      IndexedTransactionSession indexedSession, RelationalDescriptorRowAccess rowAccess) {
+      IndexedTransactionSession indexedSession,
+      RelationalDescriptorPointViews pointViews) {
     session = indexedSession;
-    rows = rowAccess;
-    current = new RelationalDescriptorCurrentRow(indexedSession);
+    primary = new RelationalDescriptorPrimaryAccess(pointViews);
+    current = new RelationalDescriptorCurrentRow(indexedSession, primary);
   }
 
   StatusCode lockPoint(
       TableDescriptor table, SqlValueAccess primaryValues) {
-    before.reset();
-    StatusCode status = rows.reserve(table);
+    StatusCode status = before.reset();
     boolean serializable = session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE;
     if (status.isOk()) status = serializable
         ? primary.resolveSource(
             session, table, primaryValues, LockMode.EXCLUSIVE, resolved)
         : primary.resolve(session, table, primaryValues, resolved);
-    if (status.isOk()) status = serializable
-        ? current.lockPointCurrent(table, resolved.logicalRowId(), before)
-        : current.lockPoint(table, resolved.logicalRowId(), before);
-    if (status.isOk()) status = primary.validateResolved(table, before);
+    if (status.isOk()) status = current.lockPoint(
+        table, primaryValues, resolved.logicalRowId(), before);
     return finish(status);
   }
 
@@ -53,9 +48,7 @@ final class RelationalDescriptorLockedRows {
 
   StatusCode lockScan(
       RelationalDescriptorScanCursor cursor, StoredTableRowView destination) {
-    TableDescriptor table = cursor.descriptor();
-    StatusCode status = rows.reserve(table);
-    if (status.isOk()) before.reset();
+    StatusCode status = before.reset();
     if (status.isOk()) status = current.lockScan(cursor, before);
     if (status.isOk()) status = destination.borrowFrom(before);
     return finish(status);
@@ -63,15 +56,13 @@ final class RelationalDescriptorLockedRows {
 
   StatusCode lockLogical(
       TableDescriptor table, long logicalRowId, StoredTableRowView destination) {
-    StatusCode status = rows.reserve(table);
-    if (status.isOk()) before.reset();
-    if (status.isOk()) status = current.lockPoint(table, logicalRowId, before);
+    StatusCode status = before.reset();
+    if (status.isOk()) status = current.lockLogical(table, logicalRowId, before);
     if (status.isOk()) status = destination.borrowFrom(before);
     return finish(status);
   }
 
   SqlValueAccess before() { return before; }
-  IndexedLockedRow locked() { return current.locked(); }
   long logicalRowId() { return current.logicalRowId(); }
   boolean borrowed() { return current.borrowed() || session.tupleSourceBorrowed(); }
 
@@ -79,15 +70,18 @@ final class RelationalDescriptorLockedRows {
     StatusCode status = session.tupleSourceBorrowed()
         ? session.retainTupleSource() : StatusCode.OK;
     StatusCode currentStatus = current.borrowed() ? current.retain() : StatusCode.OK;
-    return status.isOk() ? currentStatus : status;
+    StatusCode viewStatus = before.reset();
+    if (!status.isOk()) return status;
+    return currentStatus.isOk() ? viewStatus : currentStatus;
   }
 
   StatusCode release() {
     StatusCode currentStatus = current.borrowed() ? current.release() : StatusCode.OK;
     StatusCode sourceStatus = session.tupleSourceBorrowed()
         ? session.releaseTupleSource() : StatusCode.OK;
-    if (currentStatus.isOk() && sourceStatus.isOk()) before.reset();
-    return currentStatus.isOk() ? sourceStatus : currentStatus;
+    StatusCode rowStatus = before.reset();
+    if (!currentStatus.isOk()) return currentStatus;
+    return sourceStatus.isOk() ? rowStatus : sourceStatus;
   }
 
   private StatusCode finish(StatusCode original) {

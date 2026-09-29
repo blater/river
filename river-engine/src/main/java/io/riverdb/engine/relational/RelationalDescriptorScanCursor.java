@@ -28,6 +28,7 @@ public final class RelationalDescriptorScanCursor {
   private boolean tuplePhysical;
   private boolean emptyPhysical;
   private long logicalRowId;
+  private StoredTableRowView publishedView;
 
   public boolean isActive() {
     return owner != null || physicalOpen || schema.isActive();
@@ -68,6 +69,15 @@ public final class RelationalDescriptorScanCursor {
   }
   long logicalRowId() { return logicalRowId; }
   void logicalRowId(long value) { logicalRowId = value; }
+
+  StatusCode releaseView() {
+    if (publishedView == null) return StatusCode.OK;
+    StatusCode status = publishedView.reset();
+    if (status.isOk()) publishedView = null;
+    return status;
+  }
+
+  void publishView(StoredTableRowView view) { publishedView = view; }
 
   StatusCode claim(RelationalDescriptorTableAccess access, SchemaPin source) {
     if (owner != null || !physicalOpen || source == null || !source.isActive()) {

@@ -58,9 +58,7 @@ public final class RelationalDescriptorBatchInsert {
       status = tupleMutations.validateForeign(session, table, values);
       if (!status.isOk()) return status;
     }
-    status = session.insert(
-        RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId, rowBuffer.bytes());
-    if (status.isOk()) status = tupleMutations.stage(
+    status = tupleMutations.stage(
         session, table, logicalRowId, rowBuffer.bytes(), rowBuffer.length());
     if (status.isOk()) status = batch.admit(table);
     if (status.isOk()) result.set(logicalRowId);
@@ -91,8 +89,10 @@ public final class RelationalDescriptorBatchInsert {
         || !batch.rowAdmitted(table, row)) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = owner.descriptorRows().fetchByLogicalRowId(
         pin, batch.logicalRowId(row), foreignValidationRow);
-    return status.isOk()
-        ? tupleMutations.validateForeign(session, table, foreignValidationRow) : status;
+    if (status.isOk()) status = tupleMutations.validateForeign(
+        session, table, foreignValidationRow);
+    StatusCode released = foreignValidationRow.reset();
+    return status.isOk() ? released : status;
   }
 
   private boolean active() {

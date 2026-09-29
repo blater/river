@@ -95,7 +95,11 @@ final class RelationalDescriptorTupleDeltaPreparation {
   private StatusCode measure(TableDescriptor table, int operation, int rowBytes) {
     int primary = -1;
     for (int index = 0; index < storage.keyCount(); index++) {
-      if (storage.keyAt(index).kind() == KeyDescriptor.KIND_PRIMARY) primary = index;
+      if (storage.keyAt(index).kind() == KeyDescriptor.KIND_PRIMARY
+          || table.primaryKey() == null
+              && storage.keyAt(index).kind() == KeyDescriptor.KIND_INTERNAL_IDENTITY) {
+        primary = index;
+      }
     }
     boolean moved = operation == RelationalDescriptorTupleDeltaPlan.UPDATE
         && primary >= 0 && storage.beforeOffsetAt(primary) != storage.afterOffsetAt(primary);

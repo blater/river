@@ -26,12 +26,13 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
 
     assertEquals(StatusCode.OK, plan.insert(table, values, 91, 64));
-    assertEquals(3, plan.keyCount());
-    assertEquals(3, plan.mutationCount());
+    assertEquals(4, plan.keyCount());
+    assertEquals(4, plan.mutationCount());
     assertTrue(plan.payloadBytes() > 0);
     assertEquals(10, plan.keyAt(0).keyId());
     assertEquals(20, plan.keyAt(1).keyId());
     assertEquals(30, plan.keyAt(2).keyId());
+    assertEquals(table.identityKey().keyId(), plan.keyAt(3).keyId());
     for (int index = 0; index < plan.keyCount(); index++) {
       assertEquals(0, plan.beforeLengthAt(index));
       assertEquals(91, TupleKeyCodec.logicalRowId(
@@ -39,7 +40,7 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     }
 
     assertEquals(StatusCode.OK, plan.delete(table, values, 92));
-    assertEquals(3, plan.mutationCount());
+    assertEquals(4, plan.mutationCount());
     for (int index = 0; index < plan.keyCount(); index++) {
       assertEquals(0, plan.afterLengthAt(index));
       assertEquals(92, TupleKeyCodec.logicalRowId(
@@ -79,7 +80,7 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     assertFalse(plan.changedAt(0));
     assertFalse(plan.changedAt(1));
     assertTrue(plan.changedAt(2));
-    assertEquals(4, plan.mutationCount());
+    assertEquals(5, plan.mutationCount());
   }
 
   @Test
@@ -130,8 +131,8 @@ final class RelationalDescriptorTupleDeltaPlanTest {
 
     assertEquals(StatusCode.OK,
         plan.insert(table, values, Long.MAX_VALUE, table.encodedMaximumRowBytes()));
-    assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES, plan.keyCount());
-    assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES, plan.mutationCount());
+    assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES + 1, plan.keyCount());
+    assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES + 1, plan.mutationCount());
     assertTrue(plan.payloadBytes() >= SqlShapeLimits.MAX_TABLE_INDEXES * 765);
     for (int index = 0; index < plan.keyCount(); index++) {
       assertEquals(Long.MAX_VALUE, TupleKeyCodec.logicalRowId(

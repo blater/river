@@ -172,7 +172,9 @@ final class SqlDescriptorPointExecution {
     if (status.isOk()) status = projection.publish(
         selected, SqlDescriptorPublicRowKey.from(table, selected),
         session.visibleCommitSequence(), result);
-    return forUpdate ? finishLockedSelect(status) : status;
+    if (forUpdate) return finishLockedSelect(status);
+    StatusCode released = view.reset();
+    return status.isOk() ? released : status;
   }
 
   private StatusCode finishLockedSelect(StatusCode original) {

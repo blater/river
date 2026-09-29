@@ -7,6 +7,7 @@ import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.engine.table.IndexedTupleIndexState;
 import io.riverdb.format.btree.TupleIndexRootRecordCodec;
 import io.riverdb.format.catalog.CatalogBuildIntent;
+import io.riverdb.format.catalog.CatalogBuildIntentCodec;
 
 /** Validates published roots and advances bounded cleanup of private roots. */
 final class CatalogTupleIndexCleanup {
@@ -89,6 +90,7 @@ final class CatalogTupleIndexCleanup {
         && intent.nextChild() == intent.childCount()
         && intent.physicalIndexCount() >= 0
         && intent.physicalIndexCount() <= intent.keyCount()
+            + (intent.kind() == CatalogBuildIntentCodec.KIND_INITIAL ? 1 : 0)
         && CatalogTableKeys.reservedPhysicalIndexCount(table, intent)
             == intent.physicalIndexCount();
   }

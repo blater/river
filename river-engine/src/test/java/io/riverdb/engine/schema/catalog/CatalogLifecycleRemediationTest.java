@@ -402,11 +402,11 @@ final class CatalogLifecycleRemediationTest {
         + CatalogDefinitionManifestCodec.BYTES + CatalogBuildIntentCodec.BYTES
         + CatalogObjectHeadCodec.BYTES;
     ByteBuffer intent = ByteBuffer.allocate(CatalogBuildIntentCodec.BYTES);
-    assertEquals(StatusCode.OK, CatalogBuildIntentCodec.encode(intent, 0,
+    assertEquals(StatusCode.OK, CatalogBuildIntentCodec.encodeWithKeys(intent, 0,
         CatalogBuildIntentCodec.STATE_BUILDING, objectId, manifest.schemaId(),
         manifest.rowLayoutId(), manifest.catalogGeneration(), manifest.catalogRecordId(),
         manifest.firstChildRecordId(), manifest.childCount(), manifest.childCount(), 0,
-        manifest.payloadBytes(), catalogBytes, checksum));
+        manifest.payloadBytes(), catalogBytes, 1, 0, 1, 1, 0, checksum));
     intent.position(0).limit(CatalogBuildIntentCodec.BYTES);
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.OK,

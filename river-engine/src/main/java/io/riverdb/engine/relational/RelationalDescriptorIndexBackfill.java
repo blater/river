@@ -79,16 +79,15 @@ public final class RelationalDescriptorIndexBackfill {
     if (status.isOk()) {
       status = encoder.encodePhysical(key, values, identity.logicalRowId());
     }
-    if (status.isOk() && table.primaryKey() != null) {
+    if (status.isOk()) {
       status = locator.encodePhysical(
-          table.primaryKey(), values, identity.logicalRowId());
+          table.clusteredKey(), values, identity.logicalRowId());
     }
     if (status.isOk()) status = session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT,
         table.tableId(), key.keyId(), key.keyId(), key.shape(),
         identity.logicalRowId(), encoder.bytes(), 0, encoder.length(),
-        table.primaryKey() == null ? null : locator.bytes(), 0,
-        table.primaryKey() == null ? 0 : locator.length());
+        locator.bytes(), 0, locator.length());
     if (status.isOk()) batchRows++;
     return status;
   }
@@ -109,8 +108,7 @@ public final class RelationalDescriptorIndexBackfill {
 
   private static int maximumBatchBytes(TableDescriptor table, KeyDescriptor key) {
     int bytes = key.shape().maximumPhysicalEncodedBytes()
-        + (table.primaryKey() == null ? 0
-            : table.primaryKey().shape().maximumPhysicalEncodedBytes());
+        + table.clusteredKey().shape().maximumPhysicalEncodedBytes();
     return bytes <= Integer.MAX_VALUE / BATCH_ROWS ? bytes * BATCH_ROWS : -1;
   }
 

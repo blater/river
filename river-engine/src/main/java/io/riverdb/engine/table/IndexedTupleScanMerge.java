@@ -74,6 +74,7 @@ final class IndexedTupleScanMerge {
         committed = false;
         result.setCommitted(
             entry.logicalRowId(), cursor.page(),
+            cursor.pageStart() + entry.keyOffset(), entry.keyLength(),
             cursor.pageStart() + entry.valueOffset(), entry.valueLength(),
             entry.overflowPageId(), entry.overflowGeneration(),
             entry.modificationSequence());

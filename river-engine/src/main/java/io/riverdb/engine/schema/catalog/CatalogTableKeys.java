@@ -2,6 +2,7 @@ package io.riverdb.engine.schema.catalog;
 
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
+import io.riverdb.format.catalog.CatalogBuildIntentCodec;
 
 final class CatalogTableKeys {
   private CatalogTableKeys() {
@@ -13,10 +14,12 @@ final class CatalogTableKeys {
   }
 
   static int physicalIndexCount(TableDescriptor table) {
-    return (table.primaryKey() == null ? 0 : 1) + table.secondaryKeyCount();
+    return 1 + (table.primaryKey() == null ? 0 : 1) + table.secondaryKeyCount();
   }
 
   static KeyDescriptor physicalIndexAt(TableDescriptor table, int index) {
+    if (index == 0) return table.identityKey();
+    index--;
     if (table.primaryKey() != null) {
       if (index == 0) return table.primaryKey();
       index--;
@@ -27,17 +30,20 @@ final class CatalogTableKeys {
   static int reservedPhysicalIndexCount(
       TableDescriptor table, CatalogReservation reservation) {
     return reservedPhysicalIndexCount(
-        table, reservation.firstKeyId(), reservation.keyCount());
+        table, reservation.firstKeyId(), reservation.keyCount(),
+        reservation.kind() == CatalogBuildIntentCodec.KIND_INITIAL);
   }
 
   static int reservedPhysicalIndexCount(
       TableDescriptor table, io.riverdb.format.catalog.CatalogBuildIntent intent) {
-    return reservedPhysicalIndexCount(table, intent.firstKeyId(), intent.keyCount());
+    return reservedPhysicalIndexCount(
+        table, intent.firstKeyId(), intent.keyCount(),
+        intent.kind() == CatalogBuildIntentCodec.KIND_INITIAL);
   }
 
   private static int reservedPhysicalIndexCount(
-      TableDescriptor table, long first, int keyCount) {
-    int count = 0;
+      TableDescriptor table, long first, int keyCount, boolean initial) {
+    int count = initial ? 1 : 0;
     long end = first + keyCount;
     for (int index = 0; index < physicalIndexCount(table); index++) {
       long keyId = physicalIndexAt(table, index).keyId();
@@ -49,18 +55,21 @@ final class CatalogTableKeys {
   static KeyDescriptor reservedPhysicalIndexAt(
       TableDescriptor table, CatalogReservation reservation, int ordinal) {
     return reservedPhysicalIndexAt(
-        table, reservation.firstKeyId(), reservation.keyCount(), ordinal);
+        table, reservation.firstKeyId(), reservation.keyCount(), ordinal,
+        reservation.kind() == CatalogBuildIntentCodec.KIND_INITIAL);
   }
 
   static KeyDescriptor reservedPhysicalIndexAt(
       TableDescriptor table, io.riverdb.format.catalog.CatalogBuildIntent intent,
       int ordinal) {
     return reservedPhysicalIndexAt(
-        table, intent.firstKeyId(), intent.keyCount(), ordinal);
+        table, intent.firstKeyId(), intent.keyCount(), ordinal,
+        intent.kind() == CatalogBuildIntentCodec.KIND_INITIAL);
   }
 
   private static KeyDescriptor reservedPhysicalIndexAt(
-      TableDescriptor table, long first, int keyCount, int ordinal) {
+      TableDescriptor table, long first, int keyCount, int ordinal, boolean initial) {
+    if (initial && ordinal-- == 0) return table.identityKey();
     long end = first + keyCount;
     for (int index = 0; index < physicalIndexCount(table); index++) {
       KeyDescriptor key = physicalIndexAt(table, index);

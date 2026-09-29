@@ -20,6 +20,11 @@ final class RelationalDescriptorPrimaryAccess {
   private final RelationalTupleKeyEncoder actualEncoder = new RelationalTupleKeyEncoder();
   private final SqlMutationValues scalarValues = new SqlMutationValues();
   private final TupleBTreeScanBounds pointBounds = new TupleBTreeScanBounds();
+  private final TupleBTreeScanBounds identityBounds = new TupleBTreeScanBounds();
+  private final IndexedTupleScanCursor identityCursor = new IndexedTupleScanCursor();
+  private final IndexedTupleScanResult identityRow = new IndexedTupleScanResult();
+  private final ByteBuffer identityLocator = ByteBuffer.allocate(
+      TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
   private final RelationalDescriptorPointViews pointViews;
   private final ByteBuffer locatorKey = ByteBuffer.allocate(
       TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
@@ -40,7 +45,7 @@ final class RelationalDescriptorPrimaryAccess {
     if (!status.isOk()) return status;
     return fetchEncoded(
         session, table, expectedEncoder.bytes(), expectedEncoder.length(),
-        0, destination, null, null, result);
+        0, destination, null, null, result, false);
   }
 
   StatusCode fetchLocator(
@@ -48,10 +53,27 @@ final class RelationalDescriptorPrimaryAccess {
       ByteBuffer locator, int offset, int length, long expectedRowId,
       StoredTableRowView destination, StoredTableRowIntegerFilter filter,
       StoredTableColumnSelection selection) {
+    return fetchLocator(session, table, locator, offset, length, expectedRowId,
+        destination, filter, selection, false);
+  }
+
+  StatusCode fetchCurrentLocator(
+      IndexedTransactionSession session, TableDescriptor table,
+      ByteBuffer locator, int offset, int length, long expectedRowId,
+      StoredTableRowView destination) {
+    return fetchLocator(session, table, locator, offset, length, expectedRowId,
+        destination, null, null, true);
+  }
+
+  private StatusCode fetchLocator(
+      IndexedTransactionSession session, TableDescriptor table,
+      ByteBuffer locator, int offset, int length, long expectedRowId,
+      StoredTableRowView destination, StoredTableRowIntegerFilter filter,
+      StoredTableColumnSelection selection, boolean current) {
     if (locator == null || length <= TupleKeyCodec.LOGICAL_ROW_ID_BYTES
         || length > locatorKey.capacity() || offset < 0
         || offset > locator.limit() - length
-        || table.primaryKey() == null) return StatusCode.CORRUPTION;
+        || table.clusteredKey() == null) return StatusCode.CORRUPTION;
     long rowId = 0;
     for (int index = length - Long.BYTES; index < length; index++) {
       rowId = rowId << 8 | Byte.toUnsignedInt(locator.get(offset + index));
@@ -64,17 +86,93 @@ final class RelationalDescriptorPrimaryAccess {
     locatorKey.put(1, (byte) (locatorKey.get(1) & ~TupleKeyCodec.FLAG_PHYSICAL));
     return fetchEncoded(
         session, table, locatorKey, userLength,
-        expectedRowId, destination, filter, selection, null);
+        expectedRowId, destination, filter, selection, null, current);
+  }
+
+  StatusCode fetchCurrentPoint(
+      IndexedTransactionSession session, TableDescriptor table,
+      SqlValueAccess primaryValues, long logicalRowId,
+      StoredTableRowView destination) {
+    StatusCode status = expectedEncoder.encodePhysical(
+        table.primaryKey(), primaryValues, logicalRowId);
+    return status.isOk() ? fetchCurrentLocator(
+        session, table, expectedEncoder.bytes(), 0, expectedEncoder.length(),
+        logicalRowId, destination) : status;
+  }
+
+  StatusCode fetchByIdentity(
+      IndexedTransactionSession session, TableDescriptor table,
+      long logicalRowId, StoredTableRowView destination) {
+    return fetchByIdentity(session, table, logicalRowId, destination, false);
+  }
+
+  StatusCode fetchCurrentByIdentity(
+      IndexedTransactionSession session, TableDescriptor table,
+      long logicalRowId, StoredTableRowView destination) {
+    return fetchByIdentity(session, table, logicalRowId, destination, true);
+  }
+
+  private StatusCode fetchByIdentity(
+      IndexedTransactionSession session, TableDescriptor table,
+      long logicalRowId, StoredTableRowView destination, boolean current) {
+    StatusCode status = destination.reset();
+    if (!status.isOk()) return status;
+    status = expectedEncoder.encodePhysical(
+        table.identityKey(), null, logicalRowId);
+    if (!status.isOk()) return status;
+    if (table.primaryKey() == null) {
+      return fetchLocator(
+          session, table, expectedEncoder.bytes(), 0, expectedEncoder.length(),
+          logicalRowId, destination, null, null, current);
+    }
+    ByteBuffer encoded = expectedEncoder.bytes();
+    int userLength = expectedEncoder.length() - TupleKeyCodec.LOGICAL_ROW_ID_BYTES;
+    encoded.put(1, (byte) (encoded.get(1) & ~TupleKeyCodec.FLAG_PHYSICAL));
+    status = identityBounds.setExact(
+        encoded, 0, userLength, table.identityKey().shape(),
+        TupleBTreeScanBounds.FORWARD);
+    if (!status.isOk()) return status;
+    status = current ? session.beginCurrentTupleScan(
+        table.tableId(), table.identityKey().keyId(), table.identityKey().keyId(),
+        table.identityKey().shape(), identityBounds, identityCursor)
+        : session.beginTupleScan(
+            table.tableId(), table.identityKey().keyId(), table.identityKey().keyId(),
+            table.identityKey().shape(), identityBounds, LockMode.SHARED,
+            identityCursor);
+    if (!status.isOk()) return status;
+    status = session.nextTupleScan(identityCursor, identityRow);
+    if (status.isOk()) {
+      if (identityRow.logicalRowId() != logicalRowId
+          || identityRow.valueLength() <= TupleKeyCodec.LOGICAL_ROW_ID_BYTES
+          || identityRow.valueLength() > identityLocator.capacity()) {
+        status = StatusCode.CORRUPTION;
+      } else if (identityRow.pending()) {
+        identityRow.copyPendingValueTo(identityLocator, 0);
+        status = fetchLocator(
+            session, table, identityLocator, 0, identityRow.valueLength(),
+            logicalRowId, destination, null, null, current);
+      } else {
+        status = fetchLocator(
+            session, table, identityRow.page(), identityRow.valueOffset(),
+            identityRow.valueLength(), logicalRowId, destination, null, null, current);
+      }
+    }
+    StatusCode closed = session.closeTupleScan(identityCursor);
+    if (status == StatusCode.CONFLICT && identityRow.logicalRowId() == logicalRowId) {
+      status = StatusCode.CORRUPTION;
+    }
+    return status.isOk() ? closed : status;
   }
 
   private StatusCode fetchEncoded(
       IndexedTransactionSession session, TableDescriptor table,
       ByteBuffer encoded, int encodedLength, long expectedRowId,
       StoredTableRowView destination, StoredTableRowIntegerFilter filter,
-      StoredTableColumnSelection selection, RelationalRowIdentityResult result) {
+      StoredTableColumnSelection selection, RelationalRowIdentityResult result,
+      boolean current) {
     StatusCode status = pointBounds.setRange(
-        encoded, 0, encodedLength, table.primaryKey().shape(), true,
-        encoded, 0, encodedLength, table.primaryKey().shape(), true,
+        encoded, 0, encodedLength, table.clusteredKey().shape(), true,
+        encoded, 0, encodedLength, table.clusteredKey().shape(), true,
         TupleBTreeScanBounds.FORWARD);
     if (!status.isOk()) return status;
     IndexedTupleScanCursor pointCursor;
@@ -85,9 +183,12 @@ final class RelationalDescriptorPrimaryAccess {
     } catch (OutOfMemoryError error) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    status = session.beginTupleScan(
-        table.tableId(), table.primaryKey().keyId(), table.primaryKey().keyId(),
-        table.primaryKey().shape(), pointBounds, LockMode.SHARED, pointCursor);
+    status = current ? session.beginCurrentTupleScan(
+        table.tableId(), table.clusteredKey().keyId(), table.clusteredKey().keyId(),
+        table.clusteredKey().shape(), pointBounds, pointCursor)
+        : session.beginTupleScan(
+            table.tableId(), table.clusteredKey().keyId(), table.clusteredKey().keyId(),
+            table.clusteredKey().shape(), pointBounds, LockMode.SHARED, pointCursor);
     if (!status.isOk()) return status;
     status = session.nextTupleScan(pointCursor, pointRow);
     if (status.isOk()) {

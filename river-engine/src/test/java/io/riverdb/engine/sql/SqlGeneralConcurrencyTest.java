@@ -93,8 +93,8 @@ final class SqlGeneralConcurrencyTest {
       f.completed(first);
       f.exec(0, "COMMIT");
       f.cycle(1,
-          new Edge(0, 1, "KEY", "EXCLUSIVE", "SHARED", "CONVERSION", 4294967297L, 1),
-          new Edge(1, 0, "TUPLE_KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 1, 0));
+          new Edge(0, 1, "TUPLE_KEY", "EXCLUSIVE", "SHARED", "ORDINARY", 1, 0),
+          new Edge(1, 0, "TUPLE_KEY", "EXCLUSIVE", "SHARED", "ORDINARY", 1, 0));
       f.begin(1, S);
       assertEquals(101, f.scalar(1, "SELECT value FROM rows WHERE id=1"));
       f.exec(1, "COMMIT");
@@ -117,8 +117,8 @@ final class SqlGeneralConcurrencyTest {
       f.exec(1, "COMMIT");
       f.cycle(2,
           new Edge(0, 2, "TUPLE_KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 1, 0),
-          new Edge(1, 0, "KEY", "EXCLUSIVE", "SHARED", "ORDINARY", 4294967297L, 1),
-          new Edge(2, 1, "KEY", "SHARED", "null", "ORDINARY", 4294967297L, 1));
+          new Edge(1, 0, "TUPLE_KEY", "EXCLUSIVE", "SHARED", "ORDINARY", 1, 0),
+          new Edge(2, 1, "TUPLE_RANGE", "SHARED", "null", "ORDINARY", 1, 0));
       f.begin(2, S);
       assertEquals(101, f.scalar(2, "SELECT value FROM rows WHERE id=1"));
       f.exec(2, "COMMIT");

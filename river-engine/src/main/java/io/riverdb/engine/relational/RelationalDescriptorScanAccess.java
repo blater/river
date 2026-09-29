@@ -12,6 +12,8 @@ final class RelationalDescriptorScanAccess {
   private final RelationalDescriptorPrimaryAccess primary;
   private final RelationalDescriptorScanRegistry active =
       new RelationalDescriptorScanRegistry();
+  private final RelationalDescriptorIndexBounds fullBounds =
+      new RelationalDescriptorIndexBounds();
 
   RelationalDescriptorScanAccess(
       IndexedTransactionSession indexedSession, RelationalDescriptorPointViews pointViews) {
@@ -22,17 +24,11 @@ final class RelationalDescriptorScanAccess {
   StatusCode begin(
       RelationalDescriptorTableAccess owner, SchemaPin pin,
       TableDescriptor table, RelationalDescriptorScanCursor cursor) {
-    if (cursor == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (cursor.isActive()) return StatusCode.CONFLICT;
-    long space = RelationalDescriptorKeyspace.baseRows(table.tableId());
-    StatusCode status = session.beginScan(
-        space, Long.MIN_VALUE, space + 1, Long.MIN_VALUE, cursor.indexed());
-    if (!status.isOk()) return status;
-    cursor.markPhysicalOpen();
-    status = cursor.claim(owner, pin);
-    if (!status.isOk()) return cleanupFailedBegin(cursor, status);
-    status = active.admit(cursor);
-    return status.isOk() ? status : cleanupClaimedBegin(cursor, status);
+    StatusCode status = fullBounds.set(
+        table.clusteredKey(), null, 0, true, null, 0, true,
+        io.riverdb.storage.btree.TupleBTreeScanBounds.FORWARD);
+    return status.isOk()
+        ? beginIndex(owner, pin, table, fullBounds, LockMode.SHARED, cursor) : status;
   }
 
   StatusCode beginIndex(
@@ -73,7 +69,8 @@ final class RelationalDescriptorScanAccess {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    StatusCode reset = destination.reset();
+    StatusCode reset = cursor.releaseView();
+    if (reset.isOk()) reset = destination.reset();
     if (!reset.isOk()) return reset;
     TableDescriptor table = cursor.descriptor();
     if (selection != null && !selection.matches(table.columnCount())) {
@@ -86,14 +83,12 @@ final class RelationalDescriptorScanAccess {
       if (!status.isOk()) return status;
       long logicalRowId = cursor.logicalRowId();
       boolean primaryLeaf = cursor.isTuplePhysical()
-          && cursor.tupleBounds().key() == table.primaryKey();
+          && cursor.tupleBounds().key() == table.clusteredKey();
       status = primaryLeaf
           ? bindPrimaryLeaf(table, cursor, destination, filter, selection)
           : cursor.isTuplePhysical()
-              ? table.primaryKey() == null
-                  ? fetchView(table, logicalRowId, destination, filter, selection)
-                  : fetchSecondaryLocator(
-                      table, cursor, destination, filter, selection)
+              ? fetchSecondaryLocator(
+                  table, cursor, destination, filter, selection)
               : destination.bindFetched(table, cursor.row().row(), filter, selection);
       if (status == StatusCode.CONFLICT && cursor.isTuplePhysical()) continue;
       if (status == StatusCode.CONFLICT && filter != null) continue;
@@ -105,6 +100,7 @@ final class RelationalDescriptorScanAccess {
         if (!cursor.tupleBounds().matches()) continue;
       }
       result.set(logicalRowId);
+      cursor.publishView(destination);
       return StatusCode.OK;
     }
   }
@@ -145,17 +141,6 @@ final class RelationalDescriptorScanAccess {
         table, row.page(), row.valueOffset(), row.valueLength(), filter, selection);
   }
 
-  private StatusCode fetchView(
-      TableDescriptor table, long logicalRowId, StoredTableRowView destination,
-      StoredTableRowIntegerFilter filter, StoredTableColumnSelection selection) {
-    destination.fetched().retentionProjection(selection == null ? null : selection.projection());
-    StatusCode status = session.fetchByKey(
-        RelationalDescriptorKeyspace.baseRows(table.tableId()),
-        logicalRowId, destination.fetched());
-    return status.isOk()
-        ? destination.bindFetched(table, destination.fetched(), filter, selection) : status;
-  }
-
   private StatusCode nextPhysical(RelationalDescriptorScanCursor cursor) {
     if (cursor.isEmptyPhysical()) return StatusCode.CONFLICT;
     StatusCode status = cursor.isTuplePhysical()
@@ -169,7 +154,9 @@ final class RelationalDescriptorScanAccess {
   StatusCode close(
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor) {
     if (cursor == null || !cursor.isOwnedBy(owner)) return StatusCode.INVALID_EXTERNAL_INPUT;
-    StatusCode status = !cursor.isPhysicalOpen() || cursor.isEmptyPhysical() ? StatusCode.OK
+    StatusCode status = cursor.releaseView();
+    if (!status.isOk()) return status;
+    status = !cursor.isPhysicalOpen() || cursor.isEmptyPhysical() ? StatusCode.OK
         : cursor.isTuplePhysical() ? session.closeTupleScan(cursor.tupleIndexed())
             : session.closeScan(cursor.indexed());
     if (status.isOk()) cursor.markPhysicalClosed();

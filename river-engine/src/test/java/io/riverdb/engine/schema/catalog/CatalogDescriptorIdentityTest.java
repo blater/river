@@ -31,7 +31,7 @@ final class CatalogDescriptorIdentityTest {
   void permitsKeylessTableAtKeyIdExhaustionSentinel() {
     CatalogReservation reservation = new CatalogReservation();
     reservation.setInitial(
-        11, 12, 13, 1, 14, 15, 1, CatalogKeyspace.KEY_ID_EXHAUSTED, 0);
+        11, 12, 13, 1, 14, 15, 1, CatalogKeyspace.USER_KEY_ID_EXHAUSTED, 0);
     TableDescriptor.Result result = new TableDescriptor.Result();
     assertEquals(StatusCode.OK, CatalogDescriptorIdentity.bind(
         CatalogDescriptorIdentityTestFixture.tableWithoutKeys(), reservation, result, null));

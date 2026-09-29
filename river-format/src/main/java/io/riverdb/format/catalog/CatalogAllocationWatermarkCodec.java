@@ -84,6 +84,6 @@ public final class CatalogAllocationWatermarkCodec {
       long objectId, long schemaId, long layoutId, long recordId, long keyId) {
     return objectId > 0 && objectId <= CatalogKeyspace.OBJECT_ID_EXHAUSTED
         && schemaId > 0 && layoutId > 0 && recordId > 0
-        && keyId > 0 && keyId <= CatalogKeyspace.KEY_ID_EXHAUSTED;
+        && keyId > 0 && keyId <= CatalogKeyspace.USER_KEY_ID_EXHAUSTED;
   }
 }

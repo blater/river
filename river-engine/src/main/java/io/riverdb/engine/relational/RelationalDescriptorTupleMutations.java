@@ -18,7 +18,6 @@ final class RelationalDescriptorTupleMutations {
       new RelationalDescriptorTupleDeltaAdmission();
   private final RelationalDescriptorForeignValidation foreignValidation =
       new RelationalDescriptorForeignValidation();
-  private final int[] singleRowLengths = new int[1];
 
   RelationalDescriptorTupleMutations() {
     plan = new RelationalDescriptorTupleDeltaPlan();
@@ -89,15 +88,12 @@ final class RelationalDescriptorTupleMutations {
       int mutations, int bytes) {
     int descriptors = admission.additionalDescriptors(session, table, plan);
     return descriptors < 0 ? StatusCode.CORRUPTION
-        : session.preflightRelationalMutations(
-            rowLengths, rowStart, rowCount, mutations, descriptors, bytes);
+        : session.preflightTupleMutations(mutations, descriptors, bytes);
   }
 
   StatusCode preflightSingleRow(
       IndexedTransactionSession session, TableDescriptor table, int rowBytes) {
-    singleRowLengths[0] = rowBytes;
     return preflightWithRows(
-        session, table, singleRowLengths, 0, 1,
-        mutationCount(), payloadBytes());
+        session, table, null, 0, 0, mutationCount(), payloadBytes());
   }
 }

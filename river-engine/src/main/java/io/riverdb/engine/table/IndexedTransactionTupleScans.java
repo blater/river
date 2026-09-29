@@ -40,6 +40,28 @@ final class IndexedTransactionTupleScans {
     return status;
   }
 
+  StatusCode beginCurrent(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape, TupleBTreeScanBounds bounds,
+      IndexedTupleScanCursor cursor) {
+    if (!session.activeTransaction() || cursor == null || bounds == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = session.reserveTupleScan();
+    long privateOwner = session.tupleLifecycle().publishingPrivateOwner(
+        ownerObjectId, keyId, schemaId, shape);
+    if (status.isOk()) status = session.table().beginTupleScanAt(
+        session.table().currentCommitSequence(), ownerObjectId, keyId, schemaId,
+        privateOwner, shape, bounds, session.tupleIntents(), cursor);
+    if (status.isOk()) {
+      session.observeCommit(cursor.observedCommitSequence());
+      status = cursor.attach(session);
+    }
+    if (status.isOk()) session.registerTupleScan(cursor);
+    else if (cursor.active()) session.table().closeTupleScan(cursor);
+    return status;
+  }
+
   private StatusCode admit(
       long keyId, TupleBTreeScanBounds bounds, LockMode serializableSourceMode) {
     StatusCode status = session.reserveTupleScan();

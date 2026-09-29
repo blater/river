@@ -6,6 +6,9 @@ import java.nio.ByteBuffer;
 public final class IndexedTupleScanResult {
   private long logicalRowId;
   private ByteBuffer page;
+  private ByteBuffer keyPage;
+  private int keyOffset;
+  private int keyLength;
   private int valueOffset;
   private int valueLength;
   private int overflowPageId;
@@ -17,6 +20,9 @@ public final class IndexedTupleScanResult {
   public void reset() {
     logicalRowId = 0;
     page = null;
+    keyPage = null;
+    keyOffset = 0;
+    keyLength = 0;
     valueOffset = 0;
     valueLength = 0;
     overflowPageId = 0;
@@ -29,6 +35,9 @@ public final class IndexedTupleScanResult {
   public boolean committed() { return page != null; }
   public boolean pending() { return pendingIntents != null; }
   public ByteBuffer page() { return page; }
+  public ByteBuffer keyPage() { return keyPage; }
+  public int keyOffset() { return keyOffset; }
+  public int keyLength() { return keyLength; }
   public int valueOffset() { return valueOffset; }
   public int valueLength() { return valueLength; }
   public int overflowPageId() { return overflowPageId; }
@@ -38,18 +47,27 @@ public final class IndexedTupleScanResult {
     if (pendingIntents != null) pendingIntents.copyValueTo(pendingIntent, target, offset);
   }
 
+  public void copyPendingKeyTo(ByteBuffer target, int offset) {
+    if (pendingIntents != null) pendingIntents.copyPayloadTo(pendingIntent, target, offset);
+  }
+
   void setPending(long rowId, IndexedTupleIntentJournal intents, int intent) {
     logicalRowId = rowId;
     pendingIntents = intents;
     pendingIntent = intent;
+    keyLength = intents.payloadLengthAt(intent);
     valueLength = intents.valueLengthAt(intent);
   }
 
   void setCommitted(
-      long rowId, ByteBuffer pinnedPage, int rowOffset, int rowLength,
+      long rowId, ByteBuffer pinnedPage, int physicalKeyOffset, int physicalKeyLength,
+      int rowOffset, int rowLength,
       int overflowId, long overflowVersion, long modifiedAt) {
     logicalRowId = rowId;
     page = pinnedPage;
+    keyPage = pinnedPage;
+    keyOffset = physicalKeyOffset;
+    keyLength = physicalKeyLength;
     valueOffset = rowOffset;
     valueLength = rowLength;
     overflowPageId = overflowId;

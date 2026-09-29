@@ -37,7 +37,7 @@ public final class RelationalDescriptorTableAccess {
     owner = relationalSession;
     session = indexedSession;
     scanAccess = new RelationalDescriptorScanAccess(indexedSession, pointViews);
-    lockedRows = new RelationalDescriptorLockedRows(indexedSession, rowAccess);
+    lockedRows = new RelationalDescriptorLockedRows(indexedSession, pointViews);
     foreignKeyChecks = new RelationalDescriptorForeignKeyChecks(
         relationalSession, indexedSession, databaseServices);
     batchInsert = new RelationalDescriptorBatchInsert(
@@ -84,7 +84,8 @@ public final class RelationalDescriptorTableAccess {
     long logicalRowId = lockedRows.logicalRowId();
     status = prepareUpdate(table, logicalRowId, values);
     if (!status.isOk()) return releaseCurrent(status);
-    return stageUpdate(table, logicalRowId);
+    status = stageUpdate(table, logicalRowId);
+    return status;
   }
 
   public StatusCode fetch(
@@ -140,7 +141,7 @@ public final class RelationalDescriptorTableAccess {
     TableDescriptor table = validDescriptor(pin);
     return table == null || logicalRowId <= 0 || destination == null
         ? StatusCode.INVALID_EXTERNAL_INPUT
-        : rowAccess.fetch(session, table, logicalRowId, destination);
+        : primaryAccess.fetchByIdentity(session, table, logicalRowId, destination);
   }
 
   public StatusCode delete(SchemaPin pin, long primaryKey) {
@@ -160,7 +161,7 @@ public final class RelationalDescriptorTableAccess {
     long logicalRowId = lockedRows.logicalRowId();
     status = prepareDelete(table, logicalRowId);
     if (!status.isOk()) return releaseCurrent(status);
-    status = session.deleteLocked(lockedRows.locked());
+    status = lockedRows.retain();
     return status.isOk() ? tupleMutations.stage(
         session, table, logicalRowId, null, 0) : status;
   }
@@ -192,7 +193,7 @@ public final class RelationalDescriptorTableAccess {
     StatusCode status = lockedRows.logicalRowId() == logicalRowId
         ? prepareDelete(table, logicalRowId) : StatusCode.INVALID_EXTERNAL_INPUT;
     if (!status.isOk()) return releaseCurrent(status);
-    status = session.deleteLocked(lockedRows.locked());
+    status = lockedRows.retain();
     return status.isOk() ? tupleMutations.stage(
         session, table, logicalRowId, null, 0) : status;
   }
@@ -301,7 +302,8 @@ public final class RelationalDescriptorTableAccess {
 
   private StatusCode prepareUpdate(
       TableDescriptor table, long logicalRowId, SqlValueAccess values) {
-    StatusCode status = rowAccess.encode(table, values);
+    StatusCode status = rowAccess.reserve(table);
+    if (status.isOk()) status = rowAccess.encode(table, values);
     if (!status.isOk()) return status;
     status = checks.validate(table, values);
     if (!status.isOk()) return status;
@@ -318,7 +320,7 @@ public final class RelationalDescriptorTableAccess {
   }
 
   private StatusCode stageUpdate(TableDescriptor table, long logicalRowId) {
-    StatusCode status = session.updateLocked(lockedRows.locked(), rowAccess.bytes());
+    StatusCode status = lockedRows.retain();
     return status.isOk() ? tupleMutations.stage(
         session, table, logicalRowId, rowAccess.bytes(), rowAccess.length()) : status;
   }

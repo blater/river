@@ -8,7 +8,7 @@ import java.nio.ByteBuffer;
 
 /** Bounded retained slices for one descriptor row's before/after physical index keys. */
 final class RelationalDescriptorTupleDeltaStorage {
-  static final int MAXIMUM_KEYS = SqlShapeLimits.MAX_TABLE_INDEXES;
+  static final int MAXIMUM_KEYS = SqlShapeLimits.MAX_TABLE_INDEXES + 1;
   static final int MAXIMUM_BYTES =
       2 * MAXIMUM_KEYS * SqlShapeLimits.MAX_PHYSICAL_INDEX_KEY_BYTES;
   static final int INITIAL_KEYS = 8;

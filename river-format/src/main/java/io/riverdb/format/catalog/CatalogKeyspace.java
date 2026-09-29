@@ -18,6 +18,10 @@ public final class CatalogKeyspace {
   public static final long MAXIMUM_RELATIONAL_OBJECT_ID = Integer.MAX_VALUE;
   public static final long OBJECT_ID_EXHAUSTED = MAXIMUM_RELATIONAL_OBJECT_ID + 1;
   public static final long MAXIMUM_KEY_ID = INDEX_ROOT_SPACE - FIRST_INDEX_SPACE;
+  /** The final object-ID-sized key range belongs to stable internal identity indexes. */
+  public static final long MAXIMUM_USER_KEY_ID =
+      MAXIMUM_KEY_ID - MAXIMUM_RELATIONAL_OBJECT_ID;
+  public static final long USER_KEY_ID_EXHAUSTED = MAXIMUM_USER_KEY_ID + 1;
   public static final long KEY_ID_EXHAUSTED = MAXIMUM_KEY_ID + 1;
   public static final long ALLOCATION_WATERMARK_KEY = 1;
   public static final long VACUUM_PROGRESS_KEY = 2;
@@ -31,6 +35,10 @@ public final class CatalogKeyspace {
 
   public static boolean validKeyId(long keyId) {
     return keyId > 0 && keyId <= MAXIMUM_KEY_ID;
+  }
+
+  public static long relationalIdentityKeyId(long objectId) {
+    return validObjectHead(objectId) ? MAXIMUM_USER_KEY_ID + objectId : 0;
   }
 
   public static boolean validDefinitionRange(long firstRecordId, int count) {
