@@ -35,6 +35,9 @@ Focused tests passed:
   reclamation predicate until their exact pins are released.
 - `IndexedRelationalWalCodecTest.tupleValueAndKeyBoundarySurviveLogicalWalRoundTrip`:
   the reclaimed page ID, generation and removal sequence survive encode/decode.
+- `IndexedRelationalWalCommitTest.concurrentHybridSessionsShareOneForceAndRecoverIndependentDecisions`:
+  two different rows on the same tuple leaf receive value replacements in one
+  grouped force; both values survive a WAL-only reopen and a second reopen.
 
 `./gradlew --no-daemon :river-engine:test` passed after the final pre-allocation
 reclamation order, frame-owner extraction and prepared-member test. The

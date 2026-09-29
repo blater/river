@@ -16,6 +16,7 @@ import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.storage.btree.BTreeRootPage;
+import io.riverdb.storage.btree.TupleBTreeScanBounds;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -443,6 +444,31 @@ final class IndexedRelationalWalCommitTest {
         "coordinator did not record the shared force");
     check(telemetry.successfulCohortSizeBucket(1) == 1,
         "coordinator did not retain both requests");
+    prepareTupleValueReplacement(first, descriptor, 1, 991, 9_101);
+    prepareTupleValueReplacement(second, descriptor, 2, 992, 9_202);
+    CountDownLatch updateReady = new CountDownLatch(2);
+    CountDownLatch updateStart = new CountDownLatch(1);
+    TransactionOutcome firstUpdate = new TransactionOutcome();
+    TransactionOutcome secondUpdate = new TransactionOutcome();
+    long updateForces = counters.forceCalls();
+    ExecutorService updates = Executors.newFixedThreadPool(2);
+    try {
+      Future<StatusCode> firstCommit = updates.submit(
+          () -> coordinatedCommit(first, firstUpdate, updateReady, updateStart));
+      Future<StatusCode> secondCommit = updates.submit(
+          () -> coordinatedCommit(second, secondUpdate, updateReady, updateStart));
+      updateReady.await();
+      updateStart.countDown();
+      requireOk(firstCommit.get());
+      requireOk(secondCommit.get());
+    } finally {
+      updates.shutdownNow();
+    }
+    check(counters.forceCalls() == updateForces + 1,
+        "same-leaf replacements did not share one force");
+    assertTupleValue(created.store(), descriptor, 991, 1, 9_101);
+    assertTupleValue(created.store(), descriptor, 992, 2, 9_202);
+    assertRecoveredRegistry(created.store(), 1_000, 5, OWNER_OBJECT_ID, 4, KEY_SCHEMA_ID);
     requireOk(coordinator.close());
 
     crashWal(wal);
@@ -456,6 +482,8 @@ final class IndexedRelationalWalCommitTest {
     requireOk(reopened.store().fetchByKey(baseSpace, 2, fetched));
     assertTuple(reopened.store(), descriptor, 991, 1);
     assertTuple(reopened.store(), descriptor, 992, 2);
+    assertTupleValue(reopened.store(), descriptor, 991, 1, 9_101);
+    assertTupleValue(reopened.store(), descriptor, 992, 2, 9_202);
     assertRecoveredRegistry(reopened.store(), 1_000, 5, OWNER_OBJECT_ID, 4, KEY_SCHEMA_ID);
     requireOk(reopened.store().flush());
     requireOk(reopened.store().close());
@@ -470,6 +498,8 @@ final class IndexedRelationalWalCommitTest {
     requireOk(reopened.store().fetchByKey(baseSpace, 2, fetched));
     assertTuple(reopened.store(), descriptor, 991, 1);
     assertTuple(reopened.store(), descriptor, 992, 2);
+    assertTupleValue(reopened.store(), descriptor, 991, 1, 9_101);
+    assertTupleValue(reopened.store(), descriptor, 992, 2, 9_202);
     requireOk(reopened.store().close());
     requireOk(wal.close());
     requireOk(directory.close());
@@ -728,6 +758,43 @@ final class IndexedRelationalWalCommitTest {
   private record SplitGroup(
       long end, int pagesAfter, TupleIndexRootRecord registry,
       IndexedGroupCommitCoordinator coordinator, IndexedSessionContext context) { }
+
+  private static void prepareTupleValueReplacement(
+      IndexedTransactionSession session, int[] descriptor,
+      long rowId, long indexKey, long value) {
+    ByteBuffer key = physicalFixedTuple(rowId, indexKey);
+    ByteBuffer payload = ByteBuffer.allocate(Long.BYTES);
+    payload.putLong(0, value);
+    requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
+    requireOk(session.preflightTupleMutations(
+        1, 1, key.remaining() + payload.remaining()));
+    requireOk(session.protectTupleKeyForWrite(1_000, key, 0, key.remaining()));
+    requireOk(session.appendTupleMutation(
+        IndexedRelationalMutation.TUPLE_REPLACE,
+        OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), rowId,
+        key, 0, key.remaining(), payload, 0, payload.remaining()));
+  }
+
+  private static void assertTupleValue(
+      IndexedTableStore store, int[] descriptor,
+      long indexKey, long rowId, long expectedValue) {
+    ByteBuffer key = genericFixedTuple(indexKey);
+    TupleBTreeScanBounds bounds = new TupleBTreeScanBounds();
+    requireOk(bounds.setExact(
+        key, 0, key.remaining(), shape(descriptor), TupleBTreeScanBounds.FORWARD));
+    IndexedTupleScanCursor cursor = new IndexedTupleScanCursor();
+    IndexedTupleIntentJournal intents = new IndexedTupleIntentJournal(1, 1, 1);
+    requireOk(store.beginTupleScanAt(
+        store.currentCommitSequence(), OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
+        0, shape(descriptor), bounds, intents, cursor));
+    IndexedTupleScanResult result = new IndexedTupleScanResult();
+    requireOk(store.nextTupleScan(cursor, intents, result));
+    check(result.logicalRowId() == rowId && result.valueLength() == Long.BYTES
+            && result.overflowPageId() == 0
+            && result.page().getLong(result.valueOffset()) == expectedValue,
+        "grouped tuple replacement lost the row value for " + rowId);
+    requireOk(store.closeTupleScan(cursor));
+  }
 
   @Test
   void tupleDeleteAfterSavepointRollbackRetainsEarlierInsert(@TempDir Path root) {
