@@ -10,9 +10,13 @@ final class IndexedTupleGraphReclaimer {
   private static final int REGISTRY_PUBLICATION_RESERVE = 12;
   static final int MAX_INSPECTED_PAGES = 16;
   private final IndexedPageSet pages;
+  private final IndexedOverflowRetirementQueue retirementQueue;
   private int reclaimed;
 
-  IndexedTupleGraphReclaimer(IndexedPageSet pageSet) { pages = pageSet; }
+  IndexedTupleGraphReclaimer(IndexedPageSet pageSet) {
+    pages = pageSet;
+    retirementQueue = new IndexedOverflowRetirementQueue(pageSet);
+  }
 
   StatusCode reclaimBatch(
       long keyId, int expectedCursor, int resultingCursor, int cleanupEnd) {
@@ -61,6 +65,10 @@ final class IndexedTupleGraphReclaimer {
     reclaimed = 0;
     for (int pageId = expectedCursor; pageId < resultingCursor; pageId++) {
       if (!owned(pageId, keyId)) continue;
+      if (pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW) {
+        StatusCode status = retirementQueue.removeForDrop(pageId);
+        if (!status.isOk()) return status;
+      }
       ByteBuffer free = pages.stageFreeTuple(
           pageId, keyId, IndexedTableLimits.MAX_CHANGED_PAGES);
       if (free == null) return pages.lastStatus();

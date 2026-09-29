@@ -7,8 +7,8 @@ import java.nio.ByteBuffer;
 
 /** One-page row value addressed by a tuple leaf's page ID and durable generation. */
 public final class TupleRowOverflowCodec {
-  public static final int VERSION = 1;
-  public static final int HEADER_BYTES = 32;
+  public static final int VERSION = 2;
+  public static final int HEADER_BYTES = 40;
   public static final int MAX_VALUE_BYTES = PageCodec.MAX_PAYLOAD_BYTES - HEADER_BYTES;
   private static final long MAGIC = 0x52495654554f5646L; // RIVTUOVF
 
@@ -48,13 +48,16 @@ public final class TupleRowOverflowCodec {
     int length = FormatBytes.getInt(source, start + 12);
     long rowId = FormatBytes.getLong(source, start + 16);
     long retiredAt = FormatBytes.getLong(source, start + 24);
+    int next = FormatBytes.getInt(source, start + 32);
     if (FormatBytes.getLong(source, start) != MAGIC
         || FormatBytes.getInt(source, start + 8) != VERSION
         || rowId <= 0 || expectedLogicalRowId > 0 && rowId != expectedLogicalRowId
-        || length <= 0 || length > MAX_VALUE_BYTES || retiredAt < 0) {
+        || length <= 0 || length > MAX_VALUE_BYTES || retiredAt < 0
+        || next < 0 || next > 0 && next < PageCodec.FIRST_ALLOCATABLE_PAGE_ID
+        || retiredAt == 0 && next != 0 || FormatBytes.getInt(source, start + 36) != 0) {
       return StatusCode.CORRUPTION;
     }
-    result.set(rowId, length, retiredAt);
+    result.set(rowId, length, retiredAt, next);
     return StatusCode.OK;
   }
 
@@ -69,7 +72,22 @@ public final class TupleRowOverflowCodec {
     if (!status.isOk()) return status;
     if (header.retiredAtCommitSequence() != 0) return StatusCode.CONFLICT;
     FormatBytes.putLong(target, start + 24, removingCommitSequence);
-    header.set(header.logicalRowId(), header.valueLength(), removingCommitSequence);
+    header.set(header.logicalRowId(), header.valueLength(), removingCommitSequence, 0);
+    return StatusCode.OK;
+  }
+
+  public static StatusCode linkRetired(
+      ByteBuffer target, int start, int nextPageId, TupleRowOverflowHeader header) {
+    if (target == null || target.isReadOnly() || nextPageId < 0
+        || nextPageId > 0 && nextPageId < PageCodec.FIRST_ALLOCATABLE_PAGE_ID) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = validate(target, start, 0, header);
+    if (!status.isOk()) return status;
+    if (header.retiredAtCommitSequence() == 0) return StatusCode.CORRUPTION;
+    FormatBytes.putInt(target, start + 32, nextPageId);
+    header.set(header.logicalRowId(), header.valueLength(),
+        header.retiredAtCommitSequence(), nextPageId);
     return StatusCode.OK;
   }
 }

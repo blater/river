@@ -43,9 +43,6 @@ class IndexedRelationalSuboperationView {
   long resultingPrivateOwnerAt(int i) { return longAt(IndexedRelationalSuboperationColumns.RESULTING_PRIVATE_OWNER, i); }
   int expectedCleanupCursorAt(int i) { return intAt(IndexedRelationalSuboperationColumns.EXPECTED_CLEANUP_CURSOR, i); }
   int resultingCleanupCursorAt(int i) { return intAt(IndexedRelationalSuboperationColumns.RESULTING_CLEANUP_CURSOR, i); }
-  int reclaimedOverflowPageIdAt(int i) { return intAt(IndexedRelationalSuboperationColumns.RECLAIMED_OVERFLOW_PAGE_ID, i); }
-  long reclaimedOverflowGenerationAt(int i) { return longAt(IndexedRelationalSuboperationColumns.RECLAIMED_OVERFLOW_GENERATION, i); }
-  long reclaimedOverflowRetirementAt(int i) { return longAt(IndexedRelationalSuboperationColumns.RECLAIMED_OVERFLOW_RETIREMENT, i); }
 
   private long longAt(int column, int index) { return columns.getLong(column, index); }
   private int intAt(int column, int index) { return columns.getInt(column, index); }

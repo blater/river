@@ -84,7 +84,10 @@ final class IndexedHybridWalSizing {
 
   private StatusCode measureTupleMutations(
       IndexedTupleIntentJournal intents, int descriptor) {
-    StatusCode status = measureTupleMutations(
+    StatusCode status = addRepeated(
+        IndexedRelationalWalCodec.MUTATION_ITEM_BYTES + IndexedOverflowReclamationCodec.BYTES,
+        IndexedTupleDeltaCompiler.overflowAllocationCount(intents, descriptor));
+    if (status.isOk()) status = measureTupleMutations(
         intents, descriptor, IndexedRelationalMutation.TUPLE_DELETE);
     if (status.isOk()) status = measureTupleMutations(
         intents, descriptor, IndexedRelationalMutation.TUPLE_REPLACE);

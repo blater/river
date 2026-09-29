@@ -22,6 +22,7 @@ final class IndexedRelationalMutationBuffer {
   static final int SCALAR_UPDATE = 7;
   static final int SCALAR_DELETE = 8;
   static final int TUPLE_REPLACE = 9;
+  static final int OVERFLOW_RECLAIM = 10;
   static final int SCALAR_SUBOPERATION = -2;
   static final int MAX_SUBOPERATIONS = Integer.MAX_VALUE;
   private final int maximumPayloadBytes;
@@ -165,11 +166,20 @@ final class IndexedRelationalMutationBuffer {
         expectedCleanupCursor, resultingCleanupCursor);
   }
 
-  StatusCode recordOverflowReclamation(
-      int operation, int pageId, long generation, long retirementSequence) {
-    return sealed ? StatusCode.INVALID_EXTERNAL_INPUT
-        : suboperations.recordOverflowReclamation(
-            operation, pageId, generation, retirementSequence);
+  StatusCode appendOverflowReclamation(
+      int suboperation, int descriptor, ByteBuffer source, int offset, int length) {
+    if (sealed || descriptor < 0 || descriptor >= descriptors.count()
+        || !IndexedOverflowReclamationCodec.valid(source, offset, length)
+        || suboperation != suboperations.count() && !suboperations.acceptsMutation(
+            suboperation, entries.count(), descriptors.ownerObjectIdAt(descriptor), descriptor)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (!entries.canAppend(length)) return StatusCode.RESOURCE_EXHAUSTED;
+    entries.append(OVERFLOW_RECLAIM, descriptor, suboperation,
+        descriptors.ownerObjectIdAt(descriptor),
+        io.riverdb.format.catalog.CatalogKeyspace.relationalIndexSpace(descriptors.keyIdAt(descriptor)),
+        0, 0, source, offset, length);
+    return StatusCode.OK;
   }
 
   StatusCode appendBase(
@@ -377,15 +387,6 @@ final class IndexedRelationalMutationBuffer {
   }
   int resultingCleanupCursorAt(int ordinal) {
     return suboperations.resultingCleanupCursorAt(ordinal);
-  }
-  int reclaimedOverflowPageIdAt(int ordinal) {
-    return suboperations.reclaimedOverflowPageIdAt(ordinal);
-  }
-  long reclaimedOverflowGenerationAt(int ordinal) {
-    return suboperations.reclaimedOverflowGenerationAt(ordinal);
-  }
-  long reclaimedOverflowRetirementAt(int ordinal) {
-    return suboperations.reclaimedOverflowRetirementAt(ordinal);
   }
   void copyPayloadTo(int mutation, ByteBuffer target, int targetOffset) {
     entries.copyPayloadTo(mutation, target, targetOffset);

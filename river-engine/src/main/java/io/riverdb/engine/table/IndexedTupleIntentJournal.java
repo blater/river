@@ -32,7 +32,8 @@ final class IndexedTupleIntentJournal {
     descriptors = new IndexedTupleIntentDescriptors(maximumDescriptors);
     entries = new IndexedTupleIntentEntries(maximumMutations, maximumPayloadBytes);
     compilation = new IndexedRelationalCompilationBuffer(
-        maximumMutations, maximumDescriptors, maximumDescriptorParts(maximumDescriptors));
+        (int) Math.min(Integer.MAX_VALUE, (long) maximumMutations * 2),
+        maximumDescriptors, maximumDescriptorParts(maximumDescriptors));
   }
 
   StatusCode reserve(
@@ -48,9 +49,11 @@ final class IndexedTupleIntentJournal {
       int logicalRowFloors) {
     long entryBytes = entries.accountedBytesForReservation(mutations, payloadBytes);
     long descriptorBytes = descriptors.accountedBytesForReservation(descriptorCount);
-    long totalMutations = (long) scalarMutations + entries.count() + mutations;
+    long tupleMutations = (long) entries.count() + mutations;
+    long totalMutations = scalarMutations + tupleMutations * 2;
     long totalDescriptors = (long) descriptors.count() + descriptorCount;
-    long totalPayload = (long) scalarPayloadBytes + entries.payloadBytes() + payloadBytes;
+    long totalPayload = (long) scalarPayloadBytes + entries.payloadBytes() + payloadBytes
+        + tupleMutations * IndexedOverflowReclamationCodec.BYTES;
     long totalParts = totalDescriptors * TupleKeyCodec.MAX_INDEX_KEY_PARTS;
     if (entryBytes < 0 || descriptorBytes < 0 || scalarMutations < 0
         || scalarPayloadBytes < 0 || totalMutations > Integer.MAX_VALUE
@@ -70,8 +73,10 @@ final class IndexedTupleIntentJournal {
       int lifecycleDescriptors, int lifecycleParts, int logicalRowFloors) {
     long entryBytes = entries.accountedBytesForReservation(mutations, payloadBytes);
     long descriptorBytes = descriptors.accountedBytesForReservation(descriptorAdds);
-    long totalMutations = (long) scalarMutations + entries.count() + mutations;
-    long totalPayload = (long) scalarPayloadBytes + entries.payloadBytes() + payloadBytes;
+    long tupleMutations = (long) entries.count() + mutations;
+    long totalMutations = scalarMutations + tupleMutations * 2;
+    long totalPayload = (long) scalarPayloadBytes + entries.payloadBytes() + payloadBytes
+        + tupleMutations * IndexedOverflowReclamationCodec.BYTES;
     long totalDescriptors = (long) lifecycleDescriptors + descriptors.count() + descriptorAdds;
     long totalParts = (long) lifecycleParts + descriptorParts()
         + (long) descriptorAdds * TupleKeyCodec.MAX_INDEX_KEY_PARTS;
@@ -273,12 +278,20 @@ final class IndexedTupleIntentJournal {
       int scalarMutations, int scalarPayloadBytes, int logicalRowFloors,
       IndexedRelationalMutation[] result) {
     int parts = descriptorParts();
-    if (scalarPayloadBytes < 0 || scalarPayloadBytes > Integer.MAX_VALUE - payloadBytes()) {
+    long overflowDemand = 0;
+    for (int descriptor = 0; descriptor < descriptorCount(); descriptor++) {
+      overflowDemand += IndexedTupleDeltaCompiler.overflowAllocationCount(this, descriptor);
+    }
+    long totalMutations = (long) scalarMutations + entries.activeCount() + overflowDemand;
+    long totalPayload = (long) scalarPayloadBytes + payloadBytes()
+        + overflowDemand * IndexedOverflowReclamationCodec.BYTES;
+    if (scalarPayloadBytes < 0 || totalMutations > Integer.MAX_VALUE
+        || totalPayload > Integer.MAX_VALUE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     return compilation.prepare(
-        scalarMutations + entries.activeCount(), descriptorCount(), parts,
-        scalarPayloadBytes + payloadBytes(), logicalRowFloors, result);
+        (int) totalMutations, descriptorCount(), parts,
+        (int) totalPayload, logicalRowFloors, result);
   }
 
   StatusCode prepareLifecycleCompilation(

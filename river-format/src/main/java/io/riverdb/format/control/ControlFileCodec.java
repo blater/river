@@ -10,7 +10,7 @@ import java.util.zip.CRC32C;
 /** Fixed-size v3 codec admitting clustered relational row layouts. */
 public final class ControlFileCodec {
   public static final int RECORD_BYTES = 64;
-  public static final int MAJOR_VERSION = 3;
+  public static final int MAJOR_VERSION = 4;
   public static final int MINOR_VERSION = 0;
 
   private static final long MAGIC = 0x524956455243544cL; // RIVERCTL

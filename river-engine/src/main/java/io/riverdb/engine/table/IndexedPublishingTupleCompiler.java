@@ -49,7 +49,8 @@ final class IndexedPublishingTupleCompiler {
     int tupleRoot = registry.rootPageId();
     long generation = registry.generation();
     StatusCode status = deltas.apply(
-        intents, descriptor, tupleRoot, memberSequence, oldestVisibleCommitSequence);
+        intents, descriptor, tupleRoot, memberSequence, oldestVisibleCommitSequence,
+        mutation, suboperation, lifecycleIndex);
     if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
     boolean building = lifecycle.appendsBuilding(lifecycleIndex);
@@ -72,10 +73,6 @@ final class IndexedPublishingTupleCompiler {
             : TupleIndexRootRecordCodec.STATE_READY,
         lifecycle.privateOwnerAt(lifecycleIndex),
         building ? lifecycle.privateOwnerAt(lifecycleIndex) : 0);
-    if (status.isOk()) status = mutation.recordOverflowReclamation(
-        suboperation, deltas.reclaimedOverflowPageId(),
-        deltas.reclaimedOverflowGeneration(),
-        deltas.reclaimedOverflowRetirementSequence());
     return status.isOk() ? deltas.append(
         intents, descriptor, mutation, suboperation, lifecycleIndex) : status;
   }

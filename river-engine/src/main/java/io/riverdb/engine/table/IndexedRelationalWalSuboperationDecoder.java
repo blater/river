@@ -26,7 +26,6 @@ final class IndexedRelationalWalSuboperationDecoder {
         || keyId != (descriptor < 0 ? 0 : destination.keyIdAt(descriptor))) {
       return StatusCode.CORRUPTION;
     }
-    if (FormatBytes.getInt(source, offset + 132) != 0) return StatusCode.CORRUPTION;
     StatusCode status = destination.appendSuboperation(
         FormatBytes.getLong(source, offset + 56), descriptor,
         FormatBytes.getInt(source, offset + 16),
@@ -47,9 +46,6 @@ final class IndexedRelationalWalSuboperationDecoder {
         FormatBytes.getLong(source, offset + 112),
         FormatBytes.getInt(source, offset + 120),
         FormatBytes.getInt(source, offset + 124));
-    return status.isOk() ? destination.recordOverflowReclamation(
-        ordinal, FormatBytes.getInt(source, offset + 128),
-        FormatBytes.getLong(source, offset + 136),
-        FormatBytes.getLong(source, offset + 144)) : status;
+    return status;
   }
 }

@@ -21,6 +21,7 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   private final IndexedOperationPage overflowPage = new IndexedOperationPage();
   private final IndexedOperationPage retirementPage = new IndexedOperationPage();
   private final TupleRowOverflowHeader retirementHeader = new TupleRowOverflowHeader();
+  private final IndexedOverflowRetirementQueue retirementQueue;
   private TupleBTreePageReference firstReference;
   private TupleBTreePageReference secondReference;
   private int plannedPages;
@@ -30,6 +31,7 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   IndexedTuplePageProvider(IndexedPageSet pageSet, IndexedTupleRootState rootState) {
     pages = pageSet;
     root = rootState;
+    retirementQueue = new IndexedOverflowRetirementQueue(pageSet);
     maximumNewPages = pages == null ? 0 : Math.max(0, pages.changedPageCapacity() - 2);
   }
 
@@ -250,7 +252,8 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
           removingCommitSequence, retirementHeader);
     }
     StatusCode released = pages.releaseOperationPage(retirementPage);
-    return status.isOk() ? released : status;
+    if (status.isOk()) status = released;
+    return status.isOk() ? retirementQueue.append(pageId) : status;
   }
 
   @Override

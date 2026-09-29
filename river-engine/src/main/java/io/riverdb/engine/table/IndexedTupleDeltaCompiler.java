@@ -20,11 +20,11 @@ final class IndexedTupleDeltaCompiler {
 
   StatusCode apply(
       IndexedTupleIntentJournal intents, int descriptor, int rootPageId,
-      long modificationSequence, long oldestVisibleCommitSequence) {
-    reclaimer.reset();
-    StatusCode status = requiresOverflowAllocation(intents, descriptor)
-        ? reclaimer.reclaimOne(intents.keyIdAt(descriptor), oldestVisibleCommitSequence)
-        : StatusCode.OK;
+      long modificationSequence, long oldestVisibleCommitSequence,
+      IndexedRelationalMutation mutation, int suboperation, int outputDescriptor) {
+    StatusCode status = reclaimer.reclaim(
+        overflowAllocationCount(intents, descriptor), oldestVisibleCommitSequence,
+        mutation, suboperation, outputDescriptor);
     if (!status.isOk()) return status;
     status = tuples.configure(
         intents.keyIdAt(descriptor), intents.schemaIdAt(descriptor),
@@ -37,10 +37,6 @@ final class IndexedTupleDeltaCompiler {
         IndexedRelationalMutation.TUPLE_INSERT, modificationSequence);
     return status;
   }
-
-  int reclaimedOverflowPageId() { return reclaimer.pageId(); }
-  long reclaimedOverflowGeneration() { return reclaimer.generation(); }
-  long reclaimedOverflowRetirementSequence() { return reclaimer.retirementSequence(); }
 
   StatusCode append(
       IndexedTupleIntentJournal intents, int descriptor,
@@ -59,7 +55,7 @@ final class IndexedTupleDeltaCompiler {
   int rootPageId() { return tuples.rootPageId(); }
 
   int count(IndexedTupleIntentJournal intents, int descriptor) {
-    int count = 0;
+    int count = reclaimer.count();
     for (int index = 0; index < intents.mutationCount(); index++) {
       int operation = intents.operationAt(index);
       if (intents.activeAt(index) && intents.descriptorAt(index) == descriptor
@@ -82,18 +78,20 @@ final class IndexedTupleDeltaCompiler {
     return false;
   }
 
-  private static boolean requiresOverflowAllocation(
+  static int overflowAllocationCount(
       IndexedTupleIntentJournal intents, int descriptor) {
+    int count = 0;
     for (int index = 0; index < intents.mutationCount(); index++) {
-      if (!intents.activeAt(index) || intents.descriptorAt(index) != descriptor) continue;
+      if (!intents.activeAt(index)
+          || descriptor >= 0 && intents.descriptorAt(index) != descriptor) continue;
       int operation = intents.operationAt(index);
       if (operation != IndexedRelationalMutation.TUPLE_INSERT
           && operation != IndexedRelationalMutation.TUPLE_REPLACE) continue;
       int valueLength = intents.valueLengthAt(index);
       if (valueLength > 0 && !TupleBTreePageCodec.inlineEligible(
-          intents.payloadLengthAt(index), valueLength)) return true;
+          intents.payloadLengthAt(index), valueLength)) count++;
     }
-    return false;
+    return count;
   }
 
   private StatusCode applyOperation(

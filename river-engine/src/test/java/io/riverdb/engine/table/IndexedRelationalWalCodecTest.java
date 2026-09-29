@@ -39,17 +39,20 @@ final class IndexedRelationalWalCodecTest {
     ByteBuffer key = physicalTuple(parts, 9, 'a');
     ByteBuffer row = ByteBuffer.wrap(new byte[] {11, 22, 33, 44});
     IndexedRelationalMutationBuffer source =
-        new IndexedRelationalMutationBuffer(1, 1, parts.length);
-    requireOk(source.reserve(1, 1, parts.length, key.remaining() + row.remaining()));
+        new IndexedRelationalMutationBuffer(2, 1, parts.length);
+    requireOk(source.reserve(2, 1, parts.length,
+        key.remaining() + row.remaining() + IndexedOverflowReclamationCodec.BYTES));
     requireOk(source.appendDescriptor(
         OWNER_OBJECT_ID, 1_000, 1_000, descriptorHash(parts),
         parts, 0, parts.length));
     requireOk(source.appendSuboperation(
-        OWNER_OBJECT_ID, 0, 0, 1, 4, 4, SCALAR_ROOT, SCALAR_ROOT,
+        OWNER_OBJECT_ID, 0, 0, 2, 4, 4, SCALAR_ROOT, SCALAR_ROOT,
         NEXT_PAGE, NEXT_PAGE, 1, 2, 0, 1,
         IndexedRelationalMutation.REGISTRY_READY,
         IndexedRelationalMutation.REGISTRY_READY, 0, 0));
-    requireOk(source.recordOverflowReclamation(0, 5, 3, 7));
+    ByteBuffer reclaimed = ByteBuffer.allocate(IndexedOverflowReclamationCodec.BYTES);
+    IndexedOverflowReclamationCodec.encode(reclaimed, 5, 6, 2_000, 3, 7);
+    requireOk(source.appendOverflowReclamation(0, 0, reclaimed, 0, reclaimed.remaining()));
     requireOk(source.appendTuple(
         0, OWNER_OBJECT_ID, IndexedRelationalMutation.TUPLE_REPLACE,
         0, 9, key, 0, key.remaining(), row, 0, row.remaining()));
@@ -60,21 +63,22 @@ final class IndexedRelationalWalCodecTest {
     requireOk(IndexedRelationalWalCodec.encode(plan, 0, encoded));
     encoded.flip();
     IndexedRelationalMutationBuffer decoded =
-        new IndexedRelationalMutationBuffer(1, 1, TupleKeyCodec.MAX_INDEX_KEY_PARTS);
+        new IndexedRelationalMutationBuffer(2, 1, TupleKeyCodec.MAX_INDEX_KEY_PARTS);
     IndexedRelationalWalDecoder decoder = new IndexedRelationalWalDecoder(decoded);
     requireOk(decoder.decode(encoded, TRANSACTION_ID, 1));
     check(decoder.complete(), "tuple value WAL decoder did not complete");
-    check(decoded.operationAt(0) == IndexedRelationalMutation.TUPLE_REPLACE,
+    check(decoded.operationAt(1) == IndexedRelationalMutation.TUPLE_REPLACE,
         "tuple replacement operation lost");
-    check(decoded.tupleKeyLengthAt(0) == key.remaining()
-            && decoded.tupleValueLengthAt(0) == row.remaining(),
+    check(decoded.tupleKeyLengthAt(1) == key.remaining()
+            && decoded.tupleValueLengthAt(1) == row.remaining(),
         "tuple key/value boundary lost");
-    check(decoded.reclaimedOverflowPageIdAt(0) == 5
-            && decoded.reclaimedOverflowGenerationAt(0) == 3
-            && decoded.reclaimedOverflowRetirementAt(0) == 7,
+    ByteBuffer decodedReclamation = ByteBuffer.allocate(IndexedOverflowReclamationCodec.BYTES);
+    decoded.copyPayloadTo(0, decodedReclamation, 0);
+    check(decoded.operationAt(0) == IndexedRelationalMutationBuffer.OVERFLOW_RECLAIM
+            && decodedReclamation.equals(reclaimed),
         "overflow reclamation identity lost in WAL round trip");
     ByteBuffer copy = ByteBuffer.allocate(row.remaining());
-    decoded.copyTupleValueTo(0, copy, 0);
+    decoded.copyTupleValueTo(1, copy, 0);
     check(copy.equals(row), "tuple row value changed in WAL round trip");
   }
 

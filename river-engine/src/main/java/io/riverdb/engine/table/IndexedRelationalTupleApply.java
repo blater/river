@@ -57,13 +57,20 @@ final class IndexedRelationalTupleApply {
   private StatusCode reclaimRetired(
       IndexedRelationalMutationBuffer source, int operation, int descriptor,
       long memberSequence) {
-    int pageId = source.reclaimedOverflowPageIdAt(operation);
-    if (pageId == 0) return StatusCode.OK;
-    long retirement = source.reclaimedOverflowRetirementAt(operation);
-    return retirement >= memberSequence ? StatusCode.CORRUPTION
-        : retiredOverflow.reclaimExact(
-            source.keyIdAt(descriptor), pageId,
-            source.reclaimedOverflowGenerationAt(operation), retirement);
+    int first = source.suboperationFirstMutationAt(operation);
+    int end = first + source.suboperationMutationCountAt(operation);
+    for (int mutation = first; mutation < end; mutation++) {
+      if (source.operationAt(mutation) != IndexedRelationalMutationBuffer.OVERFLOW_RECLAIM) continue;
+      value.clear();
+      value.limit(IndexedOverflowReclamationCodec.BYTES);
+      source.copyPayloadTo(mutation, value, 0);
+      if (IndexedOverflowReclamationCodec.retirement(value, 0) >= memberSequence) {
+        return StatusCode.CORRUPTION;
+      }
+      StatusCode status = retiredOverflow.reclaimExact(value, 0);
+      if (!status.isOk()) return status;
+    }
+    return StatusCode.OK;
   }
 
   private StatusCode complete(
@@ -88,6 +95,7 @@ final class IndexedRelationalTupleApply {
     int end = first + source.suboperationMutationCountAt(operation);
     StatusCode status = StatusCode.OK;
     for (int mutation = first; status.isOk() && mutation < end; mutation++) {
+      if (source.operationAt(mutation) == IndexedRelationalMutationBuffer.OVERFLOW_RECLAIM) continue;
       int bytes = source.tupleKeyLengthAt(mutation);
       key.position(0);
       key.limit(bytes);

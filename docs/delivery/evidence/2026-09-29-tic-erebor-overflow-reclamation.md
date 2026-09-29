@@ -1,6 +1,8 @@
 # Erebor overflow reclamation and capacity progress
 
-Date: 2026-09-29 UTC. Branch: `feature/tic-erebor-clustered-row-store`.
+Date: 2026-09-29 UTC. Historical pre-promotion implementation evidence;
+see the [promotion-review fixes](2026-09-29-tic-erebor-promotion-fixes.md) for
+the replacement reclamation/WAL representation. Branch: `feature/tic-erebor-clustered-row-store`.
 The implementation follows accepted design [ADR 0015](../../adr/0015-clustered-relational-row-store.md).
 
 An overflow row replacement or delete stages the reference-removal commit

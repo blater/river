@@ -54,11 +54,12 @@ Choose split boundaries deterministically from the ordered bytes, with a fixed
 tie-break; use the same planner during compilation and replay.
 
 Only an entry exceeding the inline boundary stores a generation-qualified
-reference to an immutable overflow page. Its 32-byte payload header holds
-magic/version, owner logical row ID, row length and reserved bits; the page
+reference to an immutable overflow page. Its 40-byte payload header holds
+magic/version, owner logical row ID, row length, removal commit sequence and
+retirement-queue successor; the page
 envelope owns its primary key ID and generation. The largest currently admitted
-encoded row is 16,216 bytes: 16,256 payload bytes minus the 32-byte overflow
-header leaves 16,224 bytes. One overflow page holds any currently admitted row.
+encoded row is 16,216 bytes: 16,256 payload bytes minus the 40-byte overflow
+header leaves 16,216 bytes. One overflow page holds any currently admitted row.
 An overflow leaf entry retains its key, slot, value length and reference, with
 no inline value bytes. A maximum secondary key plus primary locator uses
 `S + K + V = 40 + 3,080 + 3,080 = 6,200` bytes and remains inline; including
@@ -317,6 +318,32 @@ recovery, checkpoint, file creation/truncation or replay can change their
 bytes. The user must explicitly recreate an old pre-V1 database; startup
 never does so automatically. A reopen test must compare file bytes before and
 after rejection.
+
+## Retirement allocation metadata
+
+The allocation root stores a durable FIFO head, tail and count. Detached
+single-page overflow values carry its intrusive successor. Retirement appends
+the page atomically with removal of its leaf reference. Before applying an
+allocating descriptor, compilation pops up to its admitted overflow allocation
+demand from the global queue, regardless of the retired page's original owner.
+Selection touches the queue head and allocation metadata; it never scans
+unrelated database pages. Drop cleanup unlinks queued references before freeing
+or re-identifying those pages.
+
+Each reclaimed page is an explicit logical mutation with page ID, successor,
+original key ID, durable generation and removal sequence. Replay verifies the
+exact head and page identity before publishing the same free-stack transition.
+The records share the existing bounded mutation arena and WAL chunk stream.
+Logical-output admission reserves one possible reclamation per overflow
+allocation; unused reservations produce no WAL records.
+
+A head is eligible only after its removal marker is checkpointed, the snapshot
+floor permits reuse and old leaf/overflow pins have ended. Staging a queue link
+does not make an already checkpointed removal ineligible. A newly staged or
+prepared removal remains ineligible. When the head blocks, allocation consumes
+available free/fresh pages; exhausting the structural page-ID domain returns
+`RESOURCE_EXHAUSTED` without publication. Releasing the retaining reader/pin
+and checkpointing permits retry of the same atomic transaction.
 
 ## Review and promotion
 

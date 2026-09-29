@@ -85,9 +85,16 @@ final class IndexedRelationalWalMutationDecoder {
     }
     if (descriptor < 0 || descriptor >= descriptorCount
         || space != CatalogKeyspace.relationalIndexSpace(destination.keyIdAt(descriptor))
-        || tupleKeyLength <= 0 || tupleKeyLength > payloadLength) {
+        || ownerObjectId != destination.descriptorOwnerObjectIdAt(descriptor) || previousRowId != 0) {
       return StatusCode.CORRUPTION;
     }
+    if (operation == IndexedRelationalMutationBuffer.OVERFLOW_RECLAIM) {
+      return logicalRowId == 0 && tupleKeyLength == 0
+          ? destination.appendOverflowReclamation(
+              suboperation, descriptor, source, payloadOffset, payloadLength)
+          : StatusCode.CORRUPTION;
+    }
+    if (tupleKeyLength <= 0 || tupleKeyLength > payloadLength) return StatusCode.CORRUPTION;
     return destination.appendTuple(
         suboperation, ownerObjectId, operation, descriptor,
         logicalRowId, source, payloadOffset, tupleKeyLength,
