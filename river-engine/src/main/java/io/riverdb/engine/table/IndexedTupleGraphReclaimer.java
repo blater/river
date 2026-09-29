@@ -11,6 +11,7 @@ final class IndexedTupleGraphReclaimer {
   static final int MAX_INSPECTED_PAGES = 16;
   private final IndexedPageSet pages;
   private final IndexedOverflowRetirementQueue retirementQueue;
+  private final IndexedOperationPage metadata = new IndexedOperationPage();
   private int reclaimed;
 
   IndexedTupleGraphReclaimer(IndexedPageSet pageSet) {
@@ -39,10 +40,7 @@ final class IndexedTupleGraphReclaimer {
     int owned = ownedPages(keyId, expectedCursor, resultingCursor);
     if (owned > budget) return StatusCode.RESOURCE_EXHAUSTED;
     if (owned == 0) return StatusCode.OK;
-    ByteBuffer metadata = pages.stageExisting(
-        IndexedTableKernel.ROOT_META_PAGE_ID, IndexedTableLimits.MAX_CHANGED_PAGES);
-    if (metadata == null) return pages.lastStatus();
-    return reclaim(keyId, metadata, expectedCursor, resultingCursor);
+    return reclaim(keyId, expectedCursor, resultingCursor);
   }
 
   StatusCode finish(long keyId, int expectedCursor, int cleanupEnd) {
@@ -61,7 +59,7 @@ final class IndexedTupleGraphReclaimer {
   }
 
   private StatusCode reclaim(
-      long keyId, ByteBuffer metadata, int expectedCursor, int resultingCursor) {
+      long keyId, int expectedCursor, int resultingCursor) {
     reclaimed = 0;
     for (int pageId = expectedCursor; pageId < resultingCursor; pageId++) {
       if (!owned(pageId, keyId)) continue;
@@ -69,11 +67,16 @@ final class IndexedTupleGraphReclaimer {
         StatusCode status = retirementQueue.removeForDrop(pageId);
         if (!status.isOk()) return status;
       }
+      StatusCode status = pages.pinScalarOperationPage(
+          IndexedTableKernel.ROOT_META_PAGE_ID, true, metadata);
+      if (!status.isOk()) return status;
       ByteBuffer free = pages.stageFreeTuple(
           pageId, keyId, IndexedTableLimits.MAX_CHANGED_PAGES);
-      if (free == null) return pages.lastStatus();
-      StatusCode status = BTreeRootPage.releasePage(metadata, pageId, free);
+      status = free == null ? pages.lastStatus()
+          : BTreeRootPage.releasePage(metadata.payload(), pageId, free);
+      StatusCode released = pages.releaseOperationPage(metadata);
       if (!status.isOk()) return status;
+      if (!released.isOk()) return released;
       reclaimed++;
     }
     return StatusCode.OK;

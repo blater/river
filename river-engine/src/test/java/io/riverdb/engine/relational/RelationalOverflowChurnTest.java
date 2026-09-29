@@ -10,6 +10,9 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.engine.checkpoint.CheckpointResult;
+import io.riverdb.engine.runtime.DatabasePageCacheTestPlan;
+import io.riverdb.engine.runtime.DatabaseResourcePlan;
+import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
@@ -19,8 +22,11 @@ import io.riverdb.tx.api.TransactionOutcome;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 final class RelationalOverflowChurnTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(111, 222);
@@ -74,8 +80,10 @@ final class RelationalOverflowChurnTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
-  @Test
-  void oneCommitReusesMultipleOtherTablePagesAndWalOnlyReplayPreservesRows(@TempDir Path root)
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void oneCommitReusesMultipleOtherTablePagesAndWalOnlyReplayPreservesRows(
+      boolean spill, @TempDir Path root)
       throws java.io.IOException {
     Path live = Files.createDirectory(root.resolve("live"));
     Path crash = Files.createDirectory(root.resolve("crash"));
@@ -104,11 +112,10 @@ final class RelationalOverflowChurnTest {
         writer.descriptorRows().update(first, row, overflowTextValues(row, "small")));
     assertEquals(StatusCode.OK, writer.commit(outcome));
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
-    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
-    for (int row = 1; row <= 2; row++) assertEquals(StatusCode.OK,
-        writer.descriptorRows().insert(second, overflowTextValues(second.descriptor(), row, large),
-            new RelationalRowIdentityResult()));
-    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, first.release());
+    assertEquals(StatusCode.OK, second.release());
+    assertEquals(StatusCode.OK, database.close());
+    // Capture the durable checkpoint before the narrow cache creates sparse spill scratch.
     try (var paths = Files.walk(live)) {
       for (Path source : paths.toList()) {
         Path target = crash.resolve(live.relativize(source));
@@ -116,10 +123,33 @@ final class RelationalOverflowChurnTest {
         else Files.copy(source, target);
       }
     }
+    assertEquals(StatusCode.OK, RelationalDatabase.openExisting(overflowRequest(spill), live,
+        DATABASE, GENERATION, 8, EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    first = new SchemaPin();
+    second = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        firstId, first, new StatusDetail(128)));
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        secondId, second, new StatusDetail(128)));
+    writer = session(database);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+    for (int row = 1; row <= 2; row++) assertEquals(StatusCode.OK,
+        writer.descriptorRows().insert(second, overflowTextValues(second.descriptor(), row, large),
+            new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    // Only the WAL decision advances the captured checkpoint; spill bytes are not recovery input.
+    try (var paths = Files.list(live)) {
+      for (Path source : paths.toList()) {
+        if (source.getFileName().toString().startsWith("river.wal")) {
+          Files.copy(source, crash.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+        }
+      }
+    }
     assertEquals(StatusCode.OK, first.release());
     assertEquals(StatusCode.OK, second.release());
     assertEquals(StatusCode.OK, database.close());
-    assertEquals(StatusCode.OK, RelationalDatabase.openExisting(databaseRequest(8), crash,
+    assertEquals(StatusCode.OK, RelationalDatabase.openExisting(overflowRequest(spill), crash,
         DATABASE, GENERATION, 8, EmbeddedLockDiagnosticsConfig.disabled(), opened));
     database = opened.database();
     first = new SchemaPin();
@@ -229,6 +259,18 @@ final class RelationalOverflowChurnTest {
     assertEquals(StatusCode.OK, writer.descriptorRows().closeScan(cursor));
     assertEquals(StatusCode.OK, writer.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static DatabaseResourcePlanRequest overflowRequest(boolean spill) {
+    DatabaseResourcePlanRequest request = databaseRequest(8);
+    if (spill) {
+      var geometry = DatabasePageCacheTestPlan.geometry(32, 4, 800);
+      request.indexedPageCache(geometry.maximumRetainedBytes(), geometry.stagingRetainedBytes());
+      DatabaseResourcePlan.Result compiled = new DatabaseResourcePlan.Result();
+      assertEquals(StatusCode.OK, DatabaseResourcePlan.compile(request, compiled));
+      assertEquals(4, compiled.plan().indexedPageCache().stagingFrames());
+    }
+    return request;
   }
 
   private static RelationalSession session(RelationalDatabase database) {

@@ -11,6 +11,7 @@ import java.nio.ByteBuffer;
 final class IndexedRetiredOverflowReclaimer {
   private final IndexedPageSet pages;
   private final IndexedOverflowRetirementQueue queue;
+  private final IndexedOperationPage metadata = new IndexedOperationPage();
   private final IndexedOperationPage candidate = new IndexedOperationPage();
   private final TupleRowOverflowHeader header = new TupleRowOverflowHeader();
   private final TupleRowOverflowHeader committedHeader = new TupleRowOverflowHeader();
@@ -97,9 +98,13 @@ final class IndexedRetiredOverflowReclaimer {
     if (!released.isOk()) return released;
     status = queue.removeHead(pageId, header.nextRetiredPageId());
     if (!status.isOk()) return status;
-    ByteBuffer metadata = pages.operationPayload(IndexedTableKernel.ROOT_META_PAGE_ID);
+    status = pages.pinScalarOperationPage(IndexedTableKernel.ROOT_META_PAGE_ID, true, metadata);
+    if (!status.isOk()) return status;
     ByteBuffer free = pages.stageFreeTuple(pageId, keyId, pages.changedPageCapacity());
-    return free == null ? pages.lastStatus() : BTreeRootPage.releasePage(metadata, pageId, free);
+    status = free == null ? pages.lastStatus()
+        : BTreeRootPage.releasePage(metadata.payload(), pageId, free);
+    released = pages.releaseOperationPage(metadata);
+    return status.isOk() ? released : status;
   }
 
   int count() { return count; }

@@ -5,7 +5,10 @@ import io.riverdb.format.page.PageCodec;
 import io.riverdb.storage.btree.BTreeRootPage;
 import java.nio.ByteBuffer;
 
-/** Checked operation-page allocation from the intrusive free stack. */
+/**
+ * Checked operation-page allocation from the intrusive free stack.
+ * The caller holds the metadata operation pin through free-head and new-frame acquisition.
+ */
 final class IndexedOperationPageAllocation {
   private IndexedOperationPageAllocation() { }
 

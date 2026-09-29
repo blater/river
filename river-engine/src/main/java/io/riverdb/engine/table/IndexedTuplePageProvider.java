@@ -253,6 +253,9 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
     }
     StatusCode released = pages.releaseOperationPage(retirementPage);
     if (status.isOk()) status = released;
+    // Transfer root ownership to the queue; allocation may already hold its writable borrow.
+    released = releaseMetadata();
+    if (status.isOk()) status = released;
     return status.isOk() ? retirementQueue.append(pageId) : status;
   }
 

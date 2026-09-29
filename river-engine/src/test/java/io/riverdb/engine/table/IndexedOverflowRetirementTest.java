@@ -2,6 +2,7 @@ package io.riverdb.engine.table;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.concurrent.FatalStateFence;
@@ -74,13 +75,17 @@ final class IndexedOverflowRetirementTest {
       assertEquals(2, reclaim.count());
       assertTrue(BTreeRootPage.hasAllocations(metadata(pages), 2, IndexedTableLimits.MAX_PAGES));
       IndexedOperationPage allocation = new IndexedOperationPage();
+      IndexedOperationPage metadata = new IndexedOperationPage();
+      assertEquals(StatusCode.OK, pages.pinScalarOperationPage(
+          IndexedTableKernel.ROOT_META_PAGE_ID, true, metadata));
       for (int expected : new int[] {6, 5}) {
         assertEquals(StatusCode.OK,
-            IndexedOperationPageAllocation.tupleOverflow(pages, metadata(pages), 99, allocation));
+            IndexedOperationPageAllocation.tupleOverflow(pages, metadata.payload(), 99, allocation));
         assertEquals(expected, allocation.pageId());
         assertEquals(2, allocation.durableGeneration());
         assertEquals(StatusCode.OK, pages.releaseOperationPage(allocation));
       }
+      assertEquals(StatusCode.OK, pages.releaseOperationPage(metadata));
       assertEquals(0, BTreeRootPage.retiredOverflowCount(metadata(pages)));
       pages.clearStagedFlags();
       pages.resetChanges();
@@ -126,16 +131,20 @@ final class IndexedOverflowRetirementTest {
       assertEquals(StatusCode.OK, pages.beginPreparedBatch());
       IndexedRetiredOverflowReclaimer reclaim = new IndexedRetiredOverflowReclaimer(pages);
       IndexedOperationPage allocation = new IndexedOperationPage();
+      IndexedOperationPage metadata = new IndexedOperationPage();
       for (int member = 0; member < 2; member++) {
         assertEquals(StatusCode.OK, reclaim.reclaim(1, Long.MAX_VALUE, mutation(), 0, 0));
         assertEquals(1, reclaim.count());
+        assertEquals(StatusCode.OK, pages.pinScalarOperationPage(
+            IndexedTableKernel.ROOT_META_PAGE_ID, true, metadata));
         assertEquals(StatusCode.OK,
-            IndexedOperationPageAllocation.tupleOverflow(pages, metadata(pages), 99, allocation));
+            IndexedOperationPageAllocation.tupleOverflow(pages, metadata.payload(), 99, allocation));
         assertEquals(5 + member, allocation.pageId());
         assertEquals(2, allocation.durableGeneration());
         assertEquals(StatusCode.OK, TupleRowOverflowCodec.encode(allocation.payload(), 0,
             10 + member, ByteBuffer.wrap(new byte[] {(byte) member}), 0, 1));
         assertEquals(StatusCode.OK, pages.releaseOperationPage(allocation));
+        assertEquals(StatusCode.OK, pages.releaseOperationPage(metadata));
         assertEquals(StatusCode.OK, pages.freezeChangedPages(member, Long.MAX_VALUE));
         pages.resetChanges();
       }
@@ -164,6 +173,138 @@ final class IndexedOverflowRetirementTest {
       pages.resetChanges();
       assertEquals(2, BTreeRootPage.retiredOverflowCount(metadata(pages)));
     }
+  }
+
+  @Test
+  void appendSpillsUnrelatedStagingWithoutReusingMetadataAndAbortRestoresQueue(@TempDir Path root) {
+    try (Files files = new Files(root)) {
+      files.seedRetiredPair();
+      files.seedRetired(7, 43);
+      IndexedPageSet pages = files.pages(4, 2);
+      assertEquals(StatusCode.OK, pages.installPresent(7));
+      IndexedOverflowRetirementQueue queue = new IndexedOverflowRetirementQueue(pages);
+      for (int attempt = 0; attempt < 2; attempt++) {
+        stageMetadataThenUnrelated(pages);
+        assertEquals(StatusCode.OK, queue.append(7));
+        assertQueue(pages, 5, 7, 3);
+        assertNext(pages, 6, 7);
+        abort(pages);
+        assertQueue(pages, 5, 6, 2);
+        assertNext(pages, 6, 0);
+      }
+    }
+  }
+
+  @Test
+  void appendPressureReleasesMetadataAndPublishesNothingUntilRetry(@TempDir Path root) {
+    try (Files files = new Files(root)) {
+      files.seedRetiredPair();
+      files.seedRetired(7, 43);
+      IndexedPageSet pages = files.pages(4, 2);
+      assertEquals(StatusCode.OK, pages.installPresent(7));
+      stageMetadataThenUnrelated(pages);
+      IndexedOperationPage unrelated = new IndexedOperationPage();
+      assertEquals(StatusCode.OK, pages.pinScalarOperationPage(3, true, unrelated));
+      IndexedOverflowRetirementQueue queue = new IndexedOverflowRetirementQueue(pages);
+      assertEquals(StatusCode.RESOURCE_EXHAUSTED, queue.append(7));
+      assertQueue(pages, 5, 6, 2);
+      assertNext(pages, 6, 0);
+      assertEquals(StatusCode.OK, pages.releaseOperationPage(unrelated));
+      abort(pages);
+      stageMetadataThenUnrelated(pages);
+      assertEquals(StatusCode.OK, queue.append(7));
+      assertQueue(pages, 5, 7, 3);
+      assertNext(pages, 6, 7);
+    }
+  }
+
+  @Test
+  void dropUnlinkSpillsAndPressureAbortsBeforeFreeStackPublication(@TempDir Path root) {
+    try (Files files = new Files(root)) {
+      files.seedRetiredPair();
+      IndexedPageSet pages = files.pages(4, 2);
+      assertEquals(StatusCode.OK, pages.installPresent(6));
+      stageMetadataThenUnrelated(pages);
+      IndexedOperationPage unrelated = new IndexedOperationPage();
+      assertEquals(StatusCode.OK, pages.pinScalarOperationPage(3, true, unrelated));
+      IndexedTupleGraphReclaimer reclaim = new IndexedTupleGraphReclaimer(pages);
+      assertEquals(StatusCode.RESOURCE_EXHAUSTED,
+          reclaim.reclaimBatch(42, 5, 7, 7));
+      assertQueue(pages, 5, 6, 2);
+      assertEquals(StatusCode.OK, pages.releaseOperationPage(unrelated));
+      abort(pages);
+      stageMetadataThenUnrelated(pages);
+      assertEquals(StatusCode.OK, reclaim.reclaimBatch(42, 5, 7, 7));
+      assertQueue(pages, 5, 5, 1);
+      assertNext(pages, 5, 0);
+      assertEquals(6, BTreeRootPage.freePageHead(metadata(pages)));
+      assertEquals(1, BTreeRootPage.freePageCount(metadata(pages)));
+      assertEquals(PageCodec.PAYLOAD_KIND_FREE, pages.payloadKind(6));
+      abort(pages);
+      assertQueue(pages, 5, 6, 2);
+      assertNext(pages, 5, 6);
+      assertEquals(0, BTreeRootPage.freePageCount(metadata(pages)));
+      assertEquals(PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW, pages.payloadKind(6));
+    }
+  }
+
+  @Test
+  void reclamationSpillsAndExactReplayPreservesQueueAndFreeStack(@TempDir Path root) {
+    try (Files files = new Files(root)) {
+      files.seedRetiredPair();
+      IndexedPageSet pages = files.pages(4, 2);
+      assertEquals(StatusCode.OK, pages.installPresent(6));
+      stageMetadataThenUnrelated(pages);
+      IndexedRetiredOverflowReclaimer reclaim = new IndexedRetiredOverflowReclaimer(pages);
+      assertEquals(StatusCode.OK, reclaim.reclaim(2, Long.MAX_VALUE, mutation(), 0, 0));
+      assertEquals(2, reclaim.count());
+      assertQueue(pages, 0, 0, 0);
+      assertEquals(2, BTreeRootPage.freePageCount(metadata(pages)));
+      assertEquals(6, BTreeRootPage.freePageHead(metadata(pages)));
+      abort(pages);
+      assertQueue(pages, 5, 6, 2);
+      // Recovery repeats the durable identities against fresh, spill-limited frames.
+      pages = files.pages(4, 2);
+      assertEquals(StatusCode.OK, pages.installPresent(6));
+      reclaim = new IndexedRetiredOverflowReclaimer(pages);
+      ByteBuffer record = ByteBuffer.allocate(IndexedOverflowReclamationCodec.BYTES);
+      for (int pageId = 5; pageId <= 6; pageId++) {
+        stageMetadataThenUnrelated(pages);
+        IndexedOverflowReclamationCodec.encode(record, pageId, pageId == 5 ? 6 : 0,
+            pageId + 36, 1, 7);
+        assertEquals(StatusCode.OK, reclaim.reclaimExact(record, 0));
+      }
+      assertQueue(pages, 0, 0, 0);
+      assertEquals(2, BTreeRootPage.freePageCount(metadata(pages)));
+      assertEquals(6, BTreeRootPage.freePageHead(metadata(pages)));
+      assertEquals(5, io.riverdb.storage.btree.BTreeFreePage.nextPageId(pages.operationPayload(6)));
+      assertEquals(0, io.riverdb.storage.btree.BTreeFreePage.nextPageId(pages.operationPayload(5)));
+    }
+  }
+
+  private static void stageMetadataThenUnrelated(IndexedPageSet pages) {
+    assertNotNull(pages.stageExisting(IndexedTableKernel.ROOT_META_PAGE_ID, 15));
+    assertNotNull(pages.stageExisting(3, 15));
+  }
+
+  private static void assertQueue(IndexedPageSet pages, int head, int tail, int count) {
+    ByteBuffer metadata = metadata(pages);
+    assertEquals(StatusCode.OK, BTreeRootPage.validate(metadata));
+    assertEquals(head, BTreeRootPage.retiredOverflowHead(metadata));
+    assertEquals(tail, BTreeRootPage.retiredOverflowTail(metadata));
+    assertEquals(count, BTreeRootPage.retiredOverflowCount(metadata));
+  }
+
+  private static void assertNext(IndexedPageSet pages, int pageId, int next) {
+    TupleRowOverflowHeader header = new TupleRowOverflowHeader();
+    assertEquals(StatusCode.OK, TupleRowOverflowCodec.validate(
+        pages.operationPayload(pageId), 0, pageId - 4, header));
+    assertEquals(next, header.nextRetiredPageId());
+  }
+
+  private static void abort(IndexedPageSet pages) {
+    pages.clearStagedFlags();
+    pages.resetChanges();
   }
 
   private static ByteBuffer metadata(IndexedPageSet pages) {
@@ -197,8 +338,12 @@ final class IndexedOverflowRetirementTest {
     }
 
     IndexedPageSet pages(int frames) {
+      return pages(frames, 16);
+    }
+
+    IndexedPageSet pages(int frames, int stagingFrames) {
       return new IndexedPageSet(pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
-          DatabasePageCacheTestPlan.geometry(frames, 16, 15));
+          DatabasePageCacheTestPlan.geometry(frames, stagingFrames, 15));
     }
 
     void seedRetiredPair() {
@@ -222,6 +367,15 @@ final class IndexedOverflowRetirementTest {
         }
         write(pageId, kind, owner, payload);
       }
+    }
+
+    void seedRetired(int pageId, long owner) {
+      ByteBuffer payload = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
+      TupleRowOverflowHeader header = new TupleRowOverflowHeader();
+      assertEquals(StatusCode.OK, TupleRowOverflowCodec.encode(
+          payload, 0, pageId - 4, ByteBuffer.wrap(new byte[] {1}), 0, 1));
+      assertEquals(StatusCode.OK, TupleRowOverflowCodec.retire(payload, 0, pageId - 4, 7, header));
+      write(pageId, PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW, owner, payload);
     }
 
     void write(int pageId, int kind, long owner, ByteBuffer payload) {

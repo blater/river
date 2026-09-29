@@ -9,37 +9,36 @@ import java.nio.ByteBuffer;
 /** Durable FIFO of detached overflow references, owned by allocation metadata. */
 final class IndexedOverflowRetirementQueue {
   private final IndexedPageSet pages;
+  private final IndexedOperationPage metadataPin = new IndexedOperationPage();
   private final IndexedOperationPage link = new IndexedOperationPage();
   private final TupleRowOverflowHeader header = new TupleRowOverflowHeader();
 
   IndexedOverflowRetirementQueue(IndexedPageSet pageSet) { pages = pageSet; }
 
   StatusCode append(int pageId) {
-    ByteBuffer metadata = writableMetadata();
-    if (metadata == null) return pages.lastStatus();
+    StatusCode status = pinMetadata();
+    if (!status.isOk()) return status;
+    ByteBuffer metadata = metadataPin.payload();
     int count = BTreeRootPage.retiredOverflowCount(metadata);
-    if (count == Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
+    if (count == Integer.MAX_VALUE) return releaseMetadata(StatusCode.RESOURCE_EXHAUSTED);
     int tail = BTreeRootPage.retiredOverflowTail(metadata);
-    if (tail != 0) {
-      StatusCode status = setNext(tail, pageId);
-      if (!status.isOk()) return status;
-    }
-    BTreeRootPage.publishRetiredOverflow(metadata,
+    if (tail != 0) status = setNext(tail, pageId);
+    if (status.isOk()) BTreeRootPage.publishRetiredOverflow(metadata,
         count == 0 ? pageId : BTreeRootPage.retiredOverflowHead(metadata), pageId, count + 1);
-    return StatusCode.OK;
+    return releaseMetadata(status);
   }
 
   StatusCode removeHead(int expectedPageId, int expectedNext) {
-    ByteBuffer metadata = writableMetadata();
-    if (metadata == null) return pages.lastStatus();
+    StatusCode status = pinMetadata();
+    if (!status.isOk()) return status;
+    ByteBuffer metadata = metadataPin.payload();
     int count = BTreeRootPage.retiredOverflowCount(metadata);
     if (count <= 0 || BTreeRootPage.retiredOverflowHead(metadata) != expectedPageId
         || (count == 1 ? expectedNext != 0 : expectedNext == 0)) {
-      return StatusCode.CORRUPTION;
-    }
-    BTreeRootPage.publishRetiredOverflow(metadata, expectedNext,
+      status = StatusCode.CORRUPTION;
+    } else BTreeRootPage.publishRetiredOverflow(metadata, expectedNext,
         count == 1 ? 0 : BTreeRootPage.retiredOverflowTail(metadata), count - 1);
-    return StatusCode.OK;
+    return releaseMetadata(status);
   }
 
   /** Drop cleanup removes a reference before its link bytes can be reused. */
@@ -54,17 +53,17 @@ final class IndexedOverflowRetirementQueue {
       if (!status.isOk()) return status;
       int next = header.nextRetiredPageId();
       if (current == pageId) {
-        metadata = writableMetadata();
-        if (metadata == null) return pages.lastStatus();
-        if (previous != 0) {
-          status = setNext(previous, next);
-          if (!status.isOk()) return status;
+        status = pinMetadata();
+        if (!status.isOk()) return status;
+        metadata = metadataPin.payload();
+        if (previous != 0) status = setNext(previous, next);
+        if (status.isOk()) {
+          int count = BTreeRootPage.retiredOverflowCount(metadata);
+          BTreeRootPage.publishRetiredOverflow(metadata,
+              previous == 0 ? next : BTreeRootPage.retiredOverflowHead(metadata),
+              next == 0 ? previous : BTreeRootPage.retiredOverflowTail(metadata), count - 1);
         }
-        int count = BTreeRootPage.retiredOverflowCount(metadata);
-        BTreeRootPage.publishRetiredOverflow(metadata,
-            previous == 0 ? next : BTreeRootPage.retiredOverflowHead(metadata),
-            next == 0 ? previous : BTreeRootPage.retiredOverflowTail(metadata), count - 1);
-        return StatusCode.OK;
+        return releaseMetadata(status);
       }
       previous = current;
       current = next;
@@ -90,7 +89,13 @@ final class IndexedOverflowRetirementQueue {
     return status.isOk() ? released : status;
   }
 
-  private ByteBuffer writableMetadata() {
-    return pages.stageExisting(IndexedTableKernel.ROOT_META_PAGE_ID, pages.changedPageCapacity());
+  // The root must remain resident while a link acquisition can spill another staged page.
+  private StatusCode pinMetadata() {
+    return pages.pinScalarOperationPage(IndexedTableKernel.ROOT_META_PAGE_ID, true, metadataPin);
+  }
+
+  private StatusCode releaseMetadata(StatusCode status) {
+    StatusCode released = pages.releaseOperationPage(metadataPin);
+    return status.isOk() ? released : status;
   }
 }
