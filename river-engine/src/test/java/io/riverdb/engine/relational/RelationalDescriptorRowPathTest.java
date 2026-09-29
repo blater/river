@@ -1470,6 +1470,91 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void oneLogicalMutationChangesMoreThanSixtyThreeOverflowPages(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowTextDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    String large = "😀".repeat(3_400);
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    for (int row = 1; row <= 70; row++) {
+      assertEquals(StatusCode.OK, session.descriptorRows().insert(
+          table, overflowTextValues(row, large), new RelationalRowIdentityResult()));
+    }
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    session = session(database);
+    StoredTableRowView fetched = emptyValues();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, session.descriptorRows().beginScan(table, cursor));
+    int[] overflowPages = new int[70];
+    for (int row = 1; row <= 70; row++) {
+      assertEquals(StatusCode.OK, session.descriptorRows().nextScan(
+          cursor, fetched, new RelationalRowIdentityResult()));
+      assertEquals(row, fetched.valueAt(0));
+      assertEquals(13_600, fetched.textByteLengthAt(1));
+      int pageId = cursor.tupleRow().overflowPageId();
+      assertTrue(pageId > 0);
+      assertFalse(contains(overflowPages, pageId));
+      overflowPages[row - 1] = pageId;
+    }
+    assertEquals(StatusCode.CONFLICT, session.descriptorRows().nextScan(
+        cursor, fetched, new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void overflowMutationRejectsInsufficientStagedPageBudgetBeforePublication(
+      @TempDir Path root) {
+    var constrained = databaseRequest(8)
+        .capacity(8, Integer.MAX_VALUE, 60, 64_000_000)
+        .maximumDelivery(Integer.MAX_VALUE, 60, 64_000_000);
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(constrained, root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowTextDescriptor(), table, new StatusDetail(128)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    String large = "😀".repeat(3_400);
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    for (int row = 1; row <= 70; row++) {
+      assertEquals(StatusCode.OK, session.descriptorRows().insert(
+          table, overflowTextValues(row, large), new RelationalRowIdentityResult()));
+    }
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    StoredTableRowView fetched = emptyValues();
+    assertEquals(StatusCode.CONFLICT, session.descriptorRows().fetch(table, 1, fetched));
+    assertEquals(StatusCode.CONFLICT, session.descriptorRows().fetch(table, 70, fetched));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static boolean contains(int[] values, int candidate) {
     for (int value : values) if (value == candidate) return true;
     return false;
