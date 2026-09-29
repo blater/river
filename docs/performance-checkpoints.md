@@ -2126,3 +2126,50 @@ baseline or promotion is designated. Prior physical-write/CPU and Stock Level
 samples retain their named versions and limitations. Independent follow-up
 review and owner resolution of the three-retry mixed-workload condition remain
 required before promotion.
+
+## 2026-09-29 — Erebor strict three-retry workload resolution
+
+River branch `feature/tic-erebor-clustered-row-store`, ticket
+[`tic-erebor`](tickets/tic-erebor.md). Production source remains `4e08034d`;
+the measured checkout is `5cfefeeb`, with additional SQL proof `0b68064f`.
+Harness `356682a` on `fix/erebor-three-retry-mix` replaces random stock
+visitation with warehouse/item order in the common full SQL binding, preserving
+generated line identity, quantities, expected rollback and immutable retry
+inputs. The binding versions/digests explicitly change; original reports are
+retained. The [resolution evidence](delivery/evidence/2026-09-29-tic-erebor-three-retry-mix.md)
+contains mechanism, exact commands, frozen hashes, counts and review handoff.
+
+Serial tests pass: harness test/race/vet/build, real READ COMMITTED opposing
+and ordered SQL controls, and all 1,137 affected engine tests. The prior clean
+full check remains the production checkpoint. The host remains in low power
+mode; one passing sample per build/workload follows the owner's instruction.
+GraalVM 25.0.4 `-Xmx1g`, macOS/arm64, local durable WAL, loopback TLS,
+READ COMMITTED with FOR UPDATE, warehouse one and seed 42.
+
+| Start UTC / BST | Workload | Measured commits | Commits/s | p99 ms | Retries | Artifact ID |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| 21:57:16 / 22:57:16 | Erebor New Order/Payment, four workers, 2s/10s, retries three | 5,120 | 511.950 | 30.573 | 0 | `river_harness_20260929_215717_6c367071` |
+| 21:57:48 / 22:57:48 | Erebor sample all, four workers, 5s/20s, retries three | 12,064 | 603.141 | 26.722 | 0 | `river_harness_20260929_215748_b93ff37d` |
+| 21:58:28 / 22:58:28 | Stable `2ada6350`, identical sample all | 10,872 | 543.536 | 30.458 | 0 | `river_harness_20260929_215828_9f1527c2` |
+
+All reports pass, have zero failed/unknown outcomes, successful invariants,
+reconciled attempts, verified report checksums and graceful complete owned
+cleanup. Measured cancellations are four/three/three respectively; expected
+rollbacks are 22/59/55. Warmup has zero retries or failed/unknown/cancelled
+outcomes. The full pair is eligible with identical key `58d88902…`.
+Reports live below `/private/tmp/river-harness-erebor-retry/runs`; exact
+versions and machine summaries are below `/private/tmp/erebor-mixed-retry`.
+
+One MariaDB sample-New-Order functional smoke, one worker, 1s/3s and retries
+three, also passes with deliberate rollbacks and stopped-to-stopped cleanup
+(`river_harness_20260929_220009_91dd0204`). It is not a cross-target comparison.
+Slopmark's common New Order owner rises 20.9653 → 27.7461, reviewed as existing
+SQL visitation responsibility; the generic scheduler and River production
+gain no policy. Incomplete SHALLOW coverage and captures are retained.
+
+Decision: the strict three-retry mixed condition is satisfied through the
+corrected, versioned binding. The accepted Stock Level decision and physical
+write-cost scope stand. These short changed-binding results establish no
+engine speedup or new baseline. Independent follow-up review, including the
+harness correction, remains before promotion. No merge, tag or baseline
+designation is recorded.

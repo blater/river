@@ -513,3 +513,21 @@ retain the investigation and promotion conditions. Independent follow-up
 approval and explicit resolution of the strict three-retry mixed run remain
 required. Prior measurement versions and the accepted Stock Level decision
 retain their original scope.
+
+Three-retry resolution, 2026-09-29: the
+[mixed-workload evidence](../delivery/evidence/2026-09-29-tic-erebor-three-retry-mix.md)
+records genuine opposing stock-lock cycles in the common harness binding and
+the real READ COMMITTED SQL proof at `0b68064f`. Harness `356682a` visits stock
+in warehouse/item order while preserving generated line numbers, quantities,
+rollback meaning and immutable retry input. Both full bindings have updated
+versions/digests; River production is unchanged. The required sample-all,
+four-worker, five/20-second, three-retry candidate and stable control now pass
+with zero retries/failures/unknown outcomes, successful invariants, equal
+comparison keys and complete cleanup. The focused pair, MariaDB smoke,
+harness test/race/vet checks and all 1,137 engine tests pass. The strict retry
+condition is satisfied. Earlier reports and the accepted Stock Level decision
+retain their identities and scope; independent follow-up review remains before
+promotion, including the separately owned harness correction.
+This narrow external defect correction follows the owner's subsequent request
+to resolve the three-retry workload. It remains a separate harness branch and
+does not expand Erebor's row-store mechanism or general harness/comparator scope.

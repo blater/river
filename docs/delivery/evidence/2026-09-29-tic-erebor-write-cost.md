@@ -159,7 +159,10 @@ candidate attempts were cancelled at the measurement boundary. Both are
 eligible with key `533b0546…`. The retry count is reported explicitly, not
 discarded. These results show successful mixed recovery within ten retries;
 they do not waive the ticket's three-retry acceptance condition. That
-condition needs owner/review resolution before promotion.
+condition remained unresolved at that checkpoint. The later
+[three-retry resolution](2026-09-29-tic-erebor-three-retry-mix.md) corrects the
+common binding's opposing stock-lock order, records its changed identity and
+passes the strict candidate/control configuration with zero retries.
 
 ### Measured catalogue scan correction
 
@@ -276,6 +279,8 @@ R1–R4 are addressed, physical costs are visible, warmed read allocation is
 zero in the tested paths, and the final clean integration check passes.
 Named individual reports and the longer New Order pair pass. The targeted
 ten-retry mix passes with reconciled retries and cleanup. The required
-three-retry mix remains unsuccessful on both builds and needs owner/review
-resolution. Updated independent durable-format/recovery/concurrency approval
-is also required. No merge, checkpoint tag or new baseline is designated.
+three-retry mix was unsuccessful on both builds at this checkpoint. The
+subsequent [versioned common-binding correction](2026-09-29-tic-erebor-three-retry-mix.md)
+satisfies that condition on both builds while retaining the retry budget.
+Updated independent durable-format/recovery/concurrency approval remains
+required. No merge, checkpoint tag or new baseline is designated.

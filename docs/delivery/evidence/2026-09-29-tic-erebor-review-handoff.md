@@ -1,8 +1,9 @@
 # Erebor updated review handoff
 
 Date: 2026-09-29 UTC. Branch: `feature/tic-erebor-clustered-row-store`.
-Base: stable `origin/master` at `2ada6350`. Final production/test source:
-`4e08034d` (F1 at `fb9772d2`). This remains an unpromoted
+Base: stable `origin/master` at `2ada6350`. Final production source:
+`4e08034d` (F1 at `fb9772d2`); additional SQL concurrency proof at `0b68064f`.
+The corrected harness binding is `356682a`. This remains an unpromoted
 replacement; intermediate commits are not separate releases.
 
 ## Review findings addressed
@@ -65,6 +66,14 @@ All 1,136 engine tests passed, with no failures, errors or skips. Log:
 `/private/tmp/erebor-followup/clean-check.log`. Production/test changes were
 committed unchanged after this checkpoint.
 
+The subsequent [three-retry resolution](2026-09-29-tic-erebor-three-retry-mix.md)
+adds a real READ COMMITTED opposing-order cycle and consistent-order control.
+The affected engine check passes all 1,137 tests. Harness tests, race checks,
+vet, the focused New Order/Payment run, the full three-retry candidate/control
+pair and an adjacent MariaDB functional smoke pass. The shared full binding
+orders stock access while preserving generated line identity and quantities.
+Its version/digest records that policy change; River production is unchanged.
+
 The [write-cost evidence](2026-09-29-tic-erebor-write-cost.md) contains actual
 map-owned page/copy/WAL/history/flush measurements, additional tuple-key
 protection counts, virtual-thread JFR attribution and the named workload
@@ -84,15 +93,21 @@ exact cross-owner replay identities, checkpoint eligibility for staged links,
 old leaf/overflow pins, blocked-head pressure, group force dependencies,
 cancelled descriptor numbering/floors, and the migrated multi-chunk coverage.
 
-The strict four-worker `sample all`, retry-limit-three run exhausted deadlock
+The earlier four-worker `sample all`, retry-limit-three run exhausted deadlock
 retries on both stable control and candidate, including repeated controls.
 Individual families passed. Short New Order results were below the control;
 the targeted longer reversed-order pair passed at 373.911 candidate versus
 278.695 control commits/s, with zero retries and failures. A matched ten-retry
 mixed diagnostic also passed (353.348 versus 348.186 commits/s), with explicit
 retry accounting and cleanup. It does not waive the strict three-retry mix.
-The evidence retains all slow/failed runs and the CPU/JIT limits. Review/owner
-resolution of that retry condition is required before promotion.
+The evidence retains all slow/failed runs and the CPU/JIT limits. The strict
+three-retry condition is now satisfied with the corrected common binding:
+candidate and stable control both have zero retries/failures/unknown outcomes,
+passed invariants, equal comparison keys and complete cleanup. Review the
+harness change at `356682a` on `fix/erebor-three-retry-mix` in
+`/private/tmp/river-harness-erebor-retry`, including original line numbering,
+invalid-item rollback and the versioned access policy. No approval of the
+independent follow-up findings is inferred from these workload results.
 
 No merge, performance checkpoint tag or baseline designation is approved by
 this handoff. The feature branch is retained for review.

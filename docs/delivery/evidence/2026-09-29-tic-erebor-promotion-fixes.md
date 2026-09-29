@@ -219,5 +219,7 @@ allocator, queue or commit path was introduced. Raw captures are
 Decision: both amended findings are ready for independent follow-up review.
 No new workload campaign or throughput claim is made. The prior physical-cost
 and Stock Level evidence keep their original source versions and scope. The
-strict three-retry mixed-workload condition and independent durable/recovery/
-concurrency approval remain unresolved; no promotion is recorded.
+strict three-retry mixed-workload condition was unresolved at this checkpoint.
+The subsequent [versioned harness correction and acceptance](2026-09-29-tic-erebor-three-retry-mix.md)
+satisfy that condition. Independent durable/recovery/concurrency approval
+remains outstanding; no promotion is recorded.
