@@ -1,17 +1,16 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
-/** Applies one BASE suboperation to scalar logical-row mappings. */
-final class IndexedRelationalBaseApply {
+/** Applies one SCALAR suboperation to scalar row mappings. */
+final class IndexedRelationalScalarApply {
   private final IndexedTableKernel kernel;
   private final IndexedRelationalScalarWriter writer;
   private final ByteBuffer row = ByteBuffer.allocate(HeapPage.MAXIMUM_ROW_BYTES);
 
-  IndexedRelationalBaseApply(IndexedTableKernel table, IndexedPageSet pages) {
+  IndexedRelationalScalarApply(IndexedTableKernel table, IndexedPageSet pages) {
     kernel = table;
     writer = new IndexedRelationalScalarWriter(table, pages);
   }
@@ -22,22 +21,17 @@ final class IndexedRelationalBaseApply {
     }
     int first = source.suboperationFirstMutationAt(operation);
     int end = first + source.suboperationMutationCountAt(operation);
-    boolean scalar = source.suboperationDescriptorAt(operation)
-        == IndexedRelationalMutationBuffer.SCALAR_SUBOPERATION;
     for (int mutation = first; mutation < end; mutation++) {
       int kind = source.operationAt(mutation);
       int bytes = source.payloadLengthAt(mutation);
-      boolean deletion = kind == IndexedRelationalMutationBuffer.BASE_DELETE
-          || kind == IndexedRelationalMutationBuffer.SCALAR_DELETE;
+      boolean deletion = kind == IndexedRelationalMutationBuffer.SCALAR_DELETE;
       if (bytes == 0 && !deletion) return StatusCode.CORRUPTION;
       row.position(0);
       row.limit(deletion ? 1 : bytes);
       if (bytes > 0) source.copyPayloadTo(mutation, row, 0);
       else row.put(0, (byte) 0);
       StatusCode status = writer.stage(
-          scalar ? source.spaceAt(mutation)
-              : CatalogKeyspace.relationalBaseRowSpace(
-                  source.suboperationOwnerAt(operation)),
+          source.spaceAt(mutation),
           source.logicalRowIdAt(mutation), source.previousRowIdAt(mutation), row,
           deletion);
       if (!status.isOk()) return status;

@@ -30,22 +30,23 @@ final class IndexedRelationalWalMutationFixtures {
   static final long KEY_SCHEMA_ID = 2_000;
   static final int SCALAR_ROOT = 3;
   static final int NEXT_PAGE = 5;
+  static final long SCALAR_SPACE = 101;
   static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(919, 929);
   static final WalGeneration GENERATION = WalGeneration.of(1);
 
-  static IndexedRelationalMutation liveBaseMutation(int expectedRoot, long value) {
+  static IndexedRelationalMutation liveScalarMutation(int expectedRoot, long value) {
     IndexedRelationalMutation mutation = new IndexedRelationalMutation(1, 0, 0);
     requireOk(mutation.reserve(1, 0, 0, Long.BYTES));
     requireOk(mutation.appendLogicalRowFloor(OWNER_OBJECT_ID, 2));
     requireOk(mutation.appendSuboperation(
-        OWNER_OBJECT_ID, -1, 0, 1, 0, 0, expectedRoot, SCALAR_ROOT,
-        NEXT_PAGE, NEXT_PAGE + 3, 0, 0, 0, 1,
+        0, IndexedRelationalMutation.SCALAR_SUBOPERATION, 0, 1, 0, 0, expectedRoot, SCALAR_ROOT,
+        NEXT_PAGE, NEXT_PAGE, 0, 0, 0, 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
         IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
     ByteBuffer row = ByteBuffer.allocate(Long.BYTES);
     row.putLong(0, value);
-    requireOk(mutation.appendBase(
-        0, OWNER_OBJECT_ID, IndexedRelationalMutation.BASE_INSERT,
+    requireOk(mutation.appendScalar(
+        0, IndexedRelationalMutation.SCALAR_INSERT, SCALAR_SPACE,
         1, 0, row, 0, Long.BYTES));
     requireOk(mutation.seal());
     return mutation;

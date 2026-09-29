@@ -6,7 +6,7 @@ import io.riverdb.base.error.StatusCode;
 final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
   private final IndexedTableKernel kernel;
   private final IndexedPageSet pages;
-  private final IndexedRelationalBaseApply base;
+  private final IndexedRelationalScalarApply scalar;
   private final IndexedTupleRegistryState registry;
   private final IndexedRelationalTupleApply tuples;
   private final IndexedRelationalApplyEvidence evidence;
@@ -25,7 +25,7 @@ final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
       IndexedLogicalRowIdRegistry logicalRowIdRegistry) {
     kernel = table;
     pages = pageSet;
-    base = new IndexedRelationalBaseApply(table, pageSet);
+    scalar = new IndexedRelationalScalarApply(table, pageSet);
     registry = new IndexedTupleRegistryState(table, pageSet);
     tuples = new IndexedRelationalTupleApply(table, pageSet, registry);
     evidence = new IndexedRelationalApplyEvidence(pageSet);
@@ -101,7 +101,7 @@ final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
       status = evidence.expected(mutations, operation);
       if (status.isOk()) {
         status = mutations.suboperationDescriptorAt(operation) < 0
-            ? base.apply(mutations, operation)
+            ? scalar.apply(mutations, operation)
                 : tuples.apply(mutations, operation, memberSequence);
       }
       if (status.isOk()) status = evidence.resulting(mutations, operation);

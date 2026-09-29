@@ -482,3 +482,11 @@ separate promotion gates.
 The [final review handoff](../delivery/evidence/2026-09-29-tic-erebor-review-handoff.md)
 lists the tested boundaries and the remaining physical write-cost and
 overflow capacity questions. No final independent code approval is recorded.
+
+Promotion review response, 2026-09-29: the independent review at `bdf43fc0`
+raised cancelled commits (R1), insufficient overflow reclamation (R2),
+database-wide allocation scans (R3) and retained descriptor BASE replay (R4).
+The [review-fix evidence](../delivery/evidence/2026-09-29-tic-erebor-promotion-fixes.md)
+records their replacement and focused validation. Final write-cost evidence,
+clean integration validation and updated independent review remain before
+promotion.

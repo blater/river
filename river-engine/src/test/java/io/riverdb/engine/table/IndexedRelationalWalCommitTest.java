@@ -50,20 +50,20 @@ final class IndexedRelationalWalCommitTest {
     requireOk(created.store().admitLogicalRowIds(OWNER_OBJECT_ID, 1));
     requireOk(created.store().reserveLogicalRowIds(OWNER_OBJECT_ID, 1, reserved));
 
-    IndexedRelationalMutation invalid = liveBaseMutation(99, 811);
+    IndexedRelationalMutation invalid = liveScalarMutation(99, 811);
     check(commitRelationalQuiescent(created.store(), TRANSACTION_ID, invalid, commit)
         == StatusCode.CORRUPTION, "invalid live evidence reached WAL publication");
     check(created.store().rowCount() == 0 && created.store().currentCommitSequence() == 1,
         "failed live group changed current state");
 
-    IndexedRelationalMutation valid = liveBaseMutation(SCALAR_ROOT, 811);
+    IndexedRelationalMutation valid = liveScalarMutation(SCALAR_ROOT, 811);
     requireOk(commitRelationalQuiescent(created.store(), TRANSACTION_ID, valid, commit));
     check(commit.commitSequence() == 2 && created.store().rowCount() == 1,
         "live grouped commit did not publish one frontier");
     HeapRowResult row = new HeapRowResult();
-    long space = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
+    long space = SCALAR_SPACE;
     requireOk(created.store().fetchByKey(space, 1, row));
-    check(row.getLong(0) == 811, "live grouped base row mismatch");
+    check(row.getLong(0) == 811, "live grouped scalar row mismatch");
     requireOk(created.store().flush());
     requireOk(created.store().close());
     requireOk(wal.close());
@@ -82,7 +82,7 @@ final class IndexedRelationalWalCommitTest {
   }
 
   @Test
-  void liveGroupedCommitPublishesBaseAndTupleRootTogether(@TempDir Path root) throws Exception {
+  void liveGroupedCommitPublishesScalarAndTupleRootTogether(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
@@ -118,15 +118,15 @@ final class IndexedRelationalWalCommitTest {
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, hash, descriptor, 0, 1));
     requireOk(group.appendLogicalRowFloor(OWNER_OBJECT_ID, 2));
     requireOk(group.appendSuboperation(
-        OWNER_OBJECT_ID, -1, 0, 1, 0, 0, 3, 3, 6, 9,
+        0, IndexedRelationalMutation.SCALAR_SUBOPERATION, 0, 1, 0, 0, 3, 3, 6, 6,
         0, 0, 2, 3, IndexedRelationalMutation.REGISTRY_ABSENT,
         IndexedRelationalMutation.REGISTRY_ABSENT, 0, 0));
     requireOk(group.appendSuboperation(
-        OWNER_OBJECT_ID, 0, 1, 1, 5, 5, 3, 3, 9, 9,
+        OWNER_OBJECT_ID, 0, 1, 1, 5, 5, 3, 3, 6, 6,
         2, 3, 3, 4, IndexedRelationalMutation.REGISTRY_READY,
         IndexedRelationalMutation.REGISTRY_READY, 0, 0));
-    requireOk(group.appendBase(
-        0, OWNER_OBJECT_ID, IndexedRelationalMutation.BASE_INSERT,
+    requireOk(group.appendScalar(
+        0, IndexedRelationalMutation.SCALAR_INSERT, SCALAR_SPACE,
         1, 0, row, 0, Long.BYTES));
     requireOk(group.appendTuple(
         1, OWNER_OBJECT_ID, IndexedRelationalMutation.TUPLE_INSERT,
@@ -134,14 +134,14 @@ final class IndexedRelationalWalCommitTest {
     requireOk(group.seal());
     requireOk(commitRelationalQuiescent(created.store(), TRANSACTION_ID + 2, group, commit));
     check(commit.commitSequence() == 4 && created.store().rowCount() == 4,
-        "base-and-tuple group did not publish one frontier");
+        "scalar-and-tuple group did not publish one frontier");
     assertRecoveredRegistry(
         created.store(), 1_000, 5, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
     HeapRowResult fetched = new HeapRowResult();
     requireOk(created.store().fetchByKey(
-        CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID),
+        SCALAR_SPACE,
         1, fetched));
-    check(fetched.getLong(0) == 991, "atomic base row missing");
+    check(fetched.getLong(0) == 991, "atomic scalar row missing");
     requireOk(created.store().flush());
     requireOk(created.store().close());
     requireOk(wal.close());
@@ -161,28 +161,28 @@ final class IndexedRelationalWalCommitTest {
             5, 5, 3, 4, 4, 5,
             IndexedRelationalMutation.REGISTRY_READY,
             IndexedRelationalMutation.REGISTRY_DROPPING,
-            0, TRANSACTION_ID + 3, 9, 9), commit));
+            0, TRANSACTION_ID + 3, 6, 6), commit));
     requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 4, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             5, 0, 4, 5, 5, 6,
             IndexedRelationalMutation.REGISTRY_DROPPING,
             IndexedRelationalMutation.REGISTRY_DROPPING,
-            TRANSACTION_ID + 3, TRANSACTION_ID + 3, 9, 9), commit));
+            TRANSACTION_ID + 3, TRANSACTION_ID + 3, 6, 6), commit));
     requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 5, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             0, 0, 5, 6, 6, 7,
             IndexedRelationalMutation.REGISTRY_DROPPING,
             IndexedRelationalMutation.REGISTRY_DROPPING,
-            TRANSACTION_ID + 3, TRANSACTION_ID + 3, 9, 9), commit));
+            TRANSACTION_ID + 3, TRANSACTION_ID + 3, 6, 6), commit));
     requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 6, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
             0, 0, 6, 7, 7, 8,
             IndexedRelationalMutation.REGISTRY_DROPPING,
             IndexedRelationalMutation.REGISTRY_ABSENT,
-            TRANSACTION_ID + 3, 0, 9, 9), commit));
+            TRANSACTION_ID + 3, 0, 6, 6), commit));
     IndexedPageSet livePages = pageSet(created.store());
     check(livePages.payloadKind(5) == PageCodec.PAYLOAD_KIND_FREE
         && BTreeRootPage.freePageCount(livePages.currentPayloadUnchecked(2)) == 1,
@@ -195,13 +195,13 @@ final class IndexedRelationalWalCommitTest {
             second, secondHash, SECOND_OWNER_OBJECT_ID, 1_001,
             0, 5, 0, 1, 8, 9,
             IndexedRelationalMutation.REGISTRY_ABSENT,
-            IndexedRelationalMutation.REGISTRY_BUILDING, 0, TRANSACTION_ID + 7, 9, 9), commit));
+            IndexedRelationalMutation.REGISTRY_BUILDING, 0, TRANSACTION_ID + 7, 6, 6), commit));
     requireOk(commitRelationalQuiescent(created.store(),
         TRANSACTION_ID + 8, liveRootMutation(
             second, secondHash, SECOND_OWNER_OBJECT_ID, 1_001,
             5, 5, 1, 2, 9, 10,
             IndexedRelationalMutation.REGISTRY_BUILDING,
-            IndexedRelationalMutation.REGISTRY_READY, TRANSACTION_ID + 7, 0, 9, 9), commit));
+            IndexedRelationalMutation.REGISTRY_READY, TRANSACTION_ID + 7, 0, 6, 6), commit));
     check(livePages.payloadKind(5) == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
         && livePages.ownerKeyId(5) == 1_001
         && BTreeRootPage.freePageCount(livePages.currentPayloadUnchecked(2)) == 0,
@@ -257,10 +257,10 @@ final class IndexedRelationalWalCommitTest {
     IndexedSessionContext context = context(manager, table, null, vacuum);
     IndexedTransactionSession session = session(context, 128);
     requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
-    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
+    long scalarSpace = SCALAR_SPACE;
     ByteBuffer row = ByteBuffer.allocate(Long.BYTES);
     row.putLong(0, 991);
-    requireOk(session.insert(baseSpace, 1, row));
+    requireOk(session.insert(scalarSpace, 1, row));
     ByteBuffer tuple = physicalFixedTuple(1, 991);
     requireOk(session.preflightTupleMutations(1, 1, tuple.remaining()));
     requireOk(session.protectTupleKeyForWrite(1_000, tuple, tuple.position(), tuple.remaining()));
@@ -272,8 +272,8 @@ final class IndexedRelationalWalCommitTest {
     requireOk(session.commit(outcome));
 
     HeapRowResult fetched = new HeapRowResult();
-    requireOk(created.store().fetchByKey(baseSpace, 1, fetched));
-    check(fetched.getLong(0) == 991, "hybrid base row missing");
+    requireOk(created.store().fetchByKey(scalarSpace, 1, fetched));
+    check(fetched.getLong(0) == 991, "hybrid scalar row missing");
     assertRecoveredRegistry(
         created.store(), 1_000, 5, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
     check(created.store().rowCount() == 4,
@@ -283,7 +283,7 @@ final class IndexedRelationalWalCommitTest {
     requireOk(session.createSavepoint(savepoint));
     ByteBuffer secondRow = ByteBuffer.allocate(Long.BYTES);
     secondRow.putLong(0, 992);
-    requireOk(session.insert(baseSpace, 2, secondRow));
+    requireOk(session.insert(scalarSpace, 2, secondRow));
     ByteBuffer secondTuple = physicalFixedTuple(2, 992);
     requireOk(session.preflightTupleMutations(1, 1, secondTuple.remaining()));
     requireOk(session.protectTupleKeyForWrite(
@@ -292,9 +292,9 @@ final class IndexedRelationalWalCommitTest {
         IndexedRelationalMutation.TUPLE_INSERT,
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), 2,
         secondTuple, secondTuple.position(), secondTuple.remaining()));
-    requireOk(session.fetchByKey(baseSpace, 2, fetched));
+    requireOk(session.fetchByKey(scalarSpace, 2, fetched));
     requireOk(session.rollbackToSavepoint(savepoint));
-    check(session.fetchByKey(baseSpace, 2, fetched) == StatusCode.CONFLICT,
+    check(session.fetchByKey(scalarSpace, 2, fetched) == StatusCode.CONFLICT,
         "savepoint rollback retained a scalar overlay row");
     requireOk(session.commit(outcome));
     check(outcome.state() == TransactionState.COMMITTED,
@@ -303,7 +303,7 @@ final class IndexedRelationalWalCommitTest {
         created.store(), 1_000, 5, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
 
     requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
-    requireOk(session.insert(baseSpace, 2, secondRow));
+    requireOk(session.insert(scalarSpace, 2, secondRow));
     requireOk(session.preflightTupleMutations(1, 1, secondTuple.remaining()));
     requireOk(session.protectTupleKeyForWrite(
         1_000, secondTuple, secondTuple.position(), secondTuple.remaining()));
@@ -314,7 +314,7 @@ final class IndexedRelationalWalCommitTest {
     requireOk(session.abort(outcome));
     check(outcome.state() == TransactionState.ABORTED,
         "hybrid abort did not report ABORTED");
-    check(created.store().fetchByKey(baseSpace, 2, fetched) == StatusCode.CONFLICT,
+    check(created.store().fetchByKey(scalarSpace, 2, fetched) == StatusCode.CONFLICT,
         "hybrid abort published a base row");
     assertRecoveredRegistry(
         created.store(), 1_000, 5, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
@@ -328,9 +328,9 @@ final class IndexedRelationalWalCommitTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(
         directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    requireOk(reopened.store().fetchByKey(baseSpace, 1, fetched));
-    check(fetched.getLong(0) == 991, "reopen lost hybrid base row");
-    check(reopened.store().fetchByKey(baseSpace, 2, fetched) == StatusCode.CONFLICT,
+    requireOk(reopened.store().fetchByKey(scalarSpace, 1, fetched));
+    check(fetched.getLong(0) == 991, "reopen lost hybrid scalar row");
+    check(reopened.store().fetchByKey(scalarSpace, 2, fetched) == StatusCode.CONFLICT,
         "reopen recovered rolled-back hybrid row");
     assertRecoveredRegistry(
         reopened.store(), 1_000, 5, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
@@ -369,9 +369,9 @@ final class IndexedRelationalWalCommitTest {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
-    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
+    long scalarSpace = SCALAR_SPACE;
     IndexedTransactionSession seed = session(context(manager, table, null, vacuum), 128);
-    prepareHybrid(seed, descriptor, baseSpace, 3, 993);
+    prepareHybrid(seed, descriptor, scalarSpace, 3, 993);
     requireOk(seed.commit(new TransactionOutcome()));
     requireOk(seed.close());
     IndexedGroupCommitCoordinator coordinator =
@@ -379,8 +379,8 @@ final class IndexedRelationalWalCommitTest {
     IndexedSessionContext context = context(manager, table, coordinator, vacuum);
     IndexedTransactionSession first = session(context, 128);
     IndexedTransactionSession second = session(context, 128);
-    prepareHybrid(first, descriptor, baseSpace, 1, 991);
-    prepareHybrid(second, descriptor, baseSpace, 2, 992);
+    prepareHybrid(first, descriptor, scalarSpace, 1, 991);
+    prepareHybrid(second, descriptor, scalarSpace, 2, 992);
     check(first.eligibleForCommitGroup(), "first hybrid transaction was not group eligible");
     check(second.eligibleForCommitGroup(), "second hybrid transaction was not group eligible");
     check(first.hasTupleIntents() && second.hasTupleIntents(), "hybrid intents were not retained");
@@ -409,8 +409,8 @@ final class IndexedRelationalWalCommitTest {
         "first probe cleanup failed");
     check(second.completeCoordinatedCommit(StatusCode.CANCELLED) == StatusCode.CANCELLED,
         "second probe cleanup failed");
-    prepareHybrid(first, descriptor, baseSpace, 1, 991);
-    prepareHybrid(second, descriptor, baseSpace, 2, 992);
+    prepareHybrid(first, descriptor, scalarSpace, 1, 991);
+    prepareHybrid(second, descriptor, scalarSpace, 2, 992);
     CountDownLatch ready = new CountDownLatch(2);
     CountDownLatch start = new CountDownLatch(1);
     ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -437,9 +437,9 @@ final class IndexedRelationalWalCommitTest {
             && Math.abs(firstOutcome.commitSequence() - secondOutcome.commitSequence()) == 1,
         "hybrid cohort did not retain independent consecutive decisions");
     HeapRowResult fetched = new HeapRowResult();
-    requireOk(created.store().fetchByKey(baseSpace, 1, fetched));
+    requireOk(created.store().fetchByKey(scalarSpace, 1, fetched));
     check(fetched.getLong(0) == 991, "first grouped hybrid row missing");
-    requireOk(created.store().fetchByKey(baseSpace, 2, fetched));
+    requireOk(created.store().fetchByKey(scalarSpace, 2, fetched));
     check(fetched.getLong(0) == 992, "second grouped hybrid row missing");
     assertTuple(created.store(), descriptor, 991, 1);
     assertTuple(created.store(), descriptor, 992, 2);
@@ -505,8 +505,8 @@ final class IndexedRelationalWalCommitTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(
         directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    requireOk(reopened.store().fetchByKey(baseSpace, 1, fetched));
-    requireOk(reopened.store().fetchByKey(baseSpace, 2, fetched));
+    requireOk(reopened.store().fetchByKey(scalarSpace, 1, fetched));
+    requireOk(reopened.store().fetchByKey(scalarSpace, 2, fetched));
     assertTuple(reopened.store(), descriptor, 991, 1);
     assertTuple(reopened.store(), descriptor, 992, 2);
     assertTupleValue(reopened.store(), descriptor, 991, 1, 9_101);
@@ -521,8 +521,8 @@ final class IndexedRelationalWalCommitTest {
     reopened.reset();
     requireOk(IndexedTableStore.openExisting(
         directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    requireOk(reopened.store().fetchByKey(baseSpace, 1, fetched));
-    requireOk(reopened.store().fetchByKey(baseSpace, 2, fetched));
+    requireOk(reopened.store().fetchByKey(scalarSpace, 1, fetched));
+    requireOk(reopened.store().fetchByKey(scalarSpace, 2, fetched));
     assertTuple(reopened.store(), descriptor, 991, 1);
     assertTuple(reopened.store(), descriptor, 992, 2);
     assertTupleValue(reopened.store(), descriptor, 991, 1, 9_101);
@@ -678,14 +678,14 @@ final class IndexedRelationalWalCommitTest {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
-    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
-    SplitPoint split = fillToSplit(created.store(), table, manager, vacuum, descriptor, baseSpace);
+    long scalarSpace = SCALAR_SPACE;
+    SplitPoint split = fillToSplit(created.store(), table, manager, vacuum, descriptor, scalarSpace);
     TupleIndexRootRecord beforeGroup = registryRecord(created.store(), 1_000);
     check(beforeGroup.rootPageId() == 5,
         "tuple root changed before allocating preflight boundary");
     int tuplePagesBefore = tuplePageCount(created.store(), 1_000);
     SplitGroup group = publishSplitGroup(
-        created.store(), counters, table, manager, vacuum, descriptor, baseSpace,
+        created.store(), counters, table, manager, vacuum, descriptor, scalarSpace,
         split, beforeGroup, tuplePagesBefore);
     int splitKey = split.key();
     long splitValue = split.value();
@@ -705,7 +705,7 @@ final class IndexedRelationalWalCommitTest {
         "freshly split tuple leaf did not admit the independent commit");
     IndexedTransactionSession third = session(context, 128);
     TransactionOutcome thirdOutcome = new TransactionOutcome();
-    prepareHybrid(third, descriptor, baseSpace, thirdKey, thirdValue);
+    prepareHybrid(third, descriptor, scalarSpace, thirdKey, thirdValue);
     requireOk(third.commit(thirdOutcome));
     check(thirdOutcome.state() == TransactionState.COMMITTED
             && thirdOutcome.commitSequence() == splitGroupEnd + 1,
@@ -718,11 +718,11 @@ final class IndexedRelationalWalCommitTest {
     requireOk(created.store().admission());
     check(tuplePageCount(created.store(), 1_000) == tuplePagesAfterGroup,
         "independent commit unexpectedly allocated another tuple page");
-    assertBaseRow(created.store(), baseSpace, thirdKey, thirdValue);
+    assertScalarRow(created.store(), scalarSpace, thirdKey, thirdValue);
     assertTuple(created.store(), descriptor, thirdValue, thirdKey);
     int lastFillerKey = splitKey - 1;
     long lastFillerValue = lastFillerKey;
-    assertBaseRow(created.store(), baseSpace, lastFillerKey, lastFillerValue);
+    assertScalarRow(created.store(), scalarSpace, lastFillerKey, lastFillerValue);
     assertTuple(created.store(), descriptor, lastFillerValue, lastFillerKey);
     TupleIndexRootRecord finalRegistry = registryRecord(created.store(), 1_000);
     check(finalRegistry.generation() == afterGroup.generation() + 1,
@@ -736,10 +736,10 @@ final class IndexedRelationalWalCommitTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(
         directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
-    assertBaseRow(reopened.store(), baseSpace, lastFillerKey, lastFillerValue);
-    assertBaseRow(reopened.store(), baseSpace, firstKey, firstValue);
-    assertBaseRow(reopened.store(), baseSpace, secondKey, secondValue);
-    assertBaseRow(reopened.store(), baseSpace, thirdKey, thirdValue);
+    assertScalarRow(reopened.store(), scalarSpace, lastFillerKey, lastFillerValue);
+    assertScalarRow(reopened.store(), scalarSpace, firstKey, firstValue);
+    assertScalarRow(reopened.store(), scalarSpace, secondKey, secondValue);
+    assertScalarRow(reopened.store(), scalarSpace, thirdKey, thirdValue);
     assertTuple(reopened.store(), descriptor, lastFillerValue, lastFillerKey);
     assertTuple(reopened.store(), descriptor, firstValue, firstKey);
     assertTuple(reopened.store(), descriptor, secondValue, secondKey);
@@ -757,7 +757,7 @@ final class IndexedRelationalWalCommitTest {
 
   private static SplitPoint fillToSplit(
       IndexedTableStore store, IndexedTable table, TransactionManager manager, IndexedVacuum vacuum,
-      int[] descriptor, long baseSpace) throws Exception {
+      int[] descriptor, long scalarSpace) throws Exception {
     IndexedSessionContext directContext = context(manager, table, null, vacuum);
     IndexedTransactionSession filler = session(directContext, 128);
     TransactionOutcome outcome = new TransactionOutcome();
@@ -769,7 +769,7 @@ final class IndexedRelationalWalCommitTest {
         requireOk(filler.close());
         return new SplitPoint(key, key, newPages);
       }
-      prepareHybrid(filler, descriptor, baseSpace, key, key);
+      prepareHybrid(filler, descriptor, scalarSpace, key, key);
       requireOk(filler.commit(outcome));
       check(outcome.state() == TransactionState.COMMITTED,
           "tuple leaf filler did not commit");
@@ -779,7 +779,7 @@ final class IndexedRelationalWalCommitTest {
 
   private static SplitGroup publishSplitGroup(
       IndexedTableStore store, NioIoCounters counters, IndexedTable table,
-      TransactionManager manager, IndexedVacuum vacuum, int[] descriptor, long baseSpace,
+      TransactionManager manager, IndexedVacuum vacuum, int[] descriptor, long scalarSpace,
       SplitPoint split, TupleIndexRootRecord beforeGroup, int tuplePagesBefore)
       throws Exception {
     int firstKey = split.key();
@@ -791,8 +791,8 @@ final class IndexedRelationalWalCommitTest {
     IndexedSessionContext context = context(manager, table, coordinator, vacuum);
     IndexedTransactionSession first = session(context, 128);
     IndexedTransactionSession second = session(context, 128);
-    prepareHybrid(first, descriptor, baseSpace, firstKey, firstValue);
-    prepareHybrid(second, descriptor, baseSpace, secondKey, secondValue);
+    prepareHybrid(first, descriptor, scalarSpace, firstKey, firstValue);
+    prepareHybrid(second, descriptor, scalarSpace, secondKey, secondValue);
     check(first.commitGroupEligibilityMask() == 0
             && second.commitGroupEligibilityMask() == 0,
         "split cohort was not group eligible");
@@ -833,8 +833,8 @@ final class IndexedRelationalWalCommitTest {
     int pagesAfter = tuplePageCount(store, 1_000);
     check(pagesAfter == tuplePagesBefore + split.newPages(),
         "split cohort allocated a different tuple-page count than preflight");
-    assertBaseRow(store, baseSpace, firstKey, firstValue);
-    assertBaseRow(store, baseSpace, secondKey, secondValue);
+    assertScalarRow(store, scalarSpace, firstKey, firstValue);
+    assertScalarRow(store, scalarSpace, secondKey, secondValue);
     assertTuple(store, descriptor, firstValue, firstKey);
     assertTuple(store, descriptor, secondValue, secondKey);
     requireOk(first.close());
@@ -1024,13 +1024,13 @@ final class IndexedRelationalWalCommitTest {
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     IndexedSessionContext context = context(manager, table, null, vacuum);
     IndexedTransactionSession session = session(context, 128);
-    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
+    long scalarSpace = SCALAR_SPACE;
     ByteBuffer row = scalarRow(993);
     ByteBuffer tuple = physicalFixedTuple(3, 993);
     IndexedSavepoint savepoint = new IndexedSavepoint();
     TransactionOutcome outcome = new TransactionOutcome();
     requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
-    requireOk(session.insert(baseSpace, 3, row));
+    requireOk(session.insert(scalarSpace, 3, row));
     requireOk(session.preflightTupleMutations(1, 1, tuple.remaining()));
     requireOk(session.protectTupleKeyForWrite(1_000, tuple, tuple.position(), tuple.remaining()));
     requireOk(session.appendTupleMutation(
@@ -1038,7 +1038,7 @@ final class IndexedRelationalWalCommitTest {
         OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID, shape(descriptor), 3,
         tuple, tuple.position(), tuple.remaining()));
     requireOk(session.createSavepoint(savepoint));
-    requireOk(session.delete(baseSpace, 3));
+    requireOk(session.delete(scalarSpace, 3));
     requireOk(session.preflightTupleMutations(1, 0, tuple.remaining()));
     requireOk(session.protectTupleKeyForWrite(1_000, tuple, tuple.position(), tuple.remaining()));
     requireOk(session.appendTupleMutation(
@@ -1247,14 +1247,14 @@ final class IndexedRelationalWalCommitTest {
     requireOk(session.appendTupleMutation(
         IndexedRelationalMutation.TUPLE_INSERT, OWNER_OBJECT_ID, 1_000,
         KEY_SCHEMA_ID, shape, 1, tuple, 0, tuple.remaining()));
-    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
-    requireOk(session.insert(baseSpace, 1, scalarRow(771)));
+    long scalarSpace = SCALAR_SPACE;
+    requireOk(session.insert(scalarSpace, 1, scalarRow(771)));
     requireOk(session.commit(outcome));
     check(outcome.state() == TransactionState.COMMITTED,
         "combined root publication and tuple DML did not commit");
     assertRecoveredRegistry(created.store(), 1_000, 5, OWNER_OBJECT_ID, 2, KEY_SCHEMA_ID);
     HeapRowResult row = new HeapRowResult();
-    requireOk(created.store().fetchByKey(baseSpace, 1, row));
+    requireOk(created.store().fetchByKey(scalarSpace, 1, row));
     requireOk(created.store().flush());
     requireOk(created.store().close());
     requireOk(wal.close());

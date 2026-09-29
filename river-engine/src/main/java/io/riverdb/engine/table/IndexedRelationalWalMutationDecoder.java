@@ -64,15 +64,6 @@ final class IndexedRelationalWalMutationDecoder {
     long previousRowId = FormatBytes.getLong(source, offset + 40);
     long ownerObjectId = FormatBytes.getLong(source, offset + 48);
     long space = FormatBytes.getLong(source, offset + 56);
-    if (operation >= IndexedRelationalMutationBuffer.BASE_INSERT
-        && operation <= IndexedRelationalMutationBuffer.BASE_DELETE) {
-      long expectedSpace = CatalogKeyspace.relationalBaseRowSpace(ownerObjectId);
-      return descriptor == -1 && tupleKeyLength == 0 && space == expectedSpace
-          ? destination.appendBase(
-              suboperation, ownerObjectId, operation, logicalRowId, previousRowId,
-              source, payloadOffset, payloadLength)
-          : StatusCode.CORRUPTION;
-    }
     if (operation >= IndexedRelationalMutationBuffer.SCALAR_INSERT
         && operation <= IndexedRelationalMutationBuffer.SCALAR_DELETE) {
       return tupleKeyLength == 0
@@ -91,7 +82,7 @@ final class IndexedRelationalWalMutationDecoder {
     if (operation == IndexedRelationalMutationBuffer.OVERFLOW_RECLAIM) {
       return logicalRowId == 0 && tupleKeyLength == 0
           ? destination.appendOverflowReclamation(
-              suboperation, descriptor, source, payloadOffset, payloadLength)
+              suboperation, descriptor, source, payloadOffset, payloadLength, false)
           : StatusCode.CORRUPTION;
     }
     if (tupleKeyLength <= 0 || tupleKeyLength > payloadLength) return StatusCode.CORRUPTION;

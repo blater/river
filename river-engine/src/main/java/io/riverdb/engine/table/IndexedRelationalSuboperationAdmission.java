@@ -61,7 +61,8 @@ final class IndexedRelationalSuboperationAdmission {
       IndexedRelationalSuboperationColumns columns, int count, int descriptor,
       int firstMutation, int coveredMutations, int mutations) {
     return count < columns.capacity() && count < columns.allocatedCapacity()
-        && descriptor >= IndexedRelationalMutationBuffer.SCALAR_SUBOPERATION
+        && (descriptor >= 0
+            || descriptor == IndexedRelationalMutationBuffer.SCALAR_SUBOPERATION)
         && firstMutation == coveredMutations && mutations >= 0;
   }
 

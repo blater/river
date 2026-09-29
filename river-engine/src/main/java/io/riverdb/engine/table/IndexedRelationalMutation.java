@@ -3,11 +3,8 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import java.nio.ByteBuffer;
 
-/** Caller-owned, reusable description of one atomic base-and-index mutation group. */
+/** Caller-owned, reusable description of one atomic scalar/tuple mutation group. */
 public final class IndexedRelationalMutation {
-  public static final int BASE_INSERT = IndexedRelationalMutationBuffer.BASE_INSERT;
-  public static final int BASE_UPDATE = IndexedRelationalMutationBuffer.BASE_UPDATE;
-  public static final int BASE_DELETE = IndexedRelationalMutationBuffer.BASE_DELETE;
   public static final int TUPLE_INSERT = IndexedRelationalMutationBuffer.TUPLE_INSERT;
   public static final int TUPLE_DELETE = IndexedRelationalMutationBuffer.TUPLE_DELETE;
   public static final int TUPLE_REPLACE = IndexedRelationalMutationBuffer.TUPLE_REPLACE;
@@ -41,7 +38,7 @@ public final class IndexedRelationalMutation {
         ownerObjectId, keyId, schemaId, descriptorHash, parts, partOffset, partCount);
   }
 
-  /** Covers committed base-row identities through the next exclusive value. */
+  /** Covers committed stable row identities through the next exclusive value. */
   public StatusCode appendLogicalRowFloor(long ownerObjectId, long nextLogicalRowId) {
     return buffer.appendLogicalRowFloor(ownerObjectId, nextLogicalRowId);
   }
@@ -86,16 +83,7 @@ public final class IndexedRelationalMutation {
 
   StatusCode appendOverflowReclamation(
       int suboperation, int descriptor, ByteBuffer source, int offset, int length) {
-    return buffer.appendOverflowReclamation(suboperation, descriptor, source, offset, length);
-  }
-
-  public StatusCode appendBase(
-      int suboperation, long ownerObjectId, int operation,
-      long logicalRowId, long previousRowId,
-      ByteBuffer source, int sourceOffset, int length) {
-    return buffer.appendBase(
-        suboperation, ownerObjectId, operation, logicalRowId, previousRowId,
-        source, sourceOffset, length);
+    return buffer.appendOverflowReclamation(suboperation, descriptor, source, offset, length, true);
   }
 
   public StatusCode appendTuple(

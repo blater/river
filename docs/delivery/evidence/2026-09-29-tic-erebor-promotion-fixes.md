@@ -49,6 +49,22 @@ Focused validation passed:
 - Existing descriptor overflow/snapshot/capacity tests, grouped commit/held-force
   tests, logical WAL codec tests, format codec tests and tuple storage tests pass.
 
+## R4: superseded descriptor BASE path
+
+Removed the descriptor BASE opcodes, `appendBase` API, negative descriptor -1
+admission, decoder branch and BASE applier. The applier now owns only the
+separate SCALAR path. Existing kernel/catalog scalar machinery remains.
+
+Continuation, truncation, digest, provider-batch and multi-chunk fixtures now
+carry clustered tuple values. The wide-record test round-trips a canonical
+primary value, 64 secondary primary locators and the identity locator. An
+actual descriptor transaction commits 80 overflow rows with a secondary
+index; their row values alone exceed a physical WAL record. WAL-only reopen
+preserves all primary values, stable identities, secondary locators and
+13,600-byte overflow values. Scalar/tuple atomic publication, lifecycle,
+vacuum and drop/reuse tests retain their separately owned SCALAR coverage.
+Focused codec, recovery, commit and overflow-churn classes pass.
+
 Updated independent durable-format/recovery/concurrency review and final clean
 integration validation remain required. Write-cost evidence is recorded
 separately; the owner's accepted Stock Level decision remains unchanged.

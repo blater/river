@@ -13,9 +13,6 @@ final class IndexedRelationalMutationBuffer {
       DatabaseResourceDefaults.ADDRESSABLE_TRANSACTION_WRITE_ENTRIES;
   static final int MAX_MUTATIONS = Integer.MAX_VALUE;
   static final int MAX_INDEX_DESCRIPTORS = Integer.MAX_VALUE;
-  static final int BASE_INSERT = 1;
-  static final int BASE_UPDATE = 2;
-  static final int BASE_DELETE = 3;
   static final int TUPLE_INSERT = 4;
   static final int TUPLE_DELETE = 5;
   static final int SCALAR_INSERT = 6;
@@ -167,11 +164,13 @@ final class IndexedRelationalMutationBuffer {
   }
 
   StatusCode appendOverflowReclamation(
-      int suboperation, int descriptor, ByteBuffer source, int offset, int length) {
+      int suboperation, int descriptor, ByteBuffer source, int offset, int length,
+      boolean beforeSuboperation) {
     if (sealed || descriptor < 0 || descriptor >= descriptors.count()
         || !IndexedOverflowReclamationCodec.valid(source, offset, length)
-        || suboperation != suboperations.count() && !suboperations.acceptsMutation(
-            suboperation, entries.count(), descriptors.ownerObjectIdAt(descriptor), descriptor)) {
+        || !(beforeSuboperation && suboperation == suboperations.count())
+            && !suboperations.acceptsMutation(
+                suboperation, entries.count(), descriptors.ownerObjectIdAt(descriptor), descriptor)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (!entries.canAppend(length)) return StatusCode.RESOURCE_EXHAUSTED;
@@ -179,25 +178,6 @@ final class IndexedRelationalMutationBuffer {
         descriptors.ownerObjectIdAt(descriptor),
         io.riverdb.format.catalog.CatalogKeyspace.relationalIndexSpace(descriptors.keyIdAt(descriptor)),
         0, 0, source, offset, length);
-    return StatusCode.OK;
-  }
-
-  StatusCode appendBase(
-      int suboperationOrdinal, long ownerObjectId,
-      int operation, long logicalRowId, long previousRowId,
-      ByteBuffer source, int sourceOffset, int length) {
-    if (sealed || !validBase(
-        ownerObjectId, operation, logicalRowId, previousRowId,
-        source, sourceOffset, length)
-        || !suboperations.acceptsMutation(
-            suboperationOrdinal, entries.count(), ownerObjectId, -1)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (!entries.canAppend(length)) return StatusCode.RESOURCE_EXHAUSTED;
-    entries.append(
-        operation, -1, suboperationOrdinal, ownerObjectId,
-        io.riverdb.format.catalog.CatalogKeyspace.relationalBaseRowSpace(ownerObjectId),
-        logicalRowId, previousRowId, source, sourceOffset, length);
     return StatusCode.OK;
   }
 
@@ -268,13 +248,6 @@ final class IndexedRelationalMutationBuffer {
     }
     for (int descriptor = 0; descriptor < descriptors.count(); descriptor++) {
       if (!descriptorReferenced(descriptor)) return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int mutation = 0; mutation < entries.count(); mutation++) {
-      if (entries.operationAt(mutation) == BASE_INSERT
-          && !coveredByLogicalRowFloor(
-              entries.ownerObjectIdAt(mutation), entries.logicalRowIdAt(mutation))) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
     }
     sealed = true;
     return StatusCode.OK;
@@ -398,29 +371,6 @@ final class IndexedRelationalMutationBuffer {
       if (suboperations.descriptorAt(operation) == descriptor) return true;
     }
     return false;
-  }
-
-  private boolean coveredByLogicalRowFloor(long objectId, long logicalRowId) {
-    for (int index = 0; index < logicalRowFloors.count(); index++) {
-      if (logicalRowFloors.objectIdAt(index) == objectId
-          && logicalRowFloors.nextAt(index) > logicalRowId) return true;
-    }
-    return false;
-  }
-
-  private static boolean validBase(
-      long ownerObjectId, int operation, long logicalRowId, long previousRowId,
-      ByteBuffer source, int sourceOffset, int length) {
-    if (!io.riverdb.format.catalog.CatalogKeyspace.validObjectHead(ownerObjectId)
-        || logicalRowId <= 0 || previousRowId < 0) return false;
-    if (operation == BASE_INSERT) {
-      return previousRowId == 0 && validPayload(source, sourceOffset, length);
-    }
-    if (operation == BASE_UPDATE) {
-      return previousRowId > 0 && validPayload(source, sourceOffset, length);
-    }
-    return operation == BASE_DELETE && previousRowId > 0 && length == 0
-        && sourceOffset >= 0 && (source == null ? sourceOffset == 0 : sourceOffset <= source.limit());
   }
 
   private static boolean validPayload(ByteBuffer source, int offset, int length) {

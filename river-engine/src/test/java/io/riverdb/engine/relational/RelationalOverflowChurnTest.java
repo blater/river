@@ -156,6 +156,81 @@ final class RelationalOverflowChurnTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void multiChunkCommitRecoversPrimarySecondaryIdentityAndOverflow(@TempDir Path root)
+      throws java.io.IOException {
+    Path live = Files.createDirectory(root.resolve("live"));
+    Path crash = Files.createDirectory(root.resolve("crash"));
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), live, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    TableDescriptor plain = overflowTextDescriptor();
+    KeyDescriptor.Result secondary = new KeyDescriptor.Result();
+    assertEquals(StatusCode.OK, KeyDescriptor.create(2, KeyDescriptor.KIND_SECONDARY,
+        false, plain.columns(), new int[] {0}, 0, secondary, null));
+    TableDescriptor.Result indexed = new TableDescriptor.Result();
+    assertEquals(StatusCode.OK, TableDescriptor.create(1, 1, 1, plain.columns(),
+        plain.primaryKey(), new KeyDescriptor[] {secondary.value()}, null, indexed, null));
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        indexed.value(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
+    RelationalSession writer = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    String large = "😀".repeat(3_400);
+    // Row values alone exceed a single physical WAL payload; all three trees share the group.
+    org.junit.jupiter.api.Assertions.assertTrue(
+        80L * 13_600 > io.riverdb.format.wal.WalRecordCodec.MAX_PAYLOAD_BYTES);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+    for (int row = 1; row <= 80; row++) assertEquals(StatusCode.OK,
+        writer.descriptorRows().insert(table, overflowTextValues(table.descriptor(), row, large),
+            new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    try (var paths = Files.walk(live)) {
+      for (Path source : paths.toList()) {
+        Path target = crash.resolve(live.relativize(source));
+        if (Files.isDirectory(source)) Files.createDirectories(target);
+        else Files.copy(source, target);
+      }
+    }
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+    assertEquals(StatusCode.OK, RelationalDatabase.openExisting(databaseRequest(8), crash,
+        DATABASE, GENERATION, 8, EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    writer = session(database);
+    StoredTableRowView fetched = new StoredTableRowView();
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    for (int row = 1; row <= 80; row++) {
+      assertEquals(StatusCode.OK, writer.descriptorRows().fetch(table, row, fetched));
+      assertEquals(13_600, fetched.textByteLengthAt(1));
+      assertEquals(StatusCode.OK, writer.descriptorRows().fetchByLogicalRowId(table, row, fetched));
+      assertEquals(row, fetched.valueAt(0));
+    }
+    RelationalDescriptorIndexBounds bounds = new RelationalDescriptorIndexBounds();
+    assertEquals(StatusCode.OK, bounds.set(table.descriptor().secondaryKeyAt(0),
+        null, 0, true, null, 0, true, io.riverdb.storage.btree.TupleBTreeScanBounds.FORWARD));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, writer.descriptorRows().beginIndexScan(
+        table, bounds, io.riverdb.tx.api.lock.LockMode.SHARED, cursor));
+    RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
+    for (int row = 1; row <= 80; row++) {
+      assertEquals(StatusCode.OK, writer.descriptorRows().nextScan(cursor, fetched, identity));
+      assertEquals(row, fetched.valueAt(0));
+      assertEquals(row, identity.logicalRowId());
+      assertEquals(13_600, fetched.textByteLengthAt(1));
+    }
+    assertEquals(StatusCode.CONFLICT, writer.descriptorRows().nextScan(cursor, fetched, identity));
+    assertEquals(StatusCode.OK, writer.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static RelationalSession session(RelationalDatabase database) {
     RelationalSessionOpenResult opened = new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(opened));
