@@ -50,6 +50,8 @@ The candidate measured here precedes overflow retirement recording commit
 `297f62dd`. Stock Level's `order_line` and `stock` rows are inline under the
 ADR placement rule, so that subsequent overflow-only change is outside this
 workload's exercised path. No New Order, Payment, order-status or mixed
-candidate report has yet been captured. The identity-index write and
-history costs, production CPU attribution and occupied-page distribution
-remain unmeasured.
+candidate report had been captured at this checkpoint. Subsequent
+[write-cost and workload evidence](2026-09-29-tic-erebor-write-cost.md) records
+those named controls, physical identity costs and CPU diagnostics on later
+source commits; it does not replace the Stock Level decision or relabel these
+historical artifacts as measurements of the final candidate.

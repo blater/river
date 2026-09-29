@@ -27,7 +27,10 @@ identity tree as its clustered row store, so its one primary mutation is not
 an additional locator-map write. `RelationalDescriptorTupleDeltaPlanTest`
 checks the declared-primary insert, delete, primary move and non-key update
 counts. The warmed maximum-index plan test reports zero thread allocation
-over ten plan updates, but it does not measure full point or scan execution.
+over ten plan updates. `RelationalClusteredReadAllocationTest` subsequently
+measured zero allocated bytes over 10,000 actual primary fetches and each
+64-row primary/secondary scan. Each committed row borrows the selected primary
+leaf buffer; the test checks that buffer identity through all three paths.
 
 `RelationalDescriptorRowPathTest.primaryAndSecondaryReadsDoNotConsultIdentityLocator`
 removes a declared-primary row's identity mapping in a controlled test and
@@ -42,9 +45,10 @@ create a map mutation.
 Each declared-primary mapping mutation carries its key and primary locator
 through the existing logical tuple WAL stream and creates a new page
 generation for every changed map page. Splits can add page copies and retained
-history. The exact extra map page changes, copied bytes, WAL bytes, historical
-frames, checkpoint writes and CPU have not been isolated in a matched
-write-workload measurement. The one short low-power New Order/Payment run
-passed invariants and cleanup but cannot establish those costs or a throughput
-comparison. This remains a review and promotion gap, separate from the
-owner-accepted Stock Level throughput gate.
+history. The [final write-cost evidence](2026-09-29-tic-erebor-write-cost.md)
+measures map-owned physical page copies, dirty pages, retained frames, logical
+WAL payload and checkpoint writes through actual descriptor commits. It also
+records replacement-lock acquisition cost and the named matched workload
+controls/JFR diagnostics. The earlier short mixed run remains historical
+correctness evidence. Independent review of the completed replacement remains
+required before promotion; the accepted Stock Level decision remains separate.

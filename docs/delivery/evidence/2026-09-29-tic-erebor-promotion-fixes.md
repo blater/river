@@ -15,6 +15,8 @@ also passed.
 
 ## R2 and R3: demand-sized reclamation and bounded selection
 
+Commit `803011be` implements the replacement described below.
+
 The allocation root now owns a durable head/tail/count FIFO of retired overflow
 pages. Overflow pages contain the intrusive successor. Compilation consumes
 up to the admitted overflow allocation demand and records each exact page,
@@ -51,6 +53,8 @@ Focused validation passed:
 
 ## R4: superseded descriptor BASE path
 
+Commit `960c25a7` removes the superseded path and migrates recovery coverage.
+
 Removed the descriptor BASE opcodes, `appendBase` API, negative descriptor -1
 admission, decoder branch and BASE applier. The applier now owns only the
 separate SCALAR path. Existing kernel/catalog scalar machinery remains.
@@ -65,6 +69,27 @@ preserves all primary values, stable identities, secondary locators and
 vacuum and drop/reuse tests retain their separately owned SCALAR coverage.
 Focused codec, recovery, commit and overflow-churn classes pass.
 
-Updated independent durable-format/recovery/concurrency review and final clean
-integration validation remain required. Write-cost evidence is recorded
+## Final validation
+
+The uninstrumented candidate at `0b2e7bbb` passed a serial clean full checkpoint
+in 4m 57s. Subsequent JFR measurement found excluded logical-head searches in
+catalogue scans. `46e5ab39` corrects the scalar/head interval intersection in
+the existing scanner; empty/populated boundary tests and the descriptor class
+passed. The [write-cost evidence](2026-09-29-tic-erebor-write-cost.md) retains
+the diagnosis and before/after measurements.
+
+The final `clean check :river-server-app:jar` at `46e5ab39` passed in 4m 30s:
+156 actionable tasks, 102 executed, 52 restored from cache and two up to date.
+All 1,131 engine tests passed with zero errors or skips. The final log is
+`/private/tmp/erebor-promotion-final-clean-check.log`; counts are in
+`/private/tmp/erebor-write-cost/final-engine-test-counts.json`. The earlier
+checkpoint log and module counts remain retained separately.
+
+The new warmed real-path read test measures zero allocated bytes for 10,000
+primary fetches and each 64-row primary/secondary scan, with the row view
+borrowing the selected primary leaf's actual buffer. Its XML is retained at
+`/private/tmp/erebor-write-cost/final-clustered-read-results.xml`.
+
+Updated independent durable-format/recovery/concurrency review remains
+required. [Write-cost evidence](2026-09-29-tic-erebor-write-cost.md) is recorded
 separately; the owner's accepted Stock Level decision remains unchanged.

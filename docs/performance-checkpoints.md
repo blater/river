@@ -2028,3 +2028,78 @@ The [complete commands, artifacts, CPU evidence and limitations](delivery/eviden
 are recorded with the diagnostic ticket. The next general storage-layout work
 is [tic-erebor](tickets/tic-erebor.md). These runs do not designate a new TPS
 baseline or a paired MariaDB ratio; the Baseline stats table is unchanged.
+
+## 2026-09-29 — tic-erebor promotion-review corrections
+
+Feature branch `feature/tic-erebor-clustered-row-store` remains unpromoted from
+stable source `2ada6350`. Review findings at `bdf43fc0` are addressed by
+`33442464` (cancelled tuple compilation), `803011be` (durable demand-sized
+retirement queue), `960c25a7` (descriptor BASE removal), `0b2e7bbb` (warmed
+actual read allocation evidence), and `46e5ab39` (catalogue scalar/head range
+correction found during measurement). The [updated review handoff](delivery/evidence/2026-09-29-tic-erebor-review-handoff.md)
+and [complete physical/workload/CPU evidence](delivery/evidence/2026-09-29-tic-erebor-write-cost.md)
+contain commands, immutable artifacts, source/JAR identities and limitations.
+
+Final serial clean command: cached Gradle 9.7.0 with `--no-daemon`,
+`--max-workers=1`, independent worktree caches, `clean check :river-server-app:jar`.
+It passed in 4m 30s: 156 actionable tasks, 102 executed, 52 restored from cache
+and two up to date. All 1,131 engine tests passed. Log:
+`/private/tmp/erebor-promotion-final-clean-check.log`. Focused tests cover
+multi-row overflow churn/reuse, cross-owner capacity, abort/group publication,
+old snapshots/pins, WAL-only replay and actual multi-chunk values/locators.
+
+Actual eight-row declared-primary commits change one unsplit identity-map
+page, copy 32 KiB, retain one 16 KiB predecessor and flush 16 KiB. Map logical
+WAL is 1,028 bytes for insert/primary move and 860 for delete in the BIGINT
+fixture. Non-key updates have zero map writes/copies/WAL/flush bytes. A
+hidden-primary table has no extra locator tree. The warmed 10,000-point and
+64-row primary/secondary scan tests allocate zero bytes and borrow leaf
+buffers. These are named ownership boundaries, not whole-transaction totals.
+
+Harness `5082670` ran the frozen installed executables serially on the
+low-power macOS/arm64 host, GraalVM 25.0.4 `-Xmx1g`, local durable WAL,
+loopback TLS and READ COMMITTED with explicit FOR UPDATE. One warehouse,
+seed 42; individual families use one worker and three retries. The owner
+permits one good sample per build/workload. Short runs are 5s warmup/20s
+measurement; the targeted longer New Order pair is 10s/60s, reversed order.
+Times below are UTC, 2026-09-29; Europe/London is one hour later (BST).
+
+| Window | Workload | Control TPS | Final TPS | Evidence |
+| --- | --- | ---: | ---: | --- |
+| 19:37 / 19:56 | sample New Order, short | 284.046 | 208.347 | `river_harness_20260929_193659_7d6e4184` / `river_harness_20260929_195644_09e2dc37` |
+| 19:38 / 19:57 | sample Payment, short | 874.877 | 837.335 | `river_harness_20260929_193828_3d773d36` / `river_harness_20260929_195714_2a52da4e` |
+| 19:39 / 19:57 | sample Order Status, short | 8,231.325 | 7,465.065 | `river_harness_20260929_193858_d80544ca` / `river_harness_20260929_195745_902c7294` |
+| 20:05–20:08 | sample New Order, longer | 278.695 | 373.911 | `river_harness_20260929_200649_684a1805` / `river_harness_20260929_200534_fd9e2ddf` |
+| 20:02–20:03 | sample all, four workers, **ten retries** | 348.186 | 353.348 | `river_harness_20260929_200231_1557af97` / `river_harness_20260929_200301_37c90d04` |
+
+All tabled reports passed invariants, had zero failed/unknown outcomes, were
+eligible with equal keys within each family/window, and stopped/removed their
+owned instances. Individual families had zero retries. The ten-retry mix
+reported 1,165 control and 1,111 candidate retries, plus four/three terminal
+cancellations. It is a changed-manifest diagnostic: the strict four-worker,
+three-retry mix repeatedly exhausted New Order deadlock retries during warmup
+on both control and candidate. All failed reports and cleanup outcomes remain
+retained in the linked evidence.
+
+Separate JFR diagnostics captured virtual-thread mapping and replacement-lock
+scopes. They identified an excluded empty head-directory search in catalogue
+scans, corrected by `46e5ab39`; final profiles have zero samples in that search.
+The final short New Order CPU window also includes substantial ongoing JVMCI
+compilation (10.8 compiler wall seconds versus 2.4 in its control). The longer
+ordinary follow-up did not repeat the candidate-specific short decline.
+Sampled whole-server budgets include JIT/GC/recorder activity; they are not
+exact map or lock CPU times. Temporary instrumentation is absent from the
+production candidate and its source.
+
+Slopmark captured the logical-sizing increase as a responsibility review
+trigger, with incomplete SHALLOW coverage. Sizing remains the existing
+admission owner; placement policy is shared with the tuple compiler. The
+mutation buffer score fell after BASE removal, and the frame cache gained no
+responsibility. Raw before/after captures are retained outside Git.
+
+Decision: implementation fixes and named physical evidence are ready for
+updated independent durable-format/recovery/concurrency review. Strict mixed
+retry acceptance needs owner/review resolution. The previously accepted Stock
+Level decision stands with its original variation. No feature merge,
+checkpoint tag or new baseline is designated; the Baseline stats table remains
+unchanged.

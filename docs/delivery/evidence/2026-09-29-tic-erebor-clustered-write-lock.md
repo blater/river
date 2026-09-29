@@ -49,3 +49,10 @@ its one expected victim; the measured capture recorded zero deadlocks.
 The host was in low power mode during this work. These are correctness and
 lock-path results. This one short TPS sample is not compared with older runs,
 is not a new baseline and does not isolate the extra lock's throughput cost.
+
+The subsequent [final write-cost evidence](2026-09-29-tic-erebor-write-cost.md)
+measures 800 uncontended replacement-key protection calls in an actual
+descriptor fixture and captures the same scopes on virtual server threads
+under New Order and Payment. It also retains the named matched controls and
+the catalogue range correction found by their CPU profiles. These later
+results retain their own source versions and workload configurations.

@@ -476,17 +476,24 @@ records the New Order/Payment lock regression found by the clean check, its
 tuple-key protection fix and the focused concurrency results.
 The [identity routing audit](../delivery/evidence/2026-09-29-tic-erebor-identity-routing.md)
 records direct primary/secondary routes and the logical mapping-mutation
-counts. It explicitly leaves physical map costs and final independent review
-open; the owner-accepted Stock Level throughput figures do not close those
-separate promotion gates.
+counts. The subsequent [physical write-cost evidence](../delivery/evidence/2026-09-29-tic-erebor-write-cost.md)
+records map pages/copies/WAL/history/flush work, replacement-lock counts,
+virtual-thread CPU/JIT diagnostics and the named controls. The accepted
+Stock Level figures retain their original scope.
 The [final review handoff](../delivery/evidence/2026-09-29-tic-erebor-review-handoff.md)
-lists the tested boundaries and the remaining physical write-cost and
-overflow capacity questions. No final independent code approval is recorded.
+lists the tested boundaries and the remaining retry-acceptance and independent
+review conditions. No final independent code approval is recorded.
 
 Promotion review response, 2026-09-29: the independent review at `bdf43fc0`
 raised cancelled commits (R1), insufficient overflow reclamation (R2),
 database-wide allocation scans (R3) and retained descriptor BASE replay (R4).
 The [review-fix evidence](../delivery/evidence/2026-09-29-tic-erebor-promotion-fixes.md)
-records their replacement and focused validation. Final write-cost evidence,
-clean integration validation and updated independent review remain before
-promotion.
+records their replacement and focused validation. Final source `46e5ab39`
+passes the clean full check with 1,131 engine tests. Warmed actual point and
+primary/secondary scan allocation is zero in the measured paths. JFR exposed
+an excluded catalogue-head scan; its interval routing is corrected and tested.
+Individual workload reports and the targeted longer New Order pair pass.
+The four-worker three-retry mix exhausts deadlock retries on both stable and
+candidate; a matched ten-retry diagnostic passes with reconciled retries and
+cleanup. Owner/review resolution of that strict retry condition and updated
+independent durable-format/recovery/concurrency approval remain before promotion.
