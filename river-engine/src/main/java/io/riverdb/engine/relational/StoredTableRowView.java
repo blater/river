@@ -51,7 +51,21 @@ public final class StoredTableRowView
   StatusCode bind(
       TableDescriptor descriptor, ByteBuffer source, int offset, int rowLength,
       StoredTableRowIntegerFilter filter, StoredTableColumnSelection selected) {
-    if (descriptor == null || source == null || !source.isReadOnly()
+    return bindChecked(descriptor, source, offset, rowLength, filter, selected, true);
+  }
+
+  /** Borrows bytes from a cursor-pinned immutable leaf generation. */
+  StatusCode bindPinned(
+      TableDescriptor descriptor, ByteBuffer source, int offset, int rowLength,
+      StoredTableRowIntegerFilter filter, StoredTableColumnSelection selected) {
+    return bindChecked(descriptor, source, offset, rowLength, filter, selected, false);
+  }
+
+  private StatusCode bindChecked(
+      TableDescriptor descriptor, ByteBuffer source, int offset, int rowLength,
+      StoredTableRowIntegerFilter filter, StoredTableColumnSelection selected,
+      boolean requireReadOnly) {
+    if (descriptor == null || source == null || requireReadOnly && !source.isReadOnly()
         || offset < 0 || rowLength < 0
         || selected != null && !selected.matches(descriptor.columnCount())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

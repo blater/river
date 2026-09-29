@@ -3,6 +3,7 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.table.IndexedTransactionSession;
+import java.nio.ByteBuffer;
 
 /** Owns one reusable tuple delta plan from admission through physical staging. */
 final class RelationalDescriptorTupleMutations {
@@ -23,14 +24,16 @@ final class RelationalDescriptorTupleMutations {
     plan = new RelationalDescriptorTupleDeltaPlan();
   }
 
-  StatusCode planInsert(TableDescriptor table, SqlValueAccess values, long logicalRowId) {
-    return plan.insert(table, values, logicalRowId);
+  StatusCode planInsert(
+      TableDescriptor table, SqlValueAccess values,
+      long logicalRowId, int rowBytes) {
+    return plan.insert(table, values, logicalRowId, rowBytes);
   }
 
   StatusCode planUpdate(
       TableDescriptor table, SqlValueAccess before,
-      SqlValueAccess after, long logicalRowId) {
-    return plan.update(table, before, after, logicalRowId);
+      SqlValueAccess after, long logicalRowId, int rowBytes) {
+    return plan.update(table, before, after, logicalRowId, rowBytes);
   }
 
   StatusCode planDelete(TableDescriptor table, SqlValueAccess values, long logicalRowId) {
@@ -62,8 +65,9 @@ final class RelationalDescriptorTupleMutations {
   }
 
   StatusCode stage(
-      IndexedTransactionSession session, TableDescriptor table, long logicalRowId) {
-    return staging.stage(session, table, plan, logicalRowId);
+      IndexedTransactionSession session, TableDescriptor table, long logicalRowId,
+      ByteBuffer row, int rowLength) {
+    return staging.stage(session, table, plan, logicalRowId, row, rowLength);
   }
 
   StatusCode prepareDelete(

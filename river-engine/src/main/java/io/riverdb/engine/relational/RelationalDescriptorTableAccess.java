@@ -165,7 +165,8 @@ public final class RelationalDescriptorTableAccess {
     status = prepareDelete(table, logicalRowId);
     if (!status.isOk()) return releaseCurrent(status);
     status = session.deleteLocked(lockedRows.locked());
-    return status.isOk() ? tupleMutations.stage(session, table, logicalRowId) : status;
+    return status.isOk() ? tupleMutations.stage(
+        session, table, logicalRowId, null, 0) : status;
   }
 
   /** Updates the row most recently published by this owned scan cursor. */
@@ -196,7 +197,8 @@ public final class RelationalDescriptorTableAccess {
         ? prepareDelete(table, logicalRowId) : StatusCode.INVALID_EXTERNAL_INPUT;
     if (!status.isOk()) return releaseCurrent(status);
     status = session.deleteLocked(lockedRows.locked());
-    return status.isOk() ? tupleMutations.stage(session, table, logicalRowId) : status;
+    return status.isOk() ? tupleMutations.stage(
+        session, table, logicalRowId, null, 0) : status;
   }
 
   /** Opens a logical-row scan and transfers the supplied schema pin into the cursor. */
@@ -307,7 +309,7 @@ public final class RelationalDescriptorTableAccess {
     status = checks.validate(table, values);
     if (!status.isOk()) return status;
     status = tupleMutations.planUpdate(
-        table, lockedRows.before(), values, logicalRowId);
+        table, lockedRows.before(), values, logicalRowId, rowAccess.length());
     if (!status.isOk()) return status;
     status = preflightMutation(table, rowAccess.length());
     if (status.isOk()) status = tupleMutations.protect(session, table);
@@ -320,7 +322,8 @@ public final class RelationalDescriptorTableAccess {
 
   private StatusCode stageUpdate(TableDescriptor table, long logicalRowId) {
     StatusCode status = session.updateLocked(lockedRows.locked(), rowAccess.bytes());
-    return status.isOk() ? tupleMutations.stage(session, table, logicalRowId) : status;
+    return status.isOk() ? tupleMutations.stage(
+        session, table, logicalRowId, rowAccess.bytes(), rowAccess.length()) : status;
   }
 
   private StatusCode releaseCurrent(StatusCode original) {

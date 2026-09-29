@@ -60,7 +60,8 @@ public final class RelationalDescriptorBatchInsert {
     }
     status = session.insert(
         RelationalDescriptorKeyspace.baseRows(table.tableId()), logicalRowId, rowBuffer.bytes());
-    if (status.isOk()) status = tupleMutations.stage(session, table, logicalRowId);
+    if (status.isOk()) status = tupleMutations.stage(
+        session, table, logicalRowId, rowBuffer.bytes(), rowBuffer.length());
     if (status.isOk()) status = batch.admit(table);
     if (status.isOk()) result.set(logicalRowId);
     return status;
@@ -74,7 +75,7 @@ public final class RelationalDescriptorBatchInsert {
     if (!status.isOk()) return status;
     status = checks.validate(table, values);
     if (!status.isOk()) return status;
-    status = tupleMutations.planInsert(table, values, logicalRowId);
+    status = tupleMutations.planInsert(table, values, logicalRowId, rowBuffer.length());
     if (!status.isOk()) return status;
     status = tupleMutations.preflightSingleRow(session, table, rowBuffer.length());
     if (!status.isOk()) return status;
