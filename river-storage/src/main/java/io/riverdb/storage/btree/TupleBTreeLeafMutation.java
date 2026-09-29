@@ -24,6 +24,17 @@ final class TupleBTreeLeafMutation {
       ByteBuffer key, int keyOffset, int keyLength,
       TupleBTreeWorkspace workspace,
       TupleBTreePageProvider provider, TupleBTreePageReference reference) {
+    return insert(page, start, schemaId, shape, key, keyOffset, keyLength,
+        null, 0, 0, 0, 0, 0, workspace, provider, reference);
+  }
+
+  static StatusCode insert(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      TupleBTreeWorkspace workspace,
+      TupleBTreePageProvider provider, TupleBTreePageReference reference) {
     StatusCode status = TupleBTreeLeafMutationPreparation.prepare(
         page, start, schemaId, shape, key, keyOffset, keyLength,
         workspace, provider, reference);
@@ -46,7 +57,9 @@ final class TupleBTreeLeafMutation {
     }
     return TupleBTreePageCodec.insertPreparedLeaf(
         page, start, schemaId, shape,
-        key, keyOffset, keyLength, insertion, workspace.mutation);
+        key, keyOffset, keyLength, value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence,
+        insertion, workspace.mutation);
   }
 
   static StatusCode delete(
@@ -56,6 +69,35 @@ final class TupleBTreeLeafMutation {
     return delete(
         page, start, schemaId, shape, key, keyOffset, keyLength,
         workspace, null, null);
+  }
+
+  static StatusCode replace(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      TupleBTreeWorkspace workspace,
+      TupleBTreePageProvider provider, TupleBTreePageReference reference) {
+    StatusCode status = TupleBTreeLeafMutationPreparation.prepare(
+        page, start, schemaId, shape, key, keyOffset, keyLength,
+        workspace, provider, reference);
+    if (!status.isOk()) return status;
+    int index = TupleBTreePageSupport.lowerBoundLeaf(
+        page, start, key, keyOffset, keyLength, workspace);
+    if (index < 0) {
+      workspace.mutation.reset();
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    int equality = equalAt(page, start, key, keyOffset, keyLength, index, workspace);
+    if (equality <= 0) {
+      workspace.mutation.reset();
+      return equality < 0 ? StatusCode.INVARIANT_BROKEN : StatusCode.CONFLICT;
+    }
+    return TupleBTreePageCodec.replacePreparedLeafValue(
+        page, start, schemaId, shape, key, keyOffset, keyLength,
+        value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence,
+        index, workspace.mutation);
   }
 
   static StatusCode delete(

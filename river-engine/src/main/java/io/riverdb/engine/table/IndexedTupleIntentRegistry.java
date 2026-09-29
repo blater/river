@@ -55,7 +55,9 @@ final class IndexedTupleIntentRegistry {
     return matchesBuilding(batch, index) ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 
-  StatusCode stage(int resultingRoot, boolean building, long privateOwner) {
+  StatusCode stage(
+      int resultingRoot, boolean building, long privateOwner,
+      long memberSequence, boolean membershipChanged) {
     if (record.generation() == Long.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
     int count = record.descriptorCount();
     StatusCode status = record.copyDescriptors(descriptors, 0);
@@ -65,7 +67,8 @@ final class IndexedTupleIntentRegistry {
             : TupleIndexRootRecordCodec.STATE_READY, resultingRoot,
         record.keyId(), record.ownerObjectId(), record.schemaId(),
         record.descriptorHash(), building ? privateOwner : 0, record.generation() + 1,
-        descriptors, 0, count);
+        membershipChanged ? memberSequence : record.membershipSequence(),
+        0, descriptors, 0, count);
     bytes.position(0);
     bytes.limit(TupleIndexRootRecordCodec.BYTES);
     return status.isOk() ? writer.stage(

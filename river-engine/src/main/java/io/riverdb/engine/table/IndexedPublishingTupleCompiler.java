@@ -23,7 +23,8 @@ final class IndexedPublishingTupleCompiler {
   StatusCode compile(
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedTupleIndexLifecycleBatch lifecycle, int lifecycleIndex,
-      IndexedRelationalMutation mutation, int suboperation, int firstMutation) {
+      IndexedRelationalMutation mutation, int suboperation, int firstMutation,
+      long memberSequence) {
     if (!IndexedPublishingTupleMatch.same(
         intents, descriptor, lifecycle, lifecycleIndex)) return StatusCode.CORRUPTION;
     StatusCode status = registry.loadBuilding(lifecycle, lifecycleIndex);
@@ -32,7 +33,7 @@ final class IndexedPublishingTupleCompiler {
     return status.isOk()
         ? compileLoaded(
             intents, descriptor, lifecycle, lifecycleIndex, mutation,
-            suboperation, firstMutation, expected)
+            suboperation, firstMutation, memberSequence, expected)
         : status;
   }
 
@@ -40,7 +41,7 @@ final class IndexedPublishingTupleCompiler {
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedTupleIndexLifecycleBatch lifecycle, int lifecycleIndex,
       IndexedRelationalMutation mutation, int suboperation, int firstMutation,
-      ByteBuffer expected) {
+      long memberSequence, ByteBuffer expected) {
     int scalarRoot = BTreeRootPage.rootPageId(expected);
     int nextPage = BTreeRootPage.nextPageId(expected);
     long heap = kernel.operationRowCount();
@@ -50,7 +51,9 @@ final class IndexedPublishingTupleCompiler {
     if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
     boolean building = lifecycle.appendsBuilding(lifecycleIndex);
-    status = registry.stage(resultingRoot, building, lifecycle.privateOwnerAt(lifecycleIndex));
+    status = registry.stage(
+        resultingRoot, building, lifecycle.privateOwnerAt(lifecycleIndex),
+        memberSequence, deltas.count(intents, descriptor) > 0 || !building);
     if (!status.isOk()) return status;
     ByteBuffer resulting = metadata();
     if (resulting == null) return StatusCode.CORRUPTION;

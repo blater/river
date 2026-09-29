@@ -36,7 +36,9 @@ final class IndexedTupleLifecycleCompiler {
 
   StatusCode compile(
       IndexedTupleIndexLifecycleBatch batch, int index,
-      IndexedRelationalMutation mutation, int firstMutation) {
+      IndexedRelationalMutation mutation, int firstMutation,
+      long memberSequence) {
+    registry.memberSequence(memberSequence);
     return switch (batch.operationAt(index)) {
       case IndexedTupleIndexLifecycleBatch.CREATE_BUILDING ->
           create(batch, index, mutation, firstMutation);

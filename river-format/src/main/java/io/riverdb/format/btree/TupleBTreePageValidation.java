@@ -68,10 +68,13 @@ final class TupleBTreePageValidation {
     int previousLength = 0;
     for (int index = 0; index < count; index++) {
       int slot = start + TupleBTreePageCodec.HEADER_BYTES
-          + index * TupleBTreePageCodec.SLOT_BYTES;
+          + index * TupleBTreePageCodec.slotBytes(type);
       int keyOffset = FormatBytes.getInt(source, slot);
       int keyLength = FormatBytes.getInt(source, slot + 4);
-      cursor -= keyLength;
+      if (type == TupleBTreePageCodec.TYPE_LEAF
+          && !TupleBTreeEntryValidation.validLeafValue(
+              source, slot, keyOffset, keyLength)) return StatusCode.CORRUPTION;
+      cursor -= keyLength + TupleBTreeEntryValidation.inlineValueLength(source, slot, type);
       if (!TupleBTreeEntryValidation.valid(
           source, start, slot, type, keyOffset, keyLength, cursor, freeStart,
           highOffset, highLength, previousOffset, previousLength, index, expectedShape)) {

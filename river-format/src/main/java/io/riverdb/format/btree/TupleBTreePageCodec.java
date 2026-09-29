@@ -8,16 +8,30 @@ import java.nio.ByteBuffer;
 
 /** Compact slotted B-tree payload with inline physical tuple keys. */
 public final class TupleBTreePageCodec {
-  public static final int VERSION = 3;
+  public static final int VERSION = 4;
   public static final int TYPE_LEAF = 1;
   public static final int TYPE_INTERNAL = 2;
   public static final int HEADER_BYTES = 72;
   public static final int SLOT_BYTES = 12;
+  public static final int LEAF_SLOT_BYTES = 40;
   public static final int MAXIMUM_SLOTS =
       (PageCodec.MAX_PAYLOAD_BYTES - HEADER_BYTES) / SLOT_BYTES;
+  public static final int MAXIMUM_LEAF_SLOTS =
+      (PageCodec.MAX_PAYLOAD_BYTES - HEADER_BYTES) / LEAF_SLOT_BYTES;
   static final long MAGIC = 0x5249565455425450L; // RIVTUBTP
 
   private TupleBTreePageCodec() { }
+
+  public static int slotBytes(int type) {
+    return type == TYPE_LEAF ? LEAF_SLOT_BYTES : SLOT_BYTES;
+  }
+
+  public static boolean inlineEligible(int physicalKeyBytes, int valueBytes) {
+    return physicalKeyBytes > 0 && physicalKeyBytes <= TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES
+        && valueBytes >= 0 && (long) LEAF_SLOT_BYTES + physicalKeyBytes + valueBytes
+            <= PageCodec.MAX_PAYLOAD_BYTES - HEADER_BYTES
+                - TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES;
+  }
 
   public static StatusCode initialize(
       ByteBuffer target, int start, int type, int pointer,
@@ -47,6 +61,17 @@ public final class TupleBTreePageCodec {
       ByteBuffer key, int keyOffset, int keyLength) {
     return TupleBTreePageAppend.append(
         page, start, shape, TYPE_LEAF, key, keyOffset, keyLength, 0);
+  }
+
+  public static StatusCode appendLeaf(
+      ByteBuffer page, int start, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence) {
+    return TupleBTreePageAppend.appendLeaf(
+        page, start, shape, key, keyOffset, keyLength,
+        value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence);
   }
 
   /**
@@ -127,12 +152,36 @@ public final class TupleBTreePageCodec {
         key, keyOffset, keyLength, insertion, capability);
   }
 
+  public static StatusCode insertPreparedLeaf(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      int insertion, TupleBTreePageMutationCapability capability) {
+    return TupleBTreePageMutation.insertLeaf(
+        page, start, schemaId, shape, key, keyOffset, keyLength,
+        value, valueOffset, valueLength, overflowPageId, overflowGeneration,
+        modificationSequence, insertion, capability);
+  }
+
   /** Mutates the exact leaf bound by {@link #prepareLeafMutation}. */
   public static StatusCode deletePreparedLeaf(
       ByteBuffer page, int start, long schemaId, TupleShape shape, int deletion,
       TupleBTreePageMutationCapability capability) {
     return TupleBTreePageMutation.deleteLeaf(
         page, start, schemaId, shape, deletion, capability);
+  }
+
+  public static StatusCode replacePreparedLeafValue(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      int index, TupleBTreePageMutationCapability capability) {
+    return TupleBTreePageMutation.replaceLeafValue(
+        page, start, schemaId, shape, key, keyOffset, keyLength,
+        value, valueOffset, valueLength, overflowPageId, overflowGeneration,
+        modificationSequence, index, capability);
   }
 
   public static StatusCode appendInternal(
@@ -153,10 +202,15 @@ public final class TupleBTreePageCodec {
         source, start, header, index, TYPE_LEAF)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int slot = start + HEADER_BYTES + index * SLOT_BYTES;
+    int slot = start + HEADER_BYTES + index * LEAF_SLOT_BYTES;
     int keyOffset = FormatBytes.getInt(source, slot);
     int keyLength = FormatBytes.getInt(source, slot + 4);
     result.set(keyOffset, keyLength,
+        FormatBytes.getInt(source, slot + 8),
+        FormatBytes.getInt(source, slot + 12),
+        FormatBytes.getInt(source, slot + 16),
+        FormatBytes.getLong(source, slot + 20),
+        FormatBytes.getLong(source, slot + 28),
         TupleKeyCodec.validatedLogicalRowId(source, start + keyOffset, keyLength));
     return StatusCode.OK;
   }

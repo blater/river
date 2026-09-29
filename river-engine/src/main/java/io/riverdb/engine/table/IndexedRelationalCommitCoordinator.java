@@ -26,7 +26,8 @@ final class IndexedRelationalCommitCoordinator {
       IndexedRelationalMutationBuffer mutations) {
     failureFences = false;
     StatusCode status = plan.plan(transactionId, operationId, mutations);
-    if (status.isOk()) status = applier.stage(mutations, oldestVisibleCommitSequence);
+    if (status.isOk()) status = applier.stage(
+        mutations, commitSequence, oldestVisibleCommitSequence);
     if (status.isOk()) status = wal.prepare(plan, commitSequence);
     if (!status.isOk()) return cancelPrepared(status);
     status = wal.forcePrepared();

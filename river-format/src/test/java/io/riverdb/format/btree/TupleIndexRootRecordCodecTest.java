@@ -27,6 +27,7 @@ final class TupleIndexRootRecordCodecTest {
     assertEquals(descriptorHash(), result.descriptorHash());
     assertEquals(0, result.privateOwner());
     assertEquals(29, result.generation());
+    assertEquals(17, result.membershipSequence());
     assertEquals(2, result.descriptorCount());
     assertEquals(DESCRIPTORS[0], result.descriptorAt(0));
     assertEquals(DESCRIPTORS[1], result.descriptorAt(1));
@@ -58,7 +59,7 @@ final class TupleIndexRootRecordCodecTest {
     assertEquals(StatusCode.OK,
         TupleIndexRootRecordCodec.encode(bytes, 0,
             TupleIndexRootRecordCodec.STATE_READY, 17,
-            7, 11, 13, descriptorHash(), 0, 29,
+            7, 11, 13, descriptorHash(), 0, 29, 17, 0,
             DESCRIPTORS, 0, DESCRIPTORS.length));
     assertEquals(StatusCode.OK,
         TupleIndexRootRecordCodec.decode(bytes, 0, result));
@@ -67,7 +68,7 @@ final class TupleIndexRootRecordCodecTest {
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
         TupleIndexRootRecordCodec.encode(bytes, 0,
             TupleIndexRootRecordCodec.STATE_READY, 17,
-            CatalogKeyspace.KEY_ID_EXHAUSTED, 11, 13, descriptorHash(), 0, 29,
+            CatalogKeyspace.KEY_ID_EXHAUSTED, 11, 13, descriptorHash(), 0, 29, 17, 0,
             DESCRIPTORS, 0, DESCRIPTORS.length));
     assertEquals(StatusCode.OK, encode(bytes, TupleIndexRootRecordCodec.STATE_READY, 17, 0));
     FormatBytes.putLong(bytes, 40, 0);
@@ -81,11 +82,15 @@ final class TupleIndexRootRecordCodecTest {
     ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
     TupleIndexRootRecord result = new TupleIndexRootRecord();
     assertEquals(StatusCode.OK, encode(bytes, TupleIndexRootRecordCodec.STATE_READY, 17, 0));
-    FormatBytes.putInt(bytes, 8, 3);
+    FormatBytes.putInt(bytes, 8, 4);
     assertEquals(StatusCode.CORRUPTION,
         TupleIndexRootRecordCodec.decode(bytes, 0, result));
     assertEquals(StatusCode.OK, encode(bytes, TupleIndexRootRecordCodec.STATE_READY, 17, 0));
     FormatBytes.putInt(bytes, 80 + DESCRIPTORS.length * Integer.BYTES, SqlTypeDescriptor.BIGINT);
+    assertEquals(StatusCode.CORRUPTION,
+        TupleIndexRootRecordCodec.decode(bytes, 0, result));
+    assertEquals(StatusCode.OK, encode(bytes, TupleIndexRootRecordCodec.STATE_READY, 17, 0));
+    FormatBytes.putLong(bytes, 208, -1);
     assertEquals(StatusCode.CORRUPTION,
         TupleIndexRootRecordCodec.decode(bytes, 0, result));
   }
@@ -97,7 +102,7 @@ final class TupleIndexRootRecordCodecTest {
     assertEquals(StatusCode.OK,
         TupleIndexRootRecordCodec.encode(
             bytes, 0, TupleIndexRootRecordCodec.STATE_DROPPING, 0,
-            7, 11, 13, descriptorHash(), 23, 29, 20,
+            7, 11, 13, descriptorHash(), 23, 29, 17, 20,
             DESCRIPTORS, 0, DESCRIPTORS.length));
     assertEquals(StatusCode.OK,
         TupleIndexRootRecordCodec.decode(bytes, 0, result));
@@ -107,12 +112,12 @@ final class TupleIndexRootRecordCodecTest {
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
         TupleIndexRootRecordCodec.encode(
             bytes, 0, TupleIndexRootRecordCodec.STATE_DROPPING, 0,
-            7, 11, 13, descriptorHash(), 23, 29, 3,
+            7, 11, 13, descriptorHash(), 23, 29, 17, 3,
             DESCRIPTORS, 0, DESCRIPTORS.length));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
         TupleIndexRootRecordCodec.encode(
             bytes, 0, TupleIndexRootRecordCodec.STATE_READY, 17,
-            7, 11, 13, descriptorHash(), 0, 29, 4,
+            7, 11, 13, descriptorHash(), 0, 29, 17, 4,
             DESCRIPTORS, 0, DESCRIPTORS.length));
   }
 
@@ -126,7 +131,7 @@ final class TupleIndexRootRecordCodecTest {
   private static StatusCode encode(ByteBuffer bytes, int state, int root, long owner) {
     return TupleIndexRootRecordCodec.encode(
         bytes, 0, state, root, 7, 11, 7, descriptorHash(), owner, 29,
-        DESCRIPTORS, 0, DESCRIPTORS.length);
+        17, 0, DESCRIPTORS, 0, DESCRIPTORS.length);
   }
 
   private static long descriptorHash() {

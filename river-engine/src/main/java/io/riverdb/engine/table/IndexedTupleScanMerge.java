@@ -45,12 +45,16 @@ final class IndexedTupleScanMerge {
         int intent = ordinals[position++];
         if (comparison == 0) committed = false;
         if (intents.operationAt(intent) == IndexedRelationalMutation.TUPLE_INSERT) {
-          result.set(intents.logicalRowIdAt(intent));
+          result.setPending(intents.logicalRowIdAt(intent));
           return StatusCode.OK;
         }
       } else {
         committed = false;
-        result.set(entry.logicalRowId());
+        result.setCommitted(
+            entry.logicalRowId(), cursor.page(),
+            cursor.pageStart() + entry.valueOffset(), entry.valueLength(),
+            entry.overflowPageId(), entry.overflowGeneration(),
+            entry.modificationSequence());
         return StatusCode.OK;
       }
     }

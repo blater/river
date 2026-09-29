@@ -73,8 +73,7 @@ final class IndexedTupleRootSnapshot {
     return true;
   }
 
-  // Every tuple mutation versions its registry row, covering entries and negative decisions.
-  long observedCommitSequence() { return version.observedCommitSequence(); }
+  long observedCommitSequence() { return record.membershipSequence(); }
 
   long generation() { return record.generation(); }
 

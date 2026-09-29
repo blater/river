@@ -113,6 +113,52 @@ final class TupleBTreeLeafPageTest {
   }
 
   @Test
+  void splitPreservesExistingInlineValuesAndEntrySequences() {
+    TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
+    ByteBuffer source = page(shape);
+    ByteBuffer keys = ByteBuffer.allocate(128);
+    ByteBuffer value = ByteBuffer.allocate(520);
+    for (int index = 0; index < value.capacity(); index++) {
+      value.put(index, (byte) (index % 101));
+    }
+    int next = 1;
+    int length;
+    while (true) {
+      length = key(keys, 0, next, next);
+      StatusCode status = TupleBTreePageCodec.appendLeaf(
+          source, 0, shape, keys, 0, length, value, 0, 520, 0, 0, next);
+      if (status == StatusCode.RESOURCE_EXHAUSTED) break;
+      assertEquals(StatusCode.OK, status);
+      next++;
+    }
+    ByteBuffer left = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
+    ByteBuffer right = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
+    TupleBTreeWorkspace workspace = new TupleBTreeWorkspace();
+    TupleBTreeSplitResult split = new TupleBTreeSplitResult();
+    assertEquals(StatusCode.OK, TupleBTreeLeafPage.splitInsert(
+        source, 0, left, 0, right, 0, 16, 17, SCHEMA_ID, shape,
+        keys, 0, length, workspace, split));
+    TupleBTreePageHeader header = new TupleBTreePageHeader();
+    TupleBTreePageValidationProof proof = new TupleBTreePageValidationProof();
+    TupleBTreeLeafEntry entry = new TupleBTreeLeafEntry();
+    for (int pageNumber = 0; pageNumber < 2; pageNumber++) {
+      ByteBuffer page = pageNumber == 0 ? left : right;
+      assertEquals(StatusCode.OK, TupleBTreePageCodec.validateForRead(
+          page, 0, SCHEMA_ID, shape, header, proof));
+      for (int ordinal = 0; ordinal < header.entryCount(); ordinal++) {
+        assertEquals(StatusCode.OK, TupleBTreePageCodec.readValidatedLeaf(
+            page, 0, header, ordinal, entry));
+        if (entry.logicalRowId() == next) continue;
+        assertEquals(entry.logicalRowId(), entry.modificationSequence());
+        assertEquals(520, entry.valueLength());
+        for (int offset = 0; offset < 520; offset++) {
+          assertEquals(value.get(offset), page.get(entry.valueOffset() + offset));
+        }
+      }
+    }
+  }
+
+  @Test
   void oversizedIndexKeyLeavesPageUnchanged() {
     int text = SqlTypeDescriptor.varchar(255);
     TupleShape shape = shape(new int[] {text, text, text});

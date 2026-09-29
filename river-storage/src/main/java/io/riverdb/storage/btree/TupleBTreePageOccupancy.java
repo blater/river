@@ -8,7 +8,8 @@ final class TupleBTreePageOccupancy {
 
   static boolean accepts(int keyLength, TupleBTreeWorkspace workspace) {
     long resultingFreeStart = (long) TupleBTreePageCodec.HEADER_BYTES
-        + (long) (workspace.header.entryCount() + 1) * TupleBTreePageCodec.SLOT_BYTES;
+        + (long) (workspace.header.entryCount() + 1)
+            * TupleBTreePageCodec.slotBytes(workspace.header.type());
     long resultingFreeEnd = (long) workspace.header.freeEnd() - keyLength;
     return resultingFreeStart <= resultingFreeEnd;
   }

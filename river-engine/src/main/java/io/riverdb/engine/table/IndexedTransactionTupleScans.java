@@ -90,7 +90,10 @@ final class IndexedTransactionTupleScans {
         || session.findTupleScan(cursor) < 0 || !cursor.ownedBy(session)) {
       return StatusCode.CONFLICT;
     }
-    return session.table().nextTupleScan(cursor, session.tupleIntents(), result);
+    StatusCode status = session.table().nextTupleScan(
+        cursor, session.tupleIntents(), result);
+    if (status.isOk()) session.observeCommit(result.modificationSequence());
+    return status;
   }
 
   StatusCode close(IndexedTupleScanCursor cursor) {

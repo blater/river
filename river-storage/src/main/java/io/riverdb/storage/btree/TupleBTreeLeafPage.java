@@ -43,12 +43,40 @@ public final class TupleBTreeLeafPage {
         workspace, provider, reference);
   }
 
+  static StatusCode insertBorrowed(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      TupleBTreeWorkspace workspace,
+      TupleBTreePageProvider provider, TupleBTreePageReference reference) {
+    return TupleBTreeLeafMutation.insert(
+        page, start, schemaId, shape, key, keyOffset, keyLength,
+        value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence,
+        workspace, provider, reference);
+  }
+
   static StatusCode delete(
       ByteBuffer page, int start, long schemaId, TupleShape shape,
       ByteBuffer key, int keyOffset, int keyLength,
       TupleBTreeWorkspace workspace) {
     return TupleBTreeLeafMutation.delete(
         page, start, schemaId, shape, key, keyOffset, keyLength, workspace);
+  }
+
+  static StatusCode replaceBorrowed(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      TupleBTreeWorkspace workspace,
+      TupleBTreePageProvider provider, TupleBTreePageReference reference) {
+    return TupleBTreeLeafMutation.replace(
+        page, start, schemaId, shape, key, keyOffset, keyLength,
+        value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence,
+        workspace, provider, reference);
   }
 
   static StatusCode deleteBorrowed(
@@ -72,5 +100,21 @@ public final class TupleBTreeLeafPage {
         source, sourceStart, left, leftStart, right, rightStart,
         leftPageId, rightPageId, schemaId, shape,
         key, keyOffset, keyLength, workspace, result);
+  }
+
+  public static StatusCode splitInsert(
+      ByteBuffer source, int sourceStart,
+      ByteBuffer left, int leftStart,
+      ByteBuffer right, int rightStart,
+      int leftPageId, int rightPageId, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      TupleBTreeWorkspace workspace, TupleBTreeSplitResult result) {
+    return TupleBTreeLeafSplit.splitInsert(
+        source, sourceStart, left, leftStart, right, rightStart,
+        leftPageId, rightPageId, schemaId, shape,
+        key, keyOffset, keyLength, value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence, workspace, result);
   }
 }

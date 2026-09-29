@@ -49,12 +49,22 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
     return StatusCode.OK;
   }
 
+  StatusCode beginVariableAllocation() {
+    if (active || pages == null || root == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = root.begin();
+    if (!status.isOk()) return status;
+    plannedPages = -1;
+    allocatedPages = 0;
+    active = true;
+    return StatusCode.OK;
+  }
+
   StatusCode finish(StatusCode operation) {
     if (!active) return StatusCode.INVARIANT_BROKEN;
     StatusCode status = operation;
     if (firstReference != null || secondReference != null) {
       status = StatusCode.INVARIANT_BROKEN;
-    } else if (status.isOk() && allocatedPages != plannedPages) {
+    } else if (status.isOk() && plannedPages >= 0 && allocatedPages != plannedPages) {
       status = StatusCode.INVARIANT_BROKEN;
     }
     StatusCode released = releaseMetadata();
@@ -167,8 +177,17 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   @Override
   public StatusCode allocate(TupleBTreePageReference result) {
     if (!active || result == null || result.isAttached()
-        || allocatedPages >= plannedPages || !metadata.attached()) {
+        || allocatedPages >= (plannedPages < 0 ? maximumNewPages : plannedPages)) {
       return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    if (!metadata.attached()) {
+      StatusCode admission = pages.pinScalarOperationPage(
+          IndexedTableKernel.ROOT_META_PAGE_ID, true, metadata);
+      if (!admission.isOk()) return admission;
+    }
+    if (plannedPages < 0) {
+      StatusCode admission = admitAllocation(1);
+      if (!admission.isOk()) return admission;
     }
     IndexedOperationPage page = freePage();
     if (page == null) return StatusCode.RESOURCE_EXHAUSTED;

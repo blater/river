@@ -49,6 +49,16 @@ public final class TupleBTree {
     return TupleBTreeMutation.insert(this, key, keyOffset, keyLength, workspace);
   }
 
+  public StatusCode insert(
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      TupleBTreeTreeWorkspace workspace) {
+    return TupleBTreeMutation.insert(
+        this, key, keyOffset, keyLength, value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence, workspace);
+  }
+
   public StatusCode preflightInsert(
       ByteBuffer key, int keyOffset, int keyLength,
       TupleBTreeTreeWorkspace workspace, TupleBTreeInsertPreflightResult result) {
@@ -59,6 +69,16 @@ public final class TupleBTree {
   public StatusCode delete(
       ByteBuffer key, int keyOffset, int keyLength, TupleBTreeTreeWorkspace workspace) {
     return TupleBTreeMutation.delete(this, key, keyOffset, keyLength, workspace);
+  }
+
+  public StatusCode replaceValue(
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      TupleBTreeTreeWorkspace workspace) {
+    return TupleBTreeMutation.replaceValue(
+        this, key, keyOffset, keyLength, value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence, workspace);
   }
 
   public StatusCode validate(

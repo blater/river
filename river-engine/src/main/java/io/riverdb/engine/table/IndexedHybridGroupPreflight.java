@@ -114,7 +114,7 @@ final class IndexedHybridGroupPreflight {
     long started = System.nanoTime();
     StatusCode status = compiler.compileCumulative(
         prepared.pendingMutations(), prepared.tupleIntents(), prepared.tupleLifecycle(),
-        prepared.logicalRowFloors());
+        prepared.logicalRowFloors(), sequences[index]);
     record(path, IndexedCommitStage.PREFLIGHT_COMPILE, started, status);
     if (status.isOk()) status = validateVersions(prepared);
     if (status.isOk()) status = planMember(prepared, plan, index, sequences, path);

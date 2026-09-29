@@ -13,12 +13,13 @@ public final class TupleIndexRootRecord {
   private long descriptorHash;
   private long privateOwner;
   private long generation;
+  private long membershipSequence;
   private int cleanupCursor;
   private int descriptorCount;
 
   void set(int valueState, int root, long key, long object,
       long schema, long hash, long owner, long valueGeneration,
-      int cursor, int count) {
+      long valueMembershipSequence, int cursor, int count) {
     state = valueState;
     rootPageId = root;
     keyId = key;
@@ -27,6 +28,7 @@ public final class TupleIndexRootRecord {
     descriptorHash = hash;
     privateOwner = owner;
     generation = valueGeneration;
+    membershipSequence = valueMembershipSequence;
     cleanupCursor = cursor;
     descriptorCount = count;
     for (int index = count; index < descriptors.length; index++) descriptors[index] = 0;
@@ -43,6 +45,7 @@ public final class TupleIndexRootRecord {
     descriptorHash = 0;
     privateOwner = 0;
     generation = 0;
+    membershipSequence = 0;
     cleanupCursor = 0;
     descriptorCount = 0;
     for (int index = 0; index < descriptors.length; index++) descriptors[index] = 0;
@@ -55,6 +58,7 @@ public final class TupleIndexRootRecord {
   public long descriptorHash() { return descriptorHash; }
   public long privateOwner() { return privateOwner; }
   public long generation() { return generation; }
+  public long membershipSequence() { return membershipSequence; }
   public int cleanupCursor() { return cleanupCursor; }
   public int descriptorCount() { return descriptorCount; }
   public int descriptorAt(int index) {

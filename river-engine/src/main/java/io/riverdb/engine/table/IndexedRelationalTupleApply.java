@@ -21,28 +21,31 @@ final class IndexedRelationalTupleApply {
     reclaimer = new IndexedTupleGraphReclaimer(pageSet);
   }
 
-  StatusCode apply(IndexedRelationalMutationBuffer source, int operation) {
+  StatusCode apply(
+      IndexedRelationalMutationBuffer source, int operation, long memberSequence) {
     if (kernel.operationRowCount() != source.expectedHeapVersionAt(operation)) {
       return StatusCode.CORRUPTION;
     }
-    return applyLoaded(source, operation);
+    return applyLoaded(source, operation, memberSequence);
   }
 
   private StatusCode applyLoaded(
-      IndexedRelationalMutationBuffer source, int operation) {
+      IndexedRelationalMutationBuffer source, int operation, long memberSequence) {
     StatusCode status = registry.load(source, operation);
     int descriptor = source.suboperationDescriptorAt(operation);
     if (status.isOk()) status = prepare(source, operation, descriptor);
     if (status.isOk()) status = applyMutations(source, operation);
     if (status.isOk()) status = validateResult(source, operation);
-    if (status.isOk()) status = stageAndCleanup(source, operation, descriptor);
+    if (status.isOk()) status = stageAndCleanup(
+        source, operation, descriptor, memberSequence);
     return complete(status, source, operation);
   }
 
   private StatusCode stageAndCleanup(
-      IndexedRelationalMutationBuffer source, int operation, int descriptor) {
+      IndexedRelationalMutationBuffer source, int operation, int descriptor,
+      long memberSequence) {
     // Registry allocation precedes free-page publication; failure discards both staged changes.
-    StatusCode status = registry.stage(source, operation);
+    StatusCode status = registry.stage(source, operation, memberSequence);
     return status.isOk() ? cleanup(source, operation, descriptor) : status;
   }
 

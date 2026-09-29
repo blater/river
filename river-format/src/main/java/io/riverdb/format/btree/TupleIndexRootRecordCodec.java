@@ -2,13 +2,12 @@ package io.riverdb.format.btree;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.FormatBytes;
-import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
 /** Self-contained durable tuple-root registry record. */
 public final class TupleIndexRootRecordCodec {
-  public static final int VERSION = 4;
-  public static final int BYTES = 208;
+  public static final int VERSION = 5;
+  public static final int BYTES = 216;
   public static final int STATE_BUILDING = 1;
   public static final int STATE_READY = 2;
   public static final int STATE_DROPPING = 3;
@@ -17,6 +16,7 @@ public final class TupleIndexRootRecordCodec {
   private static final int DESCRIPTOR_COUNT_OFFSET = 72;
   private static final int RESERVED_OFFSET = 76;
   private static final int DESCRIPTORS_OFFSET = 80;
+  private static final int MEMBERSHIP_SEQUENCE_OFFSET = 208;
 
   private TupleIndexRootRecordCodec() { }
 
@@ -24,21 +24,9 @@ public final class TupleIndexRootRecordCodec {
       ByteBuffer target, int start, int state, int rootPageId,
       long keyId, long ownerObjectId, long schemaId,
       long descriptorHash, long privateOwner, long generation,
+      long membershipSequence, int cleanupCursor,
       int[] descriptors, int descriptorOffset, int descriptorCount) {
-    int cursor = state == STATE_DROPPING && rootPageId == 0
-        ? PageCodec.FIRST_ALLOCATABLE_PAGE_ID : 0;
-    return encode(
-        target, start, state, rootPageId, keyId, ownerObjectId, schemaId,
-        descriptorHash, privateOwner, generation, cursor,
-        descriptors, descriptorOffset, descriptorCount);
-  }
-
-  public static StatusCode encode(
-      ByteBuffer target, int start, int state, int rootPageId,
-      long keyId, long ownerObjectId, long schemaId,
-      long descriptorHash, long privateOwner, long generation, int cleanupCursor,
-      int[] descriptors, int descriptorOffset, int descriptorCount) {
-    if (!writable(target, start)
+    if (!writable(target, start) || membershipSequence < 0
         || !TupleIndexRootRecordValidation.identity(state, rootPageId, keyId, ownerObjectId,
             schemaId, descriptorHash, privateOwner, generation, cleanupCursor)
         || !TupleIndexRootRecordValidation.descriptors(
@@ -62,6 +50,7 @@ public final class TupleIndexRootRecordCodec {
       FormatBytes.putInt(target, start + DESCRIPTORS_OFFSET + index * Integer.BYTES,
           index < descriptorCount ? descriptors[descriptorOffset + index] : 0);
     }
+    FormatBytes.putLong(target, start + MEMBERSHIP_SEQUENCE_OFFSET, membershipSequence);
     return StatusCode.OK;
   }
 
@@ -81,11 +70,14 @@ public final class TupleIndexRootRecordCodec {
     long hash = FormatBytes.getLong(source, start + 48);
     long owner = FormatBytes.getLong(source, start + 56);
     long generation = FormatBytes.getLong(source, start + 64);
+    long membershipSequence = FormatBytes.getLong(
+        source, start + MEMBERSHIP_SEQUENCE_OFFSET);
     int cleanupCursor = FormatBytes.getInt(source, start + RESERVED_OFFSET);
     int descriptorCount = FormatBytes.getInt(source, start + DESCRIPTOR_COUNT_OFFSET);
     if (FormatBytes.getLong(source, start) != MAGIC
         || FormatBytes.getInt(source, start + 8) != VERSION
         || FormatBytes.getInt(source, start + 12) != BYTES
+        || membershipSequence < 0
         || !TupleIndexRootRecordValidation.identity(
             state, root, key, object, schema, hash, owner, generation, cleanupCursor)
         || !TupleIndexRootRecordValidation.encoded(
@@ -94,7 +86,7 @@ public final class TupleIndexRootRecordCodec {
     }
     result.set(
         state, root, key, object, schema, hash, owner, generation,
-        cleanupCursor, descriptorCount);
+        membershipSequence, cleanupCursor, descriptorCount);
     for (int index = 0; index < descriptorCount; index++) {
       result.setDescriptorAt(index, FormatBytes.getInt(
           source, start + DESCRIPTORS_OFFSET + index * Integer.BYTES));

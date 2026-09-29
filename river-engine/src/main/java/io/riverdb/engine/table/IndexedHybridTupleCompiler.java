@@ -23,21 +23,22 @@ final class IndexedHybridTupleCompiler {
   StatusCode compile(
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedRelationalMutation mutation, int outputDescriptor,
-      int suboperation, int firstMutation) {
+      int suboperation, int firstMutation, long memberSequence) {
     StatusCode status = registry.load(intents, descriptor);
     ByteBuffer expected = status.isOk() ? metadata() : null;
     if (status.isOk() && expected == null) status = StatusCode.CORRUPTION;
     return status.isOk()
         ? compileLoaded(
             intents, descriptor, mutation, outputDescriptor,
-            suboperation, firstMutation, expected)
+            suboperation, firstMutation, memberSequence, expected)
         : status;
   }
 
   private StatusCode compileLoaded(
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedRelationalMutation mutation, int outputDescriptor,
-      int suboperation, int firstMutation, ByteBuffer expected) {
+      int suboperation, int firstMutation, long memberSequence,
+      ByteBuffer expected) {
     int scalarRoot = BTreeRootPage.rootPageId(expected);
     int nextPage = BTreeRootPage.nextPageId(expected);
     long heap = kernel.operationRowCount();
@@ -46,7 +47,9 @@ final class IndexedHybridTupleCompiler {
     StatusCode status = deltas.apply(intents, descriptor, tupleRoot);
     if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
-    status = registry.stage(resultingRoot, false, 0);
+    status = registry.stage(
+        resultingRoot, false, 0, memberSequence,
+        deltas.count(intents, descriptor) > 0);
     if (!status.isOk()) return status;
     ByteBuffer resulting = metadata();
     if (resulting == null) return StatusCode.CORRUPTION;

@@ -75,6 +75,28 @@ final class IndexedRelationalTupleSession {
     return finished;
   }
 
+  StatusCode insertValue(
+      ByteBuffer key, ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence) {
+    StatusCode status = provider.beginVariableAllocation();
+    if (!status.isOk()) return status;
+    status = tree.insert(key, key.position(), key.remaining(),
+        value, valueOffset, valueLength, overflowPageId,
+        overflowGeneration, modificationSequence, workspace);
+    return finish(status);
+  }
+
+  StatusCode replaceValue(
+      ByteBuffer key, ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence) {
+    StatusCode status = provider.beginVariableAllocation();
+    if (!status.isOk()) return status;
+    status = tree.replaceValue(key, key.position(), key.remaining(),
+        value, valueOffset, valueLength, overflowPageId,
+        overflowGeneration, modificationSequence, workspace);
+    return finish(status);
+  }
+
   StatusCode delete(ByteBuffer key) {
     StatusCode status = provider.begin(0);
     if (!status.isOk()) return status;

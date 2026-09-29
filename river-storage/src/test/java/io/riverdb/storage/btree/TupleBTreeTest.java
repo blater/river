@@ -115,6 +115,112 @@ final class TupleBTreeTest {
   }
 
   @Test
+  void valuedInsertThroughSplitKeepsInlineRowsWithTheirKeys() {
+    TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
+    TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(32);
+    TupleBTree tree = new TupleBTree(pages, SCHEMA_ID, shape);
+    TupleBTreeTreeWorkspace workspace = workspace();
+    assertEquals(StatusCode.OK, tree.initialize(workspace));
+    ByteBuffer key = ByteBuffer.allocate(128);
+    ByteBuffer value = ByteBuffer.allocate(512);
+    for (int row = 1; row <= 90; row++) {
+      int length = bigintKey(key, 0, row);
+      for (int offset = 0; offset < value.capacity(); offset++) {
+        value.put(offset, (byte) (row + offset));
+      }
+      assertEquals(StatusCode.OK, tree.insert(
+          key, 0, length, value, 0, value.capacity(), 0, 0, row,
+          workspace));
+    }
+    TupleBTreeCursor cursor = new TupleBTreeCursor();
+    assertEquals(StatusCode.OK, cursor.openAll(tree, workspace));
+    TupleBTreeLeafEntry entry = new TupleBTreeLeafEntry();
+    for (int row = 1; row <= 90; row++) {
+      assertEquals(StatusCode.OK, cursor.next(entry));
+      assertEquals(row, entry.logicalRowId());
+      assertEquals(row, entry.modificationSequence());
+      assertEquals(512, entry.valueLength());
+      for (int offset = 0; offset < 512; offset++) {
+        assertEquals((byte) (row + offset),
+            cursor.page().get(cursor.pageStart() + entry.valueOffset() + offset));
+      }
+    }
+    assertEquals(StatusCode.CONFLICT, cursor.next(entry));
+    assertEquals(StatusCode.OK, cursor.close());
+  }
+
+  @Test
+  void largeInlineMiddleEntryUsesThreeOrderedLeaves() {
+    TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
+    TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(16);
+    TupleBTree tree = new TupleBTree(pages, SCHEMA_ID, shape);
+    TupleBTreeTreeWorkspace workspace = workspace();
+    assertEquals(StatusCode.OK, tree.initialize(workspace));
+    ByteBuffer keys = ByteBuffer.allocate(192);
+    int first = bigintKey(keys, 0, 1);
+    int middle = bigintKey(keys, 64, 2);
+    int last = bigintKey(keys, 128, 3);
+    ByteBuffer values = ByteBuffer.allocate(10_000);
+    assertEquals(StatusCode.OK, tree.insert(
+        keys, 0, first, values, 0, 8_000, 0, 0, 1, workspace));
+    assertEquals(StatusCode.OK, tree.insert(
+        keys, 128, last, values, 0, 8_000, 0, 0, 3, workspace));
+    assertEquals(StatusCode.OK, tree.insert(
+        keys, 64, middle, values, 0, 10_000, 0, 0, 2, workspace));
+    TupleBTreeValidationResult validation = new TupleBTreeValidationResult();
+    assertEquals(StatusCode.OK, tree.validate(workspace, validation));
+    assertEquals(3, validation.entryCount());
+    TupleBTreeCursor cursor = new TupleBTreeCursor();
+    assertEquals(StatusCode.OK, cursor.openAll(tree, workspace));
+    TupleBTreeLeafEntry entry = new TupleBTreeLeafEntry();
+    for (int row = 1; row <= 3; row++) {
+      assertEquals(StatusCode.OK, cursor.next(entry));
+      assertEquals(row, entry.logicalRowId());
+      assertEquals(row == 2 ? 10_000 : 8_000, entry.valueLength());
+    }
+    assertEquals(StatusCode.CONFLICT, cursor.next(entry));
+    assertEquals(StatusCode.OK, cursor.close());
+  }
+
+  @Test
+  void valueGrowthSplitsLeafWithoutChangingKeyMembership() {
+    TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
+    TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(16);
+    TupleBTree tree = new TupleBTree(pages, SCHEMA_ID, shape);
+    TupleBTreeTreeWorkspace workspace = workspace();
+    assertEquals(StatusCode.OK, tree.initialize(workspace));
+    ByteBuffer keys = ByteBuffer.allocate(128);
+    int first = bigintKey(keys, 0, 1);
+    int second = bigintKey(keys, 64, 2);
+    ByteBuffer oldValue = ByteBuffer.allocate(8_000);
+    ByteBuffer newValue = ByteBuffer.allocate(10_000);
+    newValue.put(0, (byte) 91);
+    assertEquals(StatusCode.OK, tree.insert(
+        keys, 0, first, oldValue, 0, 8_000, 0, 0, 11, workspace));
+    assertEquals(StatusCode.OK, tree.insert(
+        keys, 64, second, oldValue, 0, 8_000, 0, 0, 12, workspace));
+    assertEquals(StatusCode.OK, tree.replaceValue(
+        keys, 0, first, newValue, 0, 10_000, 0, 0, 21, workspace));
+    TupleBTreeValidationResult validation = new TupleBTreeValidationResult();
+    assertEquals(StatusCode.OK, tree.validate(workspace, validation));
+    assertEquals(2, validation.entryCount());
+    TupleBTreeCursor cursor = new TupleBTreeCursor();
+    assertEquals(StatusCode.OK, cursor.openAll(tree, workspace));
+    TupleBTreeLeafEntry entry = new TupleBTreeLeafEntry();
+    assertEquals(StatusCode.OK, cursor.next(entry));
+    assertEquals(1, entry.logicalRowId());
+    assertEquals(21, entry.modificationSequence());
+    assertEquals(10_000, entry.valueLength());
+    assertEquals((byte) 91, cursor.page().get(cursor.pageStart() + entry.valueOffset()));
+    assertEquals(StatusCode.OK, cursor.next(entry));
+    assertEquals(2, entry.logicalRowId());
+    assertEquals(12, entry.modificationSequence());
+    assertEquals(8_000, entry.valueLength());
+    assertEquals(StatusCode.CONFLICT, cursor.next(entry));
+    assertEquals(StatusCode.OK, cursor.close());
+  }
+
+  @Test
   void updatesApproximateCompositeKeysWithoutBreakingTreeValidation() {
     TupleShape shape = shape(new int[] {SqlTypeDescriptor.REAL, SqlTypeDescriptor.DOUBLE});
     TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(8);
