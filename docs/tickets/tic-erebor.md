@@ -468,3 +468,6 @@ Implementation validation, 2026-09-29: the
 records the checkpoint-gated free-stack transition, old-snapshot test,
 greater-than-63-page logical mutation and insufficient-budget rejection.
 This is branch-level correctness evidence, not final durable-format approval.
+`RelationalDescriptorRowPathTest.oldControlFormatIsRejectedBeforeAnyDurableFileChanges`
+reopens a database with a committed row and a checksum-valid prior control
+version. Open returns `CORRUPTION` and every database file remains byte-identical.

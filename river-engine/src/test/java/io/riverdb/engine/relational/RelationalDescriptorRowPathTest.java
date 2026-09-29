@@ -2,6 +2,7 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,6 +14,8 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.checkpoint.CheckpointResult;
+import io.riverdb.engine.control.DatabaseControlStore;
+import io.riverdb.format.control.ControlFileCodec;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
@@ -29,7 +32,11 @@ import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.lock.LockMode;
 import java.nio.file.Path;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -40,6 +47,56 @@ final class RelationalDescriptorRowPathTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
   private static final int COLUMN_COUNT = 1_024;
   private static final int[] NULL_ORDINALS = {7, 8, 63, 64, 255, 1_023};
+
+  @Test
+  void oldControlFormatIsRejectedBeforeAnyDurableFileChanges(@TempDir Path root)
+      throws java.io.IOException {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowTextDescriptor(), table, new StatusDetail(128)));
+    RelationalSession writer = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+        table, overflowTextValues(7, "seed"), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    Path control = root.resolve(DatabaseControlStore.CONTROL_FILE_NAME);
+    byte[] old = Files.readAllBytes(control);
+    assertEquals(ControlFileCodec.RECORD_BYTES, old.length);
+    ByteBuffer bytes = ByteBuffer.wrap(old).order(ByteOrder.LITTLE_ENDIAN);
+    bytes.putInt(8, ControlFileCodec.MAJOR_VERSION - 1);
+    CRC32C checksum = new CRC32C();
+    checksum.update(old, 0, 56);
+    bytes.putInt(56, (int) checksum.getValue());
+    bytes.putInt(60, ~(int) checksum.getValue());
+    Files.write(control, old);
+    Map<String, byte[]> before = durableFiles(root);
+
+    assertEquals(StatusCode.CORRUPTION,
+        RelationalDatabase.openExisting(
+            databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    Map<String, byte[]> after = durableFiles(root);
+    assertEquals(before.keySet(), after.keySet());
+    for (String name : before.keySet()) assertArrayEquals(before.get(name), after.get(name), name);
+  }
+
+  private static Map<String, byte[]> durableFiles(Path root) throws java.io.IOException {
+    Map<String, byte[]> files = new TreeMap<>();
+    try (var paths = Files.walk(root)) {
+      for (Path path : paths.filter(Files::isRegularFile).toList()) {
+        files.put(root.relativize(path).toString(), Files.readAllBytes(path));
+      }
+    }
+    return files;
+  }
 
   @Test
   void malformedExternalTextKeyCannotDeleteCanonicalRow(@TempDir Path root) {
