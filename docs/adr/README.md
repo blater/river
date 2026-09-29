@@ -34,6 +34,7 @@ promotion evidence remain controlled by the
 | [0012](0012-embedded-api-and-protocol-boundaries.md) | Embedded API and protocol boundaries | Accepted | Q01/N01-N06 compatibility and security evidence |
 | [0013](0013-dependency-neutral-identities.md) | Dependency-neutral identity catalog | Accepted | Physical encodings remain ADR 0004/K02 decisions |
 | [0014](0014-riverd-instance-security.md) | `riverd` instance security and client discovery | Accepted | Contract ratified by `tic-11a5`; implementation remains with core `tic-615d`/`tic-72ea`/`tic-ec50`, operations `tic-0803`/`tic-d2e9`/`tic-b901`, and evidence `tic-95e8`/`tic-9640` |
+| [0015](0015-clustered-relational-row-store.md) | Clustered relational row store | Accepted for implementation | `tic-erebor` code review and delivery gate |
 
 ## Coupled vocabulary
 
