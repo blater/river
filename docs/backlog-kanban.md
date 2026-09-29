@@ -2,6 +2,13 @@
 
 ## Current indexed-read frontier — 2026-09-29
 
+[tic-thranduil](tickets/tic-thranduil.md) measured the complete full-cardinality
+indexed-probe path. Its [evidence](delivery/evidence/2026-09-29-tic-thranduil-indexed-probes.md)
+rules out post-warmup metadata file misses as the Stock Level gap and confirms
+about 450 extra logical-head lookups per transaction. The next storage slice is
+[tic-erebor](tickets/tic-erebor.md): primary-key access that reaches the row
+without this separate indirection.
+
 [tic-isildur](tickets/tic-isildur.md) is the current user-directed performance
 epic under [tic-30c3](tickets/tic-30c3.md). Its first slice,
 [tic-healthy-bellodonna](tickets/tic-healthy-bellodonna.md), carries required

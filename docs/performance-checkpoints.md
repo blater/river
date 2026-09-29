@@ -1979,3 +1979,22 @@ both controls, but the short local samples and shared-host activity do not
 establish a general speedup. **Decision:** accept the architectural replacement
 and correctness evidence without designating a new TPS baseline or claiming a
 MariaDB ratio. The Baseline stats table remains unchanged.
+
+## 2026-09-29 — tic-thranduil full indexed-probe diagnosis
+
+On `master` `a8ceade9`, the unchanged full Stock Level workload passed two
+ordinary River 5/20-second runs at 1,438.82 and 1,463.54 TPS (harness IDs
+`river_harness_20260929_030737_6dcb5d0f` and
+`river_harness_20260929_030928_bc253240`). A loaded MariaDB `ANALYZE` plan
+examined 225 `order_line` rows and 225 `stock` rows for a representative
+query. Temporary River counters measured 225 candidates from each table per
+transaction, about 451 logical-head lookups, 472 heap fetches and 35.5 kB of
+selected-row copies. The metadata working set fit in 64 frames per directory:
+52 version frames, 15 row-location frames and zero measured frame misses in
+the selected steady interval. An unchanged River JFR run also recorded zero
+metadata-directory and indexed-page file reads in its measured window.
+
+The [complete commands, artifacts, CPU evidence and limitations](delivery/evidence/2026-09-29-tic-thranduil-indexed-probes.md)
+are recorded with the diagnostic ticket. The next general storage-layout work
+is [tic-erebor](tickets/tic-erebor.md). These runs do not designate a new TPS
+baseline or a paired MariaDB ratio; the Baseline stats table is unchanged.

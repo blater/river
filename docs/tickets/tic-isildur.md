@@ -14,12 +14,14 @@ created: 2026-09-28T15:54:39.393162Z
 ---
 # Remove indexed-read work amplification
 
-River's tuple-index scans return logical row IDs, then search the scalar base-row
-tree, resolve MVCC visibility, locate a heap row, retain and copy the full row,
-and decode columns the query may not use. This epic removes those costs through
-one general read contract and one canonical storage layout. It is the next
-architecture delivery under [tic-30c3](tic-30c3.md) and expands the Stock Level
-work in [tic-72e5](tic-72e5.md).
+River's tuple-index scans return logical row IDs. The former scalar base-row
+B-tree has been replaced by a logical-head directory, and projection now
+retains only required row bytes. Current reads still traverse that separate
+head directory, resolve MVCC visibility and heap location, then retain the
+selected fields. This epic removes the remaining costs through one general
+read contract and one canonical storage layout. It is the next architecture
+delivery under [tic-30c3](tic-30c3.md) and expands the Stock Level work in
+[tic-72e5](tic-72e5.md).
 
 ## Design
 
@@ -43,13 +45,17 @@ work in [tic-72e5](tic-72e5.md).
    replacement at `b6bc7e63`. Intermediate containers and conversion adapters
    are removed across read and write consumers; copies remain at explicit
    ownership boundaries. The wider tic-celeborn trust-boundary audit remains.
+4. [Tic-thranduil](tic-thranduil.md) measured the current indexed-probe path
+   against MariaDB's actual plan. [Tic-erebor](tic-erebor.md) owns the next
+   primary-index-to-row storage replacement; the mixed-workload metadata-cache
+   question remains separate.
 
 ## Acceptance Criteria
 
-- The unchanged full Stock Level workload shows fewer base-tree searches,
-  fewer bytes copied and fewer columns decoded; measure each mechanism
-  separately. Preserve New Order and the adjacent sample workload without a
-  repeated unexplained regression.
+- The unchanged full Stock Level workload shows fewer separate head-directory
+  traversals, fewer bytes copied and fewer columns decoded; measure each
+  mechanism separately. Preserve New Order and the adjacent sample workload
+  without a repeated unexplained regression.
 - Tests cover current and older snapshots, pending insert/update/delete,
   key changes, READ COMMITTED, SERIALIZABLE, cancellation, buffer lifetime,
   rollback and cleanup. The storage replacement additionally covers splits,

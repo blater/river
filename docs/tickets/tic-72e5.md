@@ -66,6 +66,16 @@ the accepted River baseline of 1,234.227 TPS, a rough River/MariaDB ratio of
 0.264; the runs were not interleaved. See the
 [residual JOIN diagnosis](../performance-checkpoints.md#2026-09-28--residual-full-stock-level-join-diagnosis).
 
+[Tic-thranduil](tic-thranduil.md) subsequently counted about 225 actual
+`order_line` and 225 `stock` candidates per transaction, matching a loaded
+MariaDB `ANALYZE` plan. River additionally performed about 451 logical-head
+lookups and copied 35.5 kB of selected row bytes per transaction. The
+profiled measured window had no metadata-directory or indexed-page file
+reads after warmup. [Tic-erebor](tic-erebor.md) owns the next primary-key
+storage replacement; the 64-frame metadata-cache issue remains relevant to
+the separate mixed `full all` workload. See the
+[indexed-probe evidence](../delivery/evidence/2026-09-29-tic-thranduil-indexed-probes.md).
+
 ## Delivery
 
 - Deliver the general [indexed-read architecture epic](tic-isildur.md) in
