@@ -1,10 +1,14 @@
-# Erebor updated review handoff
+# Erebor accepted review handoff
 
 Date: 2026-09-29 UTC. Branch: `feature/tic-erebor-clustered-row-store`.
 Base: stable `origin/master` at `2ada6350`. Final production source:
 `4e08034d` (F1 at `fb9772d2`); additional SQL concurrency proof at `0b68064f`.
-The corrected harness binding is `356682a`. This remains an unpromoted
-replacement; intermediate commits are not separate releases.
+The corrected harness binding is `356682a`, locally integrated at `9c0be772`.
+The owner confirmed independent review passes and approved promotion of
+feature `04cd0917`. The accepted merge is `fdfda831`, checkpoint
+`perf-checkpoint-20260929-tic-erebor-clustered-row-store`; the
+[promotion record](2026-09-29-tic-erebor-promotion.md) owns final validation
+and publication. Intermediate commits were not separate releases.
 
 ## Review findings addressed
 
@@ -60,11 +64,14 @@ describes the current layout, ownership, retirement and pressure contracts.
 
 ## Validation and measurements
 
-The latest serial clean `clean check :river-server-app:jar` passed in 4m 51s:
-156 actionable tasks, 102 executed, 52 restored from cache and two up to date.
-All 1,136 engine tests passed, with no failures, errors or skips. Log:
-`/private/tmp/erebor-followup/clean-check.log`. Production/test changes were
-committed unchanged after this checkpoint.
+The fresh integration `clean check :river-server-app:jar` on merge `fdfda831`
+passed in 5m 35s: 156 actionable tasks, 125 executed and 31 up to date.
+All 1,137 engine tests passed with no failures, errors or skips; repository
+counts are 2,109 passed, zero failed/errored and 19 existing platform/opt-in
+skips. Log: `/private/tmp/erebor-promotion-final/clean-check-fdfda831-cached.log`.
+The earlier production checkpoint remains retained in
+`/private/tmp/erebor-followup/clean-check.log`. Promotion changes documentation
+only; the tested merge tree exactly matches the reviewed feature tip.
 
 The subsequent [three-retry resolution](2026-09-29-tic-erebor-three-retry-mix.md)
 adds a real READ COMMITTED opposing-order cycle and consistent-order control.
@@ -83,31 +90,22 @@ sample per build/workload. The accepted
 [Stock Level decision](2026-09-29-tic-erebor-candidate-stock-level.md) retains
 its original source versions and variation; it has not been rerun or relabelled.
 
-## Promotion conditions
+## Independent acceptance and promotion
 
-Updated independent durable-format, recovery and concurrency review remains
-required by [AGENTS.md](../../../AGENTS.md). The amended review explicitly
-withheld approval; it requires a focused follow-up on the metadata lifetimes,
-spill/pressure outcomes and allocation-test stabilization. Review the durable queue and
-exact cross-owner replay identities, checkpoint eligibility for staged links,
-old leaf/overflow pins, blocked-head pressure, group force dependencies,
-cancelled descriptor numbering/floors, and the migrated multi-chunk coverage.
+The [retained follow-up review](2026-09-29-tic-erebor-followup-review.md)
+accepts the metadata pin lifetimes, spill/pressure and recovery outcomes,
+and exact-zero allocation stabilization. All 53 independent tests pass;
+the earlier durable-format, recovery and concurrency review is included.
+The copied report retains its original source/date and then-pending workload
+condition. The [three-retry resolution](2026-09-29-tic-erebor-three-retry-mix.md)
+subsequently satisfies that condition through the versioned common binding:
+candidate and stable control both report zero retries/failures/unknown outcomes,
+passed invariants, equal comparison keys and complete owned cleanup.
+The owner's latest message confirms independent review passes and Erebor is
+ready for promotion, with no further code changes requested.
 
-The earlier four-worker `sample all`, retry-limit-three run exhausted deadlock
-retries on both stable control and candidate, including repeated controls.
-Individual families passed. Short New Order results were below the control;
-the targeted longer reversed-order pair passed at 373.911 candidate versus
-278.695 control commits/s, with zero retries and failures. A matched ten-retry
-mixed diagnostic also passed (353.348 versus 348.186 commits/s), with explicit
-retry accounting and cleanup. It does not waive the strict three-retry mix.
-The evidence retains all slow/failed runs and the CPU/JIT limits. The strict
-three-retry condition is now satisfied with the corrected common binding:
-candidate and stable control both have zero retries/failures/unknown outcomes,
-passed invariants, equal comparison keys and complete cleanup. Review the
-harness change at `356682a` on `fix/erebor-three-retry-mix` in
-`/private/tmp/river-harness-erebor-retry`, including original line numbering,
-invalid-item rollback and the versioned access policy. No approval of the
-independent follow-up findings is inferred from these workload results.
-
-No merge, performance checkpoint tag or baseline designation is approved by
-this handoff. The feature branch is retained for review.
+The earlier failed three-retry runs, ten-retry diagnostic, short New Order
+decline and longer reversed-order control remain in the write-cost evidence;
+the accepted Stock Level decision retains its source and host variation.
+The completed promotion records the merge and annotated checkpoint without
+designating a new baseline or making a cross-database speedup claim.

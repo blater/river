@@ -2173,3 +2173,36 @@ write-cost scope stand. These short changed-binding results establish no
 engine speedup or new baseline. Independent follow-up review, including the
 harness correction, remains before promotion. No merge, tag or baseline
 designation is recorded.
+
+## 2026-09-29 — Erebor accepted integration checkpoint
+
+Promotion completed at 2026-09-29 UTC / 2026-09-30 BST. Ticket
+[`tic-erebor`](tickets/tic-erebor.md) is closed as code delivery. Independent
+review passes and the owner approved promotion with no further source changes.
+Reviewed feature `04cd0917262e2694b6ebd5ffcf82a34a4fea8e0e` is merged from stable
+`2ada6350` at `fdfda8316dbc821b00fcf2de6f4244c331bbc9c8`, with annotated tag
+`perf-checkpoint-20260929-tic-erebor-clustered-row-store`. Its tree exactly matches the
+reviewed feature. The feature, integration branch `integration/tic-erebor-20260929`,
+master update and tag are published together. The separate common-binding
+correction is locally integrated in river-harness at `9c0be772`; its rebuilt
+executable matches the tested artifact byte for byte.
+
+The fresh serial clean full check and server JAR build passed in 5m 35s:
+156 actionable tasks, 125 executed and 31 up to date. All 1,137 engine tests
+passed with zero failures/errors/skips. Repository counts are 2,109 passed,
+zero failed/errored and 19 existing platform/opt-in skips. Completion was
+2026-09-29 23:02:43 UTC (2026-09-30 00:02:43 BST). The
+[promotion evidence](delivery/evidence/2026-09-29-tic-erebor-promotion.md)
+retains the exact command, log, per-module counts, independent follow-up
+report, durable-format contract and rollback boundary. Later closure changes
+are documentation only. The user's dirty main checkout is preserved.
+
+The strict three-retry workload condition is satisfied by the previously
+recorded common-binding candidate/control pair, with successful invariants,
+zero retries/failed/unknown outcomes, matching eligible keys and owned cleanup.
+The accepted Stock Level decision and physical identity-map/write-cost evidence
+retain their named source versions and attribution limits. The owner permits
+one good sample per build/workload; no additional campaign or new baseline is
+designated. The Baseline stats table remains unchanged. The previous pending
+promotion statements describe the historical checkpoints and are superseded
+by this approval and integration record.

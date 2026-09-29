@@ -1,11 +1,18 @@
 ---
 id: tic-erebor
-status: open
+status: closed
 type: story
 priority: 1
 assignee: blater
 parent: tic-isildur
 delivery: code
+base-commit: 2ada6350ae420944ce51072e3223164c9f697091
+branch: feature/tic-erebor-clustered-row-store
+delivered-commit: fdfda8316dbc821b00fcf2de6f4244c331bbc9c8
+evidence:
+    - docs/delivery/evidence/2026-09-29-tic-erebor-promotion.md
+    - docs/delivery/evidence/2026-09-29-tic-erebor-followup-review.md
+    - docs/delivery/evidence/2026-09-29-tic-erebor-three-retry-mix.md
 tags:
     - performance
     - storage
@@ -531,3 +538,25 @@ promotion, including the separately owned harness correction.
 This narrow external defect correction follows the owner's subsequent request
 to resolve the three-retry workload. It remains a separate harness branch and
 does not expand Erebor's row-store mechanism or general harness/comparator scope.
+
+## Promotion — 2026-09-29 UTC / 2026-09-30 BST
+
+The owner confirmed that independent review passes, Erebor is ready for
+promotion and no further code changes are requested. Reviewed feature
+`04cd0917262e2694b6ebd5ffcf82a34a4fea8e0e` is delivered by merge `fdfda8316dbc821b00fcf2de6f4244c331bbc9c8`,
+with annotated checkpoint `perf-checkpoint-20260929-tic-erebor-clustered-row-store`.
+The [promotion record](../delivery/evidence/2026-09-29-tic-erebor-promotion.md)
+retains the [independent follow-up](../delivery/evidence/2026-09-29-tic-erebor-followup-review.md),
+its historical scope and the subsequently satisfied three-retry condition.
+This approval supersedes the pending conditions in the dated progress entries.
+
+The merge tree exactly matches the reviewed feature. Its fresh clean full
+`check` and server JAR build passed in 5m 35s: all 1,137 engine tests passed;
+the repository reports 2,109 passed tests, zero failures/errors and 19 existing
+platform/opt-in skips. The accepted Stock Level decision and physical
+identity-map/write-cost evidence retain their original versions and limits.
+No new baseline is designated. The separate harness fix is locally integrated
+at `9c0be772` with a rebuilt executable identical to the tested artifact.
+The accepted source and evidence are published with the integration branch,
+master update and annotated tag. This ticket is closed as a code delivery;
+the parent epic's remaining work retains its separate scope.

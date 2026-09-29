@@ -1,6 +1,6 @@
 # ADR 0015: Clustered relational row store
 
-Status: Accepted for implementation after R1–R4 review and focused follow-up (2026-09-29); code and performance gates pending
+Status: Accepted and promoted at `fdfda831` (2026-09-29 UTC / 2026-09-30 BST), checkpoint `perf-checkpoint-20260929-tic-erebor-clustered-row-store`; [approval and validation](../delivery/evidence/2026-09-29-tic-erebor-promotion.md)
 
 ## Context and decision
 

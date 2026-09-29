@@ -46,9 +46,13 @@ delivery under [tic-30c3](tic-30c3.md) and expands the Stock Level work in
    are removed across read and write consumers; copies remain at explicit
    ownership boundaries. The wider tic-celeborn trust-boundary audit remains.
 4. [Tic-thranduil](tic-thranduil.md) measured the current indexed-probe path
-   against MariaDB's actual plan. [Tic-erebor](tic-erebor.md) owns the next
-   primary-index-to-row storage replacement; the mixed-workload metadata-cache
-   question remains separate.
+   against MariaDB's actual plan. [Tic-erebor](tic-erebor.md) delivers the canonical
+   primary-leaf row store at `fdfda831`, checkpoint
+   `perf-checkpoint-20260929-tic-erebor-clustered-row-store`. Its
+   [promotion record](../delivery/evidence/2026-09-29-tic-erebor-promotion.md)
+   retains independent acceptance, write costs and the resolved strict retry
+   mix. The wider trust-boundary audit and mixed-workload metadata-cache
+   question remain separate; this epic remains open.
 
 ## Acceptance Criteria
 
