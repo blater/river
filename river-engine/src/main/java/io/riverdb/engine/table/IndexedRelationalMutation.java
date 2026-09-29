@@ -84,6 +84,12 @@ public final class IndexedRelationalMutation {
         expectedCleanupCursor, resultingCleanupCursor);
   }
 
+  public StatusCode recordOverflowReclamation(
+      int suboperation, int pageId, long generation, long retirementSequence) {
+    return buffer.recordOverflowReclamation(
+        suboperation, pageId, generation, retirementSequence);
+  }
+
   public StatusCode appendBase(
       int suboperation, long ownerObjectId, int operation,
       long logicalRowId, long previousRowId,

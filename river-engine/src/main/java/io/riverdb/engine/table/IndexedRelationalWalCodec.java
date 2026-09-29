@@ -9,14 +9,14 @@ final class IndexedRelationalWalCodec {
   static final int WAL_FORMAT_ID = 1003;
   static final int WAL_FORMAT_VERSION = 1;
   static final long MAGIC = 0x314c41574c455252L;
-  static final int VERSION = 7;
+  static final int VERSION = 8;
   static final int HEADER_BYTES = 128;
   static final int DESCRIPTOR_ITEM = 1;
   static final int SUBOPERATION_ITEM = 2;
   static final int MUTATION_ITEM = 3;
   static final int LOGICAL_ROW_FLOOR_ITEM = 4;
   static final int DESCRIPTOR_ITEM_BYTES = 48;
-  static final int SUBOPERATION_ITEM_BYTES = 128;
+  static final int SUBOPERATION_ITEM_BYTES = 152;
   static final int MUTATION_ITEM_BYTES = 64;
   static final int LOGICAL_ROW_FLOOR_ITEM_BYTES = 32;
   static final long INITIAL_DIGEST = 0xcbf29ce484222325L;
@@ -133,7 +133,11 @@ final class IndexedRelationalWalCodec {
       digest = mixLong(digest, source.expectedPrivateOwnerAt(operation));
       digest = mixLong(digest, source.resultingPrivateOwnerAt(operation));
       digest = mixInt(digest, source.expectedCleanupCursorAt(operation));
-      return mixInt(digest, source.resultingCleanupCursorAt(operation));
+      digest = mixInt(digest, source.resultingCleanupCursorAt(operation));
+      digest = mixInt(digest, source.reclaimedOverflowPageIdAt(operation));
+      digest = mixInt(digest, 0);
+      digest = mixLong(digest, source.reclaimedOverflowGenerationAt(operation));
+      return mixLong(digest, source.reclaimedOverflowRetirementAt(operation));
     }
     int mutation = item - descriptors - floors - suboperations;
     digest = mixByte(digest, MUTATION_ITEM);
@@ -264,6 +268,10 @@ final class IndexedRelationalWalCodec {
     FormatBytes.putLong(target, offset + 112, source.resultingPrivateOwnerAt(ordinal));
     FormatBytes.putInt(target, offset + 120, source.expectedCleanupCursorAt(ordinal));
     FormatBytes.putInt(target, offset + 124, source.resultingCleanupCursorAt(ordinal));
+    FormatBytes.putInt(target, offset + 128, source.reclaimedOverflowPageIdAt(ordinal));
+    FormatBytes.putInt(target, offset + 132, 0);
+    FormatBytes.putLong(target, offset + 136, source.reclaimedOverflowGenerationAt(ordinal));
+    FormatBytes.putLong(target, offset + 144, source.reclaimedOverflowRetirementAt(ordinal));
     return offset + SUBOPERATION_ITEM_BYTES;
   }
 

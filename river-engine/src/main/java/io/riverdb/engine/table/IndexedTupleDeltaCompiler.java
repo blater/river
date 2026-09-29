@@ -1,11 +1,13 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.format.btree.TupleBTreePageCodec;
 import java.nio.ByteBuffer;
 
 /** Reuses one key buffer while applying and encoding one descriptor's tuple deltas. */
 final class IndexedTupleDeltaCompiler {
   private final IndexedRelationalTupleSession tuples;
+  private final IndexedRetiredOverflowReclaimer reclaimer;
   private final ByteBuffer key = ByteBuffer.allocate(
       io.riverdb.format.btree.TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
   private final ByteBuffer value = ByteBuffer.allocate(
@@ -13,21 +15,32 @@ final class IndexedTupleDeltaCompiler {
 
   IndexedTupleDeltaCompiler(IndexedPageSet pages) {
     tuples = new IndexedRelationalTupleSession(pages);
+    reclaimer = new IndexedRetiredOverflowReclaimer(pages);
   }
 
   StatusCode apply(
       IndexedTupleIntentJournal intents, int descriptor, int rootPageId,
-      long modificationSequence) {
-    StatusCode status = tuples.configure(
+      long modificationSequence, long oldestVisibleCommitSequence) {
+    reclaimer.reset();
+    StatusCode status = requiresOverflowAllocation(intents, descriptor)
+        ? reclaimer.reclaimOne(intents.keyIdAt(descriptor), oldestVisibleCommitSequence)
+        : StatusCode.OK;
+    if (!status.isOk()) return status;
+    status = tuples.configure(
         intents.keyIdAt(descriptor), intents.schemaIdAt(descriptor),
         rootPageId, intents.shapeAt(descriptor));
     if (status.isOk()) status = applyOperation(intents, descriptor,
         IndexedRelationalMutation.TUPLE_DELETE, modificationSequence);
     if (status.isOk()) status = applyOperation(intents, descriptor,
         IndexedRelationalMutation.TUPLE_REPLACE, modificationSequence);
-    return status.isOk() ? applyOperation(intents, descriptor,
-        IndexedRelationalMutation.TUPLE_INSERT, modificationSequence) : status;
+    if (status.isOk()) status = applyOperation(intents, descriptor,
+        IndexedRelationalMutation.TUPLE_INSERT, modificationSequence);
+    return status;
   }
+
+  int reclaimedOverflowPageId() { return reclaimer.pageId(); }
+  long reclaimedOverflowGeneration() { return reclaimer.generation(); }
+  long reclaimedOverflowRetirementSequence() { return reclaimer.retirementSequence(); }
 
   StatusCode append(
       IndexedTupleIntentJournal intents, int descriptor,
@@ -65,6 +78,20 @@ final class IndexedTupleDeltaCompiler {
       int operation = intents.operationAt(index);
       if (operation == IndexedRelationalMutation.TUPLE_INSERT
           || operation == IndexedRelationalMutation.TUPLE_DELETE) return true;
+    }
+    return false;
+  }
+
+  private static boolean requiresOverflowAllocation(
+      IndexedTupleIntentJournal intents, int descriptor) {
+    for (int index = 0; index < intents.mutationCount(); index++) {
+      if (!intents.activeAt(index) || intents.descriptorAt(index) != descriptor) continue;
+      int operation = intents.operationAt(index);
+      if (operation != IndexedRelationalMutation.TUPLE_INSERT
+          && operation != IndexedRelationalMutation.TUPLE_REPLACE) continue;
+      int valueLength = intents.valueLengthAt(index);
+      if (valueLength > 0 && !TupleBTreePageCodec.inlineEligible(
+          intents.payloadLengthAt(index), valueLength)) return true;
     }
     return false;
   }

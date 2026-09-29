@@ -15,6 +15,7 @@ final class IndexedHybridMutationCompiler {
   private IndexedRelationalMutation current;
   private long copiedPayloadBytes;
   private long memberSequence;
+  private long oldestVisibleCommitSequence;
 
   IndexedHybridMutationCompiler(
       IndexedTableStore store, IndexedTableKernel table, IndexedPageSet pages) {
@@ -27,12 +28,13 @@ final class IndexedHybridMutationCompiler {
   StatusCode compileCumulative(
       PendingMutationBuffer pending, IndexedTupleIntentJournal intents,
       IndexedTupleIndexLifecycleBatch lifecycleBatch, IndexedLogicalRowIdFloors floors,
-      long assignedMemberSequence) {
+      long assignedMemberSequence, long oldestVisibleSequence) {
     if (pending == null || intents == null || floors == null
-        || assignedMemberSequence <= 0) {
+        || assignedMemberSequence <= 0 || oldestVisibleSequence < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     memberSequence = assignedMemberSequence;
+    oldestVisibleCommitSequence = oldestVisibleSequence;
     StatusCode measured = sizing.measure(pending, intents, lifecycleBatch, floors);
     if (!measured.isOk()) return measured;
     StatusCode status;
@@ -130,7 +132,7 @@ final class IndexedHybridMutationCompiler {
       } else {
         status = publishing.compile(
             intents, descriptor, batch, index, compiled[0],
-            suboperation, firstMutation, memberSequence);
+            suboperation, firstMutation, memberSequence, oldestVisibleCommitSequence);
         firstMutation += publishing.count(intents, descriptor);
       }
       suboperation++;
@@ -141,7 +143,7 @@ final class IndexedHybridMutationCompiler {
       if (IndexedHybridLogicalSizing.lifecycleIndex(intents, batch, descriptor) >= 0) continue;
       status = tuples.compile(
           intents, descriptor, compiled[0], outputDescriptor,
-          suboperation, firstMutation, memberSequence);
+          suboperation, firstMutation, memberSequence, oldestVisibleCommitSequence);
       firstMutation += tuples.count(intents, descriptor);
       outputDescriptor++;
       suboperation++;
@@ -179,7 +181,7 @@ final class IndexedHybridMutationCompiler {
         && descriptor < intents.descriptorCount(); descriptor++) {
       status = tuples.compile(
           intents, descriptor, compiled[0], descriptor,
-          suboperation, firstMutation, memberSequence);
+          suboperation, firstMutation, memberSequence, oldestVisibleCommitSequence);
       firstMutation += tuples.count(intents, descriptor);
       suboperation++;
     }

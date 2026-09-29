@@ -66,6 +66,20 @@ class IndexedRelationalSuboperationLog extends IndexedRelationalSuboperationView
   }
 
   void reset() { count = 0; coveredMutations = 0; }
+  StatusCode recordOverflowReclamation(
+      int operation, int pageId, long generation, long retirementSequence) {
+    if (operation < 0 || operation >= count
+        || (pageId == 0 && (generation != 0 || retirementSequence != 0))
+        || (pageId != 0 && (pageId < 4 || generation <= 0 || retirementSequence <= 0
+            || descriptorAt(operation) < 0))) return StatusCode.INVALID_EXTERNAL_INPUT;
+    columns.setInt(IndexedRelationalSuboperationColumns.RECLAIMED_OVERFLOW_PAGE_ID,
+        operation, pageId);
+    columns.setLong(IndexedRelationalSuboperationColumns.RECLAIMED_OVERFLOW_GENERATION,
+        operation, generation);
+    columns.setLong(IndexedRelationalSuboperationColumns.RECLAIMED_OVERFLOW_RETIREMENT,
+        operation, retirementSequence);
+    return StatusCode.OK;
+  }
   long accountedBytes() { return columns.allocatedBytes(); }
   long accountedBytesForReservation(int additional) {
     if (additional < 0 || additional > columns.capacity() - count) return -1;

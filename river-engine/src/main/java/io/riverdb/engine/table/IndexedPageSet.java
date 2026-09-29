@@ -45,7 +45,13 @@ final class IndexedPageSet {
   ByteBuffer currentPayloadUnchecked(int pageId) { return cache.currentPayloadUnchecked(pageId); }
   boolean isPresent(int pageId) { return state.present(pageId); }
   boolean isStaged(int pageId) { return state.staged(pageId); }
+  boolean isPrepared(int pageId) { return cache.isPrepared(pageId); }
   boolean isDirty(int pageId) { return state.dirty(pageId); }
+  boolean hasPinnedPreRetirementTupleReference(
+      long ownerKeyId, int overflowPageId, long retirementSequence) {
+    return cache.hasPinnedPreRetirementTupleReference(
+        ownerKeyId, overflowPageId, retirementSequence);
+  }
   long recordStart(int pageId) { return cache.recordStart(pageId); }
   long recordEnd(int pageId) { return cache.recordEnd(pageId); }
   int changedPageCount() { return state.changedPageCount(); }

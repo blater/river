@@ -10,6 +10,7 @@ final class IndexedRelationalTupleApply {
   private final IndexedTupleRegistryState registry;
   private final IndexedRelationalTupleSession session;
   private final IndexedTupleGraphReclaimer reclaimer;
+  private final IndexedRetiredOverflowReclaimer retiredOverflow;
   private final ByteBuffer key =
       ByteBuffer.allocate(TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
   private final ByteBuffer value =
@@ -21,6 +22,7 @@ final class IndexedRelationalTupleApply {
     registry = roots;
     session = new IndexedRelationalTupleSession(pageSet);
     reclaimer = new IndexedTupleGraphReclaimer(pageSet);
+    retiredOverflow = new IndexedRetiredOverflowReclaimer(pageSet);
   }
 
   StatusCode apply(
@@ -35,6 +37,7 @@ final class IndexedRelationalTupleApply {
       IndexedRelationalMutationBuffer source, int operation, long memberSequence) {
     StatusCode status = registry.load(source, operation);
     int descriptor = source.suboperationDescriptorAt(operation);
+    if (status.isOk()) status = reclaimRetired(source, operation, descriptor, memberSequence);
     if (status.isOk()) status = prepare(source, operation, descriptor);
     if (status.isOk()) status = applyMutations(source, operation, memberSequence);
     if (status.isOk()) status = validateResult(source, operation);
@@ -49,6 +52,18 @@ final class IndexedRelationalTupleApply {
     // Registry allocation precedes free-page publication; failure discards both staged changes.
     StatusCode status = registry.stage(source, operation, memberSequence);
     return status.isOk() ? cleanup(source, operation, descriptor) : status;
+  }
+
+  private StatusCode reclaimRetired(
+      IndexedRelationalMutationBuffer source, int operation, int descriptor,
+      long memberSequence) {
+    int pageId = source.reclaimedOverflowPageIdAt(operation);
+    if (pageId == 0) return StatusCode.OK;
+    long retirement = source.reclaimedOverflowRetirementAt(operation);
+    return retirement >= memberSequence ? StatusCode.CORRUPTION
+        : retiredOverflow.reclaimExact(
+            source.keyIdAt(descriptor), pageId,
+            source.reclaimedOverflowGenerationAt(operation), retirement);
   }
 
   private StatusCode complete(

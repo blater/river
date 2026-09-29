@@ -115,6 +115,20 @@ final class IndexedPageFrame {
     ownerKeyId = owner;
   }
 
+  StatusCode recycleStagedFreePage(int kind, long owner) {
+    if (pinCount != 0) return StatusCode.CONFLICT;
+    if (durableGeneration == Long.MAX_VALUE) return StatusCode.FENCED;
+    durableGeneration++;
+    rememberIdentity(PageCodec.PAYLOAD_KIND_FREE, PageCodec.SCALAR_OWNER_KEY_ID);
+    invalidatePageValidation();
+    for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
+      page.put(index, (byte) 0);
+    }
+    payload.clear();
+    identity(kind, owner);
+    return StatusCode.OK;
+  }
+
   void rememberIdentity(int kind, long owner) {
     previousPayloadKind = kind;
     previousOwnerKeyId = owner;

@@ -24,7 +24,7 @@ final class IndexedPublishingTupleCompiler {
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedTupleIndexLifecycleBatch lifecycle, int lifecycleIndex,
       IndexedRelationalMutation mutation, int suboperation, int firstMutation,
-      long memberSequence) {
+      long memberSequence, long oldestVisibleCommitSequence) {
     if (!IndexedPublishingTupleMatch.same(
         intents, descriptor, lifecycle, lifecycleIndex)) return StatusCode.CORRUPTION;
     StatusCode status = registry.loadBuilding(lifecycle, lifecycleIndex);
@@ -33,7 +33,8 @@ final class IndexedPublishingTupleCompiler {
     return status.isOk()
         ? compileLoaded(
             intents, descriptor, lifecycle, lifecycleIndex, mutation,
-            suboperation, firstMutation, memberSequence, expected)
+            suboperation, firstMutation, memberSequence,
+            oldestVisibleCommitSequence, expected)
         : status;
   }
 
@@ -41,13 +42,14 @@ final class IndexedPublishingTupleCompiler {
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedTupleIndexLifecycleBatch lifecycle, int lifecycleIndex,
       IndexedRelationalMutation mutation, int suboperation, int firstMutation,
-      long memberSequence, ByteBuffer expected) {
+      long memberSequence, long oldestVisibleCommitSequence, ByteBuffer expected) {
     int scalarRoot = BTreeRootPage.rootPageId(expected);
     int nextPage = BTreeRootPage.nextPageId(expected);
     long heap = kernel.operationRowCount();
     int tupleRoot = registry.rootPageId();
     long generation = registry.generation();
-    StatusCode status = deltas.apply(intents, descriptor, tupleRoot, memberSequence);
+    StatusCode status = deltas.apply(
+        intents, descriptor, tupleRoot, memberSequence, oldestVisibleCommitSequence);
     if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
     boolean building = lifecycle.appendsBuilding(lifecycleIndex);
@@ -70,6 +72,10 @@ final class IndexedPublishingTupleCompiler {
             : TupleIndexRootRecordCodec.STATE_READY,
         lifecycle.privateOwnerAt(lifecycleIndex),
         building ? lifecycle.privateOwnerAt(lifecycleIndex) : 0);
+    if (status.isOk()) status = mutation.recordOverflowReclamation(
+        suboperation, deltas.reclaimedOverflowPageId(),
+        deltas.reclaimedOverflowGeneration(),
+        deltas.reclaimedOverflowRetirementSequence());
     return status.isOk() ? deltas.append(
         intents, descriptor, mutation, suboperation, lifecycleIndex) : status;
   }

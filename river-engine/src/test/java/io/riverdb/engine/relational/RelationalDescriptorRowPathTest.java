@@ -1555,6 +1555,124 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void retiredOverflowWaitsForOldLeafThenReusesAfterCheckpoint(@TempDir Path root)
+      throws java.io.IOException {
+    Path liveRoot = Files.createDirectory(root.resolve("live"));
+    Path crashRoot = Files.createDirectory(root.resolve("crash"));
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), liveRoot, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowTextDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    RelationalSession writer = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    String large = "😀".repeat(3_400);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+        table, overflowTextValues(7, large), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    long[] original = overflowReference(database, tableId, 7);
+
+    RelationalSession reader = session(database);
+    SchemaPin heldPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, heldPin, new StatusDetail(128)));
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor held = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, reader.descriptorRows().beginScan(heldPin, held));
+
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, writer.descriptorRows().update(
+        table, 7, overflowTextValues(7, "small")));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.RETRY, database.checkpoint(new CheckpointResult()));
+    for (int row = 8; row <= 9; row++) {
+      assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+      assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+          table, overflowTextValues(row, large), new RelationalRowIdentityResult()));
+      assertEquals(StatusCode.OK, writer.commit(outcome));
+      assertFalse(overflowReference(database, tableId, row)[0] == original[0]);
+    }
+    StoredTableRowView old = emptyValues();
+    assertEquals(StatusCode.OK, reader.descriptorRows().nextScan(
+        held, old, new RelationalRowIdentityResult()));
+    assertEquals(7, old.valueAt(0));
+    assertEquals(13_600, old.textByteLengthAt(1));
+    assertEquals(original[0], held.tupleRow().overflowPageId());
+    assertEquals(StatusCode.OK, reader.descriptorRows().closeScan(held));
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
+
+    for (int row = 10; row <= 11; row++) {
+      assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+      assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+          table, overflowTextValues(row, large), new RelationalRowIdentityResult()));
+      assertEquals(StatusCode.OK, writer.commit(outcome));
+    }
+    long[] reused = overflowReference(database, tableId, 10);
+    assertEquals(original[0], reused[0]);
+    assertTrue(reused[1] > original[1]);
+    try (var paths = Files.walk(liveRoot)) {
+      for (Path source : paths.toList()) {
+        Path target = crashRoot.resolve(liveRoot.relativize(source));
+        if (Files.isDirectory(source)) Files.createDirectories(target);
+        else Files.copy(source, target);
+      }
+    }
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), crashRoot, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    writer = session(database);
+    StoredTableRowView fetched = emptyValues();
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.descriptorRows().fetch(table, 7, fetched));
+    assertEquals(5, fetched.textByteLengthAt(1));
+    for (int row = 8; row <= 11; row++) {
+      assertEquals(StatusCode.OK, writer.descriptorRows().fetch(table, row, fetched));
+      assertEquals(13_600, fetched.textByteLengthAt(1));
+    }
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static long[] overflowReference(
+      RelationalDatabase database, long tableId, long key) {
+    SchemaPin scanPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, scanPin, new StatusDetail(128)));
+    RelationalSession scanner = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, scanner.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, scanner.descriptorRows().beginScan(scanPin, cursor));
+    StoredTableRowView row = emptyValues();
+    StatusCode status;
+    long[] reference = new long[2];
+    while ((status = scanner.descriptorRows().nextScan(
+        cursor, row, new RelationalRowIdentityResult())) == StatusCode.OK) {
+      if (row.valueAt(0) != key) continue;
+      reference[0] = cursor.tupleRow().overflowPageId();
+      reference[1] = cursor.tupleRow().overflowGeneration();
+      break;
+    }
+    assertTrue(reference[0] > 0);
+    assertEquals(StatusCode.OK, scanner.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, scanner.commit(outcome));
+    return reference;
+  }
+
   private static boolean contains(int[] values, int candidate) {
     for (int value : values) if (value == candidate) return true;
     return false;

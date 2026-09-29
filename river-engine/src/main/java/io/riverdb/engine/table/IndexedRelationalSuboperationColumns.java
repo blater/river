@@ -12,6 +12,8 @@ final class IndexedRelationalSuboperationColumns {
   static final int RESULTING_HEAP_VERSION = 5;
   static final int EXPECTED_PRIVATE_OWNER = 6;
   static final int RESULTING_PRIVATE_OWNER = 7;
+  static final int RECLAIMED_OVERFLOW_GENERATION = 8;
+  static final int RECLAIMED_OVERFLOW_RETIREMENT = 9;
 
   static final int DESCRIPTOR = 0;
   static final int FIRST_MUTATION = 1;
@@ -26,9 +28,10 @@ final class IndexedRelationalSuboperationColumns {
   static final int RESULTING_REGISTRY_STATE = 10;
   static final int EXPECTED_CLEANUP_CURSOR = 11;
   static final int RESULTING_CLEANUP_CURSOR = 12;
+  static final int RECLAIMED_OVERFLOW_PAGE_ID = 13;
 
-  private final IndexedLongChunks[] longs = new IndexedLongChunks[8];
-  private final IndexedIntChunks[] ints = new IndexedIntChunks[13];
+  private final IndexedLongChunks[] longs = new IndexedLongChunks[10];
+  private final IndexedIntChunks[] ints = new IndexedIntChunks[14];
 
   IndexedRelationalSuboperationColumns(int capacity) {
     for (int index = 0; index < longs.length; index++) longs[index] = new IndexedLongChunks(capacity);
@@ -82,6 +85,9 @@ final class IndexedRelationalSuboperationColumns {
     setLong(RESULTING_PRIVATE_OWNER, index, resultingPrivateOwner);
     setInt(EXPECTED_CLEANUP_CURSOR, index, expectedCleanupCursor);
     setInt(RESULTING_CLEANUP_CURSOR, index, resultingCleanupCursor);
+    setInt(RECLAIMED_OVERFLOW_PAGE_ID, index, 0);
+    setLong(RECLAIMED_OVERFLOW_GENERATION, index, 0);
+    setLong(RECLAIMED_OVERFLOW_RETIREMENT, index, 0);
   }
 
   long allocatedBytes() {
@@ -94,7 +100,7 @@ final class IndexedRelationalSuboperationColumns {
   long accountedBytesForCapacity(int required) {
     long longBytes = longs[OWNER].accountedBytesForCapacity(required);
     long intBytes = ints[DESCRIPTOR].accountedBytesForCapacity(required);
-    return longBytes < 0 || intBytes < 0 ? -1 : 8L * longBytes + 12L * intBytes + 64L;
+    return longBytes < 0 || intBytes < 0 ? -1 : 10L * longBytes + 14L * intBytes + 64L;
   }
 
   void release() {

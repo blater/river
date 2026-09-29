@@ -23,14 +23,16 @@ final class IndexedHybridTupleCompiler {
   StatusCode compile(
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedRelationalMutation mutation, int outputDescriptor,
-      int suboperation, int firstMutation, long memberSequence) {
+      int suboperation, int firstMutation, long memberSequence,
+      long oldestVisibleCommitSequence) {
     StatusCode status = registry.load(intents, descriptor);
     ByteBuffer expected = status.isOk() ? metadata() : null;
     if (status.isOk() && expected == null) status = StatusCode.CORRUPTION;
     return status.isOk()
         ? compileLoaded(
             intents, descriptor, mutation, outputDescriptor,
-            suboperation, firstMutation, memberSequence, expected)
+            suboperation, firstMutation, memberSequence,
+            oldestVisibleCommitSequence, expected)
         : status;
   }
 
@@ -38,13 +40,15 @@ final class IndexedHybridTupleCompiler {
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedRelationalMutation mutation, int outputDescriptor,
       int suboperation, int firstMutation, long memberSequence,
+      long oldestVisibleCommitSequence,
       ByteBuffer expected) {
     int scalarRoot = BTreeRootPage.rootPageId(expected);
     int nextPage = BTreeRootPage.nextPageId(expected);
     long heap = kernel.operationRowCount();
     int tupleRoot = registry.rootPageId();
     long generation = registry.generation();
-    StatusCode status = deltas.apply(intents, descriptor, tupleRoot, memberSequence);
+    StatusCode status = deltas.apply(
+        intents, descriptor, tupleRoot, memberSequence, oldestVisibleCommitSequence);
     if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
     boolean membershipChanged = deltas.membershipChanged(intents, descriptor);
@@ -62,6 +66,10 @@ final class IndexedHybridTupleCompiler {
         stageRegistry ? generation + 1 : generation,
         heap, kernel.operationRowCount(), TupleIndexRootRecordCodec.STATE_READY,
         TupleIndexRootRecordCodec.STATE_READY, 0, 0);
+    if (status.isOk()) status = mutation.recordOverflowReclamation(
+        suboperation, deltas.reclaimedOverflowPageId(),
+        deltas.reclaimedOverflowGeneration(),
+        deltas.reclaimedOverflowRetirementSequence());
     return status.isOk()
         ? deltas.append(
             intents, descriptor, mutation, suboperation, outputDescriptor) : status;

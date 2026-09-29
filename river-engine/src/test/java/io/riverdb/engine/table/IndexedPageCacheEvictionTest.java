@@ -13,6 +13,7 @@ import io.riverdb.engine.runtime.DatabasePageCacheTestPlan;
 import io.riverdb.engine.runtime.DatabaseResourceGovernor;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.format.page.PageCodec;
+import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
@@ -396,6 +397,105 @@ final class IndexedPageCacheEvictionTest {
 
     assertEquals(StatusCode.OK, pagesFile.close());
     assertEquals(StatusCode.OK, stagingFile.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void tupleFreePageCanBeReidentifiedWithinAndAcrossPreparedMembers(@TempDir Path root) {
+    NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
+    assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
+        root, new FatalStateFence(), new NioIoCounters(), 8, directoryResult));
+    NioDurableDirectory directory = directoryResult.directory();
+    DirectoryOperationResult pageFile = new DirectoryOperationResult();
+    DirectoryOperationResult stagingFile = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
+    IndexedPageSet pages = new IndexedPageSet(
+        pageFile.file(), stagingFile.file(), DATABASE, GENERATION, LARGE_TEST_CACHE);
+    ByteBuffer metadata = pages.stageNew(IndexedTableKernel.ROOT_META_PAGE_ID,
+        pages.changedPageCapacity());
+    assertNotNull(metadata);
+    assertEquals(StatusCode.OK, BTreeRootPage.initialize(metadata, 3, 6));
+    IndexedOperationPage allocated = new IndexedOperationPage();
+    assertEquals(StatusCode.OK, pages.pinNewTupleOverflowPage(5, 41, allocated));
+    long firstGeneration = allocated.durableGeneration();
+    assertEquals(StatusCode.OK, pages.releaseOperationPage(allocated));
+    publishPrepared(pages, Long.MAX_VALUE, 1, 2, 1);
+    pages.resetChanges();
+
+    metadata = pages.stageExisting(IndexedTableKernel.ROOT_META_PAGE_ID,
+        pages.changedPageCapacity());
+    assertNotNull(metadata);
+    ByteBuffer free = pages.stageFreeTuple(5, 41, pages.changedPageCapacity());
+    assertNotNull(free);
+    assertEquals(StatusCode.OK, BTreeRootPage.releasePage(metadata, 5, free));
+    assertEquals(StatusCode.OK, IndexedOperationPageAllocation.tupleOverflow(
+        pages, metadata, 41, allocated));
+    assertEquals(firstGeneration + 1, allocated.durableGeneration());
+    assertEquals(StatusCode.OK, pages.releaseOperationPage(allocated));
+    publishPrepared(pages, Long.MAX_VALUE, 2, 3, 2);
+    pages.resetChanges();
+
+    metadata = pages.stageExisting(IndexedTableKernel.ROOT_META_PAGE_ID,
+        pages.changedPageCapacity());
+    assertNotNull(metadata);
+    free = pages.stageFreeTuple(5, 41, pages.changedPageCapacity());
+    assertNotNull(free);
+    assertEquals(StatusCode.OK, BTreeRootPage.releasePage(metadata, 5, free));
+    assertEquals(StatusCode.OK, pages.beginPreparedBatch());
+    assertEquals(StatusCode.OK, pages.freezeChangedPages(0, Long.MAX_VALUE));
+    metadata = pages.stageExisting(IndexedTableKernel.ROOT_META_PAGE_ID,
+        pages.changedPageCapacity());
+    assertNotNull(metadata);
+    assertEquals(StatusCode.OK, IndexedOperationPageAllocation.tupleOverflow(
+        pages, metadata, 41, allocated));
+    assertEquals(firstGeneration + 2, allocated.durableGeneration());
+    assertEquals(StatusCode.OK, pages.releaseOperationPage(allocated));
+    assertEquals(StatusCode.OK, pages.freezeChangedPages(1, Long.MAX_VALUE));
+    assertEquals(StatusCode.OK, pages.installPreparedPages(new long[] {3, 4}, 2, 3, 5));
+    assertEquals(StatusCode.OK, pages.releasePreparedBatch());
+    pages.resetChanges();
+
+    assertEquals(StatusCode.OK, pageFile.file().close());
+    assertEquals(StatusCode.OK, stagingFile.file().close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void oldLeafAndOverflowPinsPreventReferenceReclamation(@TempDir Path root) {
+    NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
+    assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
+        root, new FatalStateFence(), new NioIoCounters(), 8, directoryResult));
+    NioDurableDirectory directory = directoryResult.directory();
+    DirectoryOperationResult pageFile = new DirectoryOperationResult();
+    DirectoryOperationResult stagingFile = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("pages", FileIoMode.POSITIONAL, pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", FileIoMode.POSITIONAL, stagingFile));
+    IndexedPageSet pages = new IndexedPageSet(
+        pageFile.file(), stagingFile.file(), DATABASE, GENERATION, LARGE_TEST_CACHE);
+    assertNotNull(pages.stageNew(5, pages.changedPageCapacity(),
+        PageCodec.PAYLOAD_KIND_TUPLE_BTREE, 41));
+    assertNotNull(pages.stageNew(6, pages.changedPageCapacity(),
+        PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW, 41));
+    publishPrepared(pages, Long.MAX_VALUE, 1, 2, 1);
+    pages.resetChanges();
+
+    IndexedPageGenerationPin oldLeaf = new IndexedPageGenerationPin();
+    assertEquals(StatusCode.OK, pages.pinPageAt(5, 1, oldLeaf));
+    assertNotNull(pages.stageExisting(5, pages.changedPageCapacity()));
+    publishPrepared(pages, 1, 2, 3, 2);
+    pages.resetChanges();
+    assertEquals(true, pages.hasPinnedPreRetirementTupleReference(41, 6, 2));
+    assertEquals(StatusCode.OK, pages.unpinPage(oldLeaf));
+    assertEquals(false, pages.hasPinnedPreRetirementTupleReference(41, 6, 2));
+
+    IndexedPageGenerationPin overflow = new IndexedPageGenerationPin();
+    assertEquals(StatusCode.OK, pages.pinPageAt(6, 2, overflow));
+    assertEquals(true, pages.hasPinnedPreRetirementTupleReference(41, 6, 2));
+    assertEquals(StatusCode.OK, pages.unpinPage(overflow));
+    assertEquals(false, pages.hasPinnedPreRetirementTupleReference(41, 6, 2));
+    assertEquals(StatusCode.OK, pageFile.file().close());
+    assertEquals(StatusCode.OK, stagingFile.file().close());
     assertEquals(StatusCode.OK, directory.close());
   }
 

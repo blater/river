@@ -238,6 +238,18 @@ Pure leaf movement never retires the referenced page. The leaf's page ID plus
 generation fences stale reuse. Retained retirement state obeys the configured
 page budget; pressure returns an explicit status before the commit decision.
 
+The implemented overflow header records the removing commit sequence while
+the old generation retains its row bytes. An overflow insert, replacement or
+delete may reclaim one older retired page during commit preflight. Selection
+requires a checkpointed retirement marker, a visible-snapshot floor at or
+after its removing sequence, and no pinned pre-retirement tuple leaf or
+overflow frame. The logical WAL suboperation names the exact reclaimed page,
+durable generation and retirement sequence; replay applies that free-stack
+transition before the tuple mutations and registry publication. The free-stack head
+and page identity are staged with the mutation, so a later grouped member can
+allocate the page with a higher durable generation. A release alone does not
+free a page: checkpoint and a subsequent overflow mutation drive progress.
+
 ## Mutation, WAL and recovery
 
 The descriptor mutation plan emits one primary row put/delete per row, plus
@@ -291,7 +303,7 @@ The direct-commit path retains its existing force-before-publication ordering.
 Clustered storage adds no new force barrier, commit path or acknowledgment rule.
 Replay reconstructs primary, secondary, identity and overflow pages through
 the same mutation applier and checks expected/resulting identities. Checkpoint
-includes their current pages and free-page state; vacuum reclaims only after
+includes their current pages and free-page state; overflow reclamation runs only after
 the snapshot, pin and durable-coverage conditions above.
 
 Remove descriptor base-row scalar intents, relational logical-head and

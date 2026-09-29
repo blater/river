@@ -462,3 +462,9 @@ variation in the evidence and do not treat them as an isolated CPU speedup or
 a cross-database claim. The correction applies to measurement acceptance;
 overflow reclamation, recovery, capacity, cleanup and independent final review
 remain promotion conditions.
+
+Implementation validation, 2026-09-29: the
+[overflow reclamation evidence](../delivery/evidence/2026-09-29-tic-erebor-overflow-reclamation.md)
+records the checkpoint-gated free-stack transition, old-snapshot test,
+greater-than-63-page logical mutation and insufficient-budget rejection.
+This is branch-level correctness evidence, not final durable-format approval.

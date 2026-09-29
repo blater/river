@@ -16,9 +16,11 @@ retry/outcome accounting and owned cleanup. Candidate TPS was 1,470.727 and
 1,226.331. Longer controls were 1,291.724 and 847.209; candidates were
 1,334.272 and 1,249.105. The owner accepted these numbers for the local
 performance gate. The spread prevents an isolated read-path CPU claim, and
-the implementation remains unpromoted pending durable overflow reclamation,
-capacity/recovery proof and independent final review. No new baseline row is
-designated.
+the implementation remains unpromoted pending remaining recovery and history
+proof, write-path cost assessment and independent final review. Overflow
+reclamation and greater-than-63-page mutation tests now pass, as recorded in
+[the overflow evidence](delivery/evidence/2026-09-29-tic-erebor-overflow-reclamation.md).
+No new baseline row is designated.
 
 ## Baseline stats
 

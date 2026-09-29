@@ -49,6 +49,7 @@ final class IndexedRelationalWalCodecTest {
         NEXT_PAGE, NEXT_PAGE, 1, 2, 0, 1,
         IndexedRelationalMutation.REGISTRY_READY,
         IndexedRelationalMutation.REGISTRY_READY, 0, 0));
+    requireOk(source.recordOverflowReclamation(0, 5, 3, 7));
     requireOk(source.appendTuple(
         0, OWNER_OBJECT_ID, IndexedRelationalMutation.TUPLE_REPLACE,
         0, 9, key, 0, key.remaining(), row, 0, row.remaining()));
@@ -68,6 +69,10 @@ final class IndexedRelationalWalCodecTest {
     check(decoded.tupleKeyLengthAt(0) == key.remaining()
             && decoded.tupleValueLengthAt(0) == row.remaining(),
         "tuple key/value boundary lost");
+    check(decoded.reclaimedOverflowPageIdAt(0) == 5
+            && decoded.reclaimedOverflowGenerationAt(0) == 3
+            && decoded.reclaimedOverflowRetirementAt(0) == 7,
+        "overflow reclamation identity lost in WAL round trip");
     ByteBuffer copy = ByteBuffer.allocate(row.remaining());
     decoded.copyTupleValueTo(0, copy, 0);
     check(copy.equals(row), "tuple row value changed in WAL round trip");

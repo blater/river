@@ -165,6 +165,13 @@ final class IndexedRelationalMutationBuffer {
         expectedCleanupCursor, resultingCleanupCursor);
   }
 
+  StatusCode recordOverflowReclamation(
+      int operation, int pageId, long generation, long retirementSequence) {
+    return sealed ? StatusCode.INVALID_EXTERNAL_INPUT
+        : suboperations.recordOverflowReclamation(
+            operation, pageId, generation, retirementSequence);
+  }
+
   StatusCode appendBase(
       int suboperationOrdinal, long ownerObjectId,
       int operation, long logicalRowId, long previousRowId,
@@ -370,6 +377,15 @@ final class IndexedRelationalMutationBuffer {
   }
   int resultingCleanupCursorAt(int ordinal) {
     return suboperations.resultingCleanupCursorAt(ordinal);
+  }
+  int reclaimedOverflowPageIdAt(int ordinal) {
+    return suboperations.reclaimedOverflowPageIdAt(ordinal);
+  }
+  long reclaimedOverflowGenerationAt(int ordinal) {
+    return suboperations.reclaimedOverflowGenerationAt(ordinal);
+  }
+  long reclaimedOverflowRetirementAt(int ordinal) {
+    return suboperations.reclaimedOverflowRetirementAt(ordinal);
   }
   void copyPayloadTo(int mutation, ByteBuffer target, int targetOffset) {
     entries.copyPayloadTo(mutation, target, targetOffset);

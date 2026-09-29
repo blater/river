@@ -40,7 +40,7 @@ final class IndexedOperationPageAllocation {
     int pageId = BTreeRootPage.nextAllocationPage(metadata);
     int nextFree = reusable
         ? io.riverdb.storage.btree.BTreeFreePage.nextPageId(
-            pages.currentPayloadUnchecked(pageId)) : -1;
+            pages.operationPayload(pageId)) : -1;
     status = switch (kind) {
       case PageCodec.PAYLOAD_KIND_SCALAR_BTREE ->
           pages.pinNewScalarOperationPage(pageId, result);
