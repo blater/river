@@ -12,7 +12,7 @@ final class RelationalDescriptorTupleDeltaProtection {
       RelationalDescriptorTupleDeltaPlan plan) {
     if (session == null || !plan.matches(table)) return StatusCode.INVALID_EXTERNAL_INPUT;
     for (int index = 0; index < plan.keyCount(); index++) {
-      StatusCode status = protectKey(session, plan, index);
+      StatusCode status = protectKey(session, table, plan, index);
       if (!status.isOk()) return status;
     }
     return StatusCode.OK;
@@ -20,6 +20,7 @@ final class RelationalDescriptorTupleDeltaProtection {
 
   private StatusCode protectKey(
       IndexedTransactionSession session,
+      TableDescriptor table,
       RelationalDescriptorTupleDeltaPlan plan,
       int index) {
     if (plan.kind() == RelationalDescriptorTupleDeltaPlan.INSERT) {
@@ -28,7 +29,9 @@ final class RelationalDescriptorTupleDeltaProtection {
     if (plan.kind() == RelationalDescriptorTupleDeltaPlan.DELETE) {
       return protect(session, plan, index, false);
     }
-    if (!plan.changedAt(index)) return StatusCode.OK;
+    // A value replacement must conflict with serializable readers of its clustered key.
+    if (!plan.changedAt(index)) return plan.keyAt(index).keyId() == table.clusteredKey().keyId()
+        ? protect(session, plan, index, false) : StatusCode.OK;
     int compared = TupleKeyCodec.compareUserTuple(
         plan.bytes(), plan.beforeOffsetAt(index), plan.beforeLengthAt(index),
         plan.bytes(), plan.afterOffsetAt(index), plan.afterLengthAt(index));

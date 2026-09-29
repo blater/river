@@ -5,6 +5,36 @@ work. Full historical commands, individual samples, decisions and artifact IDs
 through 2026-09-16 are in the [checkpoint archive](performance-checkpoints-archive-2026-09-16.md).
 Diagnostic samples are not audited TPC-C results or general performance claims.
 
+## 2026-09-29 — Erebor clustered-row candidate diagnostic
+
+The [Stock Level candidate evidence](delivery/evidence/2026-09-29-tic-erebor-candidate-stock-level.md)
+records two interleaved short pairs and two reversed longer pairs against stable
+`2ada6350` and candidate `9f7684b6`, with installed JVM distributions and
+identical full Stock Level manifests. All eight artifacts passed invariants,
+retry/outcome accounting and owned cleanup. Candidate TPS was 1,470.727 and
+1,195.329 in short windows against adjacent controls of 1,208.132 and
+1,226.331. Longer controls were 1,291.724 and 847.209; candidates were
+1,334.272 and 1,249.105. The owner accepted these numbers for the local
+performance gate. The spread prevents an isolated read-path CPU claim, and
+the implementation remains unpromoted pending physical write-path cost
+assessment, the overflow address-capacity question and independent final
+review. Overflow reclamation, held-force value-growth, retained-history
+pressure and greater-than-63-page mutation tests now pass, as recorded in
+[the overflow evidence](delivery/evidence/2026-09-29-tic-erebor-overflow-reclamation.md).
+No new baseline row is designated.
+
+The later non-key update lock correction at `64c299ac` passed a serial clean
+full `check` and one short River-specific New Order/Payment 50/50 diagnostic.
+Its [write-lock evidence](delivery/evidence/2026-09-29-tic-erebor-clustered-write-lock.md)
+records 5,332 commits in ten measured seconds with zero retries, failed
+outcomes or cleanup residue. The host was in low power mode, so this is a
+correctness workload result and does not establish the cost of the added
+tuple-key lock or a new performance baseline.
+The [identity routing audit](delivery/evidence/2026-09-29-tic-erebor-identity-routing.md)
+records zero map lookups on primary/secondary reads and zero map mutations on
+non-key updates through the implemented routes. Extra map page, copy, WAL and
+history costs have not been isolated; final independent review remains open.
+
 ## Baseline stats
 
 Append a row when a measured run is designated as a new performance baseline.
@@ -1998,3 +2028,148 @@ The [complete commands, artifacts, CPU evidence and limitations](delivery/eviden
 are recorded with the diagnostic ticket. The next general storage-layout work
 is [tic-erebor](tickets/tic-erebor.md). These runs do not designate a new TPS
 baseline or a paired MariaDB ratio; the Baseline stats table is unchanged.
+
+## 2026-09-29 — tic-erebor promotion-review corrections
+
+Feature branch `feature/tic-erebor-clustered-row-store` remains unpromoted from
+stable source `2ada6350`. Review findings at `bdf43fc0` are addressed by
+`33442464` (cancelled tuple compilation), `803011be` (durable demand-sized
+retirement queue), `960c25a7` (descriptor BASE removal), `0b2e7bbb` (warmed
+actual read allocation evidence), and `46e5ab39` (catalogue scalar/head range
+correction found during measurement). The [updated review handoff](delivery/evidence/2026-09-29-tic-erebor-review-handoff.md)
+and [complete physical/workload/CPU evidence](delivery/evidence/2026-09-29-tic-erebor-write-cost.md)
+contain commands, immutable artifacts, source/JAR identities and limitations.
+
+Final serial clean command: cached Gradle 9.7.0 with `--no-daemon`,
+`--max-workers=1`, independent worktree caches, `clean check :river-server-app:jar`.
+It passed in 4m 30s: 156 actionable tasks, 102 executed, 52 restored from cache
+and two up to date. All 1,131 engine tests passed. Log:
+`/private/tmp/erebor-promotion-final-clean-check.log`. Focused tests cover
+multi-row overflow churn/reuse, cross-owner capacity, abort/group publication,
+old snapshots/pins, WAL-only replay and actual multi-chunk values/locators.
+
+Actual eight-row declared-primary commits change one unsplit identity-map
+page, copy 32 KiB, retain one 16 KiB predecessor and flush 16 KiB. Map logical
+WAL is 1,028 bytes for insert/primary move and 860 for delete in the BIGINT
+fixture. Non-key updates have zero map writes/copies/WAL/flush bytes. A
+hidden-primary table has no extra locator tree. The warmed 10,000-point and
+64-row primary/secondary scan tests allocate zero bytes and borrow leaf
+buffers. These are named ownership boundaries, not whole-transaction totals.
+
+Harness `5082670` ran the frozen installed executables serially on the
+low-power macOS/arm64 host, GraalVM 25.0.4 `-Xmx1g`, local durable WAL,
+loopback TLS and READ COMMITTED with explicit FOR UPDATE. One warehouse,
+seed 42; individual families use one worker and three retries. The owner
+permits one good sample per build/workload. Short runs are 5s warmup/20s
+measurement; the targeted longer New Order pair is 10s/60s, reversed order.
+Times below are UTC, 2026-09-29; Europe/London is one hour later (BST).
+
+| Window | Workload | Control TPS | Final TPS | Evidence |
+| --- | --- | ---: | ---: | --- |
+| 19:37 / 19:56 | sample New Order, short | 284.046 | 208.347 | `river_harness_20260929_193659_7d6e4184` / `river_harness_20260929_195644_09e2dc37` |
+| 19:38 / 19:57 | sample Payment, short | 874.877 | 837.335 | `river_harness_20260929_193828_3d773d36` / `river_harness_20260929_195714_2a52da4e` |
+| 19:39 / 19:57 | sample Order Status, short | 8,231.325 | 7,465.065 | `river_harness_20260929_193858_d80544ca` / `river_harness_20260929_195745_902c7294` |
+| 20:05–20:08 | sample New Order, longer | 278.695 | 373.911 | `river_harness_20260929_200649_684a1805` / `river_harness_20260929_200534_fd9e2ddf` |
+| 20:02–20:03 | sample all, four workers, **ten retries** | 348.186 | 353.348 | `river_harness_20260929_200231_1557af97` / `river_harness_20260929_200301_37c90d04` |
+
+All tabled reports passed invariants, had zero failed/unknown outcomes, were
+eligible with equal keys within each family/window, and stopped/removed their
+owned instances. Individual families had zero retries. The ten-retry mix
+reported 1,165 control and 1,111 candidate retries, plus four/three terminal
+cancellations. It is a changed-manifest diagnostic: the strict four-worker,
+three-retry mix repeatedly exhausted New Order deadlock retries during warmup
+on both control and candidate. All failed reports and cleanup outcomes remain
+retained in the linked evidence.
+
+Separate JFR diagnostics captured virtual-thread mapping and replacement-lock
+scopes. They identified an excluded empty head-directory search in catalogue
+scans, corrected by `46e5ab39`; final profiles have zero samples in that search.
+The final short New Order CPU window also includes substantial ongoing JVMCI
+compilation (10.8 compiler wall seconds versus 2.4 in its control). The longer
+ordinary follow-up did not repeat the candidate-specific short decline.
+Sampled whole-server budgets include JIT/GC/recorder activity; they are not
+exact map or lock CPU times. Temporary instrumentation is absent from the
+production candidate and its source.
+
+Slopmark captured the logical-sizing increase as a responsibility review
+trigger, with incomplete SHALLOW coverage. Sizing remains the existing
+admission owner; placement policy is shared with the tuple compiler. The
+mutation buffer score fell after BASE removal, and the frame cache gained no
+responsibility. Raw before/after captures are retained outside Git.
+
+Decision: implementation fixes and named physical evidence are ready for
+updated independent durable-format/recovery/concurrency review. Strict mixed
+retry acceptance needs owner/review resolution. The previously accepted Stock
+Level decision stands with its original variation. No feature merge,
+checkpoint tag or new baseline is designated; the Baseline stats table remains
+unchanged.
+
+## 2026-09-29 — Erebor amended-review correctness checkpoint
+
+Branch `feature/tic-erebor-clustered-row-store`, ticket
+[`tic-erebor`](tickets/tic-erebor.md). The follow-up independent review at
+`867f6847` identified metadata-buffer reuse under staging pressure and
+intermittent allocation-test initialization. `fb9772d2` fixes the metadata pin
+lifetimes; `4e08034d` stabilizes setup/warmup without relaxing exact-zero
+verification. The [amended evidence](delivery/evidence/2026-09-29-tic-erebor-promotion-fixes.md#amended-review-f1-retirement-metadata-ownership)
+retains the deterministic regressions, two-frame pressure/abort/replay checks,
+four-frame WAL-only recovery, JFR class-loading diagnosis and slopmark review.
+
+All 52 affected tests and three fresh-JVM allocation runs pass. Each read path
+must pass five separate zero-byte batches and retain its primary-leaf borrow.
+The serial clean full check and server JAR checkpoint passed in 4m 51s, with
+all 1,136 engine tests passing; log `/private/tmp/erebor-followup/clean-check.log`.
+The source was committed unchanged after that clean check.
+
+This is a correctness checkpoint. No additional TPS campaign, benchmark
+baseline or promotion is designated. Prior physical-write/CPU and Stock Level
+samples retain their named versions and limitations. Independent follow-up
+review and owner resolution of the three-retry mixed-workload condition remain
+required before promotion.
+
+## 2026-09-29 — Erebor strict three-retry workload resolution
+
+River branch `feature/tic-erebor-clustered-row-store`, ticket
+[`tic-erebor`](tickets/tic-erebor.md). Production source remains `4e08034d`;
+the measured checkout is `5cfefeeb`, with additional SQL proof `0b68064f`.
+Harness `356682a` on `fix/erebor-three-retry-mix` replaces random stock
+visitation with warehouse/item order in the common full SQL binding, preserving
+generated line identity, quantities, expected rollback and immutable retry
+inputs. The binding versions/digests explicitly change; original reports are
+retained. The [resolution evidence](delivery/evidence/2026-09-29-tic-erebor-three-retry-mix.md)
+contains mechanism, exact commands, frozen hashes, counts and review handoff.
+
+Serial tests pass: harness test/race/vet/build, real READ COMMITTED opposing
+and ordered SQL controls, and all 1,137 affected engine tests. The prior clean
+full check remains the production checkpoint. The host remains in low power
+mode; one passing sample per build/workload follows the owner's instruction.
+GraalVM 25.0.4 `-Xmx1g`, macOS/arm64, local durable WAL, loopback TLS,
+READ COMMITTED with FOR UPDATE, warehouse one and seed 42.
+
+| Start UTC / BST | Workload | Measured commits | Commits/s | p99 ms | Retries | Artifact ID |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| 21:57:16 / 22:57:16 | Erebor New Order/Payment, four workers, 2s/10s, retries three | 5,120 | 511.950 | 30.573 | 0 | `river_harness_20260929_215717_6c367071` |
+| 21:57:48 / 22:57:48 | Erebor sample all, four workers, 5s/20s, retries three | 12,064 | 603.141 | 26.722 | 0 | `river_harness_20260929_215748_b93ff37d` |
+| 21:58:28 / 22:58:28 | Stable `2ada6350`, identical sample all | 10,872 | 543.536 | 30.458 | 0 | `river_harness_20260929_215828_9f1527c2` |
+
+All reports pass, have zero failed/unknown outcomes, successful invariants,
+reconciled attempts, verified report checksums and graceful complete owned
+cleanup. Measured cancellations are four/three/three respectively; expected
+rollbacks are 22/59/55. Warmup has zero retries or failed/unknown/cancelled
+outcomes. The full pair is eligible with identical key `58d88902…`.
+Reports live below `/private/tmp/river-harness-erebor-retry/runs`; exact
+versions and machine summaries are below `/private/tmp/erebor-mixed-retry`.
+
+One MariaDB sample-New-Order functional smoke, one worker, 1s/3s and retries
+three, also passes with deliberate rollbacks and stopped-to-stopped cleanup
+(`river_harness_20260929_220009_91dd0204`). It is not a cross-target comparison.
+Slopmark's common New Order owner rises 20.9653 → 27.7461, reviewed as existing
+SQL visitation responsibility; the generic scheduler and River production
+gain no policy. Incomplete SHALLOW coverage and captures are retained.
+
+Decision: the strict three-retry mixed condition is satisfied through the
+corrected, versioned binding. The accepted Stock Level decision and physical
+write-cost scope stand. These short changed-binding results establish no
+engine speedup or new baseline. Independent follow-up review, including the
+harness correction, remains before promotion. No merge, tag or baseline
+designation is recorded.

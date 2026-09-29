@@ -23,7 +23,29 @@ final class TupleBTreeEntryValidation {
             source, start + keyOffset, keyLength,
             source, start + highOffset, highLength) < 0)
         && (type == TupleBTreePageCodec.TYPE_LEAF
-            ? FormatBytes.getInt(source, slot + 8) == 0
+            ? validLeafValue(source, slot, keyOffset, keyLength)
             : FormatBytes.getInt(source, slot + 8) > 0);
+  }
+
+  static int inlineValueLength(ByteBuffer source, int slot, int type) {
+    return type == TupleBTreePageCodec.TYPE_LEAF && FormatBytes.getInt(source, slot + 16) == 0
+        ? FormatBytes.getInt(source, slot + 12) : 0;
+  }
+
+  static boolean validLeafValue(
+      ByteBuffer source, int slot, int keyOffset, int keyLength) {
+    int valueOffset = FormatBytes.getInt(source, slot + 8);
+    int valueLength = FormatBytes.getInt(source, slot + 12);
+    int overflowPageId = FormatBytes.getInt(source, slot + 16);
+    long overflowGeneration = FormatBytes.getLong(source, slot + 20);
+    long modificationSequence = FormatBytes.getLong(source, slot + 28);
+    if (valueLength < 0 || valueLength > io.riverdb.format.page.PageCodec.MAX_PAYLOAD_BYTES
+        || overflowPageId < 0 || modificationSequence < 0
+        || FormatBytes.getInt(source, slot + 36) != 0) return false;
+    if (overflowPageId != 0) {
+      return valueLength > 0 && valueOffset == 0 && overflowGeneration > 0;
+    }
+    return overflowGeneration == 0
+        && valueOffset == (valueLength == 0 ? 0 : keyOffset + keyLength);
   }
 }

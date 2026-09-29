@@ -10,16 +10,30 @@ final class TupleBTreeSplitPropagation {
 
   static StatusCode leaf(
       TupleBTree tree, ByteBuffer key, int offset, int length,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
       int originalRoot, TupleBTreeTreeWorkspace workspace) {
+    workspace.retryInsertionAfterSplit = false;
     StatusCode status = tree.provider().allocate(workspace.other);
     int leftPageId = workspace.leafPageId;
     int oldRightPageId = workspace.page.header.rightSiblingPageId();
     if (status.isOk()) status = validBuffers(workspace);
+    boolean splitAttempted = status.isOk();
     if (status.isOk()) status = TupleBTreeLeafPage.splitInsert(
         workspace.current.page(), workspace.current.start(),
         workspace.pageScratch, 0, workspace.other.page(), workspace.other.start(),
         leftPageId, workspace.other.pageId(), tree.schemaId(), tree.shape(),
-        key, offset, length, workspace.page, workspace.split);
+        key, offset, length, value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence,
+        workspace.page, workspace.split);
+    if (splitAttempted && status == StatusCode.RESOURCE_EXHAUSTED) {
+      status = TupleBTreeLeafSplitExisting.split(
+          workspace.current.page(), workspace.current.start(),
+          workspace.pageScratch, 0, workspace.other.page(), workspace.other.start(),
+          leftPageId, workspace.other.pageId(), tree.schemaId(), tree.shape(),
+          workspace.page, workspace.split);
+      if (status.isOk()) workspace.retryInsertionAfterSplit = true;
+    }
     if (status.isOk()) {
       TupleBTreePageSupport.copyPayload(
           workspace.pageScratch, 0, workspace.current.page(), workspace.current.start());
@@ -29,8 +43,9 @@ final class TupleBTreeSplitPropagation {
     status = releaseSplit(tree, workspace, status);
     if (status.isOk() && oldRightPageId > 0) status = TupleBTreeLeafRelink.replaceLeft(
         tree, oldRightPageId, leftPageId, rightPageId, workspace);
-    return status.isOk() ? parents(
-        tree, leftPageId, rightPageId, originalRoot, workspace) : status;
+    if (status.isOk()) status = parents(
+        tree, leftPageId, rightPageId, originalRoot, workspace);
+    return status.isOk() && workspace.retryInsertionAfterSplit ? StatusCode.RETRY : status;
   }
 
   private static StatusCode parents(

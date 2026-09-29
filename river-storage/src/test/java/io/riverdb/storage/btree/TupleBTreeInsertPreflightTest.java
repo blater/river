@@ -36,7 +36,7 @@ final class TupleBTreeInsertPreflightTest {
 
     int exactRemainingKeyBytes = workspace.header.freeEnd()
         - TupleBTreePageCodec.HEADER_BYTES
-        - (workspace.header.entryCount() + 1) * TupleBTreePageCodec.SLOT_BYTES;
+        - (workspace.header.entryCount() + 1) * TupleBTreePageCodec.LEAF_SLOT_BYTES;
     assertTrue(TupleBTreePageOccupancy.accepts(exactRemainingKeyBytes, workspace));
     assertFalse(TupleBTreePageOccupancy.accepts(exactRemainingKeyBytes + 1, workspace));
   }

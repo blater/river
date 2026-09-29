@@ -16,6 +16,8 @@ final class RelationalDescriptorTupleDeltaPlan {
   private int kind;
   private int mutationCount;
   private int payloadBytes;
+  private int primaryIndex = -1;
+  private boolean primaryChanged;
 
   RelationalDescriptorTupleDeltaPlan() {
     this(null, RelationalDescriptorTupleDeltaAllocator.STANDARD);
@@ -28,18 +30,20 @@ final class RelationalDescriptorTupleDeltaPlan {
     preparation = new RelationalDescriptorTupleDeltaPreparation(this, storage);
   }
 
-  StatusCode insert(TableDescriptor descriptor, SqlValueAccess values, long logicalRowId) {
-    return preparation.prepare(INSERT, descriptor, null, values, logicalRowId);
+  StatusCode insert(
+      TableDescriptor descriptor, SqlValueAccess values,
+      long logicalRowId, int rowBytes) {
+    return preparation.prepare(INSERT, descriptor, null, values, logicalRowId, rowBytes);
   }
 
   StatusCode delete(TableDescriptor descriptor, SqlValueAccess values, long logicalRowId) {
-    return preparation.prepare(DELETE, descriptor, values, null, logicalRowId);
+    return preparation.prepare(DELETE, descriptor, values, null, logicalRowId, 0);
   }
 
   StatusCode update(
       TableDescriptor descriptor, SqlValueAccess before,
-      SqlValueAccess after, long logicalRowId) {
-    return preparation.prepare(UPDATE, descriptor, before, after, logicalRowId);
+      SqlValueAccess after, long logicalRowId, int rowBytes) {
+    return preparation.prepare(UPDATE, descriptor, before, after, logicalRowId, rowBytes);
   }
 
   void reset() {
@@ -48,13 +52,19 @@ final class RelationalDescriptorTupleDeltaPlan {
     kind = 0;
     mutationCount = 0;
     payloadBytes = 0;
+    primaryIndex = -1;
+    primaryChanged = false;
   }
 
-  void publish(TableDescriptor descriptor, int operation, int mutations, int payload) {
+  void publish(
+      TableDescriptor descriptor, int operation, int mutations, int payload,
+      int primary, boolean moved) {
     table = descriptor;
     kind = operation;
     mutationCount = mutations;
     payloadBytes = payload;
+    primaryIndex = primary;
+    primaryChanged = moved;
   }
 
   boolean matches(TableDescriptor descriptor) { return table == descriptor; }
@@ -73,4 +83,6 @@ final class RelationalDescriptorTupleDeltaPlan {
   int userLength(int index, boolean after) { return storage.userLength(index, after); }
   int mutationCount() { return mutationCount; }
   int payloadBytes() { return payloadBytes; }
+  int primaryIndex() { return primaryIndex; }
+  boolean primaryChanged() { return primaryChanged; }
 }

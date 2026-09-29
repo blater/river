@@ -24,17 +24,20 @@ final class RelationalDescriptorTupleDeltaPreparation {
 
   StatusCode prepare(
       int operation, TableDescriptor table,
-      SqlValueAccess before, SqlValueAccess after, long logicalRowId) {
+      SqlValueAccess before, SqlValueAccess after,
+      long logicalRowId, int rowBytes) {
     plan.reset();
     encoder.clear();
     mutations = 0;
     payload = 0;
-    if (!valid(operation, table, before, after, logicalRowId)) {
+    if (!valid(operation, table, before, after, logicalRowId)
+        || rowBytes < 0 || rowBytes > TableSchema.MAXIMUM_ROW_BYTES
+        || operation != RelationalDescriptorTupleDeltaPlan.DELETE && rowBytes == 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int keys = RelationalDescriptorKeySet.count(table);
     if (keys == 0) {
-      plan.publish(table, operation, 0, 0);
+      plan.publish(table, operation, 0, 0, -1, false);
       return StatusCode.OK;
     }
     StatusCode status = reserve(table, keys, operation == RelationalDescriptorTupleDeltaPlan.UPDATE);
@@ -46,8 +49,7 @@ final class RelationalDescriptorTupleDeltaPreparation {
       plan.reset();
       return status;
     }
-    plan.publish(table, operation, mutations, payload);
-    return StatusCode.OK;
+    return measure(table, operation, rowBytes);
   }
 
   private StatusCode reserve(TableDescriptor table, int keys, boolean update) {
@@ -79,7 +81,7 @@ final class RelationalDescriptorTupleDeltaPreparation {
     if (operation != RelationalDescriptorTupleDeltaPlan.DELETE) {
       storage.copyAfter(index, encoder.bytes(), encoder.length());
     }
-    return recordMutation(index, operation);
+    return StatusCode.OK;
   }
 
   private StatusCode encodeBefore(
@@ -90,17 +92,47 @@ final class RelationalDescriptorTupleDeltaPreparation {
     return status;
   }
 
-  private StatusCode recordMutation(int index, int operation) {
-    int added = operation == RelationalDescriptorTupleDeltaPlan.UPDATE ? 2 : 1;
-    long nextPayload = (long) payload + (operation == RelationalDescriptorTupleDeltaPlan.DELETE
-        ? storage.beforeLengthAt(index) : operation == RelationalDescriptorTupleDeltaPlan.INSERT
-            ? storage.afterLengthAt(index)
-            : storage.beforeLengthAt(index) + storage.afterLengthAt(index));
-    if (mutations > Integer.MAX_VALUE - added || nextPayload > Integer.MAX_VALUE) {
+  private StatusCode measure(TableDescriptor table, int operation, int rowBytes) {
+    int primary = -1;
+    for (int index = 0; index < storage.keyCount(); index++) {
+      if (storage.keyAt(index).kind() == KeyDescriptor.KIND_PRIMARY
+          || table.primaryKey() == null
+              && storage.keyAt(index).kind() == KeyDescriptor.KIND_INTERNAL_IDENTITY) {
+        primary = index;
+      }
+    }
+    boolean moved = operation == RelationalDescriptorTupleDeltaPlan.UPDATE
+        && primary >= 0 && storage.beforeOffsetAt(primary) != storage.afterOffsetAt(primary);
+    int locatorBytes = primary < 0 ? 0 : storage.afterLengthAt(primary);
+    long totalMutations = 0;
+    long totalPayload = 0;
+    for (int index = 0; index < storage.keyCount(); index++) {
+      boolean clustered = index == primary;
+      boolean changed = operation != RelationalDescriptorTupleDeltaPlan.UPDATE
+          || storage.beforeOffsetAt(index) != storage.afterOffsetAt(index);
+      if (operation == RelationalDescriptorTupleDeltaPlan.DELETE) {
+        totalMutations++;
+        totalPayload += storage.beforeLengthAt(index);
+      } else if (operation == RelationalDescriptorTupleDeltaPlan.INSERT) {
+        totalMutations++;
+        totalPayload += storage.afterLengthAt(index)
+            + (clustered ? rowBytes : locatorBytes);
+      } else if (changed) {
+        totalMutations += 2;
+        totalPayload += storage.beforeLengthAt(index) + storage.afterLengthAt(index)
+            + (clustered ? rowBytes : locatorBytes);
+      } else if (clustered || moved) {
+        totalMutations++;
+        totalPayload += storage.afterLengthAt(index)
+            + (clustered ? rowBytes : locatorBytes);
+      }
+    }
+    if (totalMutations > Integer.MAX_VALUE || totalPayload > Integer.MAX_VALUE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    mutations += added;
-    payload = (int) nextPayload;
+    mutations = (int) totalMutations;
+    payload = (int) totalPayload;
+    plan.publish(table, operation, mutations, payload, primary, moved);
     return StatusCode.OK;
   }
 

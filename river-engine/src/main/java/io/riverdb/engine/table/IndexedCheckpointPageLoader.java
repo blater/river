@@ -91,7 +91,7 @@ final class IndexedCheckpointPageLoader {
         || header.databaseHigh() != database.high()
         || header.databaseLow() != database.low()
         || header.pageId() != pageId
-        || header.pageGeneration() != 1) return StatusCode.CORRUPTION;
+        || header.pageGeneration() <= 0) return StatusCode.CORRUPTION;
     if ((expectedGeneration == 0 && header.walGeneration() >= generation.value())
         || (expectedGeneration != 0 && header.walGeneration() != expectedGeneration)) {
       return StatusCode.CORRUPTION;

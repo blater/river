@@ -3,6 +3,8 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.btree.TupleBTreePageCodec;
 import io.riverdb.format.btree.TupleBTreePageHeader;
+import io.riverdb.format.btree.TupleRowOverflowCodec;
+import io.riverdb.format.btree.TupleRowOverflowHeader;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.page.LogicalHeadPageCodec;
@@ -15,6 +17,7 @@ import java.nio.ByteBuffer;
 final class IndexedPagePayloadValidation {
   private final IndexedPageSet pages;
   private final TupleBTreePageHeader tupleHeader = new TupleBTreePageHeader();
+  private final TupleRowOverflowHeader overflowHeader = new TupleRowOverflowHeader();
 
   IndexedPagePayloadValidation(IndexedPageSet pageSet) {
     pages = pageSet;
@@ -30,6 +33,11 @@ final class IndexedPagePayloadValidation {
     if (pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_TUPLE_BTREE) {
       return CatalogKeyspace.validKeyId(pages.ownerKeyId(pageId))
           ? TupleBTreePageCodec.validateEnvelope(payload, 0, tupleHeader)
+          : StatusCode.CORRUPTION;
+    }
+    if (pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW) {
+      return CatalogKeyspace.validKeyId(pages.ownerKeyId(pageId))
+          ? TupleRowOverflowCodec.validate(payload, 0, 0, overflowHeader)
           : StatusCode.CORRUPTION;
     }
     if (pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_LOGICAL_HEAD) {

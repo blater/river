@@ -16,12 +16,14 @@ public final class TupleBTreeTreeWorkspace {
   final TupleBTreeGraphState graph = new TupleBTreeGraphState();
   final ByteBuffer pageScratch;
   final ByteBuffer keyScratch;
+  final ByteBuffer retryKeyScratch = ByteBuffer.allocate(TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
   final int[] pathPageIds;
   final int[] pathChildOrdinals;
   final int[] pathNextChildOrdinals;
   int pathDepth;
   int leafPageId;
   int propagatedRightPageId;
+  boolean retryInsertionAfterSplit;
 
   public TupleBTreeTreeWorkspace(
       ByteBuffer reusablePage,
@@ -61,7 +63,15 @@ public final class TupleBTreeTreeWorkspace {
     pathDepth = 0;
     leafPageId = 0;
     propagatedRightPageId = 0;
+    retryInsertionAfterSplit = false;
     split.reset();
     graph.reset();
   }
+
+  void clearRemovedValue() {
+    page.clearRemovedValue();
+  }
+
+  public int removedOverflowPageId() { return page.removedOverflowPageId(); }
+  public long removedOverflowGeneration() { return page.removedOverflowGeneration(); }
 }

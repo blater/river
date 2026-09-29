@@ -434,6 +434,134 @@ final class TupleBTreePageCodecTest {
     assertEquals(3, entry.rightChildPageId());
   }
 
+  @Test
+  void valuedLeafInsertDeletePreservesPackedOffsetsAndModificationSequences() {
+    int[] descriptors = {SqlTypeDescriptor.BIGINT};
+    TupleShape shape = shape(descriptors);
+    ByteBuffer keys = ByteBuffer.allocate(192);
+    int first = key(keys, 0, descriptors, 1, 101);
+    int middle = key(keys, 64, descriptors, 2, 102);
+    int last = key(keys, 128, descriptors, 3, 103);
+    ByteBuffer values = ByteBuffer.allocate(48);
+    for (int index = 0; index < values.capacity(); index++) {
+      values.put(index, (byte) (index + 1));
+    }
+    ByteBuffer page = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.initializeLeaf(
+        page, 0, 0, 0, shape, 51, null, 0, 0));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.appendLeaf(
+        page, 0, shape, keys, 0, first, values, 0, 9, 0, 0, 11));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.appendLeaf(
+        page, 0, shape, keys, 128, last, values, 24, 15, 0, 0, 13));
+    TupleBTreePageHeader header = new TupleBTreePageHeader();
+    TupleBTreePageValidationProof proof = new TupleBTreePageValidationProof();
+    TupleBTreePageMutationCapability mutation = new TupleBTreePageMutationCapability();
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.prepareLeafMutation(
+        page, 0, 51, shape, header, proof, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.insertPreparedLeaf(
+        page, 0, 51, shape, keys, 64, middle,
+        values, 9, 15, 0, 0, 12, 1, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.validateForRead(
+        page, 0, 51, shape, header, proof));
+    assertEquals(3, header.entryCount());
+    TupleBTreeLeafEntry entry = new TupleBTreeLeafEntry();
+    for (int index = 0; index < 3; index++) {
+      assertEquals(StatusCode.OK,
+          TupleBTreePageCodec.readValidatedLeaf(page, 0, header, index, entry));
+      assertEquals(101 + index, entry.logicalRowId());
+      assertEquals(11 + index, entry.modificationSequence());
+      int length = index == 0 ? 9 : 15;
+      int valueStart = index == 0 ? 0 : index == 1 ? 9 : 24;
+      assertEquals(length, entry.valueLength());
+      for (int offset = 0; offset < length; offset++) {
+        assertEquals(values.get(valueStart + offset), page.get(entry.valueOffset() + offset));
+      }
+    }
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.validateEnvelope(page, 0, header));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.prepareLeafMutation(
+        page, 0, 51, shape, header, proof, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.deletePreparedLeaf(
+        page, 0, 51, shape, 1, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.validateForRead(
+        page, 0, 51, shape, header, proof));
+    assertEquals(2, header.entryCount());
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.readValidatedLeaf(
+        page, 0, header, 1, entry));
+    assertEquals(103, entry.logicalRowId());
+    assertEquals(13, entry.modificationSequence());
+    assertEquals(15, entry.valueLength());
+    for (int offset = 0; offset < 15; offset++) {
+      assertEquals(values.get(24 + offset), page.get(entry.valueOffset() + offset));
+    }
+  }
+
+  @Test
+  void valueReplacementMovesPackedRecordsAcrossInlineAndOverflow() {
+    int[] descriptors = {SqlTypeDescriptor.BIGINT};
+    TupleShape shape = shape(descriptors);
+    ByteBuffer keys = ByteBuffer.allocate(128);
+    int first = key(keys, 0, descriptors, 1, 101);
+    int second = key(keys, 64, descriptors, 2, 102);
+    ByteBuffer values = ByteBuffer.allocate(96);
+    for (int index = 0; index < values.capacity(); index++) {
+      values.put(index, (byte) (index + 1));
+    }
+    ByteBuffer page = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.initializeLeaf(
+        page, 0, 0, 0, shape, 53, null, 0, 0));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.appendLeaf(
+        page, 0, shape, keys, 0, first, values, 0, 8, 0, 0, 10));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.appendLeaf(
+        page, 0, shape, keys, 64, second, values, 8, 8, 0, 0, 11));
+    TupleBTreePageHeader header = new TupleBTreePageHeader();
+    TupleBTreePageValidationProof proof = new TupleBTreePageValidationProof();
+    TupleBTreePageMutationCapability mutation = new TupleBTreePageMutationCapability();
+    TupleBTreeLeafEntry entry = new TupleBTreeLeafEntry();
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.prepareLeafMutation(
+        page, 0, 53, shape, header, proof, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.replacePreparedLeafValue(
+        page, 0, 53, shape, keys, 0, first,
+        values, 16, 24, 0, 0, 20, 0, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.validateForRead(
+        page, 0, 53, shape, header, proof));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.readValidatedLeaf(
+        page, 0, header, 1, entry));
+    assertEquals(102, entry.logicalRowId());
+    assertEquals(11, entry.modificationSequence());
+    for (int offset = 0; offset < 8; offset++) {
+      assertEquals(values.get(8 + offset), page.get(entry.valueOffset() + offset));
+    }
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.prepareLeafMutation(
+        page, 0, 53, shape, header, proof, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.replacePreparedLeafValue(
+        page, 0, 53, shape, keys, 0, first,
+        null, 0, 80, 71, 9, 21, 0, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.validateForRead(
+        page, 0, 53, shape, header, proof));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.readValidatedLeaf(
+        page, 0, header, 0, entry));
+    assertEquals(0, entry.valueOffset());
+    assertEquals(80, entry.valueLength());
+    assertEquals(71, entry.overflowPageId());
+    assertEquals(9, entry.overflowGeneration());
+    assertEquals(21, entry.modificationSequence());
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.prepareLeafMutation(
+        page, 0, 53, shape, header, proof, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.replacePreparedLeafValue(
+        page, 0, 53, shape, keys, 0, first,
+        values, 40, 7, 0, 0, 22, 0, mutation));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.validateForRead(
+        page, 0, 53, shape, header, proof));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.readValidatedLeaf(
+        page, 0, header, 0, entry));
+    assertEquals(7, entry.valueLength());
+    assertEquals(0, entry.overflowPageId());
+    for (int offset = 0; offset < 7; offset++) {
+      assertEquals(values.get(40 + offset), page.get(entry.valueOffset() + offset));
+    }
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.validateEnvelope(page, 0, header));
+  }
+
   private static int key(
       ByteBuffer target, int offset, int[] descriptors, long first, long logicalRowId) {
     TupleKeyBuilder builder = new TupleKeyBuilder();

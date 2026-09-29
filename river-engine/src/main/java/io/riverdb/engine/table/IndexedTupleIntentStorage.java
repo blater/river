@@ -44,15 +44,21 @@ class IndexedTupleIntentStorage {
   int keyIndexMask() { return keyIndex.mask(); }
   int offsetAt(int index) { return columns.offset(index); }
   int lengthAt(int index) { return columns.length(index); }
+  int valueOffsetAt(int index) { return columns.valueOffset(index); }
+  int valueLengthAt(int index) { return columns.valueLength(index); }
+  int rawOperationAt(int index) { return columns.rawOperation(index); }
   int firstEntryAt(int index) { return columns.first(index); }
   int keyHashAt(int index) { return columns.hash(index); }
   boolean activeAtRaw(int index) { return columns.active(index); }
   int indexAt(int index) { return keyIndex.get(index); }
   void setIndex(int index, int value) { keyIndex.set(index, value); }
   void setOperation(int index, int value) { columns.operation(index, value); }
+  void setRawOperation(int index, int value) { columns.rawOperation(index, value); }
   void setDescriptor(int index, int value) { columns.descriptor(index, value); }
   void setOffset(int index, int value) { columns.offset(index, value); }
   void setLength(int index, int value) { columns.length(index, value); }
+  void setValueOffset(int index, int value) { columns.valueOffset(index, value); }
+  void setValueLength(int index, int value) { columns.valueLength(index, value); }
   void setFirstEntry(int index, int value) { columns.first(index, value); }
   void setKeyHash(int index, int value) { columns.hash(index, value); }
   void setLogicalRowId(int index, long value) { columns.rowId(index, value); }

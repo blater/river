@@ -1,27 +1,41 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.format.btree.TupleBTreePageCodec;
 import java.nio.ByteBuffer;
 
 /** Reuses one key buffer while applying and encoding one descriptor's tuple deltas. */
 final class IndexedTupleDeltaCompiler {
   private final IndexedRelationalTupleSession tuples;
+  private final IndexedRetiredOverflowReclaimer reclaimer;
   private final ByteBuffer key = ByteBuffer.allocate(
       io.riverdb.format.btree.TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
+  private final ByteBuffer value = ByteBuffer.allocate(
+      io.riverdb.storage.heap.HeapPage.MAXIMUM_ROW_BYTES);
 
   IndexedTupleDeltaCompiler(IndexedPageSet pages) {
     tuples = new IndexedRelationalTupleSession(pages);
+    reclaimer = new IndexedRetiredOverflowReclaimer(pages);
   }
 
   StatusCode apply(
-      IndexedTupleIntentJournal intents, int descriptor, int rootPageId) {
-    StatusCode status = tuples.configure(
+      IndexedTupleIntentJournal intents, int descriptor, int rootPageId,
+      long modificationSequence, long oldestVisibleCommitSequence,
+      IndexedRelationalMutation mutation, int suboperation, int outputDescriptor) {
+    StatusCode status = reclaimer.reclaim(
+        overflowAllocationCount(intents, descriptor), oldestVisibleCommitSequence,
+        mutation, suboperation, outputDescriptor);
+    if (!status.isOk()) return status;
+    status = tuples.configure(
         intents.keyIdAt(descriptor), intents.schemaIdAt(descriptor),
         rootPageId, intents.shapeAt(descriptor));
     if (status.isOk()) status = applyOperation(intents, descriptor,
-        IndexedRelationalMutation.TUPLE_DELETE);
-    return status.isOk() ? applyOperation(intents, descriptor,
-        IndexedRelationalMutation.TUPLE_INSERT) : status;
+        IndexedRelationalMutation.TUPLE_DELETE, modificationSequence);
+    if (status.isOk()) status = applyOperation(intents, descriptor,
+        IndexedRelationalMutation.TUPLE_REPLACE, modificationSequence);
+    if (status.isOk()) status = applyOperation(intents, descriptor,
+        IndexedRelationalMutation.TUPLE_INSERT, modificationSequence);
+    return status;
   }
 
   StatusCode append(
@@ -29,6 +43,9 @@ final class IndexedTupleDeltaCompiler {
       IndexedRelationalMutation mutation, int suboperation, int outputDescriptor) {
     StatusCode status = append(intents, descriptor,
         IndexedRelationalMutation.TUPLE_DELETE,
+        mutation, suboperation, outputDescriptor);
+    if (status.isOk()) status = append(intents, descriptor,
+        IndexedRelationalMutation.TUPLE_REPLACE,
         mutation, suboperation, outputDescriptor);
     return status.isOk() ? append(intents, descriptor,
         IndexedRelationalMutation.TUPLE_INSERT,
@@ -38,25 +55,60 @@ final class IndexedTupleDeltaCompiler {
   int rootPageId() { return tuples.rootPageId(); }
 
   int count(IndexedTupleIntentJournal intents, int descriptor) {
-    int count = 0;
+    int count = reclaimer.count();
     for (int index = 0; index < intents.mutationCount(); index++) {
       int operation = intents.operationAt(index);
       if (intents.activeAt(index) && intents.descriptorAt(index) == descriptor
           && (operation == IndexedRelationalMutation.TUPLE_INSERT
-              || operation == IndexedRelationalMutation.TUPLE_DELETE)) {
+              || operation == IndexedRelationalMutation.TUPLE_DELETE
+              || operation == IndexedRelationalMutation.TUPLE_REPLACE)) {
         count++;
       }
     }
     return count;
   }
 
+  boolean membershipChanged(IndexedTupleIntentJournal intents, int descriptor) {
+    for (int index = 0; index < intents.mutationCount(); index++) {
+      if (!intents.activeAt(index) || intents.descriptorAt(index) != descriptor) continue;
+      int operation = intents.operationAt(index);
+      if (operation == IndexedRelationalMutation.TUPLE_INSERT
+          || operation == IndexedRelationalMutation.TUPLE_DELETE) return true;
+    }
+    return false;
+  }
+
+  static int overflowAllocationCount(
+      IndexedTupleIntentJournal intents, int descriptor) {
+    int count = 0;
+    for (int index = 0; index < intents.mutationCount(); index++) {
+      if (!intents.activeAt(index)
+          || descriptor >= 0 && intents.descriptorAt(index) != descriptor) continue;
+      int operation = intents.operationAt(index);
+      if (operation != IndexedRelationalMutation.TUPLE_INSERT
+          && operation != IndexedRelationalMutation.TUPLE_REPLACE) continue;
+      int valueLength = intents.valueLengthAt(index);
+      if (valueLength > 0 && !TupleBTreePageCodec.inlineEligible(
+          intents.payloadLengthAt(index), valueLength)) count++;
+    }
+    return count;
+  }
+
   private StatusCode applyOperation(
-      IndexedTupleIntentJournal intents, int descriptor, int operation) {
+      IndexedTupleIntentJournal intents, int descriptor, int operation,
+      long modificationSequence) {
     for (int index = 0; index < intents.mutationCount(); index++) {
       if (!matches(intents, index, descriptor, operation)) continue;
       load(intents, index);
+      int valueLength = loadValue(intents, index);
       StatusCode status = operation == IndexedRelationalMutation.TUPLE_DELETE
-          ? tuples.delete(key) : tuples.insert(key);
+          ? tuples.delete(key, modificationSequence)
+          : operation == IndexedRelationalMutation.TUPLE_REPLACE
+              ? tuples.replaceValue(key, value, 0, valueLength, 0, 0,
+                  modificationSequence)
+              : valueLength == 0 ? tuples.insert(key)
+                  : tuples.insertValue(key, value, 0, valueLength, 0, 0,
+                      modificationSequence);
       if (!status.isOk()) return status;
     }
     return StatusCode.OK;
@@ -68,9 +120,11 @@ final class IndexedTupleDeltaCompiler {
     for (int index = 0; index < intents.mutationCount(); index++) {
       if (!matches(intents, index, descriptor, operation)) continue;
       load(intents, index);
+      int valueLength = loadValue(intents, index);
       StatusCode status = mutation.appendTuple(
           suboperation, intents.ownerAt(descriptor), operation, outputDescriptor,
-          intents.logicalRowIdAt(index), key, 0, key.remaining());
+          intents.logicalRowIdAt(index), key, 0, key.remaining(),
+          valueLength == 0 ? null : value, 0, valueLength);
       if (!status.isOk()) return status;
     }
     return StatusCode.OK;
@@ -81,6 +135,14 @@ final class IndexedTupleDeltaCompiler {
     key.limit(intents.payloadLengthAt(mutation));
     intents.copyPayloadTo(mutation, key, 0);
     key.position(0);
+  }
+
+  private int loadValue(IndexedTupleIntentJournal intents, int mutation) {
+    int length = intents.valueLengthAt(mutation);
+    value.clear();
+    value.limit(length);
+    if (length > 0) intents.copyValueTo(mutation, value, 0);
+    return length;
   }
 
   private static boolean matches(

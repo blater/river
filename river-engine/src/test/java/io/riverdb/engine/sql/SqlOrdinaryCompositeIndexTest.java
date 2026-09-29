@@ -190,6 +190,15 @@ final class SqlOrdinaryCompositeIndexTest {
     assertEquals(StatusCode.OK, session.execute(
         "SELECT payload FROM keyless_rows WHERE payload=93", result));
     assertEquals(0, result.key());
+    assertEquals(StatusCode.OK, session.execute(
+        "UPDATE keyless_rows SET payload=94 WHERE payload=93", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "SELECT payload FROM keyless_rows WHERE payload=94", result));
+    assertEquals(94, result.valueAt(0));
+    assertEquals(StatusCode.OK, session.execute(
+        "DELETE FROM keyless_rows WHERE payload=94", result));
+    assertEquals(StatusCode.CONFLICT, session.execute(
+        "SELECT payload FROM keyless_rows WHERE payload=94", result));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
   }

@@ -22,22 +22,14 @@ final class IndexedRelationalWalRecordFixtures {
     return result;
   }
 
-  static IndexedRelationalWalPlan oneBasePlan(
+  static IndexedRelationalWalPlan oneClusteredPlan(
       long transactionId, long operationId, long value) {
-    IndexedRelationalMutationBuffer mutations =
-        new IndexedRelationalMutationBuffer(1, 0, 0);
-    requireOk(mutations.reserve(1, 0, 0, Long.BYTES));
-    requireOk(mutations.appendLogicalRowFloor(OWNER_OBJECT_ID, 2));
-    requireOk(mutations.appendSuboperation(
-        OWNER_OBJECT_ID, -1, 0, 1, 0, 0, SCALAR_ROOT, SCALAR_ROOT,
-        NEXT_PAGE, NEXT_PAGE, 0, 0, 0, 1,
-        IndexedRelationalSuboperations.REGISTRY_ABSENT,
-        IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
+    IndexedRelationalMutationBuffer mutations = new IndexedRelationalMutationBuffer(1, 1, 1);
+    requireOk(mutations.reserve(1, 1, 1, Long.BYTES + 64));
+    appendClusteredSuboperation(mutations, 1);
     ByteBuffer row = ByteBuffer.allocate(Long.BYTES);
     row.putLong(0, value);
-    requireOk(mutations.appendBase(
-        0, OWNER_OBJECT_ID, IndexedRelationalMutationBuffer.BASE_INSERT,
-        1, 0, row, 0, Long.BYTES));
+    appendClusteredValue(mutations, 1, row);
     requireOk(mutations.seal());
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
     requireOk(plan.plan(transactionId, operationId, mutations));
@@ -151,7 +143,7 @@ final class IndexedRelationalWalRecordFixtures {
     commitGroup(wal, mutations, sequence);
   }
 
-  static void appendBaseInsertGroup(LocalWal wal, long sequence, long expectedHeap) {
+  static void appendScalarInsertGroup(LocalWal wal, long sequence, long expectedHeap) {
     ByteBuffer row = ByteBuffer.allocate(Long.BYTES);
     row.putLong(0, 771);
     IndexedRelationalMutationBuffer mutations =
@@ -159,32 +151,22 @@ final class IndexedRelationalWalRecordFixtures {
     requireOk(mutations.reserve(1, 0, 0, Long.BYTES));
     requireOk(mutations.appendLogicalRowFloor(OWNER_OBJECT_ID, 2));
     requireOk(mutations.appendSuboperation(
-        OWNER_OBJECT_ID, -1, 0, 1, 0, 0, SCALAR_ROOT, SCALAR_ROOT, 7, 10,
+        0, IndexedRelationalMutation.SCALAR_SUBOPERATION, 0, 1, 0, 0, SCALAR_ROOT, SCALAR_ROOT, 7, 7,
         0, 0, expectedHeap, expectedHeap + 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
         IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
-    requireOk(mutations.appendBase(
-        0, OWNER_OBJECT_ID, IndexedRelationalMutationBuffer.BASE_INSERT,
+    requireOk(mutations.appendScalar(
+        0, IndexedRelationalMutationBuffer.SCALAR_INSERT, SCALAR_SPACE,
         1, 0, row, 0, Long.BYTES));
     commitGroup(wal, mutations, sequence);
   }
 
-  static void appendIncompleteBaseGroup(LocalWal wal) {
+  static void appendIncompleteClusteredGroup(LocalWal wal) {
     ByteBuffer row = ByteBuffer.allocate(8_192);
-    IndexedRelationalMutationBuffer mutations =
-        new IndexedRelationalMutationBuffer(384, 0, 0);
-    requireOk(mutations.reserve(384, 0, 0, 384 * row.remaining()));
-    requireOk(mutations.appendLogicalRowFloor(OWNER_OBJECT_ID, 386));
-    for (int index = 0; index < 384; index++) {
-      requireOk(mutations.appendSuboperation(
-          OWNER_OBJECT_ID, -1, index, 1, 0, 0,
-          SCALAR_ROOT, SCALAR_ROOT, 10, 10, 0, 0, 3 + index, 4 + index,
-          IndexedRelationalSuboperations.REGISTRY_ABSENT,
-          IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
-      requireOk(mutations.appendBase(
-          index, OWNER_OBJECT_ID, IndexedRelationalMutationBuffer.BASE_INSERT,
-          index + 2L, 0, row, 0, row.remaining()));
-    }
+    IndexedRelationalMutationBuffer mutations = new IndexedRelationalMutationBuffer(384, 1, 1);
+    requireOk(mutations.reserve(384, 1, 1, 384 * (row.remaining() + 64)));
+    appendClusteredSuboperation(mutations, 384);
+    for (int index = 0; index < 384; index++) appendClusteredValue(mutations, index + 1L, row);
     requireOk(mutations.seal());
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
     requireOk(plan.plan(91, OPERATION_ID + 91, mutations));
@@ -211,17 +193,22 @@ final class IndexedRelationalWalRecordFixtures {
     requireOk(committer.releaseForced());
   }
 
-  static void appendBaseSuboperations(
-      IndexedRelationalMutationBuffer mutations, int count) {
+  static void appendClusteredSuboperation(IndexedRelationalMutationBuffer mutations, int count) {
+    int[] parts = {io.riverdb.base.type.SqlTypeDescriptor.BIGINT};
+    requireOk(mutations.appendDescriptor(
+        OWNER_OBJECT_ID, 1_000, 1_000, descriptorHash(parts), parts, 0, 1));
     requireOk(mutations.appendLogicalRowFloor(OWNER_OBJECT_ID, count + 1L));
-    for (int index = 0; index < count; index++) {
-      requireOk(mutations.appendSuboperation(
-          OWNER_OBJECT_ID, -1, index, 1,
-          0, 0, SCALAR_ROOT, SCALAR_ROOT,
-          NEXT_PAGE, NEXT_PAGE, 0, 0, index, index + 1L,
-          IndexedRelationalSuboperations.REGISTRY_ABSENT,
-          IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
-    }
+    requireOk(mutations.appendSuboperation(
+        OWNER_OBJECT_ID, 0, 0, count, 5, 5, SCALAR_ROOT, SCALAR_ROOT,
+        6, 6, 2, 3, 2, 3, IndexedRelationalSuboperations.REGISTRY_READY,
+        IndexedRelationalSuboperations.REGISTRY_READY, 0, 0));
+  }
+
+  static void appendClusteredValue(
+      IndexedRelationalMutationBuffer mutations, long rowId, ByteBuffer row) {
+    ByteBuffer key = physicalFixedTuple(rowId, rowId);
+    requireOk(mutations.appendTuple(0, OWNER_OBJECT_ID, IndexedRelationalMutation.TUPLE_INSERT,
+        0, rowId, key, 0, key.remaining(), row, 0, row.remaining()));
   }
 
   static final class PrefixBatch implements LocalWalRecordBatch {

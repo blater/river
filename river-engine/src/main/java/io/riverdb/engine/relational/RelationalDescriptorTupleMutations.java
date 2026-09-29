@@ -3,6 +3,7 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.table.IndexedTransactionSession;
+import java.nio.ByteBuffer;
 
 /** Owns one reusable tuple delta plan from admission through physical staging. */
 final class RelationalDescriptorTupleMutations {
@@ -17,20 +18,21 @@ final class RelationalDescriptorTupleMutations {
       new RelationalDescriptorTupleDeltaAdmission();
   private final RelationalDescriptorForeignValidation foreignValidation =
       new RelationalDescriptorForeignValidation();
-  private final int[] singleRowLengths = new int[1];
 
   RelationalDescriptorTupleMutations() {
     plan = new RelationalDescriptorTupleDeltaPlan();
   }
 
-  StatusCode planInsert(TableDescriptor table, SqlValueAccess values, long logicalRowId) {
-    return plan.insert(table, values, logicalRowId);
+  StatusCode planInsert(
+      TableDescriptor table, SqlValueAccess values,
+      long logicalRowId, int rowBytes) {
+    return plan.insert(table, values, logicalRowId, rowBytes);
   }
 
   StatusCode planUpdate(
       TableDescriptor table, SqlValueAccess before,
-      SqlValueAccess after, long logicalRowId) {
-    return plan.update(table, before, after, logicalRowId);
+      SqlValueAccess after, long logicalRowId, int rowBytes) {
+    return plan.update(table, before, after, logicalRowId, rowBytes);
   }
 
   StatusCode planDelete(TableDescriptor table, SqlValueAccess values, long logicalRowId) {
@@ -62,8 +64,9 @@ final class RelationalDescriptorTupleMutations {
   }
 
   StatusCode stage(
-      IndexedTransactionSession session, TableDescriptor table, long logicalRowId) {
-    return staging.stage(session, table, plan, logicalRowId);
+      IndexedTransactionSession session, TableDescriptor table, long logicalRowId,
+      ByteBuffer row, int rowLength) {
+    return staging.stage(session, table, plan, logicalRowId, row, rowLength);
   }
 
   StatusCode prepareDelete(
@@ -71,7 +74,7 @@ final class RelationalDescriptorTupleMutations {
       SqlValueAccess values, long logicalRowId,
       RelationalDescriptorForeignKeyChecks foreignKeys) {
     StatusCode status = planDelete(table, values, logicalRowId);
-    if (status.isOk()) status = preflightSingleRow(session, table, 1);
+    if (status.isOk()) status = preflight(session, table);
     if (status.isOk()) status = protect(session, table);
     return status.isOk() ? foreignKeys.checkDelete(table, values, logicalRowId) : status;
   }
@@ -79,21 +82,10 @@ final class RelationalDescriptorTupleMutations {
   int mutationCount() { return plan.mutationCount(); }
   int payloadBytes() { return plan.payloadBytes(); }
 
-  StatusCode preflightWithRows(
-      IndexedTransactionSession session, TableDescriptor table,
-      int[] rowLengths, int rowStart, int rowCount,
-      int mutations, int bytes) {
+  StatusCode preflight(IndexedTransactionSession session, TableDescriptor table) {
     int descriptors = admission.additionalDescriptors(session, table, plan);
     return descriptors < 0 ? StatusCode.CORRUPTION
-        : session.preflightRelationalMutations(
-            rowLengths, rowStart, rowCount, mutations, descriptors, bytes);
-  }
-
-  StatusCode preflightSingleRow(
-      IndexedTransactionSession session, TableDescriptor table, int rowBytes) {
-    singleRowLengths[0] = rowBytes;
-    return preflightWithRows(
-        session, table, singleRowLengths, 0, 1,
-        mutationCount(), payloadBytes());
+        : session.preflightTupleMutations(
+            mutationCount(), descriptors, payloadBytes());
   }
 }

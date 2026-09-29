@@ -21,7 +21,11 @@ final class IndexedRelationalSuboperationTransitions {
     }
     return validIdentity(keyId, expectedRoot, resultingRoot, expectedState, resultingState)
         && expectedGeneration >= 0 && expectedGeneration < Long.MAX_VALUE
-        && resultingGeneration == expectedGeneration + 1
+        && (resultingGeneration == expectedGeneration + 1
+            || resultingGeneration == expectedGeneration
+                && expectedRoot == resultingRoot
+                && expectedState == resultingState
+                && expectedPrivateOwner == resultingPrivateOwner)
         && validRecord(expectedState, expectedRoot, expectedGeneration, expectedPrivateOwner, true)
         && validRecord(resultingState, resultingRoot, resultingGeneration, resultingPrivateOwner, false)
         && validStateChange(expectedState, resultingState)

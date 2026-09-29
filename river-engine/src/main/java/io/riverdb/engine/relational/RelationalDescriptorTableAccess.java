@@ -21,12 +21,13 @@ public final class RelationalDescriptorTableAccess {
   private final RelationalDescriptorCheckValidation checks =
       new RelationalDescriptorCheckValidation();
   private final RelationalDescriptorForeignKeyChecks foreignKeyChecks;
-  private final RelationalDescriptorRowAccess rowAccess = new RelationalDescriptorRowAccess();
+  private final RelationalDescriptorRowBuffer rowBuffer = new RelationalDescriptorRowBuffer();
+  private final RelationalDescriptorPointViews pointViews =
+      new RelationalDescriptorPointViews();
   private final RelationalDescriptorLockedRows lockedRows;
   private final RelationalDescriptorPrimaryAccess primaryAccess =
-      new RelationalDescriptorPrimaryAccess();
+      new RelationalDescriptorPrimaryAccess(pointViews);
   private final RelationalDescriptorScanAccess scanAccess;
-  private final RelationalRowIdentityResult resolved = new RelationalRowIdentityResult();
 
   RelationalDescriptorTableAccess(
       RelationalSession relationalSession,
@@ -34,8 +35,8 @@ public final class RelationalDescriptorTableAccess {
       RelationalDatabaseServices databaseServices) {
     owner = relationalSession;
     session = indexedSession;
-    scanAccess = new RelationalDescriptorScanAccess(indexedSession);
-    lockedRows = new RelationalDescriptorLockedRows(indexedSession, rowAccess);
+    scanAccess = new RelationalDescriptorScanAccess(indexedSession, pointViews);
+    lockedRows = new RelationalDescriptorLockedRows(indexedSession, pointViews);
     foreignKeyChecks = new RelationalDescriptorForeignKeyChecks(
         relationalSession, indexedSession, databaseServices);
     batchInsert = new RelationalDescriptorBatchInsert(
@@ -82,7 +83,8 @@ public final class RelationalDescriptorTableAccess {
     long logicalRowId = lockedRows.logicalRowId();
     status = prepareUpdate(table, logicalRowId, values);
     if (!status.isOk()) return releaseCurrent(status);
-    return stageUpdate(table, logicalRowId);
+    status = stageUpdate(table, logicalRowId);
+    return status;
   }
 
   public StatusCode fetch(
@@ -105,13 +107,7 @@ public final class RelationalDescriptorTableAccess {
     TableDescriptor table = validDescriptor(pin);
     if (table == null || table.primaryKey() == null
         || primaryKey == null || destination == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    StatusCode status = logicalRowId(table, primaryKey, resolved);
-    if (!status.isOk()) return status;
-    long logicalRowId = resolved.logicalRowId();
-    status = rowAccess.fetch(session, table, logicalRowId, destination);
-    if (status.isOk()) status = validateResolvedPrimary(table, destination);
-    if (status.isOk() && result != null) result.set(logicalRowId);
-    return status;
+    return primaryAccess.fetch(session, table, primaryKey, destination, result);
   }
 
   /** Resolves a point candidate and decodes its logical-row-lock-protected current row. */
@@ -144,7 +140,7 @@ public final class RelationalDescriptorTableAccess {
     TableDescriptor table = validDescriptor(pin);
     return table == null || logicalRowId <= 0 || destination == null
         ? StatusCode.INVALID_EXTERNAL_INPUT
-        : rowAccess.fetch(session, table, logicalRowId, destination);
+        : primaryAccess.fetchByIdentity(session, table, logicalRowId, destination);
   }
 
   public StatusCode delete(SchemaPin pin, long primaryKey) {
@@ -164,8 +160,9 @@ public final class RelationalDescriptorTableAccess {
     long logicalRowId = lockedRows.logicalRowId();
     status = prepareDelete(table, logicalRowId);
     if (!status.isOk()) return releaseCurrent(status);
-    status = session.deleteLocked(lockedRows.locked());
-    return status.isOk() ? tupleMutations.stage(session, table, logicalRowId) : status;
+    status = lockedRows.retain();
+    return status.isOk() ? tupleMutations.stage(
+        session, table, logicalRowId, null, 0) : status;
   }
 
   /** Updates the row most recently published by this owned scan cursor. */
@@ -195,8 +192,9 @@ public final class RelationalDescriptorTableAccess {
     StatusCode status = lockedRows.logicalRowId() == logicalRowId
         ? prepareDelete(table, logicalRowId) : StatusCode.INVALID_EXTERNAL_INPUT;
     if (!status.isOk()) return releaseCurrent(status);
-    status = session.deleteLocked(lockedRows.locked());
-    return status.isOk() ? tupleMutations.stage(session, table, logicalRowId) : status;
+    status = lockedRows.retain();
+    return status.isOk() ? tupleMutations.stage(
+        session, table, logicalRowId, null, 0) : status;
   }
 
   /** Opens a logical-row scan and transfers the supplied schema pin into the cursor. */
@@ -283,7 +281,8 @@ public final class RelationalDescriptorTableAccess {
   public boolean currentBorrowed() { return lockedRows.borrowed(); }
 
   StatusCode closeActiveScan() {
-    return scanAccess.closeActive(this);
+    StatusCode status = scanAccess.closeActive(this);
+    return status.isOk() ? pointViews.closeAll() : status;
   }
 
   StatusCode closeSession() {
@@ -296,20 +295,17 @@ public final class RelationalDescriptorTableAccess {
     return session.reserveLogicalRowIds(objectId, count, result);
   }
 
-  private StatusCode preflightMutation(TableDescriptor table, int rowBytes) {
-    return tupleMutations.preflightSingleRow(session, table, rowBytes);
-  }
-
   private StatusCode prepareUpdate(
       TableDescriptor table, long logicalRowId, SqlValueAccess values) {
-    StatusCode status = rowAccess.encode(table, values);
+    StatusCode status = rowBuffer.reserve(table.encodedMaximumRowBytes());
+    if (status.isOk()) status = rowBuffer.encode(table, values);
     if (!status.isOk()) return status;
     status = checks.validate(table, values);
     if (!status.isOk()) return status;
     status = tupleMutations.planUpdate(
-        table, lockedRows.before(), values, logicalRowId);
+        table, lockedRows.before(), values, logicalRowId, rowBuffer.length());
     if (!status.isOk()) return status;
-    status = preflightMutation(table, rowAccess.length());
+    status = tupleMutations.preflight(session, table);
     if (status.isOk()) status = tupleMutations.protect(session, table);
     if (status.isOk()) status = foreignKeyChecks.checkUpdate(
         table, lockedRows.before(), values, logicalRowId);
@@ -319,8 +315,9 @@ public final class RelationalDescriptorTableAccess {
   }
 
   private StatusCode stageUpdate(TableDescriptor table, long logicalRowId) {
-    StatusCode status = session.updateLocked(lockedRows.locked(), rowAccess.bytes());
-    return status.isOk() ? tupleMutations.stage(session, table, logicalRowId) : status;
+    StatusCode status = lockedRows.retain();
+    return status.isOk() ? tupleMutations.stage(
+        session, table, logicalRowId, rowBuffer.bytes(), rowBuffer.length()) : status;
   }
 
   private StatusCode releaseCurrent(StatusCode original) {
@@ -334,16 +331,6 @@ public final class RelationalDescriptorTableAccess {
         session, table, lockedRows.before(), logicalRowId, foreignKeyChecks);
   }
 
-  private StatusCode logicalRowId(
-      TableDescriptor table, SqlValueAccess primaryValues,
-      RelationalRowIdentityResult result) {
-    return primaryAccess.resolve(session, table, primaryValues, result);
-  }
-
-  private StatusCode validateResolvedPrimary(
-      TableDescriptor table, SqlValueAccess values) {
-    return primaryAccess.validateResolved(table, values);
-  }
 
   private TableDescriptor validTable(
       SchemaPin pin, SqlMutationValues values) {

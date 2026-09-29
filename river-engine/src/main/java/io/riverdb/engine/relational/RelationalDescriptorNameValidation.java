@@ -20,7 +20,7 @@ final class RelationalDescriptorNameValidation {
   private final RelationalDescriptorNameSet seen = new RelationalDescriptorNameSet();
   private final SchemaPin pin = new SchemaPin();
   private final StatusDetail detail = new StatusDetail(128);
-  private RelationalDescriptorStorageValidation storage;
+  private RelationalDescriptorForeignKeyStorageValidation foreignKeys;
 
   RelationalDescriptorNameValidation(
       IndexedTransactionSession indexedSession,
@@ -30,9 +30,9 @@ final class RelationalDescriptorNameValidation {
   }
 
   StatusCode validate() {
-    if (storage == null) {
+    if (foreignKeys == null) {
       try {
-        storage = new RelationalDescriptorStorageValidation(session, services);
+        foreignKeys = new RelationalDescriptorForeignKeyStorageValidation(session, services);
       } catch (OutOfMemoryError error) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
@@ -67,7 +67,7 @@ final class RelationalDescriptorNameValidation {
     if (status == StatusCode.CONFLICT) return StatusCode.CORRUPTION;
     if (!status.isOk()) return status;
     boolean matches = pin.tableId() == name.objectId() && pin.isPublished();
-    if (matches) status = storage.validate(pin.descriptor());
+    if (matches) status = foreignKeys.validate(pin.descriptor());
     StatusCode released = pin.release();
     if (!matches) return StatusCode.CORRUPTION;
     return status.isOk() ? released : status;

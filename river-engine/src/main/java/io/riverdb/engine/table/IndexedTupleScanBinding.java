@@ -3,6 +3,8 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.format.btree.TupleKeyCodec;
+import io.riverdb.format.btree.TupleRowOverflowCodec;
+import io.riverdb.format.btree.TupleRowOverflowHeader;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.storage.btree.TupleBTree;
 import io.riverdb.storage.btree.TupleBTreeCursor;
@@ -18,6 +20,10 @@ final class IndexedTupleScanBinding {
   private IndexedTupleRootSnapshot root;
   private TupleBTree tree;
   private IndexedPageSet pages;
+  private final IndexedPageGenerationPin overflowPin = new IndexedPageGenerationPin();
+  private final TupleRowOverflowHeader overflowHeader = new TupleRowOverflowHeader();
+  private long visibleCommitSequence;
+  private long ownerKeyId;
 
   IndexedTupleScanBinding() {
     int height = BTreeStructuralLimits.MAXIMUM_LEVELS;
@@ -50,14 +56,45 @@ final class IndexedTupleScanBinding {
     if (status.isOk()) status = provider.configure(
         root.rootPageId(), keyId, kernel.nextPageId(), root.generation(), snapshot);
     if (status.isOk()) status = tree.configure(provider, schemaId, shape);
+    if (status.isOk()) {
+      visibleCommitSequence = snapshot;
+      ownerKeyId = keyId;
+    }
     return status;
+  }
+
+  StatusCode bindOverflow(IndexedTupleScanResult result) {
+    if (result.overflowPageId() == 0) return StatusCode.OK;
+    StatusCode status = pages.pinPageAt(
+        result.overflowPageId(), visibleCommitSequence, overflowPin);
+    if (!status.isOk()) return status;
+    if (overflowPin.payloadKind() != PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW
+        || overflowPin.ownerKeyId() != ownerKeyId
+        || overflowPin.durableGeneration() != result.overflowGeneration()) {
+      status = StatusCode.CORRUPTION;
+    } else {
+      status = TupleRowOverflowCodec.validate(
+          overflowPin.payload(), 0, result.logicalRowId(), overflowHeader);
+      if (status.isOk() && overflowHeader.valueLength() != result.valueLength()) {
+        status = StatusCode.CORRUPTION;
+      }
+    }
+    if (status.isOk()) {
+      result.bindOverflow(overflowPin.payload(), TupleRowOverflowCodec.HEADER_BYTES);
+      return status;
+    }
+    StatusCode released = releaseOverflow();
+    return released.isOk() ? status : released;
+  }
+
+  StatusCode releaseOverflow() {
+    return overflowPin.active() ? pages.unpinPage(overflowPin) : StatusCode.OK;
   }
 
   long observedCommitSequence() { return root.observedCommitSequence(); }
 
   private StatusCode bind(IndexedTableKernel kernel, IndexedPageSet pageSet) {
-    if (provider != null) return pages == pageSet
-        ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    if (provider != null && pages == pageSet) return StatusCode.OK;
     try {
       pages = pageSet;
       provider = new IndexedTupleProbePageProvider(pageSet);

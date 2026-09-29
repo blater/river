@@ -7,9 +7,9 @@ import io.riverdb.format.page.PageCodec;
 final class TupleBTreeSplitOccupancy {
   private TupleBTreeSplitOccupancy() { }
 
-  static int bytes(int entries, int keyBytes, int fenceBytes) {
+  static int bytes(int type, int entries, int keyBytes, int fenceBytes) {
     long used = (long) TupleBTreePageCodec.HEADER_BYTES
-        + (long) entries * TupleBTreePageCodec.SLOT_BYTES + keyBytes + fenceBytes;
+        + (long) entries * TupleBTreePageCodec.slotBytes(type) + keyBytes + fenceBytes;
     return used <= Integer.MAX_VALUE ? (int) used : Integer.MAX_VALUE;
   }
 

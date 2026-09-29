@@ -37,12 +37,17 @@ public final class IndexedTupleScanCursor {
   long observedCommitSequence() { return binding.observedCommitSequence(); }
 
   StatusCode next(IndexedTupleIntentJournal intents, IndexedTupleScanResult result) {
-    return !active || result == null ? StatusCode.CONFLICT
-        : merge.next(cursor, entry, intents, result);
+    if (!active || result == null) return StatusCode.CONFLICT;
+    StatusCode status = binding.releaseOverflow();
+    if (status.isOk()) status = merge.next(cursor, entry, intents, result);
+    if (status.isOk()) status = binding.bindOverflow(result);
+    if (!status.isOk()) result.reset();
+    return status;
   }
 
   StatusCode close() {
-    StatusCode status = cursor.close();
+    StatusCode status = binding.releaseOverflow();
+    if (status.isOk()) status = cursor.close();
     if (status.isOk()) {
       merge.reset();
       active = false;

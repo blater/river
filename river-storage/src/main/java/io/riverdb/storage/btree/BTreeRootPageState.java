@@ -28,11 +28,18 @@ final class BTreeRootPageState {
     int next = BTreeRootPage.nextPageId(page);
     int head = BTreeRootPage.freePageHead(page);
     int count = BTreeRootPage.freePageCount(page);
+    int retiredHead = BTreeRootPage.retiredOverflowHead(page);
+    int retiredTail = BTreeRootPage.retiredOverflowTail(page);
+    int retiredCount = BTreeRootPage.retiredOverflowCount(page);
     return FormatBytes.getLong(page, 0) == magic && FormatBytes.getInt(page, 8) == version
             && root > 0 && next > root && count >= 0
             && count <= next - BTreeRootPage.FIRST_REUSABLE_PAGE_ID
             && (count == 0 ? head == 0
                 : head >= BTreeRootPage.FIRST_REUSABLE_PAGE_ID && head < next)
+            && retiredCount >= 0 && retiredCount <= next - BTreeRootPage.FIRST_REUSABLE_PAGE_ID
+            && (retiredCount == 0 ? retiredHead == 0 && retiredTail == 0
+                : retiredHead >= BTreeRootPage.FIRST_REUSABLE_PAGE_ID && retiredHead < next
+                    && retiredTail >= BTreeRootPage.FIRST_REUSABLE_PAGE_ID && retiredTail < next)
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 

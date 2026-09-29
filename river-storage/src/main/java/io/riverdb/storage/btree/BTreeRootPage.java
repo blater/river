@@ -7,8 +7,8 @@ import java.nio.ByteBuffer;
 
 /** Durable scalar-root identity and intrusive free-page stack head. */
 public final class BTreeRootPage {
-  public static final int BYTES = 28;
-  public static final int VERSION = 4;
+  public static final int BYTES = 40;
+  public static final int VERSION = 5;
   public static final int FIRST_REUSABLE_PAGE_ID = PageCodec.FIRST_ALLOCATABLE_PAGE_ID;
   private static final long MAGIC = 0x5249564552425452L; // RIVERBTR
 
@@ -26,6 +26,14 @@ public final class BTreeRootPage {
   public static int nextPageId(ByteBuffer page) { return FormatBytes.getInt(page, 16); }
   public static int freePageHead(ByteBuffer page) { return FormatBytes.getInt(page, 20); }
   public static int freePageCount(ByteBuffer page) { return FormatBytes.getInt(page, 24); }
+  public static int retiredOverflowHead(ByteBuffer page) { return FormatBytes.getInt(page, 28); }
+  public static int retiredOverflowTail(ByteBuffer page) { return FormatBytes.getInt(page, 32); }
+  public static int retiredOverflowCount(ByteBuffer page) { return FormatBytes.getInt(page, 36); }
+  public static void publishRetiredOverflow(ByteBuffer page, int head, int tail, int count) {
+    FormatBytes.putInt(page, 28, head);
+    FormatBytes.putInt(page, 32, tail);
+    FormatBytes.putInt(page, 36, count);
+  }
   public static void publishRoot(ByteBuffer page, int root) { FormatBytes.putInt(page, 12, root); }
 
   public static int nextAllocationPage(ByteBuffer page) {

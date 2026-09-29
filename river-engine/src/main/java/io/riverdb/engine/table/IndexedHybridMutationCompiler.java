@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 
 /** Compiles one session's semantic intents into staged pages and exact WAL evidence. */
 final class IndexedHybridMutationCompiler {
-  private final IndexedTableKernel kernel;
   private final IndexedHybridScalarCompiler scalar;
   private final IndexedHybridTupleCompiler tuples;
   private final IndexedPublishingTupleCompiler publishing;
@@ -15,43 +14,27 @@ final class IndexedHybridMutationCompiler {
   private final IndexedRelationalMutation[] compiled = new IndexedRelationalMutation[1];
   private IndexedRelationalMutation current;
   private long copiedPayloadBytes;
+  private long memberSequence;
+  private long oldestVisibleCommitSequence;
 
   IndexedHybridMutationCompiler(
       IndexedTableStore store, IndexedTableKernel table, IndexedPageSet pages) {
-    kernel = table;
     scalar = new IndexedHybridScalarCompiler(table, pages);
     tuples = new IndexedHybridTupleCompiler(store, table, pages);
     publishing = new IndexedPublishingTupleCompiler(store, table, pages);
     lifecycle = new IndexedTupleLifecycleCompiler(store, table, pages);
   }
 
-  StatusCode compile(
-      PendingMutationBuffer pending, IndexedTupleIntentJournal intents,
-      IndexedTupleIndexLifecycleBatch lifecycleBatch, IndexedLogicalRowIdFloors floors) {
-    if (pending == null || intents == null || floors == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode measured = sizing.measure(pending, intents, lifecycleBatch, floors);
-    if (!measured.isOk()) return measured;
-    StatusCode reservation = kernel.reserveOperationVersions(sizing.versions());
-    if (!reservation.isOk()) return reservation;
-    if (lifecycleBatch != null && lifecycleBatch.active()) {
-      StatusCode status = compileLifecycle(
-          pending, intents, lifecycleBatch, floors, sizing);
-      if (status.isOk()) recordCompilation();
-      return status;
-    }
-    StatusCode status = compileDml(pending, intents, floors, sizing);
-    if (status.isOk()) recordCompilation();
-    return status;
-  }
-
   StatusCode compileCumulative(
       PendingMutationBuffer pending, IndexedTupleIntentJournal intents,
-      IndexedTupleIndexLifecycleBatch lifecycleBatch, IndexedLogicalRowIdFloors floors) {
-    if (pending == null || intents == null || floors == null) {
+      IndexedTupleIndexLifecycleBatch lifecycleBatch, IndexedLogicalRowIdFloors floors,
+      long assignedMemberSequence, long oldestVisibleSequence) {
+    if (pending == null || intents == null || floors == null
+        || assignedMemberSequence <= 0 || oldestVisibleSequence < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    memberSequence = assignedMemberSequence;
+    oldestVisibleCommitSequence = oldestVisibleSequence;
     StatusCode measured = sizing.measure(pending, intents, lifecycleBatch, floors);
     if (!measured.isOk()) return measured;
     StatusCode status;
@@ -85,7 +68,8 @@ final class IndexedHybridMutationCompiler {
       status = scalar.compile(pending, compiled[0]);
     }
     for (int index = 0; status.isOk() && index < batch.count(); index++) {
-      status = lifecycle.compile(batch, index, compiled[0], pending.count());
+      status = lifecycle.compile(
+          batch, index, compiled[0], pending.count(), memberSequence);
     }
     return status.isOk() ? compiled[0].seal() : status;
   }
@@ -126,6 +110,7 @@ final class IndexedHybridMutationCompiler {
     StatusCode status = StatusCode.OK;
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
+      if (!intents.activeDescriptorAt(descriptor)) continue;
       if (IndexedHybridLogicalSizing.lifecycleIndex(intents, batch, descriptor) < 0) {
         status = descriptors.append(intents, descriptor, compiled[0]);
       }
@@ -142,12 +127,13 @@ final class IndexedHybridMutationCompiler {
     for (int index = 0; status.isOk() && index < batch.count(); index++) {
       int descriptor = IndexedHybridLogicalSizing.intentDescriptor(
           intents, batch.keyIdAt(index));
-      if (descriptor < 0) {
-        status = lifecycle.compile(batch, index, compiled[0], firstMutation);
+      if (descriptor < 0 || !intents.activeDescriptorAt(descriptor)) {
+        status = lifecycle.compile(
+            batch, index, compiled[0], firstMutation, memberSequence);
       } else {
         status = publishing.compile(
             intents, descriptor, batch, index, compiled[0],
-            suboperation, firstMutation);
+            suboperation, firstMutation, memberSequence, oldestVisibleCommitSequence);
         firstMutation += publishing.count(intents, descriptor);
       }
       suboperation++;
@@ -155,10 +141,11 @@ final class IndexedHybridMutationCompiler {
     int outputDescriptor = batch.count();
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
+      if (!intents.activeDescriptorAt(descriptor)) continue;
       if (IndexedHybridLogicalSizing.lifecycleIndex(intents, batch, descriptor) >= 0) continue;
       status = tuples.compile(
           intents, descriptor, compiled[0], outputDescriptor,
-          suboperation, firstMutation);
+          suboperation, firstMutation, memberSequence, oldestVisibleCommitSequence);
       firstMutation += tuples.count(intents, descriptor);
       outputDescriptor++;
       suboperation++;
@@ -192,11 +179,13 @@ final class IndexedHybridMutationCompiler {
   private StatusCode compileDmlTuples(
       IndexedTupleIntentJournal intents, int firstMutation, int suboperation) {
     StatusCode status = StatusCode.OK;
+    int outputDescriptor = 0;
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
+      if (!intents.activeDescriptorAt(descriptor)) continue;
       status = tuples.compile(
-          intents, descriptor, compiled[0], descriptor,
-          suboperation, firstMutation);
+          intents, descriptor, compiled[0], outputDescriptor++,
+          suboperation, firstMutation, memberSequence, oldestVisibleCommitSequence);
       firstMutation += tuples.count(intents, descriptor);
       suboperation++;
     }

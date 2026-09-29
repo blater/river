@@ -375,7 +375,8 @@ public final class IndexedTable extends IndexedRelationalTableAccess
         io.riverdb.format.catalog.CatalogKeyspace.FIRST_RELATIONAL_SPACE
             + io.riverdb.format.catalog.CatalogKeyspace.MAXIMUM_RELATIONAL_OBJECT_ID;
     if (lowerSpace <= lastBaseSpace
-        && (upperSpace >= firstBaseSpace
+        && (upperSpace > firstBaseSpace
+            || upperSpace == firstBaseSpace && upperKey > 1
             || OrderedKey.isInfinity(upperSpace, upperKey))) {
       long firstTableId = lowerSpace < firstBaseSpace ? 1
           : lowerSpace - io.riverdb.format.catalog.CatalogKeyspace.FIRST_RELATIONAL_SPACE;

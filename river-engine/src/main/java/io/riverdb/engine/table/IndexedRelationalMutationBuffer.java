@@ -13,14 +13,13 @@ final class IndexedRelationalMutationBuffer {
       DatabaseResourceDefaults.ADDRESSABLE_TRANSACTION_WRITE_ENTRIES;
   static final int MAX_MUTATIONS = Integer.MAX_VALUE;
   static final int MAX_INDEX_DESCRIPTORS = Integer.MAX_VALUE;
-  static final int BASE_INSERT = 1;
-  static final int BASE_UPDATE = 2;
-  static final int BASE_DELETE = 3;
   static final int TUPLE_INSERT = 4;
   static final int TUPLE_DELETE = 5;
   static final int SCALAR_INSERT = 6;
   static final int SCALAR_UPDATE = 7;
   static final int SCALAR_DELETE = 8;
+  static final int TUPLE_REPLACE = 9;
+  static final int OVERFLOW_RECLAIM = 10;
   static final int SCALAR_SUBOPERATION = -2;
   static final int MAX_SUBOPERATIONS = Integer.MAX_VALUE;
   private final int maximumPayloadBytes;
@@ -40,7 +39,8 @@ final class IndexedRelationalMutationBuffer {
             > (long) descriptorCapacity * TupleKeyCodec.MAX_INDEX_KEY_PARTS) {
       throw new IllegalArgumentException("invalid relational mutation capacity");
     }
-    long payloadBudget = (long) mutationCapacity * HeapPage.MAXIMUM_ROW_BYTES;
+    long payloadBudget = (long) mutationCapacity
+        * (HeapPage.MAXIMUM_ROW_BYTES + TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
     maximumPayloadBytes = payloadBudget > Integer.MAX_VALUE
         ? Integer.MAX_VALUE : (int) payloadBudget;
     entries = new IndexedRelationalMutationEntries(mutationCapacity, maximumPayloadBytes);
@@ -163,22 +163,21 @@ final class IndexedRelationalMutationBuffer {
         expectedCleanupCursor, resultingCleanupCursor);
   }
 
-  StatusCode appendBase(
-      int suboperationOrdinal, long ownerObjectId,
-      int operation, long logicalRowId, long previousRowId,
-      ByteBuffer source, int sourceOffset, int length) {
-    if (sealed || !validBase(
-        ownerObjectId, operation, logicalRowId, previousRowId,
-        source, sourceOffset, length)
-        || !suboperations.acceptsMutation(
-            suboperationOrdinal, entries.count(), ownerObjectId, -1)) {
+  StatusCode appendOverflowReclamation(
+      int suboperation, int descriptor, ByteBuffer source, int offset, int length,
+      boolean beforeSuboperation) {
+    if (sealed || descriptor < 0 || descriptor >= descriptors.count()
+        || !IndexedOverflowReclamationCodec.valid(source, offset, length)
+        || !(beforeSuboperation && suboperation == suboperations.count())
+            && !suboperations.acceptsMutation(
+                suboperation, entries.count(), descriptors.ownerObjectIdAt(descriptor), descriptor)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (!entries.canAppend(length)) return StatusCode.RESOURCE_EXHAUSTED;
-    entries.append(
-        operation, -1, suboperationOrdinal, ownerObjectId,
-        io.riverdb.format.catalog.CatalogKeyspace.relationalBaseRowSpace(ownerObjectId),
-        logicalRowId, previousRowId, source, sourceOffset, length);
+    entries.append(OVERFLOW_RECLAIM, descriptor, suboperation,
+        descriptors.ownerObjectIdAt(descriptor),
+        io.riverdb.format.catalog.CatalogKeyspace.relationalIndexSpace(descriptors.keyIdAt(descriptor)),
+        0, 0, source, offset, length);
     return StatusCode.OK;
   }
 
@@ -202,7 +201,18 @@ final class IndexedRelationalMutationBuffer {
       int suboperationOrdinal, long ownerObjectId,
       int operation, int descriptorOrdinal, long logicalRowId,
       ByteBuffer source, int sourceOffset, int length) {
-    if (sealed || (operation != TUPLE_INSERT && operation != TUPLE_DELETE)
+    return appendTuple(suboperationOrdinal, ownerObjectId, operation,
+        descriptorOrdinal, logicalRowId, source, sourceOffset, length,
+        null, 0, 0);
+  }
+
+  StatusCode appendTuple(
+      int suboperationOrdinal, long ownerObjectId,
+      int operation, int descriptorOrdinal, long logicalRowId,
+      ByteBuffer source, int sourceOffset, int length,
+      ByteBuffer value, int valueOffset, int valueLength) {
+    if (sealed || (operation != TUPLE_INSERT && operation != TUPLE_DELETE
+        && operation != TUPLE_REPLACE)
         || descriptorOrdinal < 0 || descriptorOrdinal >= descriptors.count()
         || descriptors.ownerObjectIdAt(descriptorOrdinal) != ownerObjectId
         || !suboperations.acceptsMutation(
@@ -212,15 +222,21 @@ final class IndexedRelationalMutationBuffer {
         || sourceOffset > source.limit() - length
         || !TupleKeyCodec.matchesPhysicalIndexKey(
             source, sourceOffset, length, descriptors.shapeAt(descriptorOrdinal))
-        || TupleKeyCodec.logicalRowId(source, sourceOffset, length) != logicalRowId) {
+        || TupleKeyCodec.logicalRowId(source, sourceOffset, length) != logicalRowId
+        || valueLength < 0 || valueLength > HeapPage.MAXIMUM_ROW_BYTES
+        || valueLength > 0 && (operation == TUPLE_DELETE || value == null
+            || valueOffset < 0 || valueOffset > value.limit() - valueLength)
+        || valueLength == 0 && value != null
+        || operation == TUPLE_REPLACE && valueLength == 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (!entries.canAppend(length)) return StatusCode.RESOURCE_EXHAUSTED;
+    if (!entries.canAppend(length + valueLength)) return StatusCode.RESOURCE_EXHAUSTED;
     entries.append(
         operation, descriptorOrdinal, suboperationOrdinal, ownerObjectId,
         io.riverdb.format.catalog.CatalogKeyspace.relationalIndexSpace(
             descriptors.keyIdAt(descriptorOrdinal)),
-        logicalRowId, 0, source, sourceOffset, length);
+        logicalRowId, 0, source, sourceOffset, length,
+        value, valueOffset, valueLength, length);
     return StatusCode.OK;
   }
 
@@ -232,13 +248,6 @@ final class IndexedRelationalMutationBuffer {
     }
     for (int descriptor = 0; descriptor < descriptors.count(); descriptor++) {
       if (!descriptorReferenced(descriptor)) return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int mutation = 0; mutation < entries.count(); mutation++) {
-      if (entries.operationAt(mutation) == BASE_INSERT
-          && !coveredByLogicalRowFloor(
-              entries.ownerObjectIdAt(mutation), entries.logicalRowIdAt(mutation))) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
     }
     sealed = true;
     return StatusCode.OK;
@@ -299,6 +308,16 @@ final class IndexedRelationalMutationBuffer {
   long logicalRowIdAt(int index) { return entries.logicalRowIdAt(index); }
   long previousRowIdAt(int index) { return entries.previousRowIdAt(index); }
   int payloadLengthAt(int index) { return entries.payloadLengthAt(index); }
+  int tupleKeyLengthAt(int index) { return entries.tupleKeyLengthAt(index); }
+  int tupleValueLengthAt(int index) {
+    return entries.payloadLengthAt(index) - entries.tupleKeyLengthAt(index);
+  }
+  void copyTupleKeyTo(int index, ByteBuffer target, int offset) {
+    entries.copyTupleKeyTo(index, target, offset);
+  }
+  void copyTupleValueTo(int index, ByteBuffer target, int offset) {
+    entries.copyTupleValueTo(index, target, offset);
+  }
   long descriptorOwnerObjectIdAt(int ordinal) { return descriptors.ownerObjectIdAt(ordinal); }
   long keyIdAt(int ordinal) { return descriptors.keyIdAt(ordinal); }
   long schemaIdAt(int ordinal) { return descriptors.schemaIdAt(ordinal); }
@@ -352,29 +371,6 @@ final class IndexedRelationalMutationBuffer {
       if (suboperations.descriptorAt(operation) == descriptor) return true;
     }
     return false;
-  }
-
-  private boolean coveredByLogicalRowFloor(long objectId, long logicalRowId) {
-    for (int index = 0; index < logicalRowFloors.count(); index++) {
-      if (logicalRowFloors.objectIdAt(index) == objectId
-          && logicalRowFloors.nextAt(index) > logicalRowId) return true;
-    }
-    return false;
-  }
-
-  private static boolean validBase(
-      long ownerObjectId, int operation, long logicalRowId, long previousRowId,
-      ByteBuffer source, int sourceOffset, int length) {
-    if (!io.riverdb.format.catalog.CatalogKeyspace.validObjectHead(ownerObjectId)
-        || logicalRowId <= 0 || previousRowId < 0) return false;
-    if (operation == BASE_INSERT) {
-      return previousRowId == 0 && validPayload(source, sourceOffset, length);
-    }
-    if (operation == BASE_UPDATE) {
-      return previousRowId > 0 && validPayload(source, sourceOffset, length);
-    }
-    return operation == BASE_DELETE && previousRowId > 0 && length == 0
-        && sourceOffset >= 0 && (source == null ? sourceOffset == 0 : sourceOffset <= source.limit());
   }
 
   private static boolean validPayload(ByteBuffer source, int offset, int length) {

@@ -61,9 +61,18 @@ final class IndexedSessionTupleAccess {
   StatusCode append(
       int operation, long ownerId, long keyId, long schemaId, TupleShape shape,
       long rowId, ByteBuffer key, int offset, int length) {
+    return append(operation, ownerId, keyId, schemaId, shape, rowId,
+        key, offset, length, null, 0, 0);
+  }
+
+  StatusCode append(
+      int operation, long ownerId, long keyId, long schemaId, TupleShape shape,
+      long rowId, ByteBuffer key, int offset, int length,
+      ByteBuffer value, int valueOffset, int valueLength) {
     if (!acceptsMutations()) return StatusCode.CONFLICT;
     return session.tupleIntents().append(
-        operation, ownerId, keyId, schemaId, shape, rowId, key, offset, length);
+        operation, ownerId, keyId, schemaId, shape, rowId, key, offset, length,
+        value, valueOffset, valueLength);
   }
 
   StatusCode preflightLifecycles(int additional) {

@@ -2,12 +2,14 @@ package io.riverdb.engine.table;
 
 import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
@@ -32,6 +34,46 @@ import org.junit.jupiter.api.io.TempDir;
 final class IndexedTableTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(431, 433);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+
+  @Test
+  void catalogRangeExcludesHeadsUntilItsExclusiveUpperBoundPassesFirstRow(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
+    ByteBuffer value = ByteBuffer.allocateDirect(Long.BYTES);
+    value.putLong(0, 7);
+    long catalogSpace = CatalogKeyspace.FIRST_RELATIONAL_SPACE;
+    long firstHeadSpace = CatalogKeyspace.relationalBaseRowSpace(1);
+    writer.insert(catalogSpace, 7, value);
+    IndexedScanCursor cursor = new IndexedScanCursor();
+    IndexedScanResult row = new IndexedScanResult();
+    for (int populated = 0; populated < 2; populated++) {
+      for (long upper : new long[] {Long.MIN_VALUE, 0, 1}) {
+        assertEquals(StatusCode.OK, table.beginScan(table.visibleCommitSequence(),
+            catalogSpace, Long.MIN_VALUE, firstHeadSpace, upper, cursor));
+        assertFalse(cursor.mixed(), "excluded head interval must use only the scalar tree");
+        assertEquals(StatusCode.OK, table.nextScan(cursor, row));
+        assertEquals(catalogSpace, row.keySpace());
+        assertEquals(7, row.key());
+        assertEquals(StatusCode.CONFLICT, table.nextScan(cursor, row));
+        assertEquals(StatusCode.OK, table.closeScan(cursor));
+      }
+      if (populated == 0) writer.insert(firstHeadSpace, 1, value);
+    }
+    assertEquals(StatusCode.OK, table.beginScan(table.visibleCommitSequence(),
+        catalogSpace, Long.MIN_VALUE, firstHeadSpace, 2, cursor));
+    assertTrue(cursor.mixed());
+    assertEquals(StatusCode.OK, table.nextScan(cursor, row));
+    assertEquals(catalogSpace, row.keySpace());
+    assertEquals(StatusCode.OK, table.nextScan(cursor, row));
+    assertEquals(firstHeadSpace, row.keySpace());
+    assertEquals(1, row.key());
+    assertEquals(StatusCode.CONFLICT, table.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, table.closeScan(cursor));
+    assertEquals(StatusCode.OK, writer.session.close());
+    close(table, wal, directory);
+  }
 
   @Test
   void repairsFlushedRootCorruptionAndAcceptsSubsequentInsert(@TempDir Path root) {

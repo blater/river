@@ -48,6 +48,6 @@ public final class CatalogAllocationWatermark {
   }
   public boolean canAllocateKeyIds(int count) {
     return available && count >= 0 && nextKeyId > 0
-        && nextKeyId <= CatalogKeyspace.KEY_ID_EXHAUSTED - count;
+        && nextKeyId <= CatalogKeyspace.USER_KEY_ID_EXHAUSTED - count;
   }
 }

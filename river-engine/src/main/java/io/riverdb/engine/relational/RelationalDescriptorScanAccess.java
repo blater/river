@@ -9,27 +9,26 @@ import io.riverdb.tx.api.lock.LockMode;
 /** Owns bounded allocation-free descriptor scans for its transaction session. */
 final class RelationalDescriptorScanAccess {
   private final IndexedTransactionSession session;
+  private final RelationalDescriptorPrimaryAccess primary;
   private final RelationalDescriptorScanRegistry active =
       new RelationalDescriptorScanRegistry();
+  private final RelationalDescriptorIndexBounds fullBounds =
+      new RelationalDescriptorIndexBounds();
 
-  RelationalDescriptorScanAccess(IndexedTransactionSession indexedSession) {
+  RelationalDescriptorScanAccess(
+      IndexedTransactionSession indexedSession, RelationalDescriptorPointViews pointViews) {
     session = indexedSession;
+    primary = new RelationalDescriptorPrimaryAccess(pointViews);
   }
 
   StatusCode begin(
       RelationalDescriptorTableAccess owner, SchemaPin pin,
       TableDescriptor table, RelationalDescriptorScanCursor cursor) {
-    if (cursor == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (cursor.isActive()) return StatusCode.CONFLICT;
-    long space = RelationalDescriptorKeyspace.baseRows(table.tableId());
-    StatusCode status = session.beginScan(
-        space, Long.MIN_VALUE, space + 1, Long.MIN_VALUE, cursor.indexed());
-    if (!status.isOk()) return status;
-    cursor.markPhysicalOpen();
-    status = cursor.claim(owner, pin);
-    if (!status.isOk()) return cleanupFailedBegin(cursor, status);
-    status = active.admit(cursor);
-    return status.isOk() ? status : cleanupClaimedBegin(cursor, status);
+    StatusCode status = fullBounds.set(
+        table.clusteredKey(), null, 0, true, null, 0, true,
+        io.riverdb.storage.btree.TupleBTreeScanBounds.FORWARD);
+    return status.isOk()
+        ? beginIndex(owner, pin, table, fullBounds, LockMode.SHARED, cursor) : status;
   }
 
   StatusCode beginIndex(
@@ -70,7 +69,9 @@ final class RelationalDescriptorScanAccess {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    destination.reset();
+    StatusCode reset = cursor.releaseView();
+    if (reset.isOk()) reset = destination.reset();
+    if (!reset.isOk()) return reset;
     TableDescriptor table = cursor.descriptor();
     if (selection != null && !selection.matches(table.columnCount())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -81,49 +82,73 @@ final class RelationalDescriptorScanAccess {
       status = nextPhysical(cursor);
       if (!status.isOk()) return status;
       long logicalRowId = cursor.logicalRowId();
-      status = cursor.isTuplePhysical()
-          ? fetchView(table, logicalRowId, destination, filter, selection)
-          : destination.bindFetched(table, cursor.row().row(), filter, selection);
-      if (status == StatusCode.CONFLICT && cursor.isTuplePhysical()) continue;
-      if (status == StatusCode.CONFLICT && filter != null) continue;
+      boolean primaryLeaf = cursor.tupleBounds().key() == table.clusteredKey();
+      status = primaryLeaf
+          ? bindPrimaryLeaf(table, cursor, destination, filter, selection)
+          : fetchSecondaryLocator(table, cursor, destination, filter, selection);
+      if (status == StatusCode.CONFLICT) continue;
       if (!status.isOk()) return status;
-      if (cursor.isTuplePhysical()) {
+      if (!primaryLeaf || cursor.tupleRow().pending() && table.primaryKey() != null) {
         status = cursor.tupleBounds().recheck(destination);
         if (!status.isOk()) return status;
         if (!cursor.tupleBounds().matches()) continue;
       }
       result.set(logicalRowId);
+      cursor.publishView(destination);
       return StatusCode.OK;
     }
   }
 
-  private StatusCode fetchView(
-      TableDescriptor table, long logicalRowId, StoredTableRowView destination,
-      StoredTableRowIntegerFilter filter, StoredTableColumnSelection selection) {
-    destination.fetched().retentionProjection(selection == null ? null : selection.projection());
-    StatusCode status = session.fetchByKey(
-        RelationalDescriptorKeyspace.baseRows(table.tableId()),
-        logicalRowId, destination.fetched());
-    return status.isOk()
-        ? destination.bindFetched(table, destination.fetched(), filter, selection) : status;
+  private StatusCode fetchSecondaryLocator(
+      TableDescriptor table, RelationalDescriptorScanCursor cursor,
+      StoredTableRowView destination, StoredTableRowIntegerFilter filter,
+      StoredTableColumnSelection selection) {
+    var row = cursor.tupleRow();
+    if (row.valueLength() <= 0 || row.valueLength() > cursor.pendingRow().capacity()) {
+      return StatusCode.CORRUPTION;
+    }
+    if (row.pending()) {
+      row.copyPendingValueTo(cursor.pendingRow(), 0);
+      return primary.fetchLocator(
+          session, table, cursor.pendingRow(), 0, row.valueLength(),
+          row.logicalRowId(), destination, filter, selection);
+    }
+    return primary.fetchLocator(
+        session, table, row.page(), row.valueOffset(), row.valueLength(),
+        row.logicalRowId(), destination, filter, selection);
+  }
+
+  private static StatusCode bindPrimaryLeaf(
+      TableDescriptor table, RelationalDescriptorScanCursor cursor,
+      StoredTableRowView destination, StoredTableRowIntegerFilter filter,
+      StoredTableColumnSelection selection) {
+    var row = cursor.tupleRow();
+    if (row.valueLength() <= 0 || row.valueLength() > cursor.pendingRow().capacity()) {
+      return StatusCode.CORRUPTION;
+    }
+    if (row.pending()) {
+      row.copyPendingValueTo(cursor.pendingRow(), 0);
+      return destination.bindPinned(
+          table, cursor.pendingRow(), 0, row.valueLength(), filter, selection);
+    }
+    return destination.bindPinned(
+        table, row.page(), row.valueOffset(), row.valueLength(), filter, selection);
   }
 
   private StatusCode nextPhysical(RelationalDescriptorScanCursor cursor) {
     if (cursor.isEmptyPhysical()) return StatusCode.CONFLICT;
-    StatusCode status = cursor.isTuplePhysical()
-        ? session.nextTupleScan(cursor.tupleIndexed(), cursor.tupleRow())
-        : session.nextScan(cursor.indexed(), cursor.row());
-    if (status.isOk()) cursor.logicalRowId(cursor.isTuplePhysical()
-        ? cursor.tupleRow().logicalRowId() : cursor.row().key());
+    StatusCode status = session.nextTupleScan(cursor.tupleIndexed(), cursor.tupleRow());
+    if (status.isOk()) cursor.logicalRowId(cursor.tupleRow().logicalRowId());
     return status;
   }
 
   StatusCode close(
       RelationalDescriptorTableAccess owner, RelationalDescriptorScanCursor cursor) {
     if (cursor == null || !cursor.isOwnedBy(owner)) return StatusCode.INVALID_EXTERNAL_INPUT;
-    StatusCode status = !cursor.isPhysicalOpen() || cursor.isEmptyPhysical() ? StatusCode.OK
-        : cursor.isTuplePhysical() ? session.closeTupleScan(cursor.tupleIndexed())
-            : session.closeScan(cursor.indexed());
+    StatusCode status = cursor.releaseView();
+    if (!status.isOk()) return status;
+    status = !cursor.isPhysicalOpen() || cursor.isEmptyPhysical() ? StatusCode.OK
+        : session.closeTupleScan(cursor.tupleIndexed());
     if (status.isOk()) cursor.markPhysicalClosed();
     if (status.isOk()) status = cursor.complete();
     if (status.isOk()) status = active.release(cursor);
@@ -138,16 +163,16 @@ final class RelationalDescriptorScanAccess {
 
   private StatusCode cleanupFailedBegin(
       RelationalDescriptorScanCursor cursor, StatusCode original) {
-    StatusCode cleanup = cursor.isEmptyPhysical() ? StatusCode.OK : cursor.isTuplePhysical()
-        ? session.closeTupleScan(cursor.tupleIndexed()) : session.closeScan(cursor.indexed());
+    StatusCode cleanup = cursor.isEmptyPhysical() ? StatusCode.OK
+        : session.closeTupleScan(cursor.tupleIndexed());
     if (cleanup.isOk()) cursor.markPhysicalClosed();
     return cleanup.isOk() ? original : cleanup;
   }
 
   private StatusCode cleanupClaimedBegin(
       RelationalDescriptorScanCursor cursor, StatusCode original) {
-    StatusCode cleanup = cursor.isEmptyPhysical() ? StatusCode.OK : cursor.isTuplePhysical()
-        ? session.closeTupleScan(cursor.tupleIndexed()) : session.closeScan(cursor.indexed());
+    StatusCode cleanup = cursor.isEmptyPhysical() ? StatusCode.OK
+        : session.closeTupleScan(cursor.tupleIndexed());
     if (cleanup.isOk()) cursor.markPhysicalClosed();
     if (cleanup.isOk()) cleanup = cursor.complete();
     return cleanup.isOk() ? original : cleanup;

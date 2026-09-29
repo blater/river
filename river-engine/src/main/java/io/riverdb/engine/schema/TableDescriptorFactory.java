@@ -2,6 +2,7 @@ package io.riverdb.engine.schema;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
+import io.riverdb.format.catalog.CatalogKeyspace;
 
 /** Admission and unpublished construction for immutable table descriptors. */
 final class TableDescriptorFactory {
@@ -62,6 +63,13 @@ final class TableDescriptorFactory {
     if (!status.isOk()) return status;
     status = TableLayout.create(columns, layout, detail);
     if (!status.isOk()) return status;
+    long identityId = CatalogKeyspace.relationalIdentityKeyId(tableId);
+    if (identityId == 0) {
+      return fail(detail, StatusCode.INVALID_EXTERNAL_INPUT, "invalid table identity");
+    }
+    KeyDescriptor.Result identity = new KeyDescriptor.Result();
+    status = KeyDescriptor.internalIdentity(identityId, columns, identity);
+    if (!status.isOk()) return fail(detail, status, "internal identity unavailable");
     long charge = SchemaByteCharge.object(0, 7)
         + SchemaByteCharge.array(Integer.BYTES, columns.count())
         + SchemaByteCharge.array(1, columns.count())
@@ -70,14 +78,15 @@ final class TableDescriptorFactory {
         + SchemaByteCharge.array(Integer.BYTES, columns.count())
         + SchemaByteCharge.array(1, columns.count())
         + columns.byteCharge()
-        + TableKeyValidation.charge(primary, copiedSecondary, copiedForeign);
+        + TableKeyValidation.charge(primary, copiedSecondary, copiedForeign)
+        + identity.value().byteCharge();
     if (!SchemaByteCharge.fits(charge)) {
       return fail(detail, StatusCode.RESOURCE_EXHAUSTED, "table descriptor charge exceeds allowed bytes");
     }
     try {
       result.set(new TableDescriptor(
           tableId, schemaId, rowLayoutId, catalogGeneration, columns, primary,
-          copiedSecondary, copiedForeign, layout, charge));
+          identity.value(), copiedSecondary, copiedForeign, layout, charge));
     } catch (OutOfMemoryError error) {
       return fail(detail, StatusCode.RESOURCE_EXHAUSTED, "table descriptor unavailable");
     }

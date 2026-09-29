@@ -3,6 +3,7 @@ package io.riverdb.engine;
 import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databasePlan;
 import static io.riverdb.engine.TestDatabaseResources.runtimeRoot;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.concurrent.FatalStateFence;
@@ -23,8 +24,11 @@ import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -154,6 +158,43 @@ final class EmbeddedDatabaseTest {
         StatusCode.CORRUPTION,
         EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
             EmbeddedLockDiagnosticsConfig.disabled(), opened));
+  }
+
+  @Test
+  void rejectsPreviousRowFormatBeforeChangingFiles(@TempDir Path root) throws Exception {
+    EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(
+        runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, opened.database().close());
+    Path controlPath = root.resolve(DatabaseControlStore.CONTROL_FILE_NAME);
+    byte[] control = Files.readAllBytes(controlPath);
+    ByteBuffer bytes = ByteBuffer.wrap(control).order(ByteOrder.LITTLE_ENDIAN);
+    bytes.putInt(8, 2);
+    CRC32C checksum = new CRC32C();
+    checksum.update(ByteBuffer.wrap(control, 0, 56));
+    int value = (int) checksum.getValue();
+    bytes.putInt(56, value);
+    bytes.putInt(60, ~value);
+    Files.write(controlPath, control);
+    List<Path> paths = databaseFiles(root);
+    byte[][] before = new byte[paths.size()][];
+    for (int index = 0; index < paths.size(); index++) {
+      before[index] = Files.readAllBytes(paths.get(index));
+    }
+
+    assertEquals(StatusCode.CORRUPTION, EmbeddedDatabase.openExisting(
+        runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
+        EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    assertEquals(paths, databaseFiles(root));
+    for (int index = 0; index < paths.size(); index++) {
+      assertArrayEquals(before[index], Files.readAllBytes(paths.get(index)));
+    }
+  }
+
+  private static List<Path> databaseFiles(Path root) throws java.io.IOException {
+    try (var paths = Files.walk(root)) {
+      return paths.filter(Files::isRegularFile).sorted().toList();
+    }
   }
 
   @Test

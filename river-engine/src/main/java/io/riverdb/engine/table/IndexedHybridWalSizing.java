@@ -73,6 +73,7 @@ final class IndexedHybridWalSizing {
     StatusCode status = StatusCode.OK;
     for (int descriptor = 0; status.isOk()
         && descriptor < intents.descriptorCount(); descriptor++) {
+      if (!intents.activeDescriptorAt(descriptor)) continue;
       if (!excludeLifecycle
           || IndexedHybridLogicalSizing.lifecycleIndex(intents, lifecycle, descriptor) < 0) {
         status = addDescriptor(intents.shapeAt(descriptor).partCount());
@@ -83,8 +84,13 @@ final class IndexedHybridWalSizing {
 
   private StatusCode measureTupleMutations(
       IndexedTupleIntentJournal intents, int descriptor) {
-    StatusCode status = measureTupleMutations(
+    StatusCode status = addRepeated(
+        IndexedRelationalWalCodec.MUTATION_ITEM_BYTES + IndexedOverflowReclamationCodec.BYTES,
+        IndexedTupleDeltaCompiler.overflowAllocationCount(intents, descriptor));
+    if (status.isOk()) status = measureTupleMutations(
         intents, descriptor, IndexedRelationalMutation.TUPLE_DELETE);
+    if (status.isOk()) status = measureTupleMutations(
+        intents, descriptor, IndexedRelationalMutation.TUPLE_REPLACE);
     return status.isOk() ? measureTupleMutations(
         intents, descriptor, IndexedRelationalMutation.TUPLE_INSERT) : status;
   }
@@ -98,7 +104,8 @@ final class IndexedHybridWalSizing {
           && intents.operationAt(mutation) == operation) {
         status = addItem(
             IndexedRelationalWalCodec.MUTATION_ITEM_BYTES
-                + intents.payloadLengthAt(mutation));
+                + intents.payloadLengthAt(mutation)
+                + intents.valueLengthAt(mutation));
       }
     }
     return status;

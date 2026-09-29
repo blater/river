@@ -27,14 +27,30 @@ final class RelationalDescriptorStorageValidationTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
-  void missingPrimaryMappingIsCorruptionOnReopen(@TempDir Path root) {
+  void missingPrimaryMappingIsDetectedOnIdentityReadAfterReopen(@TempDir Path root) {
     RelationalDatabase database = create(root);
     NamedTable table = createNamed(database, "missing_map");
     long logicalRowId = insert(database, table.pin, 41);
     deletePrimaryTuple(database, table.pin, 41, logicalRowId);
     close(database, table.pin);
 
-    assertCorruptReopen(root);
+    RelationalDatabaseOpenResult reopened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), reopened));
+    SchemaPin pin = new SchemaPin();
+    assertEquals(StatusCode.OK, reopened.database().services().descriptors().open(
+        table.objectId, pin, new StatusDetail(128)));
+    RelationalSession session = session(reopened.database());
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.CONFLICT,
+        session.descriptorRows().fetch(pin, 41, new StoredTableRowView()));
+    assertEquals(StatusCode.CORRUPTION,
+        session.descriptorRows().fetchByLogicalRowId(
+            pin, logicalRowId, new StoredTableRowView()));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    close(reopened.database(), pin);
   }
 
   private static RelationalDatabase create(Path root) {
@@ -111,13 +127,6 @@ final class RelationalDescriptorStorageValidationTest {
   private static void close(RelationalDatabase database, SchemaPin pin) {
     assertEquals(StatusCode.OK, pin.release());
     assertEquals(StatusCode.OK, database.close());
-  }
-
-  private static void assertCorruptReopen(Path root) {
-    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
-    assertEquals(StatusCode.CORRUPTION,
-        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
-            EmbeddedLockDiagnosticsConfig.disabled(), opened));
   }
 
   private static TableDescriptor descriptor() {

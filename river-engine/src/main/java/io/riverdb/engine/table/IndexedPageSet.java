@@ -45,7 +45,13 @@ final class IndexedPageSet {
   ByteBuffer currentPayloadUnchecked(int pageId) { return cache.currentPayloadUnchecked(pageId); }
   boolean isPresent(int pageId) { return state.present(pageId); }
   boolean isStaged(int pageId) { return state.staged(pageId); }
+  boolean isPrepared(int pageId) { return cache.isPrepared(pageId); }
   boolean isDirty(int pageId) { return state.dirty(pageId); }
+  boolean hasPinnedPreRetirementTupleReference(
+      long ownerKeyId, int overflowPageId, long retirementSequence) {
+    return cache.hasPinnedPreRetirementTupleReference(
+        ownerKeyId, overflowPageId, retirementSequence);
+  }
   long recordStart(int pageId) { return cache.recordStart(pageId); }
   long recordEnd(int pageId) { return cache.recordEnd(pageId); }
   int changedPageCount() { return state.changedPageCount(); }
@@ -101,6 +107,10 @@ final class IndexedPageSet {
       int pageId, boolean writable, long ownerKeyId, IndexedOperationPage result) {
     return cache.pinTupleOperationPage(pageId, writable, ownerKeyId, result);
   }
+  StatusCode pinTupleOverflowOperationPage(
+      int pageId, boolean writable, long ownerKeyId, IndexedOperationPage result) {
+    return cache.pinTupleOverflowOperationPage(pageId, writable, ownerKeyId, result);
+  }
   StatusCode pinScalarOperationPage(
       int pageId, boolean writable, IndexedOperationPage result) {
     return cache.pinScalarOperationPage(pageId, writable, result);
@@ -122,6 +132,12 @@ final class IndexedPageSet {
       int pageId, long ownerKeyId, IndexedOperationPage result) {
     return cache.pinNewOperationPage(
         pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_TUPLE_BTREE,
+        ownerKeyId, result);
+  }
+  StatusCode pinNewTupleOverflowPage(
+      int pageId, long ownerKeyId, IndexedOperationPage result) {
+    return cache.pinNewOperationPage(
+        pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW,
         ownerKeyId, result);
   }
   StatusCode pinNewLogicalHeadOperationPage(

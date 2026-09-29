@@ -13,16 +13,18 @@ final class IndexedOperationPage {
   private int arena;
   private int frameSlot = -1;
   private long pageGeneration;
+  private long durableGeneration;
   private boolean writable;
 
   void set(
       int id, ByteBuffer bytes, int sourceArena, int sourceSlot,
-      long generation, boolean forWrite) {
+      long generation, long allocationGeneration, boolean forWrite) {
     pageId = id;
     payload = bytes;
     arena = sourceArena;
     frameSlot = sourceSlot;
     pageGeneration = generation;
+    durableGeneration = allocationGeneration;
     writable = forWrite;
   }
 
@@ -32,6 +34,7 @@ final class IndexedOperationPage {
     arena = 0;
     frameSlot = -1;
     pageGeneration = 0;
+    durableGeneration = 0;
     writable = false;
   }
 
@@ -41,5 +44,6 @@ final class IndexedOperationPage {
   int arena() { return arena; }
   int frameSlot() { return frameSlot; }
   long pageGeneration() { return pageGeneration; }
+  long durableGeneration() { return durableGeneration; }
   boolean writable() { return writable; }
 }

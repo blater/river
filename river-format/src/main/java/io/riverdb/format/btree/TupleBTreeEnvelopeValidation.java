@@ -41,10 +41,13 @@ final class TupleBTreeEnvelopeValidation {
     int previousLength = 0;
     for (int index = 0; index < count; index++) {
       int slot = start + TupleBTreePageCodec.HEADER_BYTES
-          + index * TupleBTreePageCodec.SLOT_BYTES;
+          + index * TupleBTreePageCodec.slotBytes(type);
       int keyOffset = FormatBytes.getInt(source, slot);
       int keyLength = FormatBytes.getInt(source, slot + 4);
-      cursor -= keyLength;
+      if (type == TupleBTreePageCodec.TYPE_LEAF
+          && !TupleBTreeEntryValidation.validLeafValue(
+              source, slot, keyOffset, keyLength)) return StatusCode.CORRUPTION;
+      cursor -= keyLength + TupleBTreeEntryValidation.inlineValueLength(source, slot, type);
       if (!validEntry(source, start, slot, type, keyOffset, keyLength,
           cursor, freeStart, highOffset, highLength,
           previousOffset, previousLength, index, arity)) return StatusCode.CORRUPTION;
@@ -68,11 +71,12 @@ final class TupleBTreeEnvelopeValidation {
     return FormatBytes.getLong(source, start) == TupleBTreePageCodec.MAGIC
         && FormatBytes.getInt(source, start + 8) == TupleBTreePageCodec.VERSION
         && (type == TupleBTreePageCodec.TYPE_LEAF || type == TupleBTreePageCodec.TYPE_INTERNAL)
-        && count >= 0 && count <= TupleBTreePageCodec.MAXIMUM_SLOTS
-        && FormatBytes.getInt(source, start + 20) == TupleBTreePageCodec.SLOT_BYTES
+        && count >= 0 && count <= (type == TupleBTreePageCodec.TYPE_LEAF
+            ? TupleBTreePageCodec.MAXIMUM_LEAF_SLOTS : TupleBTreePageCodec.MAXIMUM_SLOTS)
+        && FormatBytes.getInt(source, start + 20) == TupleBTreePageCodec.slotBytes(type)
         && TupleBTreePageBytes.validLinks(type, leftSibling, pointer, highLength)
         && freeStart == TupleBTreePageCodec.HEADER_BYTES
-            + count * TupleBTreePageCodec.SLOT_BYTES
+            + count * TupleBTreePageCodec.slotBytes(type)
         && freeStart <= freeEnd && freeEnd <= PageCodec.MAX_PAYLOAD_BYTES
         && highLength >= 0 && highLength <= TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES
         && (highLength != 0 || highOffset == 0)
@@ -95,7 +99,8 @@ final class TupleBTreeEnvelopeValidation {
             source, start + keyOffset, keyLength,
             source, start + highOffset, highLength) < 0)
         && (type == TupleBTreePageCodec.TYPE_LEAF
-            ? FormatBytes.getInt(source, slot + 8) == 0
+            ? TupleBTreeEntryValidation.validLeafValue(
+                source, slot, keyOffset, keyLength)
             : FormatBytes.getInt(source, slot + 8) > 0);
   }
 

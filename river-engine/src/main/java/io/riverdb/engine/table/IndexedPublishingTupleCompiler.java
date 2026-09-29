@@ -23,7 +23,8 @@ final class IndexedPublishingTupleCompiler {
   StatusCode compile(
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedTupleIndexLifecycleBatch lifecycle, int lifecycleIndex,
-      IndexedRelationalMutation mutation, int suboperation, int firstMutation) {
+      IndexedRelationalMutation mutation, int suboperation, int firstMutation,
+      long memberSequence, long oldestVisibleCommitSequence) {
     if (!IndexedPublishingTupleMatch.same(
         intents, descriptor, lifecycle, lifecycleIndex)) return StatusCode.CORRUPTION;
     StatusCode status = registry.loadBuilding(lifecycle, lifecycleIndex);
@@ -32,7 +33,8 @@ final class IndexedPublishingTupleCompiler {
     return status.isOk()
         ? compileLoaded(
             intents, descriptor, lifecycle, lifecycleIndex, mutation,
-            suboperation, firstMutation, expected)
+            suboperation, firstMutation, memberSequence,
+            oldestVisibleCommitSequence, expected)
         : status;
   }
 
@@ -40,17 +42,23 @@ final class IndexedPublishingTupleCompiler {
       IndexedTupleIntentJournal intents, int descriptor,
       IndexedTupleIndexLifecycleBatch lifecycle, int lifecycleIndex,
       IndexedRelationalMutation mutation, int suboperation, int firstMutation,
-      ByteBuffer expected) {
+      long memberSequence, long oldestVisibleCommitSequence, ByteBuffer expected) {
     int scalarRoot = BTreeRootPage.rootPageId(expected);
     int nextPage = BTreeRootPage.nextPageId(expected);
     long heap = kernel.operationRowCount();
     int tupleRoot = registry.rootPageId();
     long generation = registry.generation();
-    StatusCode status = deltas.apply(intents, descriptor, tupleRoot);
+    StatusCode status = deltas.apply(
+        intents, descriptor, tupleRoot, memberSequence, oldestVisibleCommitSequence,
+        mutation, suboperation, lifecycleIndex);
     if (!status.isOk()) return status;
     int resultingRoot = deltas.rootPageId();
     boolean building = lifecycle.appendsBuilding(lifecycleIndex);
-    status = registry.stage(resultingRoot, building, lifecycle.privateOwnerAt(lifecycleIndex));
+    boolean membershipChanged = deltas.membershipChanged(intents, descriptor) || !building;
+    boolean stageRegistry = membershipChanged || resultingRoot != tupleRoot;
+    if (stageRegistry) status = registry.stage(
+        resultingRoot, building, lifecycle.privateOwnerAt(lifecycleIndex),
+        memberSequence, membershipChanged);
     if (!status.isOk()) return status;
     ByteBuffer resulting = metadata();
     if (resulting == null) return StatusCode.CORRUPTION;
@@ -58,7 +66,8 @@ final class IndexedPublishingTupleCompiler {
         intents.ownerAt(descriptor), lifecycleIndex, firstMutation,
         deltas.count(intents, descriptor), tupleRoot, resultingRoot,
         scalarRoot, BTreeRootPage.rootPageId(resulting), nextPage,
-        BTreeRootPage.nextPageId(resulting), generation, generation + 1,
+        BTreeRootPage.nextPageId(resulting), generation,
+        stageRegistry ? generation + 1 : generation,
         heap, kernel.operationRowCount(), TupleIndexRootRecordCodec.STATE_BUILDING,
         building ? TupleIndexRootRecordCodec.STATE_BUILDING
             : TupleIndexRootRecordCodec.STATE_READY,

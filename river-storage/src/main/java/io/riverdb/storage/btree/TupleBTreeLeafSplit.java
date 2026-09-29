@@ -15,6 +15,20 @@ final class TupleBTreeLeafSplit {
       int leftPageId, int rightPageId, long schemaId, TupleShape shape,
       ByteBuffer key, int keyOffset, int keyLength,
       TupleBTreeWorkspace workspace, TupleBTreeSplitResult result) {
+    return splitInsert(source, sourceStart, left, leftStart, right, rightStart,
+        leftPageId, rightPageId, schemaId, shape,
+        key, keyOffset, keyLength, null, 0, 0, 0, 0, 0, workspace, result);
+  }
+
+  static StatusCode splitInsert(
+      ByteBuffer source, int sourceStart,
+      ByteBuffer left, int leftStart,
+      ByteBuffer right, int rightStart,
+      int leftPageId, int rightPageId, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      TupleBTreeWorkspace workspace, TupleBTreeSplitResult result) {
     StatusCode status = TupleBTreeLeafSplitAdmission.prepare(
         source, sourceStart, left, leftStart, right, rightStart,
         leftPageId, rightPageId, schemaId, shape,
@@ -31,7 +45,8 @@ final class TupleBTreeLeafSplit {
     }
     int total = workspace.header.entryCount() + 1;
     int splitAt = TupleBTreeLeafSplitPoint.choose(
-        source, sourceStart, key, keyOffset, keyLength, insertion, workspace);
+        source, sourceStart, key, keyOffset, keyLength,
+        overflowPageId == 0 ? valueLength : 0, insertion, workspace);
     if (splitAt < 0) return StatusCode.INVARIANT_BROKEN;
     if (splitAt == 0) return StatusCode.RESOURCE_EXHAUSTED;
     ByteBuffer separator;
@@ -56,7 +71,9 @@ final class TupleBTreeLeafSplit {
     if (!status.isOk()) return status;
     status = TupleBTreeLeafSplitOutput.appendMerged(
         source, sourceStart, left, leftStart, right, rightStart, shape,
-        key, keyOffset, keyLength, insertion, splitAt, total, workspace);
+        key, keyOffset, keyLength, value, valueOffset, valueLength,
+        overflowPageId, overflowGeneration, modificationSequence,
+        insertion, splitAt, total, workspace);
     if (!status.isOk()) return status;
     status = TupleBTreeLeafSplitOutput.validate(
         left, leftStart, right, rightStart, schemaId, shape, workspace);

@@ -11,16 +11,18 @@ final class CatalogBuildIntentKeyValidation {
     int maximumKeys = SqlShapeLimits.MAX_TABLE_INDEXES + SqlShapeLimits.MAX_FOREIGN_KEYS;
     if (keyCount == 0) {
       if (firstKeyId != 0
-          && (firstKeyId <= 0 || firstKeyId > CatalogKeyspace.KEY_ID_EXHAUSTED)) {
+          && (firstKeyId <= 0
+              || firstKeyId > CatalogKeyspace.USER_KEY_ID_EXHAUSTED)) {
         return false;
       }
     } else if (keyCount > maximumKeys
         || !CatalogKeyspace.validKeyId(firstKeyId)
-        || firstKeyId > CatalogKeyspace.MAXIMUM_KEY_ID - keyCount + 1) {
+        || firstKeyId > CatalogKeyspace.MAXIMUM_USER_KEY_ID - keyCount + 1) {
       return false;
     }
     if (physicalIndexCount < 0
-        || physicalIndexCount > Math.min(keyCount, SqlShapeLimits.MAX_TABLE_INDEXES)) {
+        || physicalIndexCount > Math.min(keyCount + 1,
+            SqlShapeLimits.MAX_TABLE_INDEXES + 1)) {
       return false;
     }
     if (nextPhysicalIndex < 0 || nextPhysicalIndex > physicalIndexCount) return false;

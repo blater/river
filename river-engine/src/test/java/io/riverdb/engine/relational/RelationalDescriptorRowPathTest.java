@@ -2,6 +2,7 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,12 +14,15 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.checkpoint.CheckpointResult;
+import io.riverdb.engine.control.DatabaseControlStore;
+import io.riverdb.format.control.ControlFileCodec;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.engine.table.IndexedRelationalMutation;
+import io.riverdb.engine.table.IndexedTupleIndexState;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.storage.btree.TupleBTreeScanBounds;
@@ -28,7 +32,11 @@ import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.lock.LockMode;
 import java.nio.file.Path;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -39,6 +47,56 @@ final class RelationalDescriptorRowPathTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
   private static final int COLUMN_COUNT = 1_024;
   private static final int[] NULL_ORDINALS = {7, 8, 63, 64, 255, 1_023};
+
+  @Test
+  void oldControlFormatIsRejectedBeforeAnyDurableFileChanges(@TempDir Path root)
+      throws java.io.IOException {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowTextDescriptor(), table, new StatusDetail(128)));
+    RelationalSession writer = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+        table, overflowTextValues(7, "seed"), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    Path control = root.resolve(DatabaseControlStore.CONTROL_FILE_NAME);
+    byte[] old = Files.readAllBytes(control);
+    assertEquals(ControlFileCodec.RECORD_BYTES, old.length);
+    ByteBuffer bytes = ByteBuffer.wrap(old).order(ByteOrder.LITTLE_ENDIAN);
+    bytes.putInt(8, ControlFileCodec.MAJOR_VERSION - 1);
+    CRC32C checksum = new CRC32C();
+    checksum.update(old, 0, 56);
+    bytes.putInt(56, (int) checksum.getValue());
+    bytes.putInt(60, ~(int) checksum.getValue());
+    Files.write(control, old);
+    Map<String, byte[]> before = durableFiles(root);
+
+    assertEquals(StatusCode.CORRUPTION,
+        RelationalDatabase.openExisting(
+            databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    Map<String, byte[]> after = durableFiles(root);
+    assertEquals(before.keySet(), after.keySet());
+    for (String name : before.keySet()) assertArrayEquals(before.get(name), after.get(name), name);
+  }
+
+  private static Map<String, byte[]> durableFiles(Path root) throws java.io.IOException {
+    Map<String, byte[]> files = new TreeMap<>();
+    try (var paths = Files.walk(root)) {
+      for (Path path : paths.filter(Files::isRegularFile).toList()) {
+        files.put(root.relativize(path).toString(), Files.readAllBytes(path));
+      }
+    }
+    return files;
+  }
 
   @Test
   void malformedExternalTextKeyCannotDeleteCanonicalRow(@TempDir Path root) {
@@ -280,7 +338,7 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, session.commit(outcome));
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.descriptorRows().fetchByLogicalRowId(
+    assertEquals(StatusCode.CORRUPTION, session.descriptorRows().fetchByLogicalRowId(
         table, inserted.logicalRowId(), emptyValues()));
     assertEquals(StatusCode.CONFLICT,
         session.descriptorRows().fetch(table, 77, emptyValues()));
@@ -445,7 +503,7 @@ final class RelationalDescriptorRowPathTest {
         session.descriptorRows().insert(table, values(51, NULL_ORDINALS), accepted));
     assertEquals(1, accepted.logicalRowId());
     assertEquals(
-        FORMER_DEFAULT_WRITE_ENTRIES,
+        FORMER_DEFAULT_WRITE_ENTRIES - 1,
         session.indexedSession().pendingMutationCount());
     assertEquals(StatusCode.OK, session.commit(outcome));
 
@@ -456,7 +514,7 @@ final class RelationalDescriptorRowPathTest {
     }
     assertEquals(StatusCode.OK,
         session.descriptorRows().update(table, 51, values(52, NULL_ORDINALS)));
-    assertEquals(383, session.indexedSession().pendingMutationCount());
+    assertEquals(382, session.indexedSession().pendingMutationCount());
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
     assertEquals(StatusCode.OK, table.release());
@@ -480,7 +538,7 @@ final class RelationalDescriptorRowPathTest {
   }
 
   @Test
-  void updateStagesOnlyKeysWhoseCanonicalBytesChange(@TempDir Path root) {
+  void updateStagesPrimaryValueAndChangedSecondaryKey(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
@@ -488,6 +546,7 @@ final class RelationalDescriptorRowPathTest {
     SchemaPin table = new SchemaPin();
     assertEquals(StatusCode.OK, database.services().descriptors().create(
         indexedPayloadDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
     RelationalSession session = session(database);
     TransactionOutcome outcome = new TransactionOutcome();
 
@@ -497,21 +556,75 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, session.commit(outcome));
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    IndexedTupleIndexState primaryState = new IndexedTupleIndexState();
+    IndexedTupleIndexState secondaryState = new IndexedTupleIndexState();
+    IndexedTupleIndexState identityState = new IndexedTupleIndexState();
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().identityKey().keyId(), identityState));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().primaryKey().keyId(), primaryState));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().secondaryKeyAt(0).keyId(), secondaryState));
+    long primaryMembership = primaryState.membershipSequence();
+    long secondaryMembership = secondaryState.membershipSequence();
+    long identityGeneration = identityState.generation();
     assertEquals(StatusCode.OK,
         session.descriptorRows().update(table, 1, indexedPayloadValues(1, 10, 101)));
-    assertEquals(0, session.indexedSession().pendingTupleMutationCount());
+    assertEquals(1, session.indexedSession().pendingTupleMutationCount());
     assertEquals(StatusCode.OK, session.commit(outcome));
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().primaryKey().keyId(), primaryState));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().secondaryKeyAt(0).keyId(), secondaryState));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().identityKey().keyId(), identityState));
+    assertEquals(primaryMembership, primaryState.membershipSequence());
+    assertEquals(secondaryMembership, secondaryState.membershipSequence());
+    assertEquals(identityGeneration, identityState.generation());
     assertEquals(StatusCode.OK,
         session.descriptorRows().update(table, 1, indexedPayloadValues(1, 11, 102)));
-    assertEquals(2, session.indexedSession().pendingTupleMutationCount());
+    assertEquals(3, session.indexedSession().pendingTupleMutationCount());
     assertEquals(StatusCode.OK, session.commit(outcome));
 
     StoredTableRowView fetched = emptyValues();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().primaryKey().keyId(), primaryState));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().secondaryKeyAt(0).keyId(), secondaryState));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().identityKey().keyId(), identityState));
+    assertEquals(primaryMembership, primaryState.membershipSequence());
+    assertTrue(secondaryState.membershipSequence() > secondaryMembership);
+    assertEquals(identityGeneration, identityState.generation());
     assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, fetched));
     assertEquals(11, fetched.valueAt(1));
+    assertEquals(102, fetched.valueAt(2));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    session = session(database);
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().primaryKey().keyId(), primaryState));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().secondaryKeyAt(0).keyId(), secondaryState));
+    assertEquals(StatusCode.OK, session.indexedSession().readTupleIndexState(
+        table.descriptor().identityKey().keyId(), identityState));
+    assertEquals(primaryMembership, primaryState.membershipSequence());
+    assertTrue(secondaryState.membershipSequence() > secondaryMembership);
+    assertEquals(identityGeneration, identityState.generation());
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, fetched));
     assertEquals(102, fetched.valueAt(2));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, table.release());
@@ -833,6 +946,790 @@ final class RelationalDescriptorRowPathTest {
     }
   }
 
+  @Test
+  void primaryScanSeesLaterOwnUpdatesAndDeletes(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        indexedPayloadDescriptor(), table, new StatusDetail(128)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    for (int id = 1; id <= 3; id++) {
+      assertEquals(StatusCode.OK, session.descriptorRows().insert(
+          table, indexedPayloadValues(id, 10, id * 100),
+          new RelationalRowIdentityResult()));
+    }
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    SchemaPin writerPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        table.tableId(), writerPin, new StatusDetail(128)));
+    IndexedSavepoint cursorSavepoint = new IndexedSavepoint();
+    assertEquals(StatusCode.OK, session.createSavepoint(cursorSavepoint));
+    RelationalDescriptorIndexBounds bounds = new RelationalDescriptorIndexBounds();
+    assertEquals(StatusCode.OK, bounds.set(
+        table.descriptor().primaryKey(), null, 0, true, null, 0, true,
+        TupleBTreeScanBounds.FORWARD));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
+        table, bounds, LockMode.SHARED, cursor));
+    StoredTableRowView fetched = emptyValues();
+    RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(cursor, fetched, identity));
+    assertEquals(1, fetched.valueAt(0));
+    assertEquals(StatusCode.OK,
+        session.descriptorRows().update(writerPin, 2, indexedPayloadValues(2, 10, 201)));
+    assertEquals(StatusCode.OK, session.rollbackToSavepoint(cursorSavepoint));
+    assertEquals(StatusCode.OK,
+        session.descriptorRows().update(writerPin, 2, indexedPayloadValues(2, 10, 202)));
+    assertEquals(StatusCode.OK, session.descriptorRows().delete(writerPin, 3));
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(cursor, fetched, identity));
+    assertEquals(2, fetched.valueAt(0));
+    assertEquals(202, fetched.valueAt(2));
+    assertEquals(StatusCode.CONFLICT,
+        session.descriptorRows().nextScan(cursor, fetched, identity));
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, writerPin.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void pointViewsRetainPinnedGenerationsAndCloseAtTransactionEnd(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        indexedPayloadDescriptor(), table, new StatusDetail(128)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, indexedPayloadValues(1, 10, 100), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, indexedPayloadValues(2, 11, 200), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    StoredTableRowView first = emptyValues();
+    StoredTableRowView second = emptyValues();
+    StoredTableRowView current = emptyValues();
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, first));
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 2, second));
+    assertEquals(StatusCode.OK,
+        session.descriptorRows().update(table, 1, indexedPayloadValues(1, 10, 101)));
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, current));
+    assertEquals(100, first.valueAt(2));
+    assertEquals(200, second.valueAt(2));
+    assertEquals(101, current.valueAt(2));
+
+    RelationalDescriptorIndexBounds bounds = new RelationalDescriptorIndexBounds();
+    assertEquals(StatusCode.OK, bounds.set(
+        table.descriptor().secondaryKeyAt(0), null, 0, true, null, 0, true,
+        TupleBTreeScanBounds.FORWARD));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    SchemaPin scanPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        table.tableId(), scanPin, new StatusDetail(128)));
+    assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
+        scanPin, bounds, LockMode.SHARED, cursor));
+    StoredTableRowView secondary = emptyValues();
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(
+        cursor, secondary, new RelationalRowIdentityResult()));
+    assertEquals(101, secondary.valueAt(2));
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+    assertEquals(0, secondary.count());
+
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(0, first.count());
+    assertEquals(0, second.count());
+    assertEquals(0, current.count());
+    assertEquals(0, secondary.count());
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, first));
+    assertEquals(101, first.valueAt(2));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void openScanRefreshesPendingKeyMoveInBothDirections(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        indexedPayloadDescriptor(), table, new StatusDetail(128)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    for (int id = 1; id <= 3; id++) {
+      assertEquals(StatusCode.OK, session.descriptorRows().insert(
+          table, indexedPayloadValues(id, 10, id * 100),
+          new RelationalRowIdentityResult()));
+    }
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    for (int direction : new int[] {
+        TupleBTreeScanBounds.FORWARD, TupleBTreeScanBounds.REVERSE}) {
+      assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+      assertEquals(StatusCode.OK, session.descriptorRows().update(
+          table, 2, indexedPayloadValues(2, 10, 201)));
+      RelationalDescriptorIndexBounds bounds = new RelationalDescriptorIndexBounds();
+      assertEquals(StatusCode.OK, bounds.set(
+          table.descriptor().primaryKey(), indexedPayloadValues(1, 10, 100), 1, true,
+          indexedPayloadValues(3, 10, 300), 1, true, direction));
+      RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+      SchemaPin scanPin = new SchemaPin();
+      assertEquals(StatusCode.OK, database.services().descriptors().open(
+          table.tableId(), scanPin, new StatusDetail(128)));
+      assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
+          scanPin, bounds, LockMode.SHARED, cursor));
+      StoredTableRowView row = emptyValues();
+      RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
+      assertEquals(StatusCode.OK, session.descriptorRows().nextScan(cursor, row, identity));
+      assertEquals(direction == TupleBTreeScanBounds.FORWARD ? 1 : 3, row.valueAt(0));
+      assertEquals(StatusCode.OK, session.descriptorRows().update(
+          table, 2, indexedPayloadValues(4, 10, 204)));
+      assertEquals(StatusCode.OK, session.descriptorRows().nextScan(cursor, row, identity));
+      assertEquals(direction == TupleBTreeScanBounds.FORWARD ? 3 : 1, row.valueAt(0));
+      assertEquals(StatusCode.CONFLICT,
+          session.descriptorRows().nextScan(cursor, row, identity));
+      assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+      assertEquals(StatusCode.OK, session.abort(outcome));
+    }
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void hiddenPrimaryAndSecondaryReadCanonicalRowsAfterReopen(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        hiddenPayloadDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    assertEquals(null, table.descriptor().primaryKey());
+    assertEquals(io.riverdb.format.catalog.CatalogKeyspace.relationalIdentityKeyId(tableId),
+        table.descriptor().clusteredKey().keyId());
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, hiddenPayloadValues(7, 20), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, hiddenPayloadValues(7, 10), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    session = session(database);
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor full = new RelationalDescriptorScanCursor();
+    SchemaPin fullPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, fullPin, new StatusDetail(128)));
+    assertEquals(StatusCode.OK, session.descriptorRows().beginScan(fullPin, full));
+    StoredTableRowView row = emptyValues();
+    RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(full, row, identity));
+    assertEquals(20, row.valueAt(1));
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(full, row, identity));
+    assertEquals(10, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.descriptorRows().nextScan(full, row, identity));
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(full));
+
+    RelationalDescriptorIndexBounds bounds = new RelationalDescriptorIndexBounds();
+    assertEquals(StatusCode.OK, bounds.set(
+        table.descriptor().secondaryKeyAt(0), null, 0, true, null, 0, true,
+        TupleBTreeScanBounds.FORWARD));
+    RelationalDescriptorScanCursor secondary = new RelationalDescriptorScanCursor();
+    SchemaPin secondaryPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, secondaryPin, new StatusDetail(128)));
+    assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
+        secondaryPin, bounds, LockMode.SHARED, secondary));
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(secondary, row, identity));
+    assertEquals(10, row.valueAt(1));
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(secondary, row, identity));
+    assertEquals(20, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT,
+        session.descriptorRows().nextScan(secondary, row, identity));
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(secondary));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void identityLocatorTracksPrimaryMoveAtEachSnapshot(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        indexedPayloadDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    RelationalSession writer = session(database);
+    RelationalSession reader = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    RelationalRowIdentityResult inserted = new RelationalRowIdentityResult();
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+        table, indexedPayloadValues(1, 10, 100), inserted));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    long rowId = inserted.logicalRowId();
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.descriptorRows().update(
+        table, 1, indexedPayloadValues(2, 10, 101)));
+    assertEquals(4, writer.indexedSession().pendingTupleMutationCount());
+    StoredTableRowView pending = emptyValues();
+    assertEquals(StatusCode.OK, writer.descriptorRows().fetchByLogicalRowId(
+        table, rowId, pending));
+    assertEquals(2, pending.valueAt(0));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+
+    StoredTableRowView old = emptyValues();
+    assertEquals(StatusCode.OK, reader.descriptorRows().fetchByLogicalRowId(
+        table, rowId, old));
+    assertEquals(1, old.valueAt(0));
+    assertEquals(100, old.valueAt(2));
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, reader.descriptorRows().fetchByLogicalRowId(
+        table, rowId, old));
+    assertEquals(2, old.valueAt(0));
+    assertEquals(101, old.valueAt(2));
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    reader = session(database);
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, reader.descriptorRows().fetchByLogicalRowId(
+        table, rowId, old));
+    assertEquals(2, old.valueAt(0));
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void primaryAndSecondaryReadsDoNotConsultIdentityLocator(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        indexedPayloadDescriptor(), table, new StatusDetail(128)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    RelationalRowIdentityResult inserted = new RelationalRowIdentityResult();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, indexedPayloadValues(1, 10, 100), inserted));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    long rowId = inserted.logicalRowId();
+    RelationalTupleKeyEncoder encoder = new RelationalTupleKeyEncoder();
+    assertEquals(StatusCode.OK, encoder.encodePhysical(
+        table.descriptor().identityKey(), null, rowId));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK,
+        session.indexedSession().preflightTupleMutations(1, 1, encoder.length()));
+    assertEquals(StatusCode.OK, session.indexedSession().protectTupleKeyForWrite(
+        table.descriptor().identityKey().keyId(), encoder.bytes(), 0, encoder.length()));
+    assertEquals(StatusCode.OK, session.indexedSession().appendTupleMutation(
+        io.riverdb.engine.table.IndexedRelationalMutation.TUPLE_DELETE,
+        table.tableId(), table.descriptor().identityKey().keyId(),
+        table.descriptor().identityKey().keyId(), table.descriptor().identityKey().shape(),
+        rowId, encoder.bytes(), 0, encoder.length()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    StoredTableRowView row = emptyValues();
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, row));
+    assertEquals(100, row.valueAt(2));
+    assertEquals(StatusCode.CONFLICT,
+        session.descriptorRows().fetchByLogicalRowId(table, rowId, row));
+    RelationalDescriptorIndexBounds bounds = new RelationalDescriptorIndexBounds();
+    assertEquals(StatusCode.OK, bounds.set(
+        table.descriptor().secondaryKeyAt(0), null, 0, true, null, 0, true,
+        TupleBTreeScanBounds.FORWARD));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    SchemaPin scanPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        table.tableId(), scanPin, new StatusDetail(128)));
+    assertEquals(StatusCode.OK, session.descriptorRows().beginIndexScan(
+        scanPin, bounds, LockMode.SHARED, cursor));
+    assertEquals(StatusCode.OK, session.descriptorRows().nextScan(
+        cursor, row, new RelationalRowIdentityResult()));
+    assertEquals(100, row.valueAt(2));
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.descriptorRows().update(
+        table, 1, indexedPayloadValues(1, 10, 101)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, row));
+    assertEquals(101, row.valueAt(2));
+    assertEquals(StatusCode.CONFLICT,
+        session.descriptorRows().fetchByLogicalRowId(table, rowId, row));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void lockedSecondaryCandidateFollowsMovedPrimaryThroughIdentity(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        indexedPayloadDescriptor(), table, new StatusDetail(128)));
+    RelationalSession reader = session(database);
+    RelationalSession writer = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+        table, indexedPayloadValues(1, 10, 100), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorIndexBounds bounds = new RelationalDescriptorIndexBounds();
+    assertEquals(StatusCode.OK, bounds.set(
+        table.descriptor().secondaryKeyAt(0), null, 0, true, null, 0, true,
+        TupleBTreeScanBounds.FORWARD));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    SchemaPin scanPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        table.tableId(), scanPin, new StatusDetail(128)));
+    assertEquals(StatusCode.OK, reader.descriptorRows().beginIndexScan(
+        scanPin, bounds, LockMode.SHARED, cursor));
+    StoredTableRowView old = emptyValues();
+    assertEquals(StatusCode.OK, reader.descriptorRows().nextScan(
+        cursor, old, new RelationalRowIdentityResult()));
+    assertEquals(1, old.valueAt(0));
+
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.descriptorRows().update(
+        table, 1, indexedPayloadValues(2, 10, 101)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    StoredTableRowView current = emptyValues();
+    RelationalLockedCandidateResult locked = new RelationalLockedCandidateResult();
+    assertEquals(StatusCode.OK, reader.descriptorRows().lockScannedCandidate(
+        cursor, current, locked));
+    assertTrue(locked.isLocked());
+    assertEquals(2, current.valueAt(0));
+    assertEquals(101, current.valueAt(2));
+    assertEquals(StatusCode.OK, reader.descriptorRows().releaseCurrent());
+    assertEquals(StatusCode.OK, reader.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void overflowRowSurvivesReopenAndOldSnapshotAcrossInlineReplacement(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    String key = "😀".repeat(765);
+    String large = "🧱".repeat(3000);
+    SqlMutationValues original = overflowValues(table.descriptor(), key, large);
+    RelationalSession writer = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+        table, original, new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    RelationalSession reader = session(database);
+    writer = session(database);
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor held = new RelationalDescriptorScanCursor();
+    SchemaPin heldPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, heldPin, new StatusDetail(128)));
+    assertEquals(StatusCode.OK, reader.descriptorRows().beginScan(heldPin, held));
+
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.descriptorRows().update(
+        table, original, overflowValues(table.descriptor(), key, "small")));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    StoredTableRowView old = emptyValues();
+    assertEquals(StatusCode.OK, reader.descriptorRows().nextScan(
+        held, old, new RelationalRowIdentityResult()));
+    assertEquals(12_000, old.textByteLengthAt(1));
+    assertTrue(held.tupleRow().overflowPageId() > 0);
+    assertEquals(StatusCode.OK, reader.descriptorRows().closeScan(held));
+    assertEquals(StatusCode.OK, reader.descriptorRows().fetch(table, original, old));
+    assertEquals(12_000, old.textByteLengthAt(1));
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, reader.descriptorRows().fetch(table, original, old));
+    assertEquals(5, old.textByteLengthAt(1));
+    assertEquals(0, old.pointRow().overflowPageId());
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void keyMoveBackThenValueReplacementRetainsTheRow(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        indexedPayloadDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, indexedPayloadValues(1, 10, 100), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK,
+        session.descriptorRows().update(table, 1, indexedPayloadValues(2, 10, 101)));
+    assertEquals(StatusCode.OK,
+        session.descriptorRows().update(table, 2, indexedPayloadValues(1, 10, 102)));
+    IndexedSavepoint savepoint = new IndexedSavepoint();
+    assertEquals(StatusCode.OK, session.createSavepoint(savepoint));
+    assertEquals(StatusCode.OK,
+        session.descriptorRows().update(table, 1, indexedPayloadValues(1, 10, 103)));
+    StoredTableRowView fetched = emptyValues();
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, fetched));
+    assertEquals(103, fetched.valueAt(2));
+    assertEquals(StatusCode.OK, session.rollbackToSavepoint(savepoint));
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, fetched));
+    assertEquals(102, fetched.valueAt(2));
+    assertEquals(StatusCode.OK,
+        session.descriptorRows().update(table, 1, indexedPayloadValues(1, 10, 104)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    session = session(database);
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.CONFLICT, session.descriptorRows().fetch(table, 2, fetched));
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 1, fetched));
+    assertEquals(104, fetched.valueAt(2));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void overflowPrimaryValueSurvivesReplacementAndReopen(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowTextDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    String large = "😀".repeat(3_400);
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.descriptorRows().insert(
+        table, overflowTextValues(7, large), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    StoredTableRowView fetched = emptyValues();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 7, fetched));
+    assertEquals(13_600, fetched.textByteLengthAt(1));
+    assertEquals((byte) 0xf0, fetched.getByte(fetched.textByteOffsetAt(1)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK,
+        session.descriptorRows().update(table, 7, overflowTextValues(7, "small")));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    session = session(database);
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.descriptorRows().fetch(table, 7, fetched));
+    assertEquals(5, fetched.textByteLengthAt(1));
+    assertEquals((byte) 's', fetched.getByte(fetched.textByteOffsetAt(1)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void oneLogicalMutationChangesMoreThanSixtyThreeOverflowPages(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowTextDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    String large = "😀".repeat(3_400);
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    for (int row = 1; row <= 70; row++) {
+      assertEquals(StatusCode.OK, session.descriptorRows().insert(
+          table, overflowTextValues(row, large), new RelationalRowIdentityResult()));
+    }
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    session = session(database);
+    StoredTableRowView fetched = emptyValues();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, session.descriptorRows().beginScan(table, cursor));
+    int[] overflowPages = new int[70];
+    for (int row = 1; row <= 70; row++) {
+      assertEquals(StatusCode.OK, session.descriptorRows().nextScan(
+          cursor, fetched, new RelationalRowIdentityResult()));
+      assertEquals(row, fetched.valueAt(0));
+      assertEquals(13_600, fetched.textByteLengthAt(1));
+      int pageId = cursor.tupleRow().overflowPageId();
+      assertTrue(pageId > 0);
+      assertFalse(contains(overflowPages, pageId));
+      overflowPages[row - 1] = pageId;
+    }
+    assertEquals(StatusCode.CONFLICT, session.descriptorRows().nextScan(
+        cursor, fetched, new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, session.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void overflowMutationRejectsInsufficientStagedPageBudgetBeforePublication(
+      @TempDir Path root) {
+    var constrained = databaseRequest(8)
+        .capacity(8, Integer.MAX_VALUE, 60, 64_000_000)
+        .maximumDelivery(Integer.MAX_VALUE, 60, 64_000_000);
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(constrained, root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowTextDescriptor(), table, new StatusDetail(128)));
+    RelationalSession session = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    String large = "😀".repeat(3_400);
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    for (int row = 1; row <= 70; row++) {
+      assertEquals(StatusCode.OK, session.descriptorRows().insert(
+          table, overflowTextValues(row, large), new RelationalRowIdentityResult()));
+    }
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    StoredTableRowView fetched = emptyValues();
+    assertEquals(StatusCode.CONFLICT, session.descriptorRows().fetch(table, 1, fetched));
+    assertEquals(StatusCode.CONFLICT, session.descriptorRows().fetch(table, 70, fetched));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void retiredOverflowWaitsForOldLeafThenReusesAfterCheckpoint(@TempDir Path root)
+      throws java.io.IOException {
+    Path liveRoot = Files.createDirectory(root.resolve("live"));
+    Path crashRoot = Files.createDirectory(root.resolve("crash"));
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(databaseRequest(8), liveRoot, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SchemaPin table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().create(
+        overflowTextDescriptor(), table, new StatusDetail(128)));
+    long tableId = table.tableId();
+    RelationalSession writer = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    String large = "😀".repeat(3_400);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+        table, overflowTextValues(7, large), new RelationalRowIdentityResult()));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    long[] original = overflowReference(database, tableId, 7);
+
+    RelationalSession reader = session(database);
+    SchemaPin heldPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, heldPin, new StatusDetail(128)));
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor held = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, reader.descriptorRows().beginScan(heldPin, held));
+
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, writer.descriptorRows().update(
+        table, 7, overflowTextValues(7, "small")));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.RETRY, database.checkpoint(new CheckpointResult()));
+    for (int row = 8; row <= 9; row++) {
+      assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+      assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+          table, overflowTextValues(row, large), new RelationalRowIdentityResult()));
+      assertEquals(StatusCode.OK, writer.commit(outcome));
+      assertFalse(overflowReference(database, tableId, row)[0] == original[0]);
+    }
+    StoredTableRowView old = emptyValues();
+    assertEquals(StatusCode.OK, reader.descriptorRows().nextScan(
+        held, old, new RelationalRowIdentityResult()));
+    assertEquals(7, old.valueAt(0));
+    assertEquals(13_600, old.textByteLengthAt(1));
+    assertEquals(original[0], held.tupleRow().overflowPageId());
+    assertEquals(StatusCode.OK, reader.descriptorRows().closeScan(held));
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
+
+    for (int row = 10; row <= 11; row++) {
+      assertEquals(StatusCode.OK, writer.begin(IsolationLevel.SERIALIZABLE));
+      assertEquals(StatusCode.OK, writer.descriptorRows().insert(
+          table, overflowTextValues(row, large), new RelationalRowIdentityResult()));
+      assertEquals(StatusCode.OK, writer.commit(outcome));
+    }
+    long[] reused = overflowReference(database, tableId, 10);
+    assertEquals(original[0], reused[0]);
+    assertTrue(reused[1] > original[1]);
+    try (var paths = Files.walk(liveRoot)) {
+      for (Path source : paths.toList()) {
+        Path target = crashRoot.resolve(liveRoot.relativize(source));
+        if (Files.isDirectory(source)) Files.createDirectories(target);
+        else Files.copy(source, target);
+      }
+    }
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.openExisting(databaseRequest(8), crashRoot, DATABASE, GENERATION, 8,
+            EmbeddedLockDiagnosticsConfig.disabled(), opened));
+    database = opened.database();
+    table = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, table, new StatusDetail(128)));
+    writer = session(database);
+    StoredTableRowView fetched = emptyValues();
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.descriptorRows().fetch(table, 7, fetched));
+    assertEquals(5, fetched.textByteLengthAt(1));
+    for (int row = 8; row <= 11; row++) {
+      assertEquals(StatusCode.OK, writer.descriptorRows().fetch(table, row, fetched));
+      assertEquals(13_600, fetched.textByteLengthAt(1));
+    }
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, table.release());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static long[] overflowReference(
+      RelationalDatabase database, long tableId, long key) {
+    SchemaPin scanPin = new SchemaPin();
+    assertEquals(StatusCode.OK, database.services().descriptors().open(
+        tableId, scanPin, new StatusDetail(128)));
+    RelationalSession scanner = session(database);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, scanner.begin(IsolationLevel.REPEATABLE_READ));
+    RelationalDescriptorScanCursor cursor = new RelationalDescriptorScanCursor();
+    assertEquals(StatusCode.OK, scanner.descriptorRows().beginScan(scanPin, cursor));
+    StoredTableRowView row = emptyValues();
+    StatusCode status;
+    long[] reference = new long[2];
+    while ((status = scanner.descriptorRows().nextScan(
+        cursor, row, new RelationalRowIdentityResult())) == StatusCode.OK) {
+      if (row.valueAt(0) != key) continue;
+      reference[0] = cursor.tupleRow().overflowPageId();
+      reference[1] = cursor.tupleRow().overflowGeneration();
+      break;
+    }
+    assertTrue(reference[0] > 0);
+    assertEquals(StatusCode.OK, scanner.descriptorRows().closeScan(cursor));
+    assertEquals(StatusCode.OK, scanner.commit(outcome));
+    return reference;
+  }
+
   private static boolean contains(int[] values, int candidate) {
     for (int value : values) if (value == candidate) return true;
     return false;
@@ -875,6 +1772,32 @@ final class RelationalDescriptorRowPathTest {
     return table.value();
   }
 
+  private static TableDescriptor overflowTextDescriptor() {
+    ColumnDescriptorSet.Result columns = new ColumnDescriptorSet.Result();
+    assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
+        new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.varchar(4_000)},
+        new CharSequence[] {"id", "value"}, new boolean[] {false, false}, columns));
+    KeyDescriptor.Result primary = new KeyDescriptor.Result();
+    assertEquals(StatusCode.OK, KeyDescriptor.create(
+        1, KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0},
+        0, primary, null));
+    TableDescriptor.Result table = new TableDescriptor.Result();
+    assertEquals(StatusCode.OK, TableDescriptor.create(
+        1, 1, 1, columns.value(), primary.value(), null, null, table, null));
+    return table.value();
+  }
+
+  private static SqlMutationValues overflowTextValues(long key, String text) {
+    SqlMutationValues values = new SqlMutationValues();
+    TableDescriptor table = overflowTextDescriptor();
+    assertEquals(StatusCode.OK, values.reserve(table, text.length() * 2));
+    assertEquals(StatusCode.OK, values.begin(table, null));
+    assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, key));
+    assertEquals(StatusCode.OK,
+        values.setText(1, SqlTypeDescriptor.varchar(4_000), text));
+    return values;
+  }
+
   private static TableDescriptor textPrimaryDescriptor() {
     ColumnDescriptorSet.Result columns = new ColumnDescriptorSet.Result();
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
@@ -913,6 +1836,60 @@ final class RelationalDescriptorRowPathTest {
         1, 1, 1, columns.value(), primary.value(),
         new KeyDescriptor[] {secondary.value()}, null, table, null));
     return table.value();
+  }
+
+  private static TableDescriptor hiddenPayloadDescriptor() {
+    ColumnDescriptorSet.Result columns = new ColumnDescriptorSet.Result();
+    assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
+        new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BIGINT},
+        new CharSequence[] {"value", "indexed_value"},
+        new boolean[] {false, false}, columns));
+    KeyDescriptor.Result secondary = new KeyDescriptor.Result();
+    assertEquals(StatusCode.OK, KeyDescriptor.createNamed(
+        1, KeyDescriptor.KIND_SECONDARY, false, columns.value(), new int[] {1},
+        0, "by_indexed_value", secondary, null));
+    TableDescriptor.Result table = new TableDescriptor.Result();
+    assertEquals(StatusCode.OK, TableDescriptor.create(
+        1, 1, 1, columns.value(), null,
+        new KeyDescriptor[] {secondary.value()}, null, table, null));
+    return table.value();
+  }
+
+  private static TableDescriptor overflowDescriptor() {
+    ColumnDescriptorSet.Result columns = new ColumnDescriptorSet.Result();
+    assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
+        new int[] {SqlTypeDescriptor.varchar(765), SqlTypeDescriptor.varchar(3000)},
+        new CharSequence[] {"id", "payload"}, new boolean[] {false, false}, columns));
+    KeyDescriptor.Result primary = new KeyDescriptor.Result();
+    assertEquals(StatusCode.OK, KeyDescriptor.create(
+        1, KeyDescriptor.KIND_PRIMARY, true, columns.value(), new int[] {0},
+        0, primary, null));
+    TableDescriptor.Result table = new TableDescriptor.Result();
+    assertEquals(StatusCode.OK, TableDescriptor.create(
+        1, 1, 1, columns.value(), primary.value(), null, null, table, null));
+    return table.value();
+  }
+
+  private static SqlMutationValues overflowValues(
+      TableDescriptor table, String key, String payload) {
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(table, 16_000));
+    assertEquals(StatusCode.OK, values.begin(table, null));
+    assertEquals(StatusCode.OK,
+        values.setText(0, SqlTypeDescriptor.varchar(765), key));
+    assertEquals(StatusCode.OK,
+        values.setText(1, SqlTypeDescriptor.varchar(3000), payload));
+    return values;
+  }
+
+  private static SqlMutationValues hiddenPayloadValues(long value, long indexedValue) {
+    TableDescriptor table = hiddenPayloadDescriptor();
+    SqlMutationValues values = new SqlMutationValues();
+    assertEquals(StatusCode.OK, values.reserve(table, 0));
+    assertEquals(StatusCode.OK, values.begin(table, null));
+    assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, value));
+    assertEquals(StatusCode.OK, values.setFixed(1, SqlTypeDescriptor.BIGINT, indexedValue));
+    return values;
   }
 
   private static SqlMutationValues indexedPayloadValues(

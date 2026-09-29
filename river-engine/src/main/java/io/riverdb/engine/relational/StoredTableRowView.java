@@ -4,33 +4,84 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
+import io.riverdb.engine.table.IndexedTransactionSession;
+import io.riverdb.engine.table.IndexedTupleScanCursor;
+import io.riverdb.engine.table.IndexedTupleScanResult;
 import io.riverdb.format.FormatBytes;
 import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
 /**
- * Reusable read-only descriptor row. Its bytes belong to the retained heap result of this view
- * or its owning scan cursor and remain valid until the role advances, resets or closes.
+ * Reusable read-only descriptor row. Pinned tuple bytes remain valid until this view resets
+ * or its owning scan cursor advances or closes.
  */
 public final class StoredTableRowView
     implements SqlValueAccess, io.riverdb.base.text.BoundedByteSource {
   private final HeapRowResult fetched = new HeapRowResult();
   private TableDescriptor table;
   private ByteBuffer bytes;
+  private ByteBuffer ownedBytes;
+  private IndexedTupleScanCursor pointCursor;
+  private IndexedTupleScanResult pointRow;
+  private IndexedTransactionSession pointSession;
+  private RelationalDescriptorPointViews pointViews;
   private StoredTableColumnSelection selection;
   private int start;
   private int length;
 
   HeapRowResult fetched() { return fetched; }
 
-  void borrowFrom(StoredTableRowView owner) {
-    reset();
+  IndexedTupleScanCursor pointCursor() {
+    if (pointCursor == null) pointCursor = new IndexedTupleScanCursor();
+    return pointCursor;
+  }
+
+  IndexedTupleScanResult pointRow() {
+    if (pointRow == null) pointRow = new IndexedTupleScanResult();
+    pointRow.reset();
+    return pointRow;
+  }
+
+  ByteBuffer pointPending(int required) {
+    if (ownedBytes == null || ownedBytes.capacity() < required) {
+      ownedBytes = ByteBuffer.allocate(required);
+    }
+    return ownedBytes;
+  }
+
+  StatusCode holdPoint(
+      IndexedTransactionSession session, RelationalDescriptorPointViews views) {
+    StatusCode status = views.add(this);
+    if (status.isOk()) {
+      pointSession = session;
+      pointViews = views;
+    }
+    return status;
+  }
+
+  StatusCode releasePoint() {
+    if (pointSession == null) return StatusCode.OK;
+    StatusCode status = pointSession.closeTupleScan(pointCursor);
+    if (status.isOk()) {
+      pointSession = null;
+      pointViews.remove(this);
+      pointViews = null;
+      table = null;
+      bytes = null;
+    }
+    return status;
+  }
+
+  StatusCode borrowFrom(StoredTableRowView owner) {
+    StatusCode status = reset();
+    if (!status.isOk()) return status;
     table = owner.table;
     bytes = owner.bytes;
     selection = owner.selection;
     start = owner.start;
     length = owner.length;
+    return StatusCode.OK;
   }
 
   StatusCode bindFetched(
@@ -51,7 +102,21 @@ public final class StoredTableRowView
   StatusCode bind(
       TableDescriptor descriptor, ByteBuffer source, int offset, int rowLength,
       StoredTableRowIntegerFilter filter, StoredTableColumnSelection selected) {
-    if (descriptor == null || source == null || !source.isReadOnly()
+    return bindChecked(descriptor, source, offset, rowLength, filter, selected, true);
+  }
+
+  /** Borrows bytes from a cursor-pinned immutable leaf generation. */
+  StatusCode bindPinned(
+      TableDescriptor descriptor, ByteBuffer source, int offset, int rowLength,
+      StoredTableRowIntegerFilter filter, StoredTableColumnSelection selected) {
+    return bindChecked(descriptor, source, offset, rowLength, filter, selected, false);
+  }
+
+  private StatusCode bindChecked(
+      TableDescriptor descriptor, ByteBuffer source, int offset, int rowLength,
+      StoredTableRowIntegerFilter filter, StoredTableColumnSelection selected,
+      boolean requireReadOnly) {
+    if (descriptor == null || source == null || requireReadOnly && !source.isReadOnly()
         || offset < 0 || rowLength < 0
         || selected != null && !selected.matches(descriptor.columnCount())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -77,13 +142,16 @@ public final class StoredTableRowView
     return StatusCode.OK;
   }
 
-  public void reset() {
+  public StatusCode reset() {
+    StatusCode status = releasePoint();
+    if (!status.isOk()) return status;
     table = null;
     bytes = null;
     selection = null;
     start = 0;
     length = 0;
     fetched.reset();
+    return StatusCode.OK;
   }
 
   public int count() { return table == null ? 0 : table.columnCount(); }

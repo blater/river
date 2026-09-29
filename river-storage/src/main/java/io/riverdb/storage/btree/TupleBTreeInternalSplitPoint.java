@@ -1,5 +1,6 @@
 package io.riverdb.storage.btree;
 
+import io.riverdb.format.btree.TupleBTreePageCodec;
 import java.nio.ByteBuffer;
 
 /** Chooses a byte-balanced promoted separator with fitting internal outputs. */
@@ -25,9 +26,9 @@ final class TupleBTreeInternalSplitPoint {
       int promotedBytes = mergedLength(
           source, start, keyLength, insertion, promoted, workspace);
       int leftBytes = TupleBTreeSplitOccupancy.bytes(
-          promoted, leftKeyBytes, promotedBytes);
+          TupleBTreePageCodec.TYPE_INTERNAL, promoted, leftKeyBytes, promotedBytes);
       int rightBytes = TupleBTreeSplitOccupancy.bytes(
-          total - promoted - 1,
+          TupleBTreePageCodec.TYPE_INTERNAL, total - promoted - 1,
           totalKeyBytes - leftKeyBytes - promotedBytes, oldFenceBytes);
       int imbalance = TupleBTreeSplitOccupancy.imbalance(leftBytes, rightBytes);
       if (TupleBTreeSplitOccupancy.fits(leftBytes)

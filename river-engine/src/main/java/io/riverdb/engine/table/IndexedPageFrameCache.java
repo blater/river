@@ -58,6 +58,14 @@ final class IndexedPageFrameCache {
 
   void setGeneration(WalGeneration generation) { io.setGeneration(generation); }
 
+  boolean isPrepared(int pageId) { return prepared.contains(pageId); }
+
+  boolean hasPinnedPreRetirementTupleReference(
+      long ownerKeyId, int overflowPageId, long retirementSequence) {
+    return IndexedPageFramePinVisibility.hasPreRetirementTupleReference(
+        currentFrames, ownerKeyId, overflowPageId, retirementSequence);
+  }
+
   StatusCode detach() {
     if (prepared.active()) return StatusCode.CONFLICT;
     for (IndexedPageFrame frame : currentFrames) {
@@ -128,6 +136,7 @@ final class IndexedPageFrameCache {
         frame.access = ++accessClock;
         result.set(
             slot, pageId, frame.validFromCommitSequence, frame.pageGeneration,
+            frame.durableGeneration,
             frame.payload, frame.payloadKind, frame.ownerKeyId);
         return setStatus(StatusCode.OK);
       }
@@ -204,6 +213,17 @@ final class IndexedPageFrameCache {
       int pageId, boolean writable, long ownerKeyId, IndexedOperationPage result) {
     if (ownerKeyId <= 0 || !identityMatches(
         pageId, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId)) {
+      lastStatus = StatusCode.CORRUPTION;
+      return lastStatus;
+    }
+    return operationPins.pin(
+        pageId, writable, state.changedPageCapacity(), result);
+  }
+
+  StatusCode pinTupleOverflowOperationPage(
+      int pageId, boolean writable, long ownerKeyId, IndexedOperationPage result) {
+    if (ownerKeyId <= 0 || !identityMatches(
+        pageId, PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW, ownerKeyId)) {
       lastStatus = StatusCode.CORRUPTION;
       return lastStatus;
     }
@@ -425,6 +445,10 @@ final class IndexedPageFrameCache {
     int existingSlot = stagingMap.find(pageId);
     if (existingSlot >= 0) {
       IndexedPageFrame existing = stagingFrames[existingSlot];
+      if (recycled && existing.payloadKind == PageCodec.PAYLOAD_KIND_FREE
+          && existing.ownerKeyId == PageCodec.SCALAR_OWNER_KEY_ID) {
+        return reidentifyRecycledStaging(pageId, payloadKind, ownerKeyId, existing);
+      }
       if (existing.payloadKind != payloadKind || existing.ownerKeyId != ownerKeyId) {
         lastStatus = StatusCode.CORRUPTION;
         return null;
@@ -443,20 +467,27 @@ final class IndexedPageFrameCache {
       rollbackAdmission(pageId, alreadyStaged);
       return null;
     }
-    return prepareNewStaging(
-        pageId, payloadKind, ownerKeyId, staging, alreadyStaged);
+    if (alreadyStaged) {
+      ByteBuffer loaded = loadNewStaging(pageId, staging);
+      return loaded == null || !recycled ? loaded
+          : reidentifyRecycledStaging(pageId, payloadKind, ownerKeyId, staging);
+    }
+    return prepareNewStaging(pageId, payloadKind, ownerKeyId, staging);
   }
 
   ByteBuffer stageFreeTuple(int pageId, long ownerKeyId, int maximumChangedPages) {
-    if (!identityMatches(pageId, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId)) {
+    int kind = identityMatches(pageId, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId)
+        ? PageCodec.PAYLOAD_KIND_TUPLE_BTREE
+        : identityMatches(pageId, PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW, ownerKeyId)
+            ? PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW : 0;
+    if (kind == 0) {
       lastStatus = StatusCode.CORRUPTION;
       return null;
     }
     ByteBuffer payload = stageExisting(pageId, maximumChangedPages);
     IndexedPageFrame staging = stagingFrame(pageId);
     if (payload == null || staging == null) return null;
-    staging.rememberIdentity(
-        PageCodec.PAYLOAD_KIND_TUPLE_BTREE, ownerKeyId);
+    staging.rememberIdentity(kind, ownerKeyId);
     staging.invalidatePageValidation();
     for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
       staging.page.put(index, (byte) 0);
@@ -513,16 +544,22 @@ final class IndexedPageFrameCache {
       int pageId,
       int payloadKind,
       long ownerKeyId,
-    IndexedPageFrame staging,
-      boolean alreadyStaged) {
-    if (alreadyStaged) return loadNewStaging(pageId, staging);
-    IndexedPageFrame current = state.present(pageId) ? currentFrame(pageId, true) : null;
+      IndexedPageFrame staging) {
+    IndexedPageFrame current = state.present(pageId) ? preparedFrame(pageId) : null;
+    if (current == null && state.present(pageId)) current = currentFrame(pageId, true);
     if (state.present(pageId) && current == null) {
       releaseStagingFrame(pageId);
       rollbackAdmission(pageId, false);
       markCapacityPressure(lastStatus);
       return null;
     }
+    if (current != null && current.durableGeneration == Long.MAX_VALUE) {
+      releaseStagingFrame(pageId);
+      rollbackAdmission(pageId, false);
+      lastStatus = StatusCode.FENCED;
+      return null;
+    }
+    staging.durableGeneration = current == null ? 1 : current.durableGeneration + 1;
     staging.rememberIdentity(
         current == null ? PageCodec.PAYLOAD_KIND_SCALAR_BTREE : current.payloadKind,
         current == null ? PageCodec.SCALAR_OWNER_KEY_ID : current.ownerKeyId);
@@ -558,8 +595,19 @@ final class IndexedPageFrameCache {
 
   private boolean matchingStagedIdentity(
       int pageId, int payloadKind, long ownerKeyId, boolean alreadyStaged) {
-    return !alreadyStaged || state.payloadKind(pageId) == payloadKind
-        && state.ownerKeyId(pageId) == ownerKeyId;
+    if (!alreadyStaged) return true;
+    return state.payloadKind(pageId) == payloadKind
+        && state.ownerKeyId(pageId) == ownerKeyId
+        || state.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_FREE
+            && state.ownerKeyId(pageId) == PageCodec.SCALAR_OWNER_KEY_ID;
+  }
+
+  private ByteBuffer reidentifyRecycledStaging(
+      int pageId, int payloadKind, long ownerKeyId, IndexedPageFrame staging) {
+    StatusCode status = staging.recycleStagedFreePage(payloadKind, ownerKeyId);
+    if (status.isOk()) status = state.setIdentity(pageId, payloadKind, ownerKeyId);
+    lastStatus = status;
+    return status.isOk() ? staging.payload : null;
   }
 
   private void rollbackAdmission(int pageId, boolean alreadyStaged) {

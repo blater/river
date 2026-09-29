@@ -3,17 +3,16 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
-import io.riverdb.engine.table.IndexedScanCursor;
-import io.riverdb.engine.table.IndexedScanResult;
 import io.riverdb.engine.table.IndexedTupleScanCursor;
 import io.riverdb.engine.table.IndexedTupleScanResult;
+import io.riverdb.storage.heap.HeapPage;
+import java.nio.ByteBuffer;
 
 /** Caller-owned scan state for one pinned catalog-v2 table generation. */
 public final class RelationalDescriptorScanCursor {
-  private final IndexedScanCursor indexed = new IndexedScanCursor();
-  private final IndexedScanResult row = new IndexedScanResult();
   private final IndexedTupleScanCursor tupleIndexed = new IndexedTupleScanCursor();
   private final IndexedTupleScanResult tupleRow = new IndexedTupleScanResult();
+  private final ByteBuffer pendingRow = ByteBuffer.allocate(HeapPage.MAXIMUM_ROW_BYTES);
   private final RelationalDescriptorIndexCursor tupleBounds =
       new RelationalDescriptorIndexCursor();
   private final SchemaPin schema = new SchemaPin();
@@ -25,6 +24,7 @@ public final class RelationalDescriptorScanCursor {
   private boolean tuplePhysical;
   private boolean emptyPhysical;
   private long logicalRowId;
+  private StoredTableRowView publishedView;
 
   public boolean isActive() {
     return owner != null || physicalOpen || schema.isActive();
@@ -36,34 +36,33 @@ public final class RelationalDescriptorScanCursor {
     rowLayoutId = 0;
     generation = 0;
     logicalRowId = 0;
-    row.reset();
     tupleRow.reset();
     tupleBounds.clear();
-    return indexed.reset();
-  }
-
-  IndexedScanCursor indexed() {
-    return indexed;
-  }
-
-  IndexedScanResult row() {
-    return row;
+    return StatusCode.OK;
   }
 
   IndexedTupleScanCursor tupleIndexed() { return tupleIndexed; }
   IndexedTupleScanResult tupleRow() { return tupleRow; }
+  ByteBuffer pendingRow() { return pendingRow; }
   RelationalDescriptorIndexCursor tupleBounds() { return tupleBounds; }
   StatusCode prepareSelection(
       StoredTableColumnSelection selection, StoredTableRowIntegerFilter filter) {
     if (selection != null && tuplePhysical) selection.selectKey(tupleBounds.key());
     StatusCode status = selection == null ? StatusCode.OK
         : selection.prepareProjection(schema.descriptor(), filter);
-    if (status.isOk()) row.row().retentionProjection(
-        selection == null ? null : selection.projection());
     return status;
   }
   long logicalRowId() { return logicalRowId; }
   void logicalRowId(long value) { logicalRowId = value; }
+
+  StatusCode releaseView() {
+    if (publishedView == null) return StatusCode.OK;
+    StatusCode status = publishedView.reset();
+    if (status.isOk()) publishedView = null;
+    return status;
+  }
+
+  void publishView(StoredTableRowView view) { publishedView = view; }
 
   StatusCode claim(RelationalDescriptorTableAccess access, SchemaPin source) {
     if (owner != null || !physicalOpen || source == null || !source.isActive()) {
@@ -77,12 +76,6 @@ public final class RelationalDescriptorScanCursor {
     rowLayoutId = table.rowLayoutId();
     generation = table.catalogGeneration();
     return StatusCode.OK;
-  }
-
-  void markPhysicalOpen() {
-    physicalOpen = true;
-    tuplePhysical = false;
-    emptyPhysical = false;
   }
 
   void markTuplePhysicalOpen() {

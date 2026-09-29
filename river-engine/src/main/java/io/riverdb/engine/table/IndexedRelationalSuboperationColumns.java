@@ -94,7 +94,7 @@ final class IndexedRelationalSuboperationColumns {
   long accountedBytesForCapacity(int required) {
     long longBytes = longs[OWNER].accountedBytesForCapacity(required);
     long intBytes = ints[DESCRIPTOR].accountedBytesForCapacity(required);
-    return longBytes < 0 || intBytes < 0 ? -1 : 8L * longBytes + 12L * intBytes + 64L;
+    return longBytes < 0 || intBytes < 0 ? -1 : 8L * longBytes + 13L * intBytes + 64L;
   }
 
   void release() {
