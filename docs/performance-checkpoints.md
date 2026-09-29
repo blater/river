@@ -22,6 +22,14 @@ reclamation and greater-than-63-page mutation tests now pass, as recorded in
 [the overflow evidence](delivery/evidence/2026-09-29-tic-erebor-overflow-reclamation.md).
 No new baseline row is designated.
 
+The later non-key update lock correction at `64c299ac` passed a serial clean
+full `check` and one short River-specific New Order/Payment 50/50 diagnostic.
+Its [write-lock evidence](delivery/evidence/2026-09-29-tic-erebor-clustered-write-lock.md)
+records 5,332 commits in ten measured seconds with zero retries, failed
+outcomes or cleanup residue. The host was in low power mode, so this is a
+correctness workload result and does not establish the cost of the added
+tuple-key lock or a new performance baseline.
+
 ## Baseline stats
 
 Append a row when a measured run is designated as a new performance baseline.

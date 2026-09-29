@@ -29,7 +29,23 @@ Focused results after the fix:
 - The serial clean `check` passed the bench module. It reached 609 engine
   tests with one point-cycle diagnostic expectation failure, then stopped.
   The affected SQL concurrency class passed after that expectation was
-  corrected. A successful clean full checkpoint is still required.
+  corrected. A second serial clean full `check` passed in 3m 58s:
+  156 actionable tasks, 99 executed, 55 from cache and 2 up to date.
+
+One River-specific local write-path diagnostic ran at 2026-09-29 17:51:43 UTC
+from source `64c299ac`, GraalVM 25.0.4 JVM on macOS/arm64. The exact command and
+published artifact are retained in
+`/private/tmp/river-erebor-write-lock-tps/run-metadata.properties` and
+`/private/tmp/river-erebor-write-lock-tps/tpcc-acceptance.properties`.
+The command selected `tiny`, New Order/Payment 50/50, serializable isolation,
+no-wait stress scheduling, four terminals, one warehouse, seed 42, two seconds
+warmup and ten seconds measured. It reported `status=OK`, 5,332 committed
+transactions (2,739 New Order and 2,593 Payment), 533.200 commits/s, zero
+whole-transaction retries, zero failed outcomes, passed pre/post invariants,
+`deadlock_reconciliation=OK`, `performance_capture=OK` and zero active
+transactions/locks after owned cleanup. The preflight deadlock probe recorded
+its one expected victim; the measured capture recorded zero deadlocks.
 
 The host was in low power mode during this work. These are correctness and
-lock-path results, not a throughput claim.
+lock-path results. This one short TPS sample is not compared with older runs,
+is not a new baseline and does not isolate the extra lock's throughput cost.
