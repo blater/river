@@ -14,6 +14,39 @@ final class SqlGeneralConcurrencyTest {
   private static final String S = "SERIALIZABLE";
 
   @Test
+  void readCommittedLockingReadsRequireConsistentRowOrder(@TempDir Path root) throws Exception {
+    try (var f = new SqlConcurrencyFixture(root.resolve("opposing"))) {
+      f.begin(0, "READ COMMITTED");
+      f.begin(1, "READ COMMITTED");
+      assertEquals(100, f.scalar(0, "SELECT value FROM rows WHERE id=1 FOR UPDATE"));
+      assertEquals(200, f.scalar(1, "SELECT value FROM rows WHERE id=2 FOR UPDATE"));
+      var first = f.queue(0, "SELECT value FROM rows WHERE id=2 FOR UPDATE", 1);
+      f.deadlock(1, "SELECT value FROM rows WHERE id=1 FOR UPDATE");
+      f.exec(1, "ROLLBACK");
+      f.completed(first);
+      f.exec(0, "COMMIT");
+      f.cycle(1,
+          new Edge(0, 1, "KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 4294967297L, 2),
+          new Edge(1, 0, "KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 4294967297L, 1));
+    }
+    try (var f = new SqlConcurrencyFixture(root.resolve("ordered"))) {
+      f.begin(0, "READ COMMITTED");
+      f.begin(1, "READ COMMITTED");
+      assertEquals(100, f.scalar(0, "SELECT value FROM rows WHERE id=1 FOR UPDATE"));
+      var waiting = f.queue(1, "SELECT value FROM rows WHERE id=1 FOR UPDATE", 1);
+      assertEquals(200, f.scalar(0, "SELECT value FROM rows WHERE id=2 FOR UPDATE"));
+      f.exec(0, "UPDATE rows SET value=value+1 WHERE id IN (1,2)");
+      f.exec(0, "COMMIT");
+      f.completed(waiting);
+      assertEquals(201, f.scalar(1, "SELECT value FROM rows WHERE id=2 FOR UPDATE"));
+      f.exec(1, "UPDATE rows SET value=value+1 WHERE id IN (1,2)");
+      f.exec(1, "COMMIT");
+      assertEquals(List.of(102L, 202L, 300L), f.scan(0, "SELECT value FROM rows ORDER BY id"));
+      f.noVictim();
+    }
+  }
+
+  @Test
   void pointCyclesAndAdjacentControlsAcrossIsolationPairs(@TempDir Path root) throws Exception {
     String[][] pairs = {{RR, RR}, {RR, S}, {S, S}};
     for (int pair = 0; pair < pairs.length; pair++) {
