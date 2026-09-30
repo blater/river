@@ -2,6 +2,8 @@ package io.riverdb.engine.schema;
 
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.tuple.TupleShape;
+import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.error.StatusCode;
 
 /** Immutable ordered key parts and their storage or constraint semantics. */
 public final class KeyDescriptor {
@@ -10,6 +12,7 @@ public final class KeyDescriptor {
   public static final int KIND_UNIQUE = 2;
   public static final int KIND_FOREIGN = 3;
   public static final int KIND_SECONDARY = 4;
+  public static final int KIND_INTERNAL_IDENTITY = 5;
   public static final int PRIMARY = KIND_PRIMARY;
   public static final int UNIQUE = KIND_UNIQUE;
   public static final int FOREIGN = KIND_FOREIGN;
@@ -106,6 +109,21 @@ public final class KeyDescriptor {
     return KeyDescriptorFactory.create(
         0, kind, unique, columns, ordinals, referencedKeyId,
         null, result, detail, false);
+  }
+
+  static StatusCode internalIdentity(
+      long keyId, ColumnDescriptorSet columns, Result result) {
+    TupleShape.Result shape = new TupleShape.Result();
+    StatusCode status = TupleShape.create(new int[] {SqlTypeDescriptor.BIGINT}, shape);
+    if (!status.isOk()) return status;
+    try {
+      result.set(new KeyDescriptor(
+          keyId, columns, KIND_INTERNAL_IDENTITY, true, shape.value(),
+          new int[] {-1}, 0, null));
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    return StatusCode.OK;
   }
 
   /** Creates a privately proposed key whose durable identity is bound at catalog reservation. */

@@ -55,7 +55,7 @@ final class TupleBTreePageInitialize {
     FormatBytes.putInt(target, start + 8, TupleBTreePageCodec.VERSION);
     FormatBytes.putInt(target, start + 12, type);
     FormatBytes.putInt(target, start + 16, 0);
-    FormatBytes.putInt(target, start + 20, TupleBTreePageCodec.SLOT_BYTES);
+    FormatBytes.putInt(target, start + 20, TupleBTreePageCodec.slotBytes(type));
     FormatBytes.putInt(target, start + 24, pointer);
     FormatBytes.putInt(target, start + 28, TupleBTreePageCodec.HEADER_BYTES);
     FormatBytes.putInt(target, start + 32, freeEnd);

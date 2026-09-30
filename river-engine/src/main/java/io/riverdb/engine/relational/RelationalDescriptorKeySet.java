@@ -10,10 +10,12 @@ final class RelationalDescriptorKeySet {
 
   static int count(TableDescriptor table) {
     return table == null ? 0
-        : (table.primaryKey() == null ? 0 : 1) + table.secondaryKeyCount();
+        : 1 + (table.primaryKey() == null ? 0 : 1) + table.secondaryKeyCount();
   }
 
   static KeyDescriptor at(TableDescriptor table, int index) {
+    if (index == 0) return table.identityKey();
+    index--;
     if (table.primaryKey() != null) {
       if (index == 0) return table.primaryKey();
       index--;

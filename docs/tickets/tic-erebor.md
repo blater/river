@@ -1,11 +1,18 @@
 ---
 id: tic-erebor
-status: open
+status: closed
 type: story
 priority: 1
 assignee: blater
 parent: tic-isildur
 delivery: code
+base-commit: 2ada6350ae420944ce51072e3223164c9f697091
+branch: feature/tic-erebor-clustered-row-store
+delivered-commit: fdfda8316dbc821b00fcf2de6f4244c331bbc9c8
+evidence:
+    - docs/delivery/evidence/2026-09-29-tic-erebor-promotion.md
+    - docs/delivery/evidence/2026-09-29-tic-erebor-followup-review.md
+    - docs/delivery/evidence/2026-09-29-tic-erebor-three-retry-mix.md
 tags:
     - performance
     - storage
@@ -34,6 +41,15 @@ This is a direction selected for implementation investigation, not a measured
 speedup or an approved durable format. Complete the design checkpoint below
 before committing to the replacement. Radical internal API and format changes
 are allowed; one coherent read/write/recovery implementation must result.
+
+The proposed [layout ADR](../adr/0015-clustered-relational-row-store.md) received
+an [independent design review](../delivery/evidence/2026-09-29-tic-erebor-design-review.md)
+on 2026-09-29. The ticket and ADR now incorporate corrections for R1–R4.
+The focused follow-up accepted those corrections for implementation. The ADR owns layout and ordering decisions;
+this ticket owns delivery scope, proof obligations and measured acceptance.
+Review fixes within this scope are authorized and need no additional user approval.
+The fresh [control workload evidence](../delivery/evidence/2026-09-29-tic-erebor-control.md)
+was captured before any production change.
 
 ## Scope lock and pickup
 
@@ -103,9 +119,11 @@ cost reduction, not a prediction or valid paired performance claim.
 | `IndexedTupleScanBinding`, `IndexedTupleProbePageProvider`, `TupleBTreeCursor` | Root and page selection already use a visible commit sequence, and the cursor retains its leaf pin. Inline row payload can share that selected page and lifetime. There is no need to reopen the tree for every range candidate. |
 | `RelationalDescriptorScanAccess.next`, `RelationalDescriptorPrimaryAccess` | Scans and point reads separately resolve row IDs, fetch rows and re-encode/check their keys. Returning key and row from one coherent leaf entry can remove that second row access and ordinary committed-row recheck. |
 | `IndexedPageFrameCache.pinPageAt`, `IndexedPreparedPageBatch` | Pages already have commit visibility intervals and retained predecessor frames. Publication gives readers immutable generations. This is an existing MVCC mechanism, not a proposal to copy MariaDB's undo implementation. |
-| `RelationalDescriptorTupleDeltaPreparation`, `RelationalDescriptorTupleDeltaStaging` | An unchanged key currently generates no tuple delta for a non-key update. Clustering must add a row-value replacement even when key bytes are unchanged; unchanged secondary keys still need no payload update. |
+| `RelationalDescriptorTupleDeltaPreparation`, `RelationalDescriptorTupleDeltaStaging` | An unchanged key currently generates no tuple delta for a non-key update. Clustering must add a row-value replacement even when key bytes are unchanged. A surviving secondary entry also needs a locator replacement when the primary key moves, even if its secondary ordering key is unchanged. |
 | `IndexedHybridMutationCompiler`, `IndexedHybridScalarCompiler`, `IndexedHybridTupleCompiler` | Descriptor rows currently travel through scalar base-row staging separately from tuple changes. Replace that split for clustered rows within the existing atomic commit coordinator and WAL/replay ownership. |
 | `IndexedTupleRootSnapshot`, `IndexedTupleRootRegistryWriter` | Root records carry conservative key-membership durability dependencies. A payload update must carry its own observed dependency; a cached unchanged root cannot prove the updated row durable. |
+| `IndexedGroupCommitBatch`, `IndexedHybridCommitGroup` | Shared commit publishes an appended decision before force and retains durability ownership; direct commit forces first. Preserve both existing paths and dependency-gated result delivery. |
+| `IndexedRelationalWalPlan`, `IndexedHybridGroupPreflight` | Logical mutation chunking and cumulative staged-page admission are separate responsibilities. The format-only `IndexedPageBatchCodec` has no engine caller at this base; its 63-page limit does not constrain relational WAL. |
 | `TableKeyValidation`, `RelationalDescriptorKeySet` | Tables without a declared primary key are supported. They need the same row store under a hidden logical-ID clustering key, not the superseded relational heap path. |
 
 Page history supports a transaction's earlier view of index membership and
@@ -143,9 +161,11 @@ architecture necessary, then explicitly rescope before implementing it.
 
 ## Design checkpoint before implementation
 
-Record one concise layout/ownership decision and have it independently
-reviewed. Resolve these concrete questions in that decision; do not leave them
-to caller-specific workarounds:
+The corrected [ADR 0015](../adr/0015-clustered-relational-row-store.md) supplies
+the layout/ownership decision. Obtain a focused independent follow-up on the
+R1–R4 revisions before production implementation; the original review report
+remains the record of findings. Do not repeat the broad investigation. Apply
+these resolved requirements through the existing owners:
 
 1. **Record layout and capacity.** Define key, stable logical identity, row
    payload, visibility/durability metadata and slot widths. Keep row payload
@@ -155,23 +175,30 @@ to caller-specific workarounds:
    pages. Calculate occupancy for the actual harness rows and near-limit keys
    and rows. A row admitted by today's format can nearly fill a page before
    adding a key, so define overflow/continuation ownership without reducing
-   the admitted row size to make inline storage fit. Overflow belongs to its
-   canonical leaf record and uses generation-safe references and reclamation.
-   Resolve whether key columns are reconstructed or duplicated in the value;
-   reusing the current row encoding may duplicate them, but creates no second
-   row authority. Include secondary key plus primary locator capacity: a
+   the admitted row size to make inline storage fit. Use the ADR's deterministic
+   inline rule, derived from payload/header/slot/maximum-fence capacity. Leaf
+   fullness splits inline-eligible entries; it does not send ordinary rows to
+   overflow. Extend the byte-aware split planner to include values and fences,
+   including additional ordered siblings when a large middle entry cannot fit
+   a two-leaf partition. Growth/shrinkage crosses the same placement boundary
+   in compilation and replay. Overflow belongs to its canonical leaf record
+   and uses generation-safe references and reclamation.
+   Reuse the current row encoding, including duplicated key fields; count
+   those bytes in occupancy. Include secondary key plus primary locator capacity: a
    currently valid pair of large keys must not become inadmissible. Keep
    locator/value bytes out of comparison and internal separators unless they
    are part of the existing ordering contract.
-2. **Identity and secondary references.** Prefer secondary entries that carry
+2. **Identity and secondary references.** Secondary entries carry
    the primary locator and stable logical identity, so a secondary access
    reaches the same row authority directly. Primary-key changes must update
    those locators atomically even when secondary key values do not change.
    Audit `fetchByLogicalRowId`, backfill, FK checks, locks and current-successor
-   reads. Carry a locator in existing handles wherever sufficient. If an old
-   candidate must follow a row after its primary key moves, decide explicitly
-   how stable identity resolves the current locator. Any necessary identity
-   map is locator-only with named callers, no row/version authority, and no
+   reads. Backfill/FK operations already holding a primary row or locator use
+   it directly. Derive hidden logical-ID primary locators from the identity;
+   those tables need no locator-map tree. Carry a locator in existing handles
+   wherever sufficient. An old candidate following a declared primary-key move
+   resolves its stable identity through the versioned locator-only map after
+   current-row protection. The map has named callers, no row/version authority, and no
    ordinary primary-read access. Count its writes; do not conceal the old
    head path behind a new name. Delete/reinsert must not reuse an old identity.
    A secondary read must resolve its locator at the same selected snapshot;
@@ -184,21 +211,34 @@ to caller-specific workarounds:
    Define a durable row modification identity and dependency for payload-only
    updates, candidate/current-row protection, deletions and absence. Preserve
    [tic-e544](tic-e544.md)'s observed-dependency behavior without waiting on an
-   unrelated global snapshot sequence. Determine whether root membership
-   metadata actually needs to change for a payload-only update; any decision
-   to avoid that write must still observe the row's publication correctly.
+   unrelated global snapshot sequence. Persist the ADR's separate membership
+   sequence in the root record. Publish structural root changes caused by
+   value growth/splitting while retaining unchanged membership dependencies.
+   Observe membership for index decisions and each examined row/locator's
+   modification sequence before value-dependent rejection. Preserve entry
+   sequences across unrelated leaf rewrites and splits. Apply the rule to
+   primary, secondary and identity trees, including absence; retain catalog
+   lifecycle dependencies. Do not use the registry row's newer structural
+   MVCC sequence as the membership dependency.
 4. **History and row lifetime.** Specify pin ownership for point results and
    through cursor advance, nested joins, suspension, close, cancellation and
    failure. Borrow selected inline row bytes while their immutable page is
-   pinned. Copy only values
-   whose consumer lifetime requires it; do not promise zero copies for all
+   pinned. Copy only values whose consumer lifetime requires it; do not promise zero copies for all
    operators. Demonstrate how an old snapshot and a held cursor constrain
    frame reuse, how pressure is reported, and how progress resumes when they
-   release. Do not add an unbounded history or a new arbitrary reader limit.
+   release. Overflow retirement records the reference-removal commit, page ID
+   and generation in WAL/checkpoint allocation state. An old leaf may reach
+   overflow bytes without holding an overflow pin yet; preserve that reference
+   until snapshots and leaf pins permit reclamation, alongside WAL/checkpoint
+   coverage. Do not add an unbounded history or a new arbitrary reader limit.
 5. **Atomic mutation and recovery.** Map insert, non-key update, key update,
    delete, rollback and private index build to one primary-row mutation plus
    necessary secondary changes. Specify split/root/overflow publication,
-   WAL representation, replay, checkpoint and reclamation. Remove separate
+   WAL representation, replay, checkpoint and reclamation. Extend the existing
+   logical mutation stream and deterministic applier for row values, locators,
+   overflow allocation/retirement and expected/resulting identities. Admit
+   logical chunk bytes separately from aggregate staged-page capacity; do not
+   introduce page-image logging or a 63-page mutation cap. Remove separate
    scalar base-row staging for converted relational rows. Payload-only
    replacements must be represented in pending reads, compilation and replay,
    not inferred from a changed key. Keep catalog/scalar consumers that still
@@ -207,13 +247,19 @@ to caller-specific workarounds:
    both updates, including grouped commit and a split. Preserve existing
    row/key conflict and uniqueness semantics; page replacement must not install
    a stale whole-page image. Define rollback/savepoint cleanup of pending
-   values, locator changes and reserved pages.
+   values, locator changes and reserved pages. Preserve shared ordering:
+   complete WAL append/decision, immutable-generation install and visibility
+   publication, then durability completion. Retain ownership preventing
+   premature data-file writes/reuse while force is pending. Dependent results
+   and commit acknowledgments wait for force; independent durable reads can
+   finish. Incomplete groups never publish; force failure fences through the
+   existing owner. Keep the direct path's existing force-first ordering.
 
 This checkpoint must include a complete call-path and format sketch, not an
 exhaustive database survey. A disposable branch experiment may answer a named
 remaining question; it is not an accepted production layout or baseline.
-Choose one candidate before building the full delivery. A direct-reference
-or row-undo choice needs evidence of the concrete blocker and an explicit
+The selected candidate for this corrected proposal is clustered row payloads.
+A direct-reference or row-undo choice needs evidence of the concrete blocker and an explicit
 revision of this ticket's scope and acceptance before implementation. If the
 clustered mechanism is rejected, retain that decision; do not implement an
 alternate mechanism under the current acceptance criteria.
@@ -242,9 +288,9 @@ range membership in the B-tree and remove relational key re-encoding/recheck.
 This follows from coherent key/value publication. It does not apply blindly
 to a pending replacement, a scan whose source snapshot differs, or a row
 refetched after locking. State which changed-row cases need a residual check
-and consult the direct ordering analysis in [tic-uruk-hai](tic-uruk-hai.md) for
-those cases. Preserve necessary residual checks through existing semantics;
-implementing that ticket's direct comparator is not required here. Do not
+and preserve those checks through existing semantics. The direct typed-bound
+comparator remains within `tic-uruk-hai`'s separate scope and is not required
+here; Erebor can retain existing encoding for these residual checks. Do not
 invent per-row proof scans or a second read executor.
 
 The cursor already retains its leaf pin. Its binary initial positioning also
@@ -287,7 +333,17 @@ delay the clustered-layout decision.
   membership. If page MVCC supplies row visibility, expect no separate
   per-candidate row-version-directory read. Keep catalog/secondary/overflow
   counts separate instead of claiming every transaction-wide count becomes zero.
-- Measure leaf occupancy, height, splits, current/historical frames, pinned
+- Enforce the ADR's
+  [identity-index access and maintenance budget](../adr/0015-clustered-relational-row-store.md#identity-index-access-and-maintenance-budget).
+  Report mapping lookups/mutations by operation: ordinary primary/secondary
+  reads and full scans perform zero separate map lookups; non-key updates
+  perform zero mapping mutations. Distinguish locked updates with a usable
+  locator from identity-only/moved-key successor resolution. Count map page,
+  copy, WAL and history costs separately. If Payment exercises that resolution,
+  include matched `sample payment` controls using the individual-family
+  configuration below; no additional worker/warehouse sweep is required.
+- Measure leaf occupancy distribution, height, splits, inline/overflow counts,
+  current/historical frames, pinned
   frames, changed pages, staged copies, WAL bytes and checkpoint writes.
   Run matched control/candidate `sample new-order` as the immediate mutation
   control, then `sample order-status` and `sample all` at integration. Use two
@@ -304,8 +360,8 @@ delay the clustered-layout decision.
   secondary reads across primary-key moves, same-leaf concurrent updates,
   savepoint rollback and hidden-primary lifecycle. The format replacement
   additionally covers oversized rows, splits, page reuse, vacuum, checkpoint,
-  WAL replay and crash reopen. Held-force/failure tests must cover payload-only
-  updates and negative decisions as well as ordinary row reads.
+  WAL replay and crash reopen. Use the focused review cases below for the
+  corrected durability, overflow and multi-chunk boundaries.
 - Demonstrate no new per-row allocations or per-operation buffer views on
   warmed point/scan paths with focused allocation evidence. Count retained and
   staged copies, name their owners/lifetimes, and remove temporary counters
@@ -344,6 +400,19 @@ for this local River delivery.
 
 ### Focused validation entry points
 
+The design corrections add these specific proof obligations to existing tests;
+combine cases where one test establishes the same boundary. Do not build a new
+test framework or an exhaustive permutation matrix.
+
+| Boundary | Required proof |
+| --- | --- |
+| R1 — shared publication and force | With force held, an independent durable row completes while an observed clustered update waits. Force failure fences dependent results and commit acknowledgment. Pages cannot be written/reused before durability permits it. Include a mutation spanning logical WAL chunks. |
+| R2 — logical recovery and resource admission | Replay a complete multi-chunk mutation to identical primary, secondary, identity and overflow results. A truncated/incomplete group exposes no committed subset. Exercise more than 63 changed pages under a sufficient configured budget and explicit pre-decision pressure under an insufficient budget. |
+| R3 — value growth and structural root change | A non-key update grows enough to split/replace the root while force is held. Another durable row remains independent; the changed row waits. Old snapshots traverse their original coherent tree. Unchanged row/locator sequences survive splitting. |
+| R3 — negative/value-dependent decisions | Insert/delete/key-move membership observations and absence wait for their actual dependency. A row excluded by a value predicate still contributes its modification sequence. Include secondary locator replacement and identity-map absence. |
+| R4 — inline placement and split capacity | Ordinary harness-sized rows stay inline as leaves fill. A large middle entry can require additional sibling leaves without rejection or overflow of inline-eligible rows. Cover maximum key plus locator and fence, and existing maximum row admission. |
+| R4 — overflow transition and reclamation | Grow/shrink across the placement boundary, replace an overflow row, and preserve old/current values through replay. Hold an old leaf before it pins its overflow page; retirement cannot reuse that page until the reference is unreachable and durability/checkpoint conditions permit it. After release, reclamation and progress resume. |
+
 Extend the existing format/storage tests first, then the descriptor read/write
 and recovery tests. Select only affected classes during iteration, for example:
 
@@ -377,3 +446,117 @@ Readiness review, 2026-09-29: scope, design handoff, capacity/concurrency
 boundaries and measured acceptance are now explicit. The design checkpoint
 remains the first task; no layout has been pre-approved by this review and no
 dependency edges changed.
+
+Design correction, 2026-09-29: incorporated independent findings R1–R4 into
+the ADR and delivery requirements, with the focused proof obligations above.
+The focused follow-up accepted the corrected design for implementation. Final
+code review and promotion retain their existing gates. No additional user
+approval or new prerequisite ticket is needed for this in-scope revision.
+
+Implementation progress review, 2026-09-29: the
+[source review at `53fde91a` plus pending read/overflow changes](../delivery/evidence/2026-09-29-tic-erebor-implementation-review.md)
+supports the direction and records I1–I4 for the implementing agent: correct
+value-bearing intent coalescing, reconcile foreground/replay membership policy,
+preserve latest own writes in open scans, and complete point-result borrowing.
+The report also identifies the remaining scalar-authority removal and overflow
+retirement/drop boundaries. Address these within this ticket before final
+review and acceptance measurements; this progress review is not promotion approval.
+
+Performance decision, 2026-09-29: the owner accepted the [interleaved Stock
+Level candidate numbers](../delivery/evidence/2026-09-29-tic-erebor-candidate-stock-level.md)
+as sufficient for this ticket's local throughput gate. Preserve their large
+variation in the evidence and do not treat them as an isolated CPU speedup or
+a cross-database claim. The correction applies to measurement acceptance;
+overflow reclamation, recovery, capacity, cleanup and independent final review
+remain promotion conditions.
+
+Implementation validation, 2026-09-29: the
+[overflow reclamation evidence](../delivery/evidence/2026-09-29-tic-erebor-overflow-reclamation.md)
+records the checkpoint-gated free-stack transition, old-snapshot test,
+greater-than-63-page logical mutation and insufficient-budget rejection.
+This is branch-level correctness evidence, not final durable-format approval.
+`RelationalDescriptorRowPathTest.oldControlFormatIsRejectedBeforeAnyDurableFileChanges`
+reopens a database with a committed row and a checksum-valid prior control
+version. Open returns `CORRUPTION` and every database file remains byte-identical.
+The [clustered write-lock evidence](../delivery/evidence/2026-09-29-tic-erebor-clustered-write-lock.md)
+records the New Order/Payment lock regression found by the clean check, its
+tuple-key protection fix and the focused concurrency results.
+The [identity routing audit](../delivery/evidence/2026-09-29-tic-erebor-identity-routing.md)
+records direct primary/secondary routes and the logical mapping-mutation
+counts. The subsequent [physical write-cost evidence](../delivery/evidence/2026-09-29-tic-erebor-write-cost.md)
+records map pages/copies/WAL/history/flush work, replacement-lock counts,
+virtual-thread CPU/JIT diagnostics and the named controls. The accepted
+Stock Level figures retain their original scope.
+The [final review handoff](../delivery/evidence/2026-09-29-tic-erebor-review-handoff.md)
+lists the tested boundaries and the remaining retry-acceptance and independent
+review conditions. No final independent code approval is recorded.
+
+Promotion review response, 2026-09-29: the independent review at `bdf43fc0`
+raised cancelled commits (R1), insufficient overflow reclamation (R2),
+database-wide allocation scans (R3) and retained descriptor BASE replay (R4).
+The [review-fix evidence](../delivery/evidence/2026-09-29-tic-erebor-promotion-fixes.md)
+records their replacement and focused validation. Final source `46e5ab39`
+passes the clean full check with 1,131 engine tests. Warmed actual point and
+primary/secondary scan allocation is zero in the measured paths. JFR exposed
+an excluded catalogue-head scan; its interval routing is corrected and tested.
+Individual workload reports and the targeted longer New Order pair pass.
+The four-worker three-retry mix exhausts deadlock retries on both stable and
+candidate; a matched ten-retry diagnostic passes with reconciled retries and
+cleanup. Owner/review resolution of that strict retry condition and updated
+independent durable-format/recovery/concurrency approval remain before promotion.
+
+Amended review response, 2026-09-29: the independent review of `867f6847`
+found retirement metadata eviction during link acquisition (F1/P1) and a
+nonrepeatable read-allocation warmup (F2/P2). `fb9772d2` holds operation pins
+across queue/free-stack changes and adds spill, pressure, abort/retry and
+spill-limited WAL-only recovery coverage. `4e08034d` initializes the late-loaded
+binding types traced in the exact 21,752-byte spike and requires stable
+zero-byte warmup followed by five exact-zero batches per read path. Three
+fresh-JVM allocation runs and all 52 affected tests pass. The latest clean
+full check passes all 1,136 engine tests. The
+[amended fix evidence](../delivery/evidence/2026-09-29-tic-erebor-promotion-fixes.md#amended-review-f1-retirement-metadata-ownership)
+and [updated handoff](../delivery/evidence/2026-09-29-tic-erebor-review-handoff.md)
+retain the investigation and promotion conditions. Independent follow-up
+approval and explicit resolution of the strict three-retry mixed run remain
+required. Prior measurement versions and the accepted Stock Level decision
+retain their original scope.
+
+Three-retry resolution, 2026-09-29: the
+[mixed-workload evidence](../delivery/evidence/2026-09-29-tic-erebor-three-retry-mix.md)
+records genuine opposing stock-lock cycles in the common harness binding and
+the real READ COMMITTED SQL proof at `0b68064f`. Harness `356682a` visits stock
+in warehouse/item order while preserving generated line numbers, quantities,
+rollback meaning and immutable retry input. Both full bindings have updated
+versions/digests; River production is unchanged. The required sample-all,
+four-worker, five/20-second, three-retry candidate and stable control now pass
+with zero retries/failures/unknown outcomes, successful invariants, equal
+comparison keys and complete cleanup. The focused pair, MariaDB smoke,
+harness test/race/vet checks and all 1,137 engine tests pass. The strict retry
+condition is satisfied. Earlier reports and the accepted Stock Level decision
+retain their identities and scope; independent follow-up review remains before
+promotion, including the separately owned harness correction.
+This narrow external defect correction follows the owner's subsequent request
+to resolve the three-retry workload. It remains a separate harness branch and
+does not expand Erebor's row-store mechanism or general harness/comparator scope.
+
+## Promotion — 2026-09-29 UTC / 2026-09-30 BST
+
+The owner confirmed that independent review passes, Erebor is ready for
+promotion and no further code changes are requested. Reviewed feature
+`04cd0917262e2694b6ebd5ffcf82a34a4fea8e0e` is delivered by merge `fdfda8316dbc821b00fcf2de6f4244c331bbc9c8`,
+with annotated checkpoint `perf-checkpoint-20260929-tic-erebor-clustered-row-store`.
+The [promotion record](../delivery/evidence/2026-09-29-tic-erebor-promotion.md)
+retains the [independent follow-up](../delivery/evidence/2026-09-29-tic-erebor-followup-review.md),
+its historical scope and the subsequently satisfied three-retry condition.
+This approval supersedes the pending conditions in the dated progress entries.
+
+The merge tree exactly matches the reviewed feature. Its fresh clean full
+`check` and server JAR build passed in 5m 35s: all 1,137 engine tests passed;
+the repository reports 2,109 passed tests, zero failures/errors and 19 existing
+platform/opt-in skips. The accepted Stock Level decision and physical
+identity-map/write-cost evidence retain their original versions and limits.
+No new baseline is designated. The separate harness fix is locally integrated
+at `9c0be772` with a rebuilt executable identical to the tested artifact.
+The accepted source and evidence are published with the integration branch,
+master update and annotated tag. This ticket is closed as a code delivery;
+the parent epic's remaining work retains its separate scope.

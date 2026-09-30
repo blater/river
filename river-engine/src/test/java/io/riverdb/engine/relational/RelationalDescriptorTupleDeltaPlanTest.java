@@ -25,13 +25,14 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     SqlMutationValues values = threeValues(1, 10, 20);
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
 
-    assertEquals(StatusCode.OK, plan.insert(table, values, 91));
-    assertEquals(3, plan.keyCount());
-    assertEquals(3, plan.mutationCount());
+    assertEquals(StatusCode.OK, plan.insert(table, values, 91, 64));
+    assertEquals(4, plan.keyCount());
+    assertEquals(4, plan.mutationCount());
     assertTrue(plan.payloadBytes() > 0);
     assertEquals(10, plan.keyAt(0).keyId());
     assertEquals(20, plan.keyAt(1).keyId());
     assertEquals(30, plan.keyAt(2).keyId());
+    assertEquals(table.identityKey().keyId(), plan.keyAt(3).keyId());
     for (int index = 0; index < plan.keyCount(); index++) {
       assertEquals(0, plan.beforeLengthAt(index));
       assertEquals(91, TupleKeyCodec.logicalRowId(
@@ -39,7 +40,7 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     }
 
     assertEquals(StatusCode.OK, plan.delete(table, values, 92));
-    assertEquals(3, plan.mutationCount());
+    assertEquals(4, plan.mutationCount());
     for (int index = 0; index < plan.keyCount(); index++) {
       assertEquals(0, plan.afterLengthAt(index));
       assertEquals(92, TupleKeyCodec.logicalRowId(
@@ -48,14 +49,14 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   }
 
   @Test
-  void updateSharesUnchangedKeysAndEmitsOnlyChangedBeforeAfterDeltas() {
+  void updateSharesUnchangedKeysAndReplacesThePrimaryRowValue() {
     TableDescriptor table = threeKeyTable();
     SqlMutationValues before = threeValues(1, 10, 20);
     SqlMutationValues after = threeValues(1, 10, 21);
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
 
-    assertEquals(StatusCode.OK, plan.update(table, before, after, 7));
-    assertEquals(2, plan.mutationCount());
+    assertEquals(StatusCode.OK, plan.update(table, before, after, 7, 64));
+    assertEquals(3, plan.mutationCount());
     assertTrue(plan.changedAt(0));
     assertFalse(plan.changedAt(1));
     assertFalse(plan.changedAt(2));
@@ -69,17 +70,54 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   }
 
   @Test
+  void primaryKeyMoveReplacesUnchangedSecondaryLocators() {
+    TableDescriptor table = threeKeyTable();
+    RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
+    assertEquals(StatusCode.OK, plan.update(
+        table, threeValues(1, 10, 20), threeValues(2, 10, 20), 7, 64));
+    assertTrue(plan.primaryChanged());
+    assertEquals(2, plan.primaryIndex());
+    assertFalse(plan.changedAt(0));
+    assertFalse(plan.changedAt(1));
+    assertTrue(plan.changedAt(2));
+    assertEquals(5, plan.mutationCount());
+  }
+
+  @Test
+  void nonKeyUpdateReplacesOnlyClusteredValueWithoutIdentityMutation() {
+    ColumnDescriptorSet columns = columns(
+        new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT},
+        new CharSequence[] {"id", "indexed", "payload"});
+    KeyDescriptor primary = key(30, KeyDescriptor.KIND_PRIMARY, true, columns, 0);
+    KeyDescriptor secondary = key(10, KeyDescriptor.KIND_SECONDARY, false, columns, 1);
+    TableDescriptor table = table(columns, primary, new KeyDescriptor[] {secondary});
+    SqlMutationValues before = values(table, 1, 10, 20);
+    SqlMutationValues after = values(table, 1, 10, 21);
+    RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
+
+    assertEquals(StatusCode.OK, plan.update(table, before, after, 7, 64));
+    assertEquals(3, plan.keyCount());
+    assertEquals(1, plan.mutationCount());
+    assertFalse(plan.primaryChanged());
+    for (int index = 0; index < plan.keyCount(); index++) {
+      assertFalse(plan.changedAt(index));
+    }
+    assertEquals(KeyDescriptor.KIND_PRIMARY, plan.keyAt(plan.primaryIndex()).kind());
+  }
+
+  @Test
   void failedPreparationPublishesNothingAndScrubsThePreviousPlan() {
     TableDescriptor table = threeKeyTable();
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
-    assertEquals(StatusCode.OK, plan.insert(table, threeValues(1, 2, 3), 1));
+    assertEquals(StatusCode.OK, plan.insert(table, threeValues(1, 2, 3), 1, 64));
     assertTrue(plan.bytes().get(0) != 0);
 
     SqlMutationValues invalid = new SqlMutationValues();
     assertEquals(StatusCode.OK, invalid.reserve(table, 0));
     assertEquals(StatusCode.OK, invalid.begin(table, null));
     assertEquals(StatusCode.OK, invalid.setFixed(0, SqlTypeDescriptor.BIGINT, 1));
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, plan.insert(table, invalid, 2));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, plan.insert(table, invalid, 2, 64));
     assertEquals(0, plan.keyCount());
     assertEquals(0, plan.mutationCount());
     assertEquals(0, plan.payloadBytes());
@@ -95,11 +133,11 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     allocator.failNextBytes = true;
 
     assertEquals(StatusCode.RESOURCE_EXHAUSTED,
-        plan.insert(threeKeyTable(), threeValues(1, 2, 3), 1));
+        plan.insert(threeKeyTable(), threeValues(1, 2, 3), 1, 64));
     assertEquals(0, budget.retained);
     assertEquals(0, plan.keyCount());
     assertEquals(StatusCode.OK,
-        plan.insert(threeKeyTable(), threeValues(1, 2, 3), 1));
+        plan.insert(threeKeyTable(), threeValues(1, 2, 3), 1, 64));
     assertTrue(budget.retained > 0);
   }
 
@@ -114,9 +152,10 @@ final class RelationalDescriptorTupleDeltaPlanTest {
         values.setText(0, SqlTypeDescriptor.varchar(765), text));
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
 
-    assertEquals(StatusCode.OK, plan.insert(table, values, Long.MAX_VALUE));
-    assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES, plan.keyCount());
-    assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES, plan.mutationCount());
+    assertEquals(StatusCode.OK,
+        plan.insert(table, values, Long.MAX_VALUE, table.encodedMaximumRowBytes()));
+    assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES + 1, plan.keyCount());
+    assertEquals(SqlShapeLimits.MAX_TABLE_INDEXES + 1, plan.mutationCount());
     assertTrue(plan.payloadBytes() >= SqlShapeLimits.MAX_TABLE_INDEXES * 765);
     for (int index = 0; index < plan.keyCount(); index++) {
       assertEquals(Long.MAX_VALUE, TupleKeyCodec.logicalRowId(
@@ -131,13 +170,13 @@ final class RelationalDescriptorTupleDeltaPlanTest {
     SqlMutationValues before = textValue(table, "a".repeat(765));
     SqlMutationValues after = textValue(table, "b".repeat(765));
     RelationalDescriptorTupleDeltaPlan plan = new RelationalDescriptorTupleDeltaPlan();
-    assertEquals(StatusCode.OK, plan.update(table, before, after, 1));
-    assertEquals(StatusCode.OK, plan.update(table, after, before, 1));
+    assertEquals(StatusCode.OK, plan.update(table, before, after, 1, 800));
+    assertEquals(StatusCode.OK, plan.update(table, after, before, 1, 800));
 
     long thread = Thread.currentThread().threadId();
     long allocatedBefore = allocations.getThreadAllocatedBytes(thread);
     for (int iteration = 0; iteration < 10; iteration++) {
-      allocationGuard += plan.update(table, before, after, 1).stableCode();
+      allocationGuard += plan.update(table, before, after, 1, 800).stableCode();
       allocationGuard += plan.mutationCount();
     }
     long allocated = allocations.getThreadAllocatedBytes(thread) - allocatedBefore;
@@ -193,13 +232,17 @@ final class RelationalDescriptorTupleDeltaPlanTest {
   }
 
   private static SqlMutationValues threeValues(long id, long first, long second) {
+    return values(threeKeyTable(), id, first, second);
+  }
+
+  private static SqlMutationValues values(
+      TableDescriptor table, long first, long second, long third) {
     SqlMutationValues values = new SqlMutationValues();
-    TableDescriptor table = threeKeyTable();
     assertEquals(StatusCode.OK, values.reserve(table, 0));
     assertEquals(StatusCode.OK, values.begin(table, null));
-    assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, id));
-    assertEquals(StatusCode.OK, values.setFixed(1, SqlTypeDescriptor.BIGINT, first));
-    assertEquals(StatusCode.OK, values.setFixed(2, SqlTypeDescriptor.BIGINT, second));
+    assertEquals(StatusCode.OK, values.setFixed(0, SqlTypeDescriptor.BIGINT, first));
+    assertEquals(StatusCode.OK, values.setFixed(1, SqlTypeDescriptor.BIGINT, second));
+    assertEquals(StatusCode.OK, values.setFixed(2, SqlTypeDescriptor.BIGINT, third));
     return values;
   }
 

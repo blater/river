@@ -2,6 +2,7 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.KeyDescriptor;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.format.btree.TupleKeyBuilder;
 import java.nio.ByteBuffer;
 
@@ -47,6 +48,23 @@ final class RelationalTupleKeyEncoder {
     length = 0;
     containsNull = false;
     builder.reset();
+    if (key != null && key.kind() == KeyDescriptor.KIND_INTERNAL_IDENTITY) {
+      if (!physical || logicalRowId <= 0 || parts != 1) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      StatusCode identity = scratch.reserve(key, true);
+      if (!identity.isOk()) return identity;
+      ByteBuffer target = scratch.prepare();
+      identity = builder.beginIndex(target, 0, 1);
+      if (identity.isOk()) identity = builder.addFixed(
+          SqlTypeDescriptor.BIGINT, logicalRowId);
+      if (identity.isOk()) identity = builder.finishPhysical(logicalRowId);
+      if (identity.isOk()) {
+        length = builder.keyBytes();
+        scratch.bytes(length);
+      }
+      return identity;
+    }
     StatusCode status = RelationalTupleKeyValidation.validate(
         key, values, parts, logicalRowId, physical);
     if (!status.isOk()) return status;

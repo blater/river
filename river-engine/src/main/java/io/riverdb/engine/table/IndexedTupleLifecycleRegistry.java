@@ -20,6 +20,7 @@ final class IndexedTupleLifecycleRegistry {
   private final int[] descriptors =
       new int[io.riverdb.format.btree.TupleKeyCodec.MAX_INDEX_KEY_PARTS];
   private long previousRowId;
+  private long memberSequence;
 
   IndexedTupleLifecycleRegistry(
       IndexedTableStore table, IndexedTableKernel tableKernel, IndexedPageSet pages) {
@@ -29,6 +30,7 @@ final class IndexedTupleLifecycleRegistry {
   }
 
   StatusCode loadAbsent(IndexedTupleIndexLifecycleBatch batch, int index) {
+    record.reset();
     long keyId = batch.keyIdAt(index);
     StatusCode status = store.fetchByKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row);
     if (status.isOk()) return StatusCode.CORRUPTION;
@@ -90,6 +92,8 @@ final class IndexedTupleLifecycleRegistry {
   long generation() { return record.generation(); }
   long privateOwner() { return record.privateOwner(); }
 
+  void memberSequence(long assignedSequence) { memberSequence = assignedSequence; }
+
   private StatusCode loadExisting(
       IndexedTupleIndexLifecycleBatch batch, int index, int expected) {
     long keyId = batch.keyIdAt(index);
@@ -126,6 +130,7 @@ final class IndexedTupleLifecycleRegistry {
     if (status.isOk()) status = TupleIndexRootRecordCodec.encode(
         bytes, 0, state, root, batch.keyIdAt(index), batch.ownerAt(index),
         batch.schemaIdAt(index), shape.descriptorHash(), privateOwner, generation,
+        state == record.state() ? record.membershipSequence() : memberSequence,
         cleanupCursor, descriptors, 0, count);
     bytes.position(0).limit(TupleIndexRootRecordCodec.BYTES);
     return status.isOk() ? writer.stage(

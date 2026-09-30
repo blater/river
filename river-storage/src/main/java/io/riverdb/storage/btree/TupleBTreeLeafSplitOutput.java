@@ -31,10 +31,14 @@ final class TupleBTreeLeafSplitOutput {
   static StatusCode append(
       ByteBuffer source, int sourceStart, ByteBuffer target, int targetStart,
       TupleShape shape, ByteBuffer key, int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
       int insertion, int index, TupleBTreeWorkspace workspace) {
     if (index == insertion) {
       return TupleBTreePageCodec.appendLeaf(
-          target, targetStart, shape, key, keyOffset, keyLength);
+          target, targetStart, shape, key, keyOffset, keyLength,
+          value, valueOffset, valueLength,
+          overflowPageId, overflowGeneration, modificationSequence);
     }
     return TupleBTreePageSupport.appendLeafSource(
         source, sourceStart, target, targetStart, shape,
@@ -44,13 +48,18 @@ final class TupleBTreeLeafSplitOutput {
   static StatusCode appendMerged(
       ByteBuffer source, int sourceStart, ByteBuffer left, int leftStart,
       ByteBuffer right, int rightStart, TupleShape shape, ByteBuffer key,
-      int keyOffset, int keyLength, int insertion, int splitAt, int total,
+      int keyOffset, int keyLength,
+      ByteBuffer value, int valueOffset, int valueLength,
+      int overflowPageId, long overflowGeneration, long modificationSequence,
+      int insertion, int splitAt, int total,
       TupleBTreeWorkspace workspace) {
     for (int index = 0; index < total; index++) {
       boolean toLeft = index < splitAt;
       StatusCode status = append(
           source, sourceStart, toLeft ? left : right,
           toLeft ? leftStart : rightStart, shape, key, keyOffset, keyLength,
+          value, valueOffset, valueLength,
+          overflowPageId, overflowGeneration, modificationSequence,
           insertion, index, workspace);
       if (!status.isOk()) return status;
     }

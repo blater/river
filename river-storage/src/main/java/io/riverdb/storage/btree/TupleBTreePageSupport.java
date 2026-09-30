@@ -68,7 +68,12 @@ final class TupleBTreePageSupport {
     }
     return TupleBTreePageCodec.appendLeaf(
         target, targetStart, shape, source,
-        sourceStart + workspace.leaf.keyOffset(), workspace.leaf.keyLength());
+        sourceStart + workspace.leaf.keyOffset(), workspace.leaf.keyLength(),
+        workspace.leaf.overflowPageId() == 0 && workspace.leaf.valueLength() > 0
+            ? source : null,
+        sourceStart + workspace.leaf.valueOffset(), workspace.leaf.valueLength(),
+        workspace.leaf.overflowPageId(), workspace.leaf.overflowGeneration(),
+        workspace.leaf.modificationSequence());
   }
 
   static StatusCode appendInternalSource(

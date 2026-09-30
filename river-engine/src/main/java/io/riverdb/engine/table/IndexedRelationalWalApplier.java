@@ -6,7 +6,7 @@ import io.riverdb.base.error.StatusCode;
 final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
   private final IndexedTableKernel kernel;
   private final IndexedPageSet pages;
-  private final IndexedRelationalBaseApply base;
+  private final IndexedRelationalScalarApply scalar;
   private final IndexedTupleRegistryState registry;
   private final IndexedRelationalTupleApply tuples;
   private final IndexedRelationalApplyEvidence evidence;
@@ -25,7 +25,7 @@ final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
       IndexedLogicalRowIdRegistry logicalRowIdRegistry) {
     kernel = table;
     pages = pageSet;
-    base = new IndexedRelationalBaseApply(table, pageSet);
+    scalar = new IndexedRelationalScalarApply(table, pageSet);
     registry = new IndexedTupleRegistryState(table, pageSet);
     tuples = new IndexedRelationalTupleApply(table, pageSet, registry);
     evidence = new IndexedRelationalApplyEvidence(pageSet);
@@ -47,14 +47,15 @@ final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
     }
     StatusCode status = recovery ? logicalRowIds.recover(mutations) : StatusCode.OK;
     if (!status.isOk()) return status;
-    status = stage(mutations, oldestVisibleCommitSequence);
+    status = stage(mutations, commitSequence, oldestVisibleCommitSequence);
     return status.isOk()
         ? publish(recordStart, recordEnd, commitSequence, recovery) : status;
   }
 
   StatusCode stage(
-      IndexedRelationalMutationBuffer mutations, long oldestVisibleCommitSequence) {
-    if (staged || mutations == null || !mutations.sealed()) {
+      IndexedRelationalMutationBuffer mutations, long memberSequence,
+      long oldestVisibleCommitSequence) {
+    if (staged || mutations == null || !mutations.sealed() || memberSequence <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode floorStatus = logicalRowIds.validate(mutations);
@@ -70,7 +71,7 @@ final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
     registry.reset();
     previousRows = kernel.rowCount();
     status = pages.beginPreparedBatch();
-    if (status.isOk()) status = applyOperations(mutations, floorOnly);
+    if (status.isOk()) status = applyOperations(mutations, floorOnly, memberSequence);
     if (status.isOk() && !floorOnly) status = kernel.admitOperationPublication();
     if (status.isOk()) status = pages.freezeChangedPages(0, oldestVisibleCommitSequence);
     if (status.isOk()) {
@@ -92,14 +93,16 @@ final class IndexedRelationalWalApplier implements IndexedRelationalWalReplay {
   }
 
   private StatusCode applyOperations(
-      IndexedRelationalMutationBuffer mutations, boolean floorOnly) {
+      IndexedRelationalMutationBuffer mutations, boolean floorOnly,
+      long memberSequence) {
     StatusCode status = StatusCode.OK;
     for (int operation = 0; status.isOk() && !floorOnly
         && operation < mutations.suboperationCount(); operation++) {
       status = evidence.expected(mutations, operation);
       if (status.isOk()) {
         status = mutations.suboperationDescriptorAt(operation) < 0
-            ? base.apply(mutations, operation) : tuples.apply(mutations, operation);
+            ? scalar.apply(mutations, operation)
+                : tuples.apply(mutations, operation, memberSequence);
       }
       if (status.isOk()) status = evidence.resulting(mutations, operation);
     }

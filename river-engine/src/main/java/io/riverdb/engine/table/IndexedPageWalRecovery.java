@@ -52,7 +52,7 @@ final class IndexedPageWalRecovery {
       int pageId = (int) header.pageId();
       if (!status.isOk()) return status;
       if (pageId <= 0 || pageId > IndexedTableLimits.MAX_PAGES
-          || header.pageGeneration() != 1
+          || header.pageGeneration() <= 0
           || header.databaseHigh() != database.high()
           || header.databaseLow() != database.low()
           || header.walGeneration() != generation.value()

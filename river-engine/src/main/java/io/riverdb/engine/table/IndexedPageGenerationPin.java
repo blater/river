@@ -8,17 +8,20 @@ final class IndexedPageGenerationPin {
   private int pageId;
   private long validFromCommitSequence;
   private long pageGeneration;
+  private long durableGeneration;
   private ByteBuffer payload;
   private int payloadKind;
   private long ownerKeyId;
 
   void set(
       int frameSlot, int id, long validFrom, long generation,
+      long allocationGeneration,
       ByteBuffer bytes, int kind, long owner) {
     slot = frameSlot;
     pageId = id;
     validFromCommitSequence = validFrom;
     pageGeneration = generation;
+    durableGeneration = allocationGeneration;
     payload = bytes;
     payloadKind = kind;
     ownerKeyId = owner;
@@ -29,6 +32,7 @@ final class IndexedPageGenerationPin {
     pageId = 0;
     validFromCommitSequence = 0;
     pageGeneration = 0;
+    durableGeneration = 0;
     payload = null;
     payloadKind = 0;
     ownerKeyId = 0;
@@ -39,6 +43,7 @@ final class IndexedPageGenerationPin {
   int pageId() { return pageId; }
   long validFromCommitSequence() { return validFromCommitSequence; }
   long pageGeneration() { return pageGeneration; }
+  long durableGeneration() { return durableGeneration; }
   ByteBuffer payload() { return payload; }
   int payloadKind() { return payloadKind; }
   long ownerKeyId() { return ownerKeyId; }

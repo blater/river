@@ -31,78 +31,118 @@ final class IndexedRelationalWalCodecTest {
   private static volatile long allocationGuard;
 
   @Test
-  void primaryPlusSixtyFourUpdateRoundTripsBelow430KiB() {
-    int[] descriptors = {
-        SqlTypeDescriptor.varchar(255),
-        SqlTypeDescriptor.varchar(255),
+  void tupleValueAndKeyBoundarySurviveLogicalWalRoundTrip() {
+    int[] parts = {
+        SqlTypeDescriptor.varchar(255), SqlTypeDescriptor.varchar(255),
         SqlTypeDescriptor.varchar(250)
     };
-    long hash = descriptorHash(descriptors);
-    ByteBuffer oldTuple = physicalTuple(descriptors, 9, 'a');
-    ByteBuffer newTuple = physicalTuple(descriptors, 9, 'b');
-    int tupleBytes = oldTuple.remaining();
-    int variableBytes = 8_192 + 130 * tupleBytes;
+    ByteBuffer key = physicalTuple(parts, 9, 'a');
+    ByteBuffer row = ByteBuffer.wrap(new byte[] {11, 22, 33, 44});
     IndexedRelationalMutationBuffer source =
-        new IndexedRelationalMutationBuffer(131, 65, 65 * descriptors.length);
-    requireOk(source.reserve(131, 65, 65 * descriptors.length, variableBytes));
-    for (int index = 0; index < 65; index++) {
-      requireOk(source.appendDescriptor(
-          OWNER_OBJECT_ID, 1_000 + index, 1_000 + index, hash,
-          descriptors, 0, descriptors.length));
-    }
+        new IndexedRelationalMutationBuffer(2, 1, parts.length);
+    requireOk(source.reserve(2, 1, parts.length,
+        key.remaining() + row.remaining() + IndexedOverflowReclamationCodec.BYTES));
+    requireOk(source.appendDescriptor(
+        OWNER_OBJECT_ID, 1_000, 1_000, descriptorHash(parts),
+        parts, 0, parts.length));
     requireOk(source.appendSuboperation(
-        OWNER_OBJECT_ID, -1, 0, 1,
-        0, 0, SCALAR_ROOT, SCALAR_ROOT, NEXT_PAGE, NEXT_PAGE, 0, 0,
-        8, 9,
-        IndexedRelationalSuboperations.REGISTRY_ABSENT,
-        IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
-    for (int index = 0; index < 65; index++) {
-      requireOk(source.appendSuboperation(
-          OWNER_OBJECT_ID, index, 1 + index * 2, 2,
-          index + 1, index + 10, SCALAR_ROOT, SCALAR_ROOT,
-          NEXT_PAGE, NEXT_PAGE, 1, 2, 9 + index, 10 + index,
-          IndexedRelationalSuboperations.REGISTRY_READY,
-          IndexedRelationalSuboperations.REGISTRY_READY, 0, 0));
-    }
-    ByteBuffer row = ByteBuffer.allocate(8_192);
-    requireOk(source.appendBase(
-        0, OWNER_OBJECT_ID, IndexedRelationalMutationBuffer.BASE_UPDATE, 9, 8,
-        row, 0, row.remaining()));
-    for (int index = 0; index < 65; index++) {
-      requireOk(source.appendTuple(
-          index + 1, OWNER_OBJECT_ID,
-          IndexedRelationalMutationBuffer.TUPLE_DELETE, index, 9,
-          oldTuple, oldTuple.position(), oldTuple.remaining()));
-      requireOk(source.appendTuple(
-          index + 1, OWNER_OBJECT_ID,
-          IndexedRelationalMutationBuffer.TUPLE_INSERT, index, 9,
-          newTuple, newTuple.position(), newTuple.remaining()));
-    }
+        OWNER_OBJECT_ID, 0, 0, 2, 4, 4, SCALAR_ROOT, SCALAR_ROOT,
+        NEXT_PAGE, NEXT_PAGE, 1, 2, 0, 1,
+        IndexedRelationalMutation.REGISTRY_READY,
+        IndexedRelationalMutation.REGISTRY_READY, 0, 0));
+    ByteBuffer reclaimed = ByteBuffer.allocate(IndexedOverflowReclamationCodec.BYTES);
+    IndexedOverflowReclamationCodec.encode(reclaimed, 5, 6, 2_000, 3, 7);
+    requireOk(source.appendOverflowReclamation(0, 0, reclaimed, 0, reclaimed.remaining(), false));
+    requireOk(source.appendTuple(
+        0, OWNER_OBJECT_ID, IndexedRelationalMutation.TUPLE_REPLACE,
+        0, 9, key, 0, key.remaining(), row, 0, row.remaining()));
     requireOk(source.seal());
-    check(source.mutationCount() == 131, "wide update mutation count");
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
     requireOk(plan.plan(TRANSACTION_ID, OPERATION_ID, source));
-    check(plan.chunkCount() == 1, "wide update should be one WAL record");
-    check(plan.payloadBytesAt(0) < 430 * 1_024, "wide update exceeds 430 KiB proof bound");
-
     ByteBuffer encoded = ByteBuffer.allocate(plan.payloadBytesAt(0));
     requireOk(IndexedRelationalWalCodec.encode(plan, 0, encoded));
     encoded.flip();
     IndexedRelationalMutationBuffer decoded =
-        new IndexedRelationalMutationBuffer(
-            131, 65, 65 * io.riverdb.format.btree.TupleKeyCodec.MAX_INDEX_KEY_PARTS);
+        new IndexedRelationalMutationBuffer(2, 1, TupleKeyCodec.MAX_INDEX_KEY_PARTS);
     IndexedRelationalWalDecoder decoder = new IndexedRelationalWalDecoder(decoded);
     requireOk(decoder.decode(encoded, TRANSACTION_ID, 1));
-    check(decoder.complete(), "wide update decoder did not publish");
-    check(decoded.mutationCount() == 131 && decoded.descriptorCount() == 65,
-        "wide update round-trip counts");
-    check(decoded.suboperationCount() == 66
-        && decoded.ownerObjectIdAt(0) == OWNER_OBJECT_ID
-        && decoded.expectedTupleRootAt(1) == 1
-        && decoded.resultingTupleRootAt(1) == 10,
-        "wide update recovery evidence");
-    check(decoded.operationAt(1) == IndexedRelationalMutationBuffer.TUPLE_DELETE,
-        "old physical entry must be retained/reused");
+    check(decoder.complete(), "tuple value WAL decoder did not complete");
+    check(decoded.operationAt(1) == IndexedRelationalMutation.TUPLE_REPLACE,
+        "tuple replacement operation lost");
+    check(decoded.tupleKeyLengthAt(1) == key.remaining()
+            && decoded.tupleValueLengthAt(1) == row.remaining(),
+        "tuple key/value boundary lost");
+    ByteBuffer decodedReclamation = ByteBuffer.allocate(IndexedOverflowReclamationCodec.BYTES);
+    decoded.copyPayloadTo(0, decodedReclamation, 0);
+    check(decoded.operationAt(0) == IndexedRelationalMutationBuffer.OVERFLOW_RECLAIM
+            && decodedReclamation.equals(reclaimed),
+        "overflow reclamation identity lost in WAL round trip");
+    ByteBuffer copy = ByteBuffer.allocate(row.remaining());
+    decoded.copyTupleValueTo(1, copy, 0);
+    check(copy.equals(row), "tuple row value changed in WAL round trip");
+  }
+
+  @Test
+  void primaryRowSixtyFourLocatorsAndIdentityRoundTripWithinOneRecord() {
+    int[] parts = {
+        SqlTypeDescriptor.varchar(255), SqlTypeDescriptor.varchar(255),
+        SqlTypeDescriptor.varchar(250)
+    };
+    int[] identityParts = {SqlTypeDescriptor.BIGINT};
+    ByteBuffer oldTuple = physicalTuple(parts, 9, 'a');
+    ByteBuffer newTuple = physicalTuple(parts, 9, 'b');
+    ByteBuffer identity = physicalFixedTuple(9, 9);
+    ByteBuffer row = ByteBuffer.allocate(8_192);
+    int bytes = row.remaining() + 195 * newTuple.remaining() + identity.remaining();
+    IndexedRelationalMutationBuffer source =
+        new IndexedRelationalMutationBuffer(131, 66, 65 * parts.length + 1);
+    requireOk(source.reserve(131, 66, 65 * parts.length + 1, bytes));
+    for (int index = 0; index < 65; index++) {
+      requireOk(source.appendDescriptor(OWNER_OBJECT_ID, 1_000 + index, 1_000 + index,
+          descriptorHash(parts), parts, 0, parts.length));
+    }
+    requireOk(source.appendDescriptor(OWNER_OBJECT_ID, 1_065, 1_065,
+        descriptorHash(identityParts), identityParts, 0, 1));
+    for (int index = 0; index < 66; index++) {
+      requireOk(source.appendSuboperation(
+          OWNER_OBJECT_ID, index, index * 2, index == 65 ? 1 : 2,
+          index + 5, index + 5, SCALAR_ROOT, SCALAR_ROOT,
+          80, 80, 1, 2, 8 + index, 9 + index,
+          IndexedRelationalSuboperations.REGISTRY_READY,
+          IndexedRelationalSuboperations.REGISTRY_READY, 0, 0));
+    }
+    for (int index = 0; index < 65; index++) {
+      requireOk(source.appendTuple(index, OWNER_OBJECT_ID,
+          IndexedRelationalMutationBuffer.TUPLE_DELETE, index, 9,
+          oldTuple, 0, oldTuple.remaining()));
+      ByteBuffer value = index == 0 ? row : newTuple;
+      requireOk(source.appendTuple(index, OWNER_OBJECT_ID,
+          IndexedRelationalMutationBuffer.TUPLE_INSERT, index, 9,
+          newTuple, 0, newTuple.remaining(), value, 0, value.remaining()));
+    }
+    requireOk(source.appendTuple(65, OWNER_OBJECT_ID,
+        IndexedRelationalMutationBuffer.TUPLE_REPLACE, 65, 9,
+        identity, 0, identity.remaining(), newTuple, 0, newTuple.remaining()));
+    requireOk(source.seal());
+    IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
+    requireOk(plan.plan(TRANSACTION_ID, OPERATION_ID, source));
+    check(plan.chunkCount() == 1, "wide clustered update should fit one WAL record");
+    check(plan.payloadBytesAt(0) <= WalRecordCodec.MAX_PAYLOAD_BYTES,
+        "wide clustered update exceeds physical record capacity");
+    IndexedRelationalMutationBuffer decoded =
+        new IndexedRelationalMutationBuffer(131, 66, 66 * TupleKeyCodec.MAX_INDEX_KEY_PARTS);
+    IndexedRelationalWalDecoder decoder = new IndexedRelationalWalDecoder(decoded);
+    requireOk(decoder.decode(encode(plan, 0), TRANSACTION_ID, 1));
+    check(decoder.complete() && decoded.mutationCount() == 131
+            && decoded.descriptorCount() == 66 && decoded.suboperationCount() == 66,
+        "wide clustered update round-trip counts");
+    check(decoded.tupleValueLengthAt(1) == row.remaining(), "canonical row value lost");
+    ByteBuffer locator = ByteBuffer.allocate(newTuple.remaining());
+    decoded.copyTupleValueTo(3, locator, 0);
+    check(locator.equals(newTuple), "secondary primary locator lost");
+    decoded.copyTupleValueTo(130, locator, 0);
+    check(decoded.operationAt(130) == IndexedRelationalMutationBuffer.TUPLE_REPLACE
+            && locator.equals(newTuple), "identity primary locator lost");
   }
 
   @Test
@@ -237,18 +277,15 @@ final class IndexedRelationalWalCodecTest {
   }
 
   @Test
-  void worstMutationCountChunksWithinPhysicalRecordLimit() {
+  void largeClusteredValuesChunkWithinPhysicalRecordLimit() {
     IndexedRelationalMutationBuffer source =
-        new IndexedRelationalMutationBuffer(384, 0, 0);
+        new IndexedRelationalMutationBuffer(384, 1, 1);
     int rowBytes = 8_192;
-    requireOk(source.reserve(384, 0, 0, 384 * rowBytes));
+    requireOk(source.reserve(384, 1, 1, 384 * (rowBytes + 64)));
     ByteBuffer row = ByteBuffer.allocate(rowBytes);
-    appendBaseSuboperations(source, 384);
+    appendClusteredSuboperation(source, 384);
     for (int index = 0; index < 384; index++) {
-      requireOk(source.appendBase(
-          index, OWNER_OBJECT_ID,
-          IndexedRelationalMutationBuffer.BASE_INSERT, index + 1L, 0,
-          row, 0, rowBytes));
+      appendClusteredValue(source, index + 1L, row);
     }
     requireOk(source.seal());
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
@@ -260,7 +297,7 @@ final class IndexedRelationalWalCodecTest {
     }
 
     IndexedRelationalMutationBuffer decoded =
-        new IndexedRelationalMutationBuffer(384, 0, 0);
+        new IndexedRelationalMutationBuffer(384, 1, TupleKeyCodec.MAX_INDEX_KEY_PARTS);
     IndexedRelationalWalDecoder decoder = new IndexedRelationalWalDecoder(decoded);
     for (int chunk = 0; chunk < plan.chunkCount(); chunk++) {
       ByteBuffer encoded = encode(plan, chunk);
@@ -275,13 +312,11 @@ final class IndexedRelationalWalCodecTest {
   @Test
   void rejectsTruncationReorderingAndDigestCorruption() {
     IndexedRelationalMutationBuffer one =
-        new IndexedRelationalMutationBuffer(1, 0, 0);
+        new IndexedRelationalMutationBuffer(1, 1, 1);
     ByteBuffer row = ByteBuffer.allocate(32);
-    requireOk(one.reserve(1, 0, 0, row.remaining()));
-    appendBaseSuboperations(one, 1);
-    requireOk(one.appendBase(
-        0, OWNER_OBJECT_ID,
-        IndexedRelationalMutationBuffer.BASE_INSERT, 1, 0, row, 0, row.remaining()));
+    requireOk(one.reserve(1, 1, 1, row.remaining() + 64));
+    appendClusteredSuboperation(one, 1);
+    appendClusteredValue(one, 1, row);
     requireOk(one.seal());
     IndexedRelationalWalPlan onePlan = new IndexedRelationalWalPlan();
     requireOk(onePlan.plan(TRANSACTION_ID, OPERATION_ID + 2, one));
@@ -296,22 +331,19 @@ final class IndexedRelationalWalCodecTest {
     check(decodeOne(corrupted) == StatusCode.CORRUPTION, "digest corruption accepted");
 
     IndexedRelationalMutationBuffer many =
-        new IndexedRelationalMutationBuffer(384, 0, 0);
+        new IndexedRelationalMutationBuffer(384, 1, 1);
     ByteBuffer largeRow = ByteBuffer.allocate(8_192);
-    requireOk(many.reserve(384, 0, 0, 384 * largeRow.remaining()));
-    appendBaseSuboperations(many, 384);
+    requireOk(many.reserve(384, 1, 1, 384 * (largeRow.remaining() + 64)));
+    appendClusteredSuboperation(many, 384);
     for (int index = 0; index < 384; index++) {
-      requireOk(many.appendBase(
-          index, OWNER_OBJECT_ID,
-          IndexedRelationalMutationBuffer.BASE_INSERT, index + 1L, 0,
-          largeRow, 0, largeRow.remaining()));
+      appendClusteredValue(many, index + 1L, largeRow);
     }
     requireOk(many.seal());
     IndexedRelationalWalPlan manyPlan = new IndexedRelationalWalPlan();
     requireOk(manyPlan.plan(TRANSACTION_ID, OPERATION_ID + 3, many));
     ByteBuffer second = encode(manyPlan, 1);
     IndexedRelationalMutationBuffer output =
-        new IndexedRelationalMutationBuffer(384, 0, 0);
+        new IndexedRelationalMutationBuffer(384, 1, TupleKeyCodec.MAX_INDEX_KEY_PARTS);
     IndexedRelationalWalDecoder decoder = new IndexedRelationalWalDecoder(output);
     check(decoder.decode(second, TRANSACTION_ID, 0) == StatusCode.CORRUPTION,
         "reordered chunk accepted");
@@ -361,13 +393,13 @@ final class IndexedRelationalWalCodecTest {
     requireOk(source.appendDescriptor(
         OWNER_OBJECT_ID, 1_000, 1_000, descriptorHash(descriptor), descriptor, 0, 1));
     requireOk(source.appendSuboperation(
-        OWNER_OBJECT_ID, -1, 0, 1,
+        0, IndexedRelationalMutation.SCALAR_SUBOPERATION, 0, 1,
         0, 0, SCALAR_ROOT, SCALAR_ROOT + 1, NEXT_PAGE, NEXT_PAGE + 1, 0, 0,
         0, 1,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
         IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
     check(source.appendSuboperation(
-        OWNER_OBJECT_ID, -1, 1, 1,
+        0, IndexedRelationalMutation.SCALAR_SUBOPERATION, 1, 1,
         0, 0, SCALAR_ROOT, SCALAR_ROOT, NEXT_PAGE + 1, NEXT_PAGE + 1, 0, 0,
         1, 2,
         IndexedRelationalSuboperations.REGISTRY_ABSENT,
@@ -395,7 +427,7 @@ final class IndexedRelationalWalCodecTest {
 
   static StatusCode decodeOne(ByteBuffer source) {
     IndexedRelationalMutationBuffer output =
-        new IndexedRelationalMutationBuffer(1, 0, 0);
+        new IndexedRelationalMutationBuffer(1, 1, TupleKeyCodec.MAX_INDEX_KEY_PARTS);
     return new IndexedRelationalWalDecoder(output).decode(source, TRANSACTION_ID, 1);
   }
 

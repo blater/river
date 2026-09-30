@@ -15,4 +15,19 @@ public final class TupleBTreeWorkspace {
   final TupleBTreeLeafEntry leaf = new TupleBTreeLeafEntry();
   final TupleBTreeInternalEntry internal = new TupleBTreeInternalEntry();
   final TupleKeyPrefix prefix = new TupleKeyPrefix();
+  private int removedOverflowPageId;
+  private long removedOverflowGeneration;
+
+  void clearRemovedValue() {
+    removedOverflowPageId = 0;
+    removedOverflowGeneration = 0;
+  }
+
+  void removedValue(int pageId, long generation) {
+    removedOverflowPageId = pageId;
+    removedOverflowGeneration = generation;
+  }
+
+  int removedOverflowPageId() { return removedOverflowPageId; }
+  long removedOverflowGeneration() { return removedOverflowGeneration; }
 }

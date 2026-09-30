@@ -14,15 +14,20 @@ created: 2026-09-29T09:23:21.523962Z
 ---
 # Simplify indexed-row resolution and tuple-bound rechecks
 
-Scheduling revision, 2026-09-29: [Erebor](tic-erebor.md)'s clustered-row design
-decision now precedes this cleanup. Rebase the implementation scope on the
-selected layout: consolidate surviving snapshot-resolution responsibilities,
-and use the direct comparator only for row checks that remain necessary.
-An ordinary committed row delivered with its key from the same visible primary
-leaf should not require this recheck at all. Do not build a comparator or
-refactor an indirection path simply to delete it in the storage replacement.
-The current-source analysis below remains valid for the existing path and for
-changed-row residual checks.
+Scheduling reconciliation, 2026-09-30: [Erebor](tic-erebor.md)'s clustered-row
+replacement is delivered at `fdfda831`, checkpoint
+`perf-checkpoint-20260929-tic-erebor-clustered-row-store`. Before implementation,
+reassess the scope below against that accepted layout: consolidate surviving
+snapshot-resolution responsibilities and use the direct comparator only for
+row checks that remain necessary. Ordinary committed rows delivered with their
+keys from the same visible primary leaf no longer need the separate row access
+and recheck. Do not restore that removed path to implement this cleanup.
+
+The source findings and implementation proposal below describe `2ada6350`,
+before Erebor, and remain historical input to that reassessment rather than a
+verified description of current callers. The direct ordering analysis remains
+relevant to changed-row residual checks; verify their owners and lifetimes on
+the implementation base before selecting the remaining change.
 
 Simplify committed row reads around one explicit, reusable version-resolution
 result. Point reads and scans should consume the metadata already selected by

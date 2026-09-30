@@ -41,14 +41,12 @@ final class IndexedRelationalWalRecoveryTest {
   @Test
   void productionDispatchRetainsContiguousGroupAndPublishesOnlyFinalChunk() {
     IndexedRelationalMutationBuffer source =
-        new IndexedRelationalMutationBuffer(384, 0, 0);
+        new IndexedRelationalMutationBuffer(384, 1, 1);
     ByteBuffer row = ByteBuffer.allocate(8_192);
-    requireOk(source.reserve(384, 0, 0, 384 * row.remaining()));
-    appendBaseSuboperations(source, 384);
+    requireOk(source.reserve(384, 1, 1, 384 * (row.remaining() + 64)));
+    appendClusteredSuboperation(source, 384);
     for (int index = 0; index < 384; index++) {
-      requireOk(source.appendBase(
-          index, OWNER_OBJECT_ID, IndexedRelationalMutationBuffer.BASE_INSERT,
-          index + 1L, 0, row, 0, row.remaining()));
+      appendClusteredValue(source, index + 1L, row);
     }
     requireOk(source.seal());
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
@@ -81,14 +79,12 @@ final class IndexedRelationalWalRecoveryTest {
   @Test
   void productionDispatchRejectsInterleaving() {
     IndexedRelationalMutationBuffer source =
-        new IndexedRelationalMutationBuffer(384, 0, 0);
+        new IndexedRelationalMutationBuffer(384, 1, 1);
     ByteBuffer row = ByteBuffer.allocate(8_192);
-    requireOk(source.reserve(384, 0, 0, 384 * row.remaining()));
-    appendBaseSuboperations(source, 384);
+    requireOk(source.reserve(384, 1, 1, 384 * (row.remaining() + 64)));
+    appendClusteredSuboperation(source, 384);
     for (int index = 0; index < 384; index++) {
-      requireOk(source.appendBase(
-          index, OWNER_OBJECT_ID, IndexedRelationalMutationBuffer.BASE_INSERT,
-          index + 1L, 0, row, 0, row.remaining()));
+      appendClusteredValue(source, index + 1L, row);
     }
     requireOk(source.seal());
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
@@ -112,14 +108,12 @@ final class IndexedRelationalWalRecoveryTest {
       @TempDir Path root) {
     int mutations = 2_048;
     IndexedRelationalMutationBuffer source =
-        new IndexedRelationalMutationBuffer(mutations, 0, 0);
+        new IndexedRelationalMutationBuffer(mutations, 1, 1);
     ByteBuffer row = ByteBuffer.allocate(8_192);
-    requireOk(source.reserve(mutations, 0, 0, mutations * row.remaining()));
-    appendBaseSuboperations(source, mutations);
+    requireOk(source.reserve(mutations, 1, 1, mutations * (row.remaining() + 64)));
+    appendClusteredSuboperation(source, mutations);
     for (int index = 0; index < mutations; index++) {
-      requireOk(source.appendBase(
-          index, OWNER_OBJECT_ID, IndexedRelationalMutationBuffer.BASE_INSERT,
-          index + 1L, 0, row, 0, row.remaining()));
+      appendClusteredValue(source, index + 1L, row);
     }
     requireOk(source.seal());
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
@@ -163,14 +157,12 @@ final class IndexedRelationalWalRecoveryTest {
       @TempDir Path root) throws Exception {
     int mutations = 2_048;
     IndexedRelationalMutationBuffer source =
-        new IndexedRelationalMutationBuffer(mutations, 0, 0);
+        new IndexedRelationalMutationBuffer(mutations, 1, 1);
     ByteBuffer row = ByteBuffer.allocate(8_192);
-    requireOk(source.reserve(mutations, 0, 0, mutations * row.remaining()));
-    appendBaseSuboperations(source, mutations);
+    requireOk(source.reserve(mutations, 1, 1, mutations * (row.remaining() + 64)));
+    appendClusteredSuboperation(source, mutations);
     for (int index = 0; index < mutations; index++) {
-      requireOk(source.appendBase(
-          index, OWNER_OBJECT_ID, IndexedRelationalMutationBuffer.BASE_INSERT,
-          index + 1L, 0, row, 0, row.remaining()));
+      appendClusteredValue(source, index + 1L, row);
     }
     requireOk(source.seal());
     IndexedRelationalWalPlan interrupted = new IndexedRelationalWalPlan();
@@ -205,7 +197,7 @@ final class IndexedRelationalWalRecoveryTest {
     check(firstRecovery.applications == 0,
         "incomplete continuation reached relational replay");
 
-    IndexedRelationalWalPlan committed = oneBasePlan(
+    IndexedRelationalWalPlan committed = oneClusteredPlan(
         TRANSACTION_ID + 1, OPERATION_ID + 9, 29);
     IndexedRelationalWalCommitter committer =
         new IndexedRelationalWalCommitter(wal, new IndexedGroupCommitMetrics());
@@ -251,14 +243,12 @@ final class IndexedRelationalWalRecoveryTest {
 
     int mutations = 2_048;
     IndexedRelationalMutationBuffer source =
-        new IndexedRelationalMutationBuffer(mutations, 0, 0);
+        new IndexedRelationalMutationBuffer(mutations, 1, 1);
     ByteBuffer row = ByteBuffer.allocate(8_192);
-    requireOk(source.reserve(mutations, 0, 0, mutations * row.remaining()));
-    appendBaseSuboperations(source, mutations);
+    requireOk(source.reserve(mutations, 1, 1, mutations * (row.remaining() + 64)));
+    appendClusteredSuboperation(source, mutations);
     for (int index = 0; index < mutations; index++) {
-      requireOk(source.appendBase(
-          index, OWNER_OBJECT_ID, IndexedRelationalMutationBuffer.BASE_INSERT,
-          index + 1L, 0, row, 0, row.remaining()));
+      appendClusteredValue(source, index + 1L, row);
     }
     requireOk(source.seal());
     IndexedRelationalWalPlan interrupted = new IndexedRelationalWalPlan();
@@ -314,7 +304,7 @@ final class IndexedRelationalWalRecoveryTest {
 
   @Test
   void committedRelationalRecordRequiresPositiveSequenceBeforeCoveredSkip() {
-    IndexedRelationalWalPlan plan = oneBasePlan(TRANSACTION_ID, OPERATION_ID + 71, 11);
+    IndexedRelationalWalPlan plan = oneClusteredPlan(TRANSACTION_ID, OPERATION_ID + 71, 11);
     RecordingReplay replay = new RecordingReplay();
     IndexedRelationalWalRecovery recovery = new IndexedRelationalWalRecovery(replay);
     check(recovery.apply(
@@ -337,9 +327,9 @@ final class IndexedRelationalWalRecoveryTest {
         wal, null, null, DATABASE, new IndexedStorePhase(), replay);
     requireOk(recovery.recover(GENERATION, true, 90));
 
-    IndexedRelationalWalPlan first = oneBasePlan(
+    IndexedRelationalWalPlan first = oneClusteredPlan(
         TRANSACTION_ID, OPERATION_ID + 91, 11);
-    IndexedRelationalWalPlan second = oneBasePlan(
+    IndexedRelationalWalPlan second = oneClusteredPlan(
         TRANSACTION_ID, OPERATION_ID + 92, 22);
     LocalWalReadResult firstRecord = record(first, 0, 91, 1, 1_000);
     LocalWalReadResult secondRecord = record(second, 0, 91, 1, firstRecord.nextOffset());
@@ -354,7 +344,7 @@ final class IndexedRelationalWalRecoveryTest {
   }
 
   @Test
-  void walOnlyReopenAppliesRootLifecycleTupleAndBase(@TempDir Path root) {
+  void walOnlyReopenAppliesRootLifecycleTupleAndScalar(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
@@ -385,7 +375,7 @@ final class IndexedRelationalWalRecoveryTest {
     appendTupleInsertGroup(
         wal, secondDescriptor, secondHash, SECOND_OWNER_OBJECT_ID,
         1_001, 1_001, 6, 7, 3, 5, physicalTextTuple(2, "second"));
-    appendBaseInsertGroup(wal, 8, 6);
+    appendScalarInsertGroup(wal, 8, 6);
     requireOk(wal.close());
     requireOk(directory.close());
 
@@ -395,11 +385,11 @@ final class IndexedRelationalWalRecoveryTest {
     requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistry(reopened.store());
     assertRecoveredRegistry(reopened.store(), 1_001, 6, SECOND_OWNER_OBJECT_ID);
-    HeapRowResult base = new HeapRowResult();
+    HeapRowResult scalar = new HeapRowResult();
     requireOk(reopened.store().fetchByKey(
-        CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID),
-        1, base));
-    check(base.length() == Long.BYTES && base.getLong(0) == 771, "base replay mismatch");
+        SCALAR_SPACE,
+        1, scalar));
+    check(scalar.length() == Long.BYTES && scalar.getLong(0) == 771, "scalar replay mismatch");
     check(reopened.store().rowCount() == 7, "grouped replay heap frontier mismatch");
     IndexedVacuumResult vacuum = new IndexedVacuumResult();
     requireOk(reopened.store().vacuum(90, vacuum));
@@ -408,11 +398,11 @@ final class IndexedRelationalWalRecoveryTest {
     assertRecoveredRegistry(reopened.store());
     assertRecoveredRegistry(reopened.store(), 1_001, 6, SECOND_OWNER_OBJECT_ID);
     requireOk(reopened.store().fetchByKey(
-        CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID),
-        1, base));
-    check(base.getLong(0) == 771, "vacuum changed grouped base row");
+        SCALAR_SPACE,
+        1, scalar));
+    check(scalar.getLong(0) == 771, "vacuum changed grouped scalar row");
     requireOk(reopened.store().flush());
-    appendIncompleteBaseGroup(wal);
+    appendIncompleteClusteredGroup(wal);
     requireOk(reopened.store().close());
     requireOk(wal.close());
     requireOk(directory.close());

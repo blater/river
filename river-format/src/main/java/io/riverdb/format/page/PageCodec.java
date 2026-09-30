@@ -19,6 +19,7 @@ public final class PageCodec {
   public static final int PAYLOAD_KIND_TUPLE_BTREE = 2;
   public static final int PAYLOAD_KIND_FREE = 3;
   public static final int PAYLOAD_KIND_LOGICAL_HEAD = 4;
+  public static final int PAYLOAD_KIND_TUPLE_OVERFLOW = 5;
   public static final int FREE_PAYLOAD_BYTES = Integer.BYTES;
   public static final long SCALAR_OWNER_KEY_ID = 0;
 

@@ -14,6 +14,7 @@ public final class TableDescriptor {
   private final long catalogGeneration;
   private final ColumnDescriptorSet columns;
   private final KeyDescriptor primaryKey;
+  private final KeyDescriptor identityKey;
   private final KeyDescriptor[] secondaryKeys;
   private final KeyDescriptor[] foreignKeys;
   private final TableLayout.Result layout;
@@ -26,6 +27,7 @@ public final class TableDescriptor {
       long generation,
       ColumnDescriptorSet columnSet,
       KeyDescriptor primary,
+      KeyDescriptor identity,
       KeyDescriptor[] secondary,
       KeyDescriptor[] foreign,
       TableLayout.Result layoutResult,
@@ -36,6 +38,7 @@ public final class TableDescriptor {
     catalogGeneration = generation;
     columns = columnSet;
     primaryKey = primary;
+    identityKey = identity;
     secondaryKeys = secondary;
     foreignKeys = foreign;
     layout = layoutResult;
@@ -146,6 +149,13 @@ public final class TableDescriptor {
 
   public KeyDescriptor primaryKey() {
     return primaryKey;
+  }
+
+  /** Internal row-ID index; row authority for hidden-primary tables, locator map otherwise. */
+  public KeyDescriptor identityKey() { return identityKey; }
+
+  public KeyDescriptor clusteredKey() {
+    return primaryKey == null ? identityKey : primaryKey;
   }
 
   public int secondaryKeyCount() {

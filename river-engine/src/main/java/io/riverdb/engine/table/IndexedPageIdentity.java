@@ -11,6 +11,7 @@ final class IndexedPageIdentity {
     return payloadKind == PageCodec.PAYLOAD_KIND_SCALAR_BTREE
         ? ownerKeyId == PageCodec.SCALAR_OWNER_KEY_ID
         : payloadKind == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
+            || payloadKind == PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW
             ? CatalogKeyspace.validKeyId(ownerKeyId)
             : payloadKind == PageCodec.PAYLOAD_KIND_LOGICAL_HEAD
                 ? ownerKeyId == 0 || CatalogKeyspace.validObjectHead(ownerKeyId)

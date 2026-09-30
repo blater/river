@@ -59,7 +59,9 @@ final class IndexedVersionOperation {
     int required = 0;
     for (int operation = 0; operation < mutations.suboperationCount(); operation++) {
       int additional = mutations.suboperationDescriptorAt(operation) < 0
-          ? mutations.suboperationMutationCountAt(operation) : 1;
+          ? mutations.suboperationMutationCountAt(operation)
+          : mutations.resultingGenerationAt(operation)
+              == mutations.expectedGenerationAt(operation) ? 0 : 1;
       required = required(required, additional);
       if (required < 0) return -1;
     }

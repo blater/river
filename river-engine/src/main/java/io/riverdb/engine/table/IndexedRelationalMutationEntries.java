@@ -10,6 +10,7 @@ final class IndexedRelationalMutationEntries {
   private final IndexedIntChunks suboperationOrdinals;
   private final IndexedIntChunks payloadOffsets;
   private final IndexedIntChunks payloadLengths;
+  private final IndexedIntChunks tupleKeyLengths;
   private final IndexedLongChunks logicalRowIds;
   private final IndexedLongChunks previousRowIds;
   private final IndexedLongChunks ownerObjectIds;
@@ -24,6 +25,7 @@ final class IndexedRelationalMutationEntries {
     suboperationOrdinals = new IndexedIntChunks(capacity);
     payloadOffsets = new IndexedIntChunks(capacity);
     payloadLengths = new IndexedIntChunks(capacity);
+    tupleKeyLengths = new IndexedIntChunks(capacity);
     logicalRowIds = new IndexedLongChunks(capacity);
     previousRowIds = new IndexedLongChunks(capacity);
     ownerObjectIds = new IndexedLongChunks(capacity);
@@ -54,6 +56,8 @@ final class IndexedRelationalMutationEntries {
     if (!status.isOk()) return status;
     status = payloadLengths.reserve(required);
     if (!status.isOk()) return status;
+    status = tupleKeyLengths.reserve(required);
+    if (!status.isOk()) return status;
     status = logicalRowIds.reserve(required);
     if (!status.isOk()) return status;
     status = previousRowIds.reserve(required);
@@ -74,8 +78,21 @@ final class IndexedRelationalMutationEntries {
       ByteBuffer source,
       int sourceOffset,
       int length) {
+    append(operation, descriptorOrdinal, suboperationOrdinal, ownerObjectId, space,
+        logicalRowId, previousRowId, source, sourceOffset, length,
+        null, 0, 0, 0);
+  }
+
+  void append(
+      int operation, int descriptorOrdinal, int suboperationOrdinal,
+      long ownerObjectId, long space, long logicalRowId, long previousRowId,
+      ByteBuffer source, int sourceOffset, int length,
+      ByteBuffer value, int valueOffset, int valueLength, int tupleKeyLength) {
     for (int index = 0; index < length; index++) {
       payload.set(payloadBytes + index, source.get(sourceOffset + index));
+    }
+    for (int index = 0; index < valueLength; index++) {
+      payload.set(payloadBytes + length + index, value.get(valueOffset + index));
     }
     operations.set(count, operation);
     descriptorOrdinals.set(count, descriptorOrdinal);
@@ -85,8 +102,9 @@ final class IndexedRelationalMutationEntries {
     logicalRowIds.set(count, logicalRowId);
     previousRowIds.set(count, previousRowId);
     payloadOffsets.set(count, payloadBytes);
-    payloadLengths.set(count, length);
-    payloadBytes += length;
+    tupleKeyLengths.set(count, tupleKeyLength);
+    payloadLengths.set(count, length + valueLength);
+    payloadBytes += length + valueLength;
     count++;
   }
 
@@ -100,12 +118,22 @@ final class IndexedRelationalMutationEntries {
   void copyPayloadTo(int mutation, ByteBuffer target, int targetOffset) {
     payload.copyTo(payloadOffsets.get(mutation), target, targetOffset, payloadLengths.get(mutation));
   }
+  void copyTupleKeyTo(int mutation, ByteBuffer target, int targetOffset) {
+    payload.copyTo(payloadOffsets.get(mutation), target, targetOffset,
+        tupleKeyLengths.get(mutation));
+  }
+  void copyTupleValueTo(int mutation, ByteBuffer target, int targetOffset) {
+    payload.copyTo(payloadOffsets.get(mutation) + tupleKeyLengths.get(mutation),
+        target, targetOffset,
+        payloadLengths.get(mutation) - tupleKeyLengths.get(mutation));
+  }
 
   void reset() { count = 0; payloadBytes = 0; }
   long accountedBytes() {
     return operations.allocatedBytes() + descriptorOrdinals.allocatedBytes()
         + suboperationOrdinals.allocatedBytes() + payloadOffsets.allocatedBytes()
-        + payloadLengths.allocatedBytes() + logicalRowIds.allocatedBytes()
+        + payloadLengths.allocatedBytes() + tupleKeyLengths.allocatedBytes()
+        + logicalRowIds.allocatedBytes()
         + previousRowIds.allocatedBytes() + ownerObjectIds.allocatedBytes()
         + spaces.allocatedBytes() + payload.retainedBytes() + 64L;
   }
@@ -120,7 +148,7 @@ final class IndexedRelationalMutationEntries {
     long longBytes = logicalRowIds.accountedBytesForCapacity(required);
     long payloadBytesRequired = payload.retainedBytesForCapacity((int) requiredPayload);
     if (intBytes < 0 || longBytes < 0 || payloadBytesRequired < 0) return -1;
-    return Math.max(accountedBytes(), 5L * intBytes + 4L * longBytes
+    return Math.max(accountedBytes(), 6L * intBytes + 4L * longBytes
         + payloadBytesRequired + 64L);
   }
   int capacity() { return operations.capacity(); }
@@ -130,6 +158,7 @@ final class IndexedRelationalMutationEntries {
   int descriptorOrdinalAt(int index) { return descriptorOrdinals.get(index); }
   int suboperationOrdinalAt(int index) { return suboperationOrdinals.get(index); }
   int payloadLengthAt(int index) { return payloadLengths.get(index); }
+  int tupleKeyLengthAt(int index) { return tupleKeyLengths.get(index); }
   long logicalRowIdAt(int index) { return logicalRowIds.get(index); }
   long previousRowIdAt(int index) { return previousRowIds.get(index); }
   long ownerObjectIdAt(int index) { return ownerObjectIds.get(index); }
@@ -144,6 +173,7 @@ final class IndexedRelationalMutationEntries {
     suboperationOrdinals.release();
     payloadOffsets.release();
     payloadLengths.release();
+    tupleKeyLengths.release();
     logicalRowIds.release();
     previousRowIds.release();
     ownerObjectIds.release();

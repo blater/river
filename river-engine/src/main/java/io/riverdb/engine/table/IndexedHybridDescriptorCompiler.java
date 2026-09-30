@@ -10,6 +10,7 @@ final class IndexedHybridDescriptorCompiler {
   StatusCode append(
       IndexedTupleIntentJournal intents, IndexedRelationalMutation mutation) {
     for (int descriptor = 0; descriptor < intents.descriptorCount(); descriptor++) {
+      if (!intents.activeDescriptorAt(descriptor)) continue;
       StatusCode status = append(intents, descriptor, mutation);
       if (!status.isOk()) return status;
     }

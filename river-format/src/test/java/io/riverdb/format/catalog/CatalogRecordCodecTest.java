@@ -293,7 +293,7 @@ final class CatalogRecordCodecTest {
     assertEquals(StatusCode.OK, CatalogAllocationWatermarkCodec.encode(
         bytes, 4, CatalogKeyspace.OBJECT_ID_EXHAUSTED, Long.MAX_VALUE - 1,
         Long.MAX_VALUE - 2, Long.MAX_VALUE - 3,
-        CatalogKeyspace.MAXIMUM_KEY_ID - 3, new CRC32C()));
+        CatalogKeyspace.MAXIMUM_USER_KEY_ID - 3, new CRC32C()));
     CatalogAllocationWatermark watermark = new CatalogAllocationWatermark();
     assertEquals(StatusCode.OK,
         CatalogAllocationWatermarkCodec.decode(bytes, 4, watermark, new CRC32C()));
@@ -304,6 +304,10 @@ final class CatalogRecordCodecTest {
     assertTrue(watermark.canAllocateCatalogRecordId());
     assertTrue(watermark.canAllocateKeyIds(4));
     assertFalse(watermark.canAllocateKeyIds(5));
+    assertEquals(CatalogKeyspace.MAXIMUM_USER_KEY_ID - 3, watermark.nextKeyId());
+    assertEquals(CatalogKeyspace.MAXIMUM_KEY_ID,
+        CatalogKeyspace.relationalIdentityKeyId(
+            CatalogKeyspace.MAXIMUM_RELATIONAL_OBJECT_ID));
     assertEquals(
         CatalogKeyspace.FIRST_INDEX_SPACE + CatalogKeyspace.MAXIMUM_KEY_ID - 1,
         CatalogKeyspace.relationalIndexSpace(CatalogKeyspace.MAXIMUM_KEY_ID));

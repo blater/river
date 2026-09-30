@@ -84,12 +84,16 @@ class IndexedTupleIntentView extends IndexedTupleIntentStorage {
   int descriptorAt(int index) { return columns.descriptor(index); }
   long logicalRowIdAt(int index) { return columns.rowId(index); }
   int payloadLengthAt(int index) { return lengthAt(index); }
+  int valueLengthAt(int index) { return super.valueLengthAt(index); }
   boolean canAppend(int length) {
     return length >= 0 && count < maximumMutations
         && payloadBytes <= maximumPayloadBytes - length && columns.hasSlot(count, maximumMutations);
   }
   void copyPayloadTo(int index, ByteBuffer target, int targetOffset) {
     payload.copyTo(offsetAt(index), lengthAt(index), target, targetOffset);
+  }
+  void copyValueTo(int index, ByteBuffer target, int targetOffset) {
+    payload.copyTo(valueOffsetAt(index), valueLengthAt(index), target, targetOffset);
   }
   int compare(int left, int right) {
     int leftLength = copyToScratch(left, compareLeftBytes);

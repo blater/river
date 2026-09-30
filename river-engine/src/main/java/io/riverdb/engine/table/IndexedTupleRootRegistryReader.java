@@ -23,6 +23,7 @@ final class IndexedTupleRootRegistryReader {
   }
 
   StatusCode load(IndexedRelationalMutationBuffer source, int operation) {
+    record.reset();
     int descriptor = source.suboperationDescriptorAt(operation);
     StatusCode status = lookup.find(CatalogKeyspace.INDEX_ROOT_SPACE,
         source.keyIdAt(descriptor));
@@ -73,4 +74,5 @@ final class IndexedTupleRootRegistryReader {
   }
 
   long rowId() { return rowId; }
+  long membershipSequence() { return record.membershipSequence(); }
 }

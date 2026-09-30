@@ -44,9 +44,9 @@ final class IndexedRelationalWalStorageFixtures {
 
   static void prepareHybrid(
       IndexedTransactionSession session, int[] descriptor,
-      long baseSpace, int key, long value) {
+      long scalarSpace, int key, long value) {
     requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
-    requireOk(session.insert(baseSpace, key, scalarRow(value)));
+    requireOk(session.insert(scalarSpace, key, scalarRow(value)));
     ByteBuffer tuple = physicalFixedTuple(key, value);
     requireOk(session.preflightTupleMutations(1, 1, tuple.remaining()));
     requireOk(session.protectTupleKeyForWrite(1_000, tuple, tuple.position(), tuple.remaining()));
@@ -76,11 +76,11 @@ final class IndexedRelationalWalStorageFixtures {
         "grouped hybrid tuple missing for row " + logicalRowId);
   }
 
-  static void assertBaseRow(
+  static void assertScalarRow(
       IndexedTableStore store, long space, long key, long expectedValue) {
     HeapRowResult row = new HeapRowResult();
     requireOk(store.fetchByKey(space, key, row));
-    check(row.getLong(0) == expectedValue, "hybrid base row value mismatch for " + key);
+    check(row.getLong(0) == expectedValue, "hybrid scalar row value mismatch for " + key);
   }
 
   static LocalWal openWal(NioDurableDirectory directory, boolean existing) {

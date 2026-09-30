@@ -28,7 +28,8 @@ final class IndexedOperationPagePins {
     }
     frame.pinCount++;
     result.set(
-        pageId, frame.payload, arena, slot, frame.pageGeneration, writable);
+        pageId, frame.payload, arena, slot, frame.pageGeneration,
+        frame.durableGeneration, writable);
     return cache.setStatus(StatusCode.OK);
   }
 
@@ -52,7 +53,7 @@ final class IndexedOperationPagePins {
     frame.pinCount++;
     result.set(
         pageId, frame.payload, IndexedOperationPage.STAGING_ARENA,
-        slot, frame.pageGeneration, true);
+        slot, frame.pageGeneration, frame.durableGeneration, true);
     return cache.setStatus(StatusCode.OK);
   }
 

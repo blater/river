@@ -5,6 +5,9 @@ import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.btree.TupleBTreePageProvider;
 import io.riverdb.storage.btree.TupleBTreePageReference;
 import io.riverdb.format.btree.TupleBTreePageValidationProof;
+import io.riverdb.format.btree.TupleRowOverflowCodec;
+import io.riverdb.format.btree.TupleRowOverflowHeader;
+import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
 /** Operation-scoped native PageSet provider for one tuple index. */
@@ -15,6 +18,10 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   private final IndexedOperationPage metadata = new IndexedOperationPage();
   private final IndexedOperationPage firstPage = new IndexedOperationPage();
   private final IndexedOperationPage secondPage = new IndexedOperationPage();
+  private final IndexedOperationPage overflowPage = new IndexedOperationPage();
+  private final IndexedOperationPage retirementPage = new IndexedOperationPage();
+  private final TupleRowOverflowHeader retirementHeader = new TupleRowOverflowHeader();
+  private final IndexedOverflowRetirementQueue retirementQueue;
   private TupleBTreePageReference firstReference;
   private TupleBTreePageReference secondReference;
   private int plannedPages;
@@ -24,6 +31,7 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   IndexedTuplePageProvider(IndexedPageSet pageSet, IndexedTupleRootState rootState) {
     pages = pageSet;
     root = rootState;
+    retirementQueue = new IndexedOverflowRetirementQueue(pageSet);
     maximumNewPages = pages == null ? 0 : Math.max(0, pages.changedPageCapacity() - 2);
   }
 
@@ -49,12 +57,23 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
     return StatusCode.OK;
   }
 
+  StatusCode beginVariableAllocation() {
+    if (active || pages == null || root == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = root.begin();
+    if (!status.isOk()) return status;
+    plannedPages = -1;
+    allocatedPages = 0;
+    active = true;
+    return StatusCode.OK;
+  }
+
   StatusCode finish(StatusCode operation) {
     if (!active) return StatusCode.INVARIANT_BROKEN;
     StatusCode status = operation;
-    if (firstReference != null || secondReference != null) {
+    if (firstReference != null || secondReference != null
+        || overflowPage.attached() || retirementPage.attached()) {
       status = StatusCode.INVARIANT_BROKEN;
-    } else if (status.isOk() && allocatedPages != plannedPages) {
+    } else if (status.isOk() && plannedPages >= 0 && allocatedPages != plannedPages) {
       status = StatusCode.INVARIANT_BROKEN;
     }
     StatusCode released = releaseMetadata();
@@ -72,7 +91,8 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
 
   boolean reusable() {
     return !active && !root.active() && !metadata.attached()
-        && firstReference == null && secondReference == null;
+        && firstReference == null && secondReference == null
+        && !overflowPage.attached() && !retirementPage.attached();
   }
 
   StatusCode releaseRetained() {
@@ -167,8 +187,17 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   @Override
   public StatusCode allocate(TupleBTreePageReference result) {
     if (!active || result == null || result.isAttached()
-        || allocatedPages >= plannedPages || !metadata.attached()) {
+        || allocatedPages >= (plannedPages < 0 ? maximumNewPages : plannedPages)) {
       return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    if (!metadata.attached()) {
+      StatusCode admission = pages.pinScalarOperationPage(
+          IndexedTableKernel.ROOT_META_PAGE_ID, true, metadata);
+      if (!admission.isOk()) return admission;
+    }
+    if (plannedPages < 0) {
+      StatusCode admission = admitAllocation(1);
+      if (!admission.isOk()) return admission;
     }
     IndexedOperationPage page = freePage();
     if (page == null) return StatusCode.RESOURCE_EXHAUSTED;
@@ -179,6 +208,55 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
       status = attach(result, page, true);
     }
     return status;
+  }
+
+  StatusCode allocateOverflow() {
+    if (!active || plannedPages >= 0 || overflowPage.attached()
+        || allocatedPages >= maximumNewPages) return StatusCode.RESOURCE_EXHAUSTED;
+    if (!metadata.attached()) {
+      StatusCode status = pages.pinScalarOperationPage(
+          IndexedTableKernel.ROOT_META_PAGE_ID, true, metadata);
+      if (!status.isOk()) return status;
+    }
+    StatusCode status = admitAllocation(1);
+    if (status.isOk()) status = IndexedOperationPageAllocation.tupleOverflow(
+        pages, metadata.payload(), root.keyId(), overflowPage);
+    if (status.isOk()) allocatedPages++;
+    return status;
+  }
+
+  IndexedOperationPage overflowPage() { return overflowPage; }
+
+  StatusCode releaseOverflow() {
+    return !active || !overflowPage.attached()
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : pages.releaseOperationPage(overflowPage);
+  }
+
+  StatusCode retireOverflow(
+      int pageId, long generation, long logicalRowId, long removingCommitSequence) {
+    if (!active || pageId <= 0 || generation <= 0 || logicalRowId <= 0
+        || retirementPage.attached()
+        || pages.payloadKind(pageId) != PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW
+        || pages.ownerKeyId(pageId) != root.keyId()) {
+      return StatusCode.CORRUPTION;
+    }
+    StatusCode status = pages.pinTupleOverflowOperationPage(
+        pageId, true, root.keyId(), retirementPage);
+    if (!status.isOk()) return status;
+    if (retirementPage.durableGeneration() != generation) {
+      status = StatusCode.CORRUPTION;
+    } else {
+      status = TupleRowOverflowCodec.retire(
+          retirementPage.payload(), 0, logicalRowId,
+          removingCommitSequence, retirementHeader);
+    }
+    StatusCode released = pages.releaseOperationPage(retirementPage);
+    if (status.isOk()) status = released;
+    // Transfer root ownership to the queue; allocation may already hold its writable borrow.
+    released = releaseMetadata();
+    if (status.isOk()) status = released;
+    return status.isOk() ? retirementQueue.append(pageId) : status;
   }
 
   @Override

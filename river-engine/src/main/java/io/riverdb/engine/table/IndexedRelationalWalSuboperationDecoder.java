@@ -26,7 +26,7 @@ final class IndexedRelationalWalSuboperationDecoder {
         || keyId != (descriptor < 0 ? 0 : destination.keyIdAt(descriptor))) {
       return StatusCode.CORRUPTION;
     }
-    return destination.appendSuboperation(
+    StatusCode status = destination.appendSuboperation(
         FormatBytes.getLong(source, offset + 56), descriptor,
         FormatBytes.getInt(source, offset + 16),
         FormatBytes.getInt(source, offset + 20),
@@ -46,5 +46,6 @@ final class IndexedRelationalWalSuboperationDecoder {
         FormatBytes.getLong(source, offset + 112),
         FormatBytes.getInt(source, offset + 120),
         FormatBytes.getInt(source, offset + 124));
+    return status;
   }
 }

@@ -2,7 +2,7 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 
-/** Exact reusable logical-output and WAL demand calculation before physical staging. */
+/** Bounded logical-output and WAL demand calculation before physical staging. */
 final class IndexedHybridLogicalSizing {
   private int mutations;
   private int descriptors;
@@ -54,7 +54,8 @@ final class IndexedHybridLogicalSizing {
       IndexedTupleIndexLifecycleBatch lifecycle,
       IndexedLogicalRowIdFloors floors) {
     int activeTuples = intents.activeMutationCount();
-    long mutationTotal = (long) pending.count() + activeTuples;
+    int overflowDemand = IndexedTupleDeltaCompiler.overflowAllocationCount(intents, -1);
+    long mutationTotal = (long) pending.count() + activeTuples + overflowDemand;
     if (mutationTotal > Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
     mutations = (int) mutationTotal;
     logicalRowFloors = floors.count();
@@ -66,14 +67,16 @@ final class IndexedHybridLogicalSizing {
         partTotal += lifecycle.shapeAt(index).partCount();
       }
       for (int descriptor = 0; descriptor < intents.descriptorCount(); descriptor++) {
+        if (!intents.activeDescriptorAt(descriptor)) continue;
         if (lifecycleIndex(intents, lifecycle, descriptor) >= 0) continue;
         if (descriptors == Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
         descriptors++;
         partTotal += intents.shapeAt(descriptor).partCount();
       }
     } else {
-      descriptors = intents.descriptorCount();
-      for (int descriptor = 0; descriptor < descriptors; descriptor++) {
+      for (int descriptor = 0; descriptor < intents.descriptorCount(); descriptor++) {
+        if (!intents.activeDescriptorAt(descriptor)) continue;
+        descriptors++;
         partTotal += intents.shapeAt(descriptor).partCount();
       }
     }
@@ -94,9 +97,12 @@ final class IndexedHybridLogicalSizing {
 
     long payloadTotal = scalarPayloadBytes(pending);
     if (payloadTotal < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    payloadTotal += overflowDemand * IndexedOverflowReclamationCodec.BYTES;
+    if (payloadTotal > Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
     for (int mutation = 0; mutation < intents.mutationCount(); mutation++) {
       if (intents.activeAt(mutation)) {
-        payloadTotal += intents.payloadLengthAt(mutation);
+        payloadTotal += (long) intents.payloadLengthAt(mutation)
+            + intents.valueLengthAt(mutation);
         if (payloadTotal > Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
       }
     }

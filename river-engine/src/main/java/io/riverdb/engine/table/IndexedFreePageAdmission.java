@@ -21,7 +21,7 @@ final class IndexedFreePageAdmission {
         || pages.ownerKeyId(pageId) != PageCodec.SCALAR_OWNER_KEY_ID) {
       return StatusCode.CORRUPTION;
     }
-    ByteBuffer free = pages.currentPayload(pageId);
+    ByteBuffer free = pages.operationPayload(pageId);
     return free == null ? pages.lastStatus()
         : BTreeFreePage.validate(
             free, pageId, BTreeRootPage.nextPageId(metadata), count);

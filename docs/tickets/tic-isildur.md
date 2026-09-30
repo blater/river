@@ -49,15 +49,16 @@ delivery under [tic-30c3](tic-30c3.md) and expands the Stock Level work in
    against MariaDB's actual plan. [Tic-boromir](tic-boromir.md) tested bounded
    metadata frame-hit lookup with unchanged cache capacity and closed without
    code after repeated quiet-host TPS and p99 regressions.
-   [Tic-erebor](tic-erebor.md) is now next: prefer canonical row payload in
-   primary-index leaves, beginning with its explicit identity, MVCC/history,
-   overflow and publication design checkpoint. Deliver and measure one
-   complete row-store replacement. [Tic-uruk-hai](tic-uruk-hai.md) then
-   consolidates surviving snapshot-resolution and bound-check responsibilities;
-   do not optimize a row access path that the selected layout removes. Its
-   direct comparison analysis applies to residual changed-row checks where
-   still needed. The mixed-workload metadata-cache capacity question remains
-   separate.
+   [Tic-erebor](tic-erebor.md) delivers the canonical primary-leaf row store at
+   `fdfda831`, checkpoint
+   `perf-checkpoint-20260929-tic-erebor-clustered-row-store`. Its
+   [promotion record](../delivery/evidence/2026-09-29-tic-erebor-promotion.md)
+   retains independent acceptance, write costs and the resolved strict retry
+   mix. [Tic-uruk-hai](tic-uruk-hai.md) follows with surviving snapshot-resolution
+   and bound-check responsibilities, after reassessing its source findings
+   against the delivered layout. The wider trust-boundary audit and
+   mixed-workload metadata-cache capacity question remain separate; this epic
+   remains open.
 
 ## Acceptance Criteria
 

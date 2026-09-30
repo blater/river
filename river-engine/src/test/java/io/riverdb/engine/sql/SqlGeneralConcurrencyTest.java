@@ -14,6 +14,39 @@ final class SqlGeneralConcurrencyTest {
   private static final String S = "SERIALIZABLE";
 
   @Test
+  void readCommittedLockingReadsRequireConsistentRowOrder(@TempDir Path root) throws Exception {
+    try (var f = new SqlConcurrencyFixture(root.resolve("opposing"))) {
+      f.begin(0, "READ COMMITTED");
+      f.begin(1, "READ COMMITTED");
+      assertEquals(100, f.scalar(0, "SELECT value FROM rows WHERE id=1 FOR UPDATE"));
+      assertEquals(200, f.scalar(1, "SELECT value FROM rows WHERE id=2 FOR UPDATE"));
+      var first = f.queue(0, "SELECT value FROM rows WHERE id=2 FOR UPDATE", 1);
+      f.deadlock(1, "SELECT value FROM rows WHERE id=1 FOR UPDATE");
+      f.exec(1, "ROLLBACK");
+      f.completed(first);
+      f.exec(0, "COMMIT");
+      f.cycle(1,
+          new Edge(0, 1, "KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 4294967297L, 2),
+          new Edge(1, 0, "KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 4294967297L, 1));
+    }
+    try (var f = new SqlConcurrencyFixture(root.resolve("ordered"))) {
+      f.begin(0, "READ COMMITTED");
+      f.begin(1, "READ COMMITTED");
+      assertEquals(100, f.scalar(0, "SELECT value FROM rows WHERE id=1 FOR UPDATE"));
+      var waiting = f.queue(1, "SELECT value FROM rows WHERE id=1 FOR UPDATE", 1);
+      assertEquals(200, f.scalar(0, "SELECT value FROM rows WHERE id=2 FOR UPDATE"));
+      f.exec(0, "UPDATE rows SET value=value+1 WHERE id IN (1,2)");
+      f.exec(0, "COMMIT");
+      f.completed(waiting);
+      assertEquals(201, f.scalar(1, "SELECT value FROM rows WHERE id=2 FOR UPDATE"));
+      f.exec(1, "UPDATE rows SET value=value+1 WHERE id IN (1,2)");
+      f.exec(1, "COMMIT");
+      assertEquals(List.of(102L, 202L, 300L), f.scan(0, "SELECT value FROM rows ORDER BY id"));
+      f.noVictim();
+    }
+  }
+
+  @Test
   void pointCyclesAndAdjacentControlsAcrossIsolationPairs(@TempDir Path root) throws Exception {
     String[][] pairs = {{RR, RR}, {RR, S}, {S, S}};
     for (int pair = 0; pair < pairs.length; pair++) {
@@ -28,9 +61,10 @@ final class SqlGeneralConcurrencyTest {
           f.completed(first);
           f.exec(1, "ROLLBACK");
           f.exec(0, "COMMIT");
+          // Either held row identity or clustered key can be the first conflicting lock.
           f.cycle(1,
-              new Edge(0, 1, pair == 2 ? "TUPLE_KEY" : "KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", pair == 2 ? 1 : 4294967297L, pair == 2 ? 0 : 2),
-              new Edge(1, 0, pair == 2 ? "TUPLE_KEY" : "KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", pair == 2 ? 1 : 4294967297L, pair == 2 ? 0 : 1));
+              new Edge(0, 1, null, "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 0, 2),
+              new Edge(1, 0, null, "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 0, 1));
           assertEquals(101, f.scalar(0, "SELECT value FROM rows WHERE id=1"));
           assertEquals(202, f.scalar(0, "SELECT value FROM rows WHERE id=2"));
           f.begin(1, pairs[pair][1]);
@@ -93,8 +127,8 @@ final class SqlGeneralConcurrencyTest {
       f.completed(first);
       f.exec(0, "COMMIT");
       f.cycle(1,
-          new Edge(0, 1, "KEY", "EXCLUSIVE", "SHARED", "CONVERSION", 4294967297L, 1),
-          new Edge(1, 0, "TUPLE_KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 1, 0));
+          new Edge(0, 1, "TUPLE_KEY", "EXCLUSIVE", "SHARED", "ORDINARY", 1, 0),
+          new Edge(1, 0, "TUPLE_KEY", "EXCLUSIVE", "SHARED", "ORDINARY", 1, 0));
       f.begin(1, S);
       assertEquals(101, f.scalar(1, "SELECT value FROM rows WHERE id=1"));
       f.exec(1, "COMMIT");
@@ -117,8 +151,8 @@ final class SqlGeneralConcurrencyTest {
       f.exec(1, "COMMIT");
       f.cycle(2,
           new Edge(0, 2, "TUPLE_KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", 1, 0),
-          new Edge(1, 0, "KEY", "EXCLUSIVE", "SHARED", "ORDINARY", 4294967297L, 1),
-          new Edge(2, 1, "KEY", "SHARED", "null", "ORDINARY", 4294967297L, 1));
+          new Edge(1, 0, "TUPLE_KEY", "EXCLUSIVE", "SHARED", "ORDINARY", 1, 0),
+          new Edge(2, 1, "TUPLE_RANGE", "SHARED", "null", "ORDINARY", 1, 0));
       f.begin(2, S);
       assertEquals(101, f.scalar(2, "SELECT value FROM rows WHERE id=1"));
       f.exec(2, "COMMIT");

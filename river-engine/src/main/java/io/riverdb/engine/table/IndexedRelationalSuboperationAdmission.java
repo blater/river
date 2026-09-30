@@ -28,7 +28,8 @@ final class IndexedRelationalSuboperationAdmission {
             descriptor, expectedTupleRoot, resultingTupleRoot,
             expectedNextPage, resultingNextPage, expectedRegistryState,
             resultingRegistryState, expectedCleanupCursor, resultingCleanupCursor)
-        && validHeap(descriptor, mutations, expectedHeapVersion, resultingHeapVersion)
+        && validHeap(descriptor, mutations, expectedGeneration, resultingGeneration,
+            expectedHeapVersion, resultingHeapVersion)
         && chainsPerKey(columns, count, keyId, descriptor, expectedTupleRoot,
             expectedGeneration, expectedRegistryState, expectedPrivateOwner)
         && (count == 0 || columns.getLong(
@@ -60,7 +61,8 @@ final class IndexedRelationalSuboperationAdmission {
       IndexedRelationalSuboperationColumns columns, int count, int descriptor,
       int firstMutation, int coveredMutations, int mutations) {
     return count < columns.capacity() && count < columns.allocatedCapacity()
-        && descriptor >= IndexedRelationalMutationBuffer.SCALAR_SUBOPERATION
+        && (descriptor >= 0
+            || descriptor == IndexedRelationalMutationBuffer.SCALAR_SUBOPERATION)
         && firstMutation == coveredMutations && mutations >= 0;
   }
 
@@ -82,9 +84,12 @@ final class IndexedRelationalSuboperationAdmission {
   }
 
   private static boolean validHeap(
-      int descriptor, int mutations, long expected, long resulting) {
-    int appendedVersions = descriptor < 0 ? mutations : 1;
-    return appendedVersions > 0 && expected >= 0
+      int descriptor, int mutations, long expectedGeneration, long resultingGeneration,
+      long expected, long resulting) {
+    int appendedVersions = descriptor < 0 ? mutations
+        : expectedGeneration == resultingGeneration ? 0 : 1;
+    return (descriptor < 0 ? appendedVersions > 0 : mutations > 0 || appendedVersions > 0)
+        && expected >= 0
         && expected <= Long.MAX_VALUE - appendedVersions
         && resulting == expected + appendedVersions;
   }

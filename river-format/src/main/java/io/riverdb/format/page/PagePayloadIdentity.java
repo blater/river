@@ -14,6 +14,9 @@ final class PagePayloadIdentity {
             ? ownerKeyId == PageCodec.SCALAR_OWNER_KEY_ID
             : payloadKind == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
                 ? CatalogKeyspace.validKeyId(ownerKeyId)
+                : payloadKind == PageCodec.PAYLOAD_KIND_TUPLE_OVERFLOW
+                    ? CatalogKeyspace.validKeyId(ownerKeyId)
+                        && payloadBytes == PageCodec.MAX_PAYLOAD_BYTES
                 : payloadKind == PageCodec.PAYLOAD_KIND_LOGICAL_HEAD
                     ? (ownerKeyId == 0 || CatalogKeyspace.validObjectHead(ownerKeyId))
                         && payloadBytes == PageCodec.MAX_PAYLOAD_BYTES

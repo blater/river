@@ -32,7 +32,8 @@ final class IndexedTupleIntentJournal {
     descriptors = new IndexedTupleIntentDescriptors(maximumDescriptors);
     entries = new IndexedTupleIntentEntries(maximumMutations, maximumPayloadBytes);
     compilation = new IndexedRelationalCompilationBuffer(
-        maximumMutations, maximumDescriptors, maximumDescriptorParts(maximumDescriptors));
+        (int) Math.min(Integer.MAX_VALUE, (long) maximumMutations * 2),
+        maximumDescriptors, maximumDescriptorParts(maximumDescriptors));
   }
 
   StatusCode reserve(
@@ -48,9 +49,11 @@ final class IndexedTupleIntentJournal {
       int logicalRowFloors) {
     long entryBytes = entries.accountedBytesForReservation(mutations, payloadBytes);
     long descriptorBytes = descriptors.accountedBytesForReservation(descriptorCount);
-    long totalMutations = (long) scalarMutations + entries.count() + mutations;
+    long tupleMutations = (long) entries.count() + mutations;
+    long totalMutations = scalarMutations + tupleMutations * 2;
     long totalDescriptors = (long) descriptors.count() + descriptorCount;
-    long totalPayload = (long) scalarPayloadBytes + entries.payloadBytes() + payloadBytes;
+    long totalPayload = (long) scalarPayloadBytes + entries.payloadBytes() + payloadBytes
+        + tupleMutations * IndexedOverflowReclamationCodec.BYTES;
     long totalParts = totalDescriptors * TupleKeyCodec.MAX_INDEX_KEY_PARTS;
     if (entryBytes < 0 || descriptorBytes < 0 || scalarMutations < 0
         || scalarPayloadBytes < 0 || totalMutations > Integer.MAX_VALUE
@@ -70,8 +73,10 @@ final class IndexedTupleIntentJournal {
       int lifecycleDescriptors, int lifecycleParts, int logicalRowFloors) {
     long entryBytes = entries.accountedBytesForReservation(mutations, payloadBytes);
     long descriptorBytes = descriptors.accountedBytesForReservation(descriptorAdds);
-    long totalMutations = (long) scalarMutations + entries.count() + mutations;
-    long totalPayload = (long) scalarPayloadBytes + entries.payloadBytes() + payloadBytes;
+    long tupleMutations = (long) entries.count() + mutations;
+    long totalMutations = scalarMutations + tupleMutations * 2;
+    long totalPayload = (long) scalarPayloadBytes + entries.payloadBytes() + payloadBytes
+        + tupleMutations * IndexedOverflowReclamationCodec.BYTES;
     long totalDescriptors = (long) lifecycleDescriptors + descriptors.count() + descriptorAdds;
     long totalParts = (long) lifecycleParts + descriptorParts()
         + (long) descriptorAdds * TupleKeyCodec.MAX_INDEX_KEY_PARTS;
@@ -108,13 +113,24 @@ final class IndexedTupleIntentJournal {
   StatusCode append(
       int operation, long owner, long keyId, long schemaId, TupleShape shape,
       long logicalRowId, ByteBuffer key, int offset, int length) {
+    return append(operation, owner, keyId, schemaId, shape, logicalRowId,
+        key, offset, length, null, 0, 0);
+  }
+
+  StatusCode append(
+      int operation, long owner, long keyId, long schemaId, TupleShape shape,
+      long logicalRowId, ByteBuffer key, int offset, int length,
+      ByteBuffer value, int valueOffset, int valueLength) {
     if (!valid(operation, owner, keyId, schemaId, shape, logicalRowId, key, offset, length)
-        || length > entriesPayloadRemaining() || !entries.canAppend(length)) {
+        || !validValue(operation, value, valueOffset, valueLength)
+        || (long) length + valueLength > entriesPayloadRemaining()
+        || !entries.canAppend(length + valueLength)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int descriptor = descriptors.register(owner, keyId, schemaId, shape);
     if (descriptor < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    entries.append(operation, descriptor, logicalRowId, key, offset, length);
+    entries.append(operation, descriptor, logicalRowId, key, offset, length,
+        value, valueOffset, valueLength);
     changeGeneration();
     return StatusCode.OK;
   }
@@ -145,7 +161,14 @@ final class IndexedTupleIntentJournal {
   long hashAt(int descriptor) { return descriptors.hashAt(descriptor); }
   TupleShape shapeAt(int descriptor) { return descriptors.shapeAt(descriptor); }
   int payloadLengthAt(int index) { return entries.payloadLengthAt(index); }
+  int valueLengthAt(int index) { return entries.valueLengthAt(index); }
   boolean activeAt(int index) { return entries.activeAt(index); }
+  boolean activeDescriptorAt(int descriptor) {
+    for (int index = 0; index < entries.count(); index++) {
+      if (entries.activeAt(index) && entries.descriptorAt(index) == descriptor) return true;
+    }
+    return false;
+  }
   StatusCode descriptorStatus(
       long owner, long keyId, long schemaId, TupleShape shape) {
     return descriptors.status(owner, keyId, schemaId, shape);
@@ -227,6 +250,9 @@ final class IndexedTupleIntentJournal {
   void copyPayloadTo(int index, ByteBuffer target, int offset) {
     entries.copyPayloadTo(index, target, offset);
   }
+  void copyValueTo(int index, ByteBuffer target, int offset) {
+    entries.copyValueTo(index, target, offset);
+  }
 
   int collect(long keyId, io.riverdb.storage.btree.TupleBTreeScanBounds bounds, int[] ordinals) {
     if (bounds == null || ordinals == null) return -1;
@@ -252,12 +278,20 @@ final class IndexedTupleIntentJournal {
       int scalarMutations, int scalarPayloadBytes, int logicalRowFloors,
       IndexedRelationalMutation[] result) {
     int parts = descriptorParts();
-    if (scalarPayloadBytes < 0 || scalarPayloadBytes > Integer.MAX_VALUE - payloadBytes()) {
+    long overflowDemand = 0;
+    for (int descriptor = 0; descriptor < descriptorCount(); descriptor++) {
+      overflowDemand += IndexedTupleDeltaCompiler.overflowAllocationCount(this, descriptor);
+    }
+    long totalMutations = (long) scalarMutations + entries.activeCount() + overflowDemand;
+    long totalPayload = (long) scalarPayloadBytes + payloadBytes()
+        + overflowDemand * IndexedOverflowReclamationCodec.BYTES;
+    if (scalarPayloadBytes < 0 || totalMutations > Integer.MAX_VALUE
+        || totalPayload > Integer.MAX_VALUE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     return compilation.prepare(
-        scalarMutations + entries.activeCount(), descriptorCount(), parts,
-        scalarPayloadBytes + payloadBytes(), logicalRowFloors, result);
+        (int) totalMutations, descriptorCount(), parts,
+        (int) totalPayload, logicalRowFloors, result);
   }
 
   StatusCode prepareLifecycleCompilation(
@@ -291,7 +325,9 @@ final class IndexedTupleIntentJournal {
   }
 
   private static int maximumPayloadBytes(int mutations) {
-    long maximum = (long) mutations * TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES;
+    long maximum = (long) mutations
+        * (TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES
+            + io.riverdb.storage.heap.HeapPage.MAXIMUM_ROW_BYTES);
     return (int) Math.min(Integer.MAX_VALUE, maximum);
   }
 
@@ -299,7 +335,8 @@ final class IndexedTupleIntentJournal {
       int operation, long owner, long keyId, long schemaId, TupleShape shape,
       long logicalRowId, ByteBuffer key, int offset, int length) {
     return (operation == IndexedRelationalMutation.TUPLE_INSERT
-            || operation == IndexedRelationalMutation.TUPLE_DELETE)
+            || operation == IndexedRelationalMutation.TUPLE_DELETE
+            || operation == IndexedRelationalMutation.TUPLE_REPLACE)
         && CatalogKeyspace.validObjectHead(owner) && CatalogKeyspace.validKeyId(keyId)
         && schemaId > 0 && shape != null && shape.partCount() > 0
         && shape.partCount() <= TupleKeyCodec.MAX_INDEX_KEY_PARTS
@@ -309,6 +346,16 @@ final class IndexedTupleIntentJournal {
         && offset <= key.limit() - length
         && TupleKeyCodec.matchesPhysicalIndexKey(key, offset, length, shape)
         && TupleKeyCodec.logicalRowId(key, offset, length) == logicalRowId;
+  }
+
+  private static boolean validValue(
+      int operation, ByteBuffer value, int offset, int length) {
+    if (length == 0) return value == null
+        && operation != IndexedRelationalMutation.TUPLE_REPLACE;
+    return operation != IndexedRelationalMutation.TUPLE_DELETE
+        && value != null && offset >= 0
+        && length > 0 && length <= io.riverdb.storage.heap.HeapPage.MAXIMUM_ROW_BYTES
+        && offset <= value.limit() - length;
   }
 
   private void changeGeneration() {

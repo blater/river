@@ -17,11 +17,12 @@ final class TupleBTreeHeaderValidation {
     return FormatBytes.getLong(source, start) == TupleBTreePageCodec.MAGIC
         && FormatBytes.getInt(source, start + 8) == TupleBTreePageCodec.VERSION
         && (type == TupleBTreePageCodec.TYPE_LEAF || type == TupleBTreePageCodec.TYPE_INTERNAL)
-        && count >= 0 && count <= TupleBTreePageCodec.MAXIMUM_SLOTS
-        && FormatBytes.getInt(source, start + 20) == TupleBTreePageCodec.SLOT_BYTES
+        && count >= 0 && count <= (type == TupleBTreePageCodec.TYPE_LEAF
+            ? TupleBTreePageCodec.MAXIMUM_LEAF_SLOTS : TupleBTreePageCodec.MAXIMUM_SLOTS)
+        && FormatBytes.getInt(source, start + 20) == TupleBTreePageCodec.slotBytes(type)
         && TupleBTreePageBytes.validLinks(type, leftSibling, pointer, highLength)
         && freeStart == TupleBTreePageCodec.HEADER_BYTES
-            + count * TupleBTreePageCodec.SLOT_BYTES
+            + count * TupleBTreePageCodec.slotBytes(type)
         && freeStart <= freeEnd && freeEnd <= PageCodec.MAX_PAYLOAD_BYTES
         && highLength >= 0 && highLength <= TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES
         && (highLength != 0 || highOffset == 0)

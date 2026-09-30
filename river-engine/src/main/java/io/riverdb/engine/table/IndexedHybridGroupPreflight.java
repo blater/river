@@ -114,7 +114,7 @@ final class IndexedHybridGroupPreflight {
     long started = System.nanoTime();
     StatusCode status = compiler.compileCumulative(
         prepared.pendingMutations(), prepared.tupleIntents(), prepared.tupleLifecycle(),
-        prepared.logicalRowFloors());
+        prepared.logicalRowFloors(), sequences[index], oldestVisibleCommitSequence);
     record(path, IndexedCommitStage.PREFLIGHT_COMPILE, started, status);
     if (status.isOk()) status = validateVersions(prepared);
     if (status.isOk()) status = planMember(prepared, plan, index, sequences, path);
@@ -126,7 +126,7 @@ final class IndexedHybridGroupPreflight {
 
   private StatusCode validateVersions(IndexedPreparedLogicalCommit prepared) {
     int actual = IndexedVersionOperation.required(compiler.mutation().buffer());
-    return actual < 0 || actual != prepared.admittedVersionOperations()
+    return actual < 0 || actual > prepared.admittedVersionOperations()
         ? StatusCode.INVARIANT_BROKEN : StatusCode.OK;
   }
 

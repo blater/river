@@ -72,10 +72,10 @@ final class SqlConcurrencyIsolationTest {
       f.scalar(0, "SELECT value FROM rows WHERE id=1");
       f.scalar(1, "SELECT value FROM rows WHERE id=1");
       var update = f.queue(0, "UPDATE rows SET value=101 WHERE id=1", 1);
-      f.block("KEY", "EXCLUSIVE", "SHARED", "CONVERSION", "ACTIVE_OWNER",
+      f.block("TUPLE_KEY", "EXCLUSIVE", "SHARED", "ORDINARY", "ACTIVE_OWNER",
           "ACTIVE_OWNER", "NO_INCOMPATIBLE_ACTIVE_OWNER");
-      f.block("KEY", "SHARED", "EXCLUSIVE", "ORDINARY", "CONVERSION",
-          "CONVERSION_PRIORITY", "CONVERSION_QUEUE_EMPTY");
+      f.block("TUPLE_RANGE", "SHARED", "EXCLUSIVE", "ORDINARY", "ORDINARY",
+          "FIFO_FAIRNESS", "NO_EARLIER_INCOMPATIBLE_WAITER");
       var reader = f.queue(2, "SELECT value FROM rows WHERE id=1", 2);
       f.exec(1, "COMMIT");
       f.completed(update);
@@ -88,7 +88,7 @@ final class SqlConcurrencyIsolationTest {
       for (int i = 0; i < 3; i++) f.begin(i, "SERIALIZABLE");
       f.scalar(0, "SELECT value FROM rows WHERE id=1");
       f.exec(2, "UPDATE rows SET value=201 WHERE id=2");
-      f.block("KEY", "EXCLUSIVE", "SHARED", "ORDINARY", "ACTIVE_OWNER",
+      f.block("TUPLE_KEY", "EXCLUSIVE", "SHARED", "ORDINARY", "ACTIVE_OWNER",
           "ACTIVE_OWNER", "NO_INCOMPATIBLE_ACTIVE_OWNER");
       f.block("TUPLE_KEY", "EXCLUSIVE", "EXCLUSIVE", "ORDINARY", "ACTIVE_OWNER",
           "ACTIVE_OWNER", "NO_INCOMPATIBLE_ACTIVE_OWNER");

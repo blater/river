@@ -10,21 +10,20 @@ tested bounded resident frame lookup. After competing workloads ended, three
 matched quiet-host comparisons showed a repeated TPS and p99 regression, so
 the candidate was removed and resident frame scans remain.
 
-The next architectural delivery is [tic-erebor](tickets/tic-erebor.md): make
-the primary index the canonical relational row store, with row payload in its
-leaves as the preferred candidate. Start with the specified design checkpoint
-for identity/secondary references, page-history pressure, oversized records,
-row lifetime and durable publication, then implement and measure one complete
-replacement. MariaDB's measured primary accesses already reach row data at
-their leaves; River's repeated separate row access is the hypothesis to test.
+[Tic-erebor](tickets/tic-erebor.md) now delivers canonical primary-leaf rows at
+merge `fdfda831`, checkpoint
+`perf-checkpoint-20260929-tic-erebor-clustered-row-store`. Independent review
+and the fresh clean check pass; the owner accepted promotion. The
+[promotion evidence](delivery/evidence/2026-09-29-tic-erebor-promotion.md)
+records the accepted Stock Level decision, physical write costs and resolved
+three-retry mix. The wider epic and storage-trust audit remain open.
 
-[Tic-uruk-hai](tickets/tic-uruk-hai.md) follows the Erebor decision, targeting
-only surviving version-resolution and bound-check duplication. Its direct
-comparison analysis remains useful for changed-row residual checks; a coherent
-clustered leaf may remove ordinary committed-row rechecks completely. The
-smaller directional cursor-bound optimization is recorded in Erebor and is not
-a prerequisite. This is scheduling order, not dependency edges or a claim of
-an established speedup.
+[Tic-uruk-hai](tickets/tic-uruk-hai.md) follows the accepted Erebor replacement,
+targeting only surviving version-resolution and bound-check duplication.
+Reassess its pre-Erebor source findings against the delivered layout before
+implementation. Its direct comparison analysis remains relevant to necessary
+changed-row residual checks. This is scheduling order, not a new dependency
+edge or a claim of an established speedup.
 
 [tic-isildur](tickets/tic-isildur.md) is the current user-directed performance
 epic under [tic-30c3](tickets/tic-30c3.md). Its first slice,
