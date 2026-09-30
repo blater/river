@@ -46,9 +46,18 @@ delivery under [tic-30c3](tic-30c3.md) and expands the Stock Level work in
    are removed across read and write consumers; copies remain at explicit
    ownership boundaries. The wider tic-celeborn trust-boundary audit remains.
 4. [Tic-thranduil](tic-thranduil.md) measured the current indexed-probe path
-   against MariaDB's actual plan. [Tic-erebor](tic-erebor.md) owns the next
-   primary-index-to-row storage replacement; the mixed-workload metadata-cache
-   question remains separate.
+   against MariaDB's actual plan. [Tic-boromir](tic-boromir.md) tested bounded
+   metadata frame-hit lookup with unchanged cache capacity and closed without
+   code after repeated quiet-host TPS and p99 regressions.
+   [Tic-erebor](tic-erebor.md) is now next: prefer canonical row payload in
+   primary-index leaves, beginning with its explicit identity, MVCC/history,
+   overflow and publication design checkpoint. Deliver and measure one
+   complete row-store replacement. [Tic-uruk-hai](tic-uruk-hai.md) then
+   consolidates surviving snapshot-resolution and bound-check responsibilities;
+   do not optimize a row access path that the selected layout removes. Its
+   direct comparison analysis applies to residual changed-row checks where
+   still needed. The mixed-workload metadata-cache capacity question remains
+   separate.
 
 ## Acceptance Criteria
 

@@ -1998,3 +1998,114 @@ The [complete commands, artifacts, CPU evidence and limitations](delivery/eviden
 are recorded with the diagnostic ticket. The next general storage-layout work
 is [tic-erebor](tickets/tic-erebor.md). These runs do not designate a new TPS
 baseline or a paired MariaDB ratio; the Baseline stats table is unchanged.
+
+## 2026-09-29 — tic-boromir resident-frame lookup
+
+The control was `master` `2ada6350` (production source unchanged from
+`a8ceade9`), engine JAR SHA-256
+`9952756dec648338e009fc3ef47dc9ec133020fff30143e6e6c624146ade2b12`.
+The candidate was the bounded lookup source on
+`feature/tic-boromir-resident-frame-map` before commit, benchmark engine JAR
+SHA-256 `93671b9be920f4ef60a3c68d0ad6fd90fbb005d8abc39551031c42e8f5c838b5`.
+Both executables used GraalVM 25.0.4 JVM with `-Xmx1g` on macOS/arm64. The
+external harness was `5082670`. Workload settings were `full stock-level`,
+READ COMMITTED, durable local WAL, loopback TCP/TLS, one worker and warehouse,
+seed 42, retry limit 3, and unchanged 64-frame, 64 KiB metadata caches.
+Host activity was not controlled; the user reported competing performance tests
+during this sequence.
+
+The exact short-run command was the following, substituting each row's
+executable and version label. The long pair changed only `--warmup=10s` and
+`--duration=60s`:
+
+```sh
+~/src/ingres/river-harness/benchmark run river tpcc full stock-level \
+  --river-executable=EXECUTABLE --river-version=VERSION \
+  --warmup=5s --duration=20s --workers=1 --warehouses=1 \
+  --seed=42 --max-retries=3
+```
+
+`EXECUTABLE` was `/private/tmp/river-ent-candidate/river` for controls and
+`/private/tmp/river-boromir-candidate/river` for candidates. Each immutable
+artifact is under `/Users/blater/src/ingres/river-harness/runs/`.
+
+| Order/window | Version label | TPS | p99 ms | Artifact ID |
+| --- | --- | ---: | ---: | --- |
+| A1, 5/20s | `boromir-control-a1` | 1,411.386 | 0.980 | `river_harness_20260929_093033_644859ef` |
+| B1, 5/20s | `boromir-candidate-b1` | 1,463.036 | 0.889 | `river_harness_20260929_093420_8c2aff89` |
+| A2, 5/20s | `boromir-control-a2` | 1,009.658 | 1.576 | `river_harness_20260929_093612_71152020` |
+| B2, 5/20s | `boromir-candidate-b2` | 1,254.074 | 1.092 | `river_harness_20260929_093827_be94daec` |
+| A3, 10/60s | `boromir-control-long-a3` | 1,053.499 | 1.234 | `river_harness_20260929_094049_3ecfde6f` |
+| B3, 10/60s | `boromir-candidate-long-b3` | 1,045.550 | 2.222 | `river_harness_20260929_094341_8b22db6e` |
+
+Every run passed its invariants, had zero failed or unknown outcomes and zero
+retries, stopped its owned River instance gracefully, and left the service
+inactive. The four short runs had eligible comparison key `fd5865b1...` and
+the long pair had eligible key `f7b5a6af...`; complete keys are in the reports.
+The first matched pair favored the candidate by 3.7% TPS and had lower p99.
+Later results were unstable, and the long pair showed no candidate gain. They
+are retained without exclusion. The user explicitly allowed one good run to
+satisfy the performance gate while competing host tests were active. After
+those tests ended, the following fresh sequence was run with the same settings.
+The 5/20-second runs used A/B/A/B order; the 10/60-second pair deliberately
+reversed order to check time drift. The same command template above applied,
+with the shown versions and windows.
+
+| Order/window | Version label | TPS | p99 ms | Artifact ID |
+| --- | --- | ---: | ---: | --- |
+| A4, 5/20s | `boromir-quiet-control-a4` | 1,465.175 | 0.843 | `river_harness_20260929_101121_525dbf63` |
+| B4, 5/20s | `boromir-quiet-candidate-b4` | 1,387.684 | 0.894 | `river_harness_20260929_101300_d5ed852a` |
+| A5, 5/20s | `boromir-quiet-control-a5` | 1,355.986 | 0.929 | `river_harness_20260929_101453_94d64f27` |
+| B5, 5/20s | `boromir-quiet-candidate-b5` | 1,318.084 | 1.045 | `river_harness_20260929_101640_e2665e9c` |
+| B6, 10/60s | `boromir-quiet-candidate-long-b6` | 1,267.793 | 0.970 | `river_harness_20260929_101848_14008b79` |
+| A6, 10/60s | `boromir-quiet-control-long-a6` | 1,316.555 | 0.919 | `river_harness_20260929_102127_b6c9a113` |
+
+All six quiet reports passed invariants, zero failed and unknown outcomes, and
+zero retries. Every instance shut down gracefully and left the service
+inactive. The short comparison keys were all eligible and identical
+(`fd5865b1...`); the long pair also matched and was eligible (`f7b5a6af...`).
+Candidate TPS was lower by 5.3%, 2.8%, and 3.7% in the adjacent short, short,
+and reverse-order long comparisons. Candidate p99 was higher in all three.
+The controls themselves drifted, but the reversed longer pair still favored
+the control. This repeated quiet-host regression triggered the ticket's stop
+rule; the candidate was removed rather than promoted. The user relaxation for
+one good run during contention did not override this later evidence.
+
+The tested candidate replaced both resident-hit array scans with a transient long-page-key
+map. Each directory uses 128 buckets for at most 64 frames: 1,024 key bytes
+and 128 slot bytes of primitive array payload. Hit probes terminate at an
+empty bucket within 128 slots; eviction keeps the existing victim scan and
+replaces the mapping only after a successful load. Focused tests covered
+collision deletion, 65-page clean/dirty replacement, high row IDs, failed and
+short writeback, partial failed reads, retry, clear, vacuum truncate failure,
+flush and reopen. A warmed `ThreadMXBean` check measured zero allocated heap
+bytes across 100,000 map lookup/remove/insert iterations. The same focused
+command also ran relational WAL recovery, checkpoint and interrupted-vacuum
+tests:
+
+```sh
+./gradlew --no-daemon :river-engine:test \
+  --tests io.riverdb.engine.table.IndexedDiskDirectoryEvictionTest \
+  --tests io.riverdb.engine.table.IndexedDiskDirectoryCapacityTest \
+  --tests io.riverdb.engine.table.IndexedResidentFrameMapTest \
+  --tests io.riverdb.engine.table.IndexedRelationalWalRecoveryTest \
+  --tests io.riverdb.engine.table.IndexedRelationalWalCheckpointTest \
+  --tests io.riverdb.engine.table.IndexedTableStoreInterruptedVacuumTest \
+  :river-engine:jar
+```
+
+That command passed before the candidate was removed. The affected production
+slopmark scores moved from
+74.628 to 73.981 for `IndexedVersionDirectory` and from 68.971 to 68.141 for
+`IndexedRowDirectory`; the new helper scored 26.381. These scores are review
+signals only. Actual baseline scan lengths, candidate workload probe counts
+and matched CPU profiles were not collected after the user relaxed the
+performance gate. The initial local `./verify` completed module tests but
+`verifySourcePolicy` rejected tabs in pre-existing ignored
+`benchmark-results/` XML files. The same source and tests were copied to the
+isolated `/private/tmp/river-boromir-verify` worktree at `2ada6350` and
+`RIVER_GRADLE_HOME=/Users/blater/src/river/.river-gradle ./verify` passed there
+(156 tasks, 71 executed, 56 from cache, 29 up-to-date). Byte-for-byte source
+comparison confirmed the copied production and test files matched the feature
+checkout. No production code was accepted, so no feature merge, performance
+checkpoint tag, new Baseline stats row or MariaDB comparison is designated.
