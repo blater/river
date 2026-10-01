@@ -1,5 +1,7 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.sql.SqlScanAssertions.assertRows;
+
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -428,24 +430,6 @@ final class SqlMergeJoinTest {
     assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(expected, row.valueAt(0));
-    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
-    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
-  }
-
-  private static void assertRows(
-      SqlSession session,
-      SqlExecutionResult result,
-      String sql,
-      long[][] expected) {
-    SqlScanCursor cursor = new SqlScanCursor();
-    SqlScanRowResult row = new SqlScanRowResult();
-    assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
-    for (long[] values : expected) {
-      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-      for (int column = 0; column < values.length; column++) {
-        assertEquals(values[column], row.valueAt(column));
-      }
-    }
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }

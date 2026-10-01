@@ -1,5 +1,7 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.sql.SqlScanAssertions.assertPlanRow;
+
 import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -9,7 +11,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.base.text.PackedText;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.relational.RelationalDatabase;
@@ -357,20 +358,6 @@ final class SqlJoinViewTest {
     assertPlanRow(session, cursor, row, "hash", 2, 2);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
-  }
-
-  private static void assertPlanRow(
-      SqlSession session,
-      SqlScanCursor cursor,
-      SqlScanRowResult row,
-      String operator,
-      long detail,
-      long actualRows) {
-    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack(operator), row.valueAt(0));
-    assertEquals(detail, row.valueAt(1));
-    assertEquals(actualRows < 0, row.isNull(2));
-    if (actualRows >= 0) assertEquals(actualRows, row.valueAt(2));
   }
 
   private static void assertRows(

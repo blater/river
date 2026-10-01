@@ -1,10 +1,11 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.sql.SqlScanAssertions.assertPlanRow;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.PackedText;
 
 /** Assertions for JOIN block EXPLAIN shape and atomic temporal failures. */
 final class SqlJoinBlockPlanAssertions {
@@ -124,20 +125,6 @@ final class SqlJoinBlockPlanAssertions {
     }
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
-  }
-
-  private static void assertPlanRow(
-      SqlSession session,
-      SqlScanCursor cursor,
-      SqlScanRowResult row,
-      String operator,
-      long detail,
-      long rows) {
-    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack(operator), row.valueAt(0));
-    assertEquals(detail, row.valueAt(1));
-    assertEquals(rows < 0, row.isNull(2));
-    if (rows >= 0) assertEquals(rows, row.valueAt(2));
   }
 
   private record PlanRow(String operator, long detail, long rows) {}
