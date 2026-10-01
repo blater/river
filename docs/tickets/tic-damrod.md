@@ -116,7 +116,7 @@ with its disposition and implementation reference as each slice lands.
 
 ### 2026-10-01T15:35:06Z
 
-### Delivery — 2026-10-01
+**Delivery — 2026-10-01**
 
 Implemented on `ticket/tic-damrod-dry-refactoring` from
 `4ac490321a9f1110900d34562d671a6709af8fc5`. Sixteen cohesive code commits span
@@ -134,7 +134,7 @@ primitives retain absolute access and byte order. Existing warmed public-result,
 SQL/transaction allocation and resource-pressure tests remain part of the
 passing affected-module suite.
 
-### Validation
+**Validation**
 
 - Focused tests cover independent durable byte expectations through all four
   codecs, operator truth at signed extrema, canonical parser admission, response
@@ -169,7 +169,7 @@ passing affected-module suite.
   Logs and artifact are outside Git at the named path. The smoke used the exact
   delivered code before the slice commits were recorded.
 
-### Independent review and ownership check
+**Independent review and ownership check**
 
 Read-only reviewer Avicenna independently approved durable access, exact numeric
 reachability, SQL comparison/names, relational equality/lookup, all six DDL
@@ -190,4 +190,3 @@ and ownership review. The unchanged calculation moved to the concrete
 `ProtocolResponseCapacity` owner (3.410); the codec returns to 41.062. Both
 immediate consumers delegate directly. This change keeps encoding/decoding and
 response-capacity policy coherent without introducing a configurable framework.
-
