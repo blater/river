@@ -62,7 +62,8 @@ public final class ExactDecimalDescriptors {
     return bounded(precision(source) - scale(source), targetScale);
   }
 
-  static int scale(int descriptor) {
+  /** Decimal scale, or zero for an integral exact descriptor. */
+  public static int scale(int descriptor) {
     return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
         ? SqlTypeDescriptor.parameterTwo(descriptor) : 0;
   }
@@ -99,7 +100,8 @@ public final class ExactDecimalDescriptors {
     return SqlTypeDescriptor.decimal(precision, boundedScale);
   }
 
-  private static int precision(int descriptor) {
+  /** Decimal digit precision of an exact numeric descriptor; zero for other types. */
+  public static int precision(int descriptor) {
     return switch (SqlTypeDescriptor.typeId(descriptor)) {
       case SqlTypeDescriptor.TYPE_ID_SMALLINT -> 5;
       case SqlTypeDescriptor.TYPE_ID_INTEGER -> 10;

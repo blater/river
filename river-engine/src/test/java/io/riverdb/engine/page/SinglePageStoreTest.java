@@ -1,11 +1,13 @@
 package io.riverdb.engine.page;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+import static io.riverdb.engine.TestDurableStorage.openWal;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
@@ -15,11 +17,8 @@ import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalOpenResult;
 import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
@@ -34,7 +33,7 @@ final class SinglePageStoreTest {
   @Test
   void logsBeforeFlushAndReopensMaterializedPage(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     SinglePageStore store = createStore(directory, wal);
     byte[] expected = {6, 2, 6, 4, 3, 3, 8};
     PageUpdate update = new PageUpdate();
@@ -63,7 +62,7 @@ final class SinglePageStoreTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     SinglePageStoreOpenResult opened = new SinglePageStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -81,7 +80,7 @@ final class SinglePageStoreTest {
   @Test
   void recoversCorruptPageHeaderFromForcedWalAfterImage(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     SinglePageStore store = createStore(directory, wal);
     byte[] expected = {1, 4, 1, 4, 2, 1};
     PageUpdate update = new PageUpdate();
@@ -140,7 +139,7 @@ final class SinglePageStoreTest {
   @Test
   void replaysForcedWalWhenCrashLeavesOlderValidPage(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     SinglePageStore store = createStore(directory, wal);
     byte[] expected = {2, 7, 1, 8, 2, 8};
     PageUpdate update = new PageUpdate();
@@ -153,7 +152,7 @@ final class SinglePageStoreTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     SinglePageStoreOpenResult recovered = new SinglePageStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -167,25 +166,6 @@ final class SinglePageStoreTest {
     assertEquals(StatusCode.OK, recovered.store().close());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
-  }
-
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult result = new NioDirectoryOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        NioDurableDirectory.openExisting(
-            root,
-            new FatalStateFence(),
-            new NioIoCounters(),
-            8,
-            result));
-    return result.directory();
-  }
-
-  private static LocalWal openWal(NioDurableDirectory directory) {
-    LocalWalOpenResult result = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
-    return result.wal();
   }
 
   private static SinglePageStore createStore(

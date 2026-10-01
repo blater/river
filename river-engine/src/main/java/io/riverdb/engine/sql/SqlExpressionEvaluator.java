@@ -57,15 +57,7 @@ final class SqlExpressionEvaluator {
       long actual,
       SqlComparison comparison,
       long expected) {
-    return switch (comparison) {
-      case EQUAL -> actual == expected;
-      case NOT_EQUAL -> actual != expected;
-      case LESS_THAN -> actual < expected;
-      case LESS_OR_EQUAL -> actual <= expected;
-      case GREATER_THAN -> actual > expected;
-      case GREATER_OR_EQUAL -> actual >= expected;
-      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
-    };
+    return SqlDescriptorComparison.matches(Long.compare(actual, expected), comparison);
   }
 
   boolean matchesComparison(
@@ -75,15 +67,7 @@ final class SqlExpressionEvaluator {
       long expected,
       int expectedDescriptor) {
     int compared = compareExact(actual, actualDescriptor, expected, expectedDescriptor);
-    return switch (comparison) {
-      case EQUAL -> compared == 0;
-      case NOT_EQUAL -> compared != 0;
-      case LESS_THAN -> compared < 0;
-      case LESS_OR_EQUAL -> compared <= 0;
-      case GREATER_THAN -> compared > 0;
-      case GREATER_OR_EQUAL -> compared >= 0;
-      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
-    };
+    return SqlDescriptorComparison.matches(compared, comparison);
   }
 
   int compareExact(

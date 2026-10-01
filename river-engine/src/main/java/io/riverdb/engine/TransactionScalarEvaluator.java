@@ -1,5 +1,8 @@
 package io.riverdb.engine;
 
+import static io.riverdb.base.type.ExactDecimalDescriptors.precision;
+import static io.riverdb.base.type.ExactDecimalDescriptors.scale;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.ExactDecimal128;
@@ -370,19 +373,6 @@ final class TransactionScalarEvaluator {
         ? ExactDecimal128Conversion.toDouble(
             stack.high(slot), stack.low(slot), scale(descriptor), wideScratch)
         : SqlNumericValue.doubleValue(stack.low(slot), descriptor);
-  }
-  private static int precision(int descriptor) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_SMALLINT -> 5;
-      case SqlTypeDescriptor.TYPE_ID_INTEGER -> 10;
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> 19;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL -> SqlTypeDescriptor.parameterOne(descriptor);
-      default -> 19;
-    };
-  }
-  private static int scale(int descriptor) {
-    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? SqlTypeDescriptor.parameterTwo(descriptor) : 0;
   }
   private static int scalarCount(TransactionValueReader source, int slot) {
     int count = 0;

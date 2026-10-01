@@ -1,5 +1,7 @@
 package io.riverdb.engine.schema.catalog;
 
+import static io.riverdb.engine.schema.catalog.CatalogStatus.fail;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.schema.TableDescriptor;
@@ -104,10 +106,5 @@ final class CatalogTableSuccessor {
     plan.reset();
     reservation.reset();
     descriptor.reset();
-  }
-
-  private static StatusCode fail(StatusDetail detail, StatusCode status) {
-    if (detail != null && detail.code() == StatusCode.OK) detail.set(status);
-    return status;
   }
 }

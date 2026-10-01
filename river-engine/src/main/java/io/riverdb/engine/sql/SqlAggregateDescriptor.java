@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.type.ExactDecimalDescriptors;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.sql.SqlAggregateKind;
@@ -23,8 +24,8 @@ final class SqlAggregateDescriptor {
           ? SqlTypeDescriptor.DOUBLE : inputDescriptor;
     }
     if (type == SqlCommandType.AVG || type == SqlCommandType.GROUP_AVG) {
-      int scale = SqlExactNumericDigits.scale(inputDescriptor);
-      int integerDigits = SqlExactNumericDigits.integer(inputDescriptor);
+      int scale = ExactDecimalDescriptors.scale(inputDescriptor);
+      int integerDigits = ExactDecimalDescriptors.precision(inputDescriptor) - scale;
       int resultScale = Math.min(Math.max(scale, 6),
           Math.max(0, SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION - integerDigits));
       return SqlTypeDescriptor.decimal(SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION, resultScale);

@@ -7,14 +7,12 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
-import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.sql.Types;
 
 /** JDBC column rows resolved through River's SQL binder without reading table rows. */
-final class RiverColumnsResultSet extends AbstractResultSet {
+final class RiverColumnsResultSet extends RiverMetadataResultSet {
   private static final int INITIAL_RELATION_CAPACITY = 16;
   private static final String[] COLUMN_NAMES = {
       "TABLE_CAT",
@@ -249,18 +247,7 @@ final class RiverColumnsResultSet extends AbstractResultSet {
       throw JdbcExceptions.invalid("target type must not be null");
     }
     Object value = getObject(column);
-    if (value == null || type.isInstance(value)) {
-      return type.cast(value);
-    }
-    if (type == String.class) {
-      return type.cast(value.toString());
-    }
-    throw JdbcExceptions.unsupported();
-  }
-
-  @Override
-  public <T> T getObject(String label, Class<T> type) throws SQLException {
-    return getObject(findColumn(label), type);
+    return convert(value, type);
   }
 
   @Override
@@ -270,70 +257,6 @@ final class RiverColumnsResultSet extends AbstractResultSet {
       throw JdbcExceptions.invalid("no column metadata value has been read");
     }
     return lastWasNull;
-  }
-
-  @Override
-  public int findColumn(String label) throws SQLException {
-    requireOpen();
-    return METADATA.findColumn(label);
-  }
-
-  @Override
-  public ResultSetMetaData getMetaData() throws SQLException {
-    requireOpen();
-    return METADATA;
-  }
-
-  @Override
-  public Statement getStatement() throws SQLException {
-    requireOpen();
-    return null;
-  }
-
-  @Override
-  public int getType() throws SQLException {
-    requireOpen();
-    return ResultSet.TYPE_FORWARD_ONLY;
-  }
-
-  @Override
-  public int getConcurrency() throws SQLException {
-    requireOpen();
-    return ResultSet.CONCUR_READ_ONLY;
-  }
-
-  @Override
-  public int getFetchDirection() throws SQLException {
-    requireOpen();
-    return ResultSet.FETCH_FORWARD;
-  }
-
-  @Override
-  public void setFetchDirection(int direction) throws SQLException {
-    requireOpen();
-    if (direction != ResultSet.FETCH_FORWARD) {
-      throw JdbcExceptions.unsupported();
-    }
-  }
-
-  @Override
-  public int getFetchSize() throws SQLException {
-    requireOpen();
-    return 1;
-  }
-
-  @Override
-  public void setFetchSize(int rows) throws SQLException {
-    requireOpen();
-    if (rows < 0 || rows > 1) {
-      throw JdbcExceptions.unsupported();
-    }
-  }
-
-  @Override
-  public int getHoldability() throws SQLException {
-    requireOpen();
-    return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
 
   @Override
@@ -366,18 +289,7 @@ final class RiverColumnsResultSet extends AbstractResultSet {
   }
 
   @Override
-  public <T> T unwrap(Class<T> type) throws SQLException {
-    requireOpen();
-    if (type != null && type.isInstance(this)) {
-      return type.cast(this);
-    }
-    throw JdbcExceptions.unsupported();
-  }
-
-  @Override
-  public boolean isWrapperFor(Class<?> type) {
-    return !closed && type != null && type.isInstance(this);
-  }
+  RiverResultSetMetaData metadata() { return METADATA; }
 
   private void loadRelations() throws SQLException {
     while (query != null && query.isActive()) {
@@ -530,7 +442,8 @@ final class RiverColumnsResultSet extends AbstractResultSet {
     }
   }
 
-  private void requireOpen() throws SQLException {
+  @Override
+  void requireOpen() throws SQLException {
     if (closed) {
       throw JdbcExceptions.closed("column metadata result set");
     }

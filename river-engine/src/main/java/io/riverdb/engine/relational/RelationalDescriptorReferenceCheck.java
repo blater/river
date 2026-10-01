@@ -6,7 +6,6 @@ import io.riverdb.engine.schema.ForeignKeySupport;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.engine.table.IndexedTupleProbeResult;
-import java.nio.ByteBuffer;
 
 /** Checks one referencing descriptor against a parent row change. */
 final class RelationalDescriptorReferenceCheck {
@@ -24,7 +23,7 @@ final class RelationalDescriptorReferenceCheck {
       TableDescriptor child, long changedRowId) {
     for (int index = 0; index < child.foreignKeyCount(); index++) {
       KeyDescriptor foreign = child.foreignKeyAt(index);
-      KeyDescriptor target = physicalKey(parent, foreign.referencedKeyId());
+      KeyDescriptor target = parent.physicalKey(foreign.referencedKeyId());
       if (target == null) continue;
       StatusCode status = changed(target, before, after);
       if (status == StatusCode.CONFLICT) continue;
@@ -34,7 +33,7 @@ final class RelationalDescriptorReferenceCheck {
       if (child.tableId() == parent.tableId() && after != null) {
         status = afterKey.encodeUser(foreign, after);
         if (!status.isOk()) return status;
-        if (!afterKey.containsNull() && equal(beforeKey, afterKey)) {
+        if (!afterKey.containsNull() && beforeKey.sameBytes(afterKey)) {
           return StatusCode.FOREIGN_KEY_VIOLATION;
         }
       }
@@ -57,7 +56,7 @@ final class RelationalDescriptorReferenceCheck {
 
   boolean references(TableDescriptor parent, TableDescriptor child) {
     for (int index = 0; index < child.foreignKeyCount(); index++) {
-      if (physicalKey(parent, child.foreignKeyAt(index).referencedKeyId()) != null) {
+      if (parent.physicalKey(child.foreignKeyAt(index).referencedKeyId()) != null) {
         return true;
       }
     }
@@ -72,34 +71,13 @@ final class RelationalDescriptorReferenceCheck {
     if (after == null) return StatusCode.OK;
     status = afterKey.encodeUser(target, after);
     if (!status.isOk()) return status;
-    return equal(beforeKey, afterKey) ? StatusCode.CONFLICT : StatusCode.OK;
-  }
-
-  private static KeyDescriptor physicalKey(TableDescriptor table, long keyId) {
-    if (table.primaryKey() != null && table.primaryKey().keyId() == keyId) {
-      return table.primaryKey();
-    }
-    for (int index = 0; index < table.secondaryKeyCount(); index++) {
-      if (table.secondaryKeyAt(index).keyId() == keyId) return table.secondaryKeyAt(index);
-    }
-    return null;
+    return beforeKey.sameBytes(afterKey) ? StatusCode.CONFLICT : StatusCode.OK;
   }
 
   private static boolean samePrefixShape(KeyDescriptor left, KeyDescriptor right) {
     if (left.partCount() > right.partCount()) return false;
     for (int part = 0; part < left.partCount(); part++) {
       if (left.typeDescriptorAt(part) != right.typeDescriptorAt(part)) return false;
-    }
-    return true;
-  }
-
-  private static boolean equal(
-      RelationalTupleKeyEncoder left, RelationalTupleKeyEncoder right) {
-    if (left.length() != right.length()) return false;
-    ByteBuffer leftBytes = left.bytes();
-    ByteBuffer rightBytes = right.bytes();
-    for (int index = 0; index < left.length(); index++) {
-      if (leftBytes.get(index) != rightBytes.get(index)) return false;
     }
     return true;
   }

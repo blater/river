@@ -83,15 +83,6 @@ final class SqlDescriptorSubqueryOutcome {
         inputHigh, input, leftDescriptor,
         resultHigh, result, childDescriptor,
         decimal128);
-    return switch (effective) {
-      case EQUAL -> compared == 0;
-      case NOT_EQUAL -> compared != 0;
-      case LESS_THAN -> compared < 0;
-      case LESS_OR_EQUAL -> compared <= 0;
-      case GREATER_THAN -> compared > 0;
-      case GREATER_OR_EQUAL -> compared >= 0;
-      default -> false;
-    };
+    return SqlDescriptorComparison.matches(compared, effective);
   }
-
 }

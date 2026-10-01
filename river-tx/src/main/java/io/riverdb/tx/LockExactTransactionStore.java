@@ -2,9 +2,7 @@ package io.riverdb.tx;
 
 /** Narrow typed arena for transaction-local exact-lock chain heads. */
 final class LockExactTransactionStore extends LockTypedSlots {
-  static final class Chunk {
-    final long[] generations = new long[256];
-    final long[] free = new long[256];
+  static final class Chunk extends LockTypedSlots.Chunk {
     final long[] transactionIds = new long[256];
     final long[] transactionGenerations = new long[256];
     final long[] holdingHeads = new long[256];
@@ -33,30 +31,13 @@ final class LockExactTransactionStore extends LockTypedSlots {
     final byte[] parentPreconditions = new byte[256];
     final byte[] frameModes = new byte[256];
     final byte[] framePhases = new byte[256];
-    final long[] occupied = new long[4];
     final long[] deadlockScheduled = new long[4];
-    int used;
   }
 
   // Includes all retained DFS workspace; detection never grows storage after admission.
   LockExactTransactionStore(LockSegmentArena arena) { super(arena, 51_744); }
   Chunk record(long slot) { return (Chunk) chunk(slot); }
   @Override Object newChunk(long index) { return new Chunk(); }
-  @Override long generation(long slot) { return record(slot).generations[offset(slot)]; }
-  @Override void generation(long slot, long value) { record(slot).generations[offset(slot)] = value; }
-  @Override long freeLink(long slot) { return record(slot).free[offset(slot)]; }
-  @Override void freeLink(long slot, long value) { record(slot).free[offset(slot)] = value; }
-  @Override void used(long slot, int delta) { record(slot).used += delta; }
-  @Override void occupied(long slot, boolean value) {
-    Chunk chunk = record(slot);
-    int offset = offset(slot);
-    if (value) chunk.occupied[offset >>> 6] |= 1L << offset;
-    else chunk.occupied[offset >>> 6] &= ~(1L << offset);
-  }
-  @Override boolean occupied(long slot) {
-    int offset = offset(slot);
-    return (record(slot).occupied[offset >>> 6] & (1L << offset)) != 0;
-  }
   @Override void clear(long slot) {
     Chunk chunk = record(slot);
     int offset = offset(slot);

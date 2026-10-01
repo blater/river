@@ -1,5 +1,7 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.base.type.ExactDecimalDescriptors.precision;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.ExactDecimal128;
@@ -92,15 +94,5 @@ final class SqlDescriptorNumericAssignment {
   private void publishWide(long valueHigh, long valueLow) {
     high = valueHigh;
     low = valueLow;
-  }
-
-  private static int precision(int descriptor) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_SMALLINT -> 5;
-      case SqlTypeDescriptor.TYPE_ID_INTEGER -> 10;
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> 19;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL -> SqlTypeDescriptor.parameterOne(descriptor);
-      default -> 0;
-    };
   }
 }

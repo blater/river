@@ -147,6 +147,15 @@ public final class TableDescriptor {
     return columns.find(name);
   }
 
+  /** Primary or secondary physical key with this durable identity, excluding foreign keys. */
+  public KeyDescriptor physicalKey(long keyId) {
+    if (primaryKey != null && primaryKey.keyId() == keyId) return primaryKey;
+    for (int index = 0; index < secondaryKeys.length; index++) {
+      if (secondaryKeys[index].keyId() == keyId) return secondaryKeys[index];
+    }
+    return null;
+  }
+
   public KeyDescriptor primaryKey() {
     return primaryKey;
   }

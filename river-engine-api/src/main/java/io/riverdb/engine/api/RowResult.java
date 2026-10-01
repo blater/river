@@ -130,7 +130,6 @@ public final class RowResult {
     return values.setText(index, source, offset, length);
   }
 
-
   /** Legacy scalar row-key field; descriptor composite/keyless rows report zero. */
   public long key() {
     return key;
@@ -216,13 +215,6 @@ public final class RowResult {
   }
 
   public int copyTextAt(int index, char[] destination, int offset) {
-    int length = textLengthAt(index);
-    if (length < 0
-        || destination == null
-        || offset < 0
-        || offset > destination.length - length) {
-      return -1;
-    }
     return values.copyTextAt(index, destination, offset);
   }
 

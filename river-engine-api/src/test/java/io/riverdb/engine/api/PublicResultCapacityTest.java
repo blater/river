@@ -1,6 +1,7 @@
 package io.riverdb.engine.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -56,6 +57,41 @@ final class PublicResultCapacityTest {
     assertEquals(0x9f, Byte.toUnsignedInt(encoded.get(2)));
     assertEquals(0x98, Byte.toUnsignedInt(encoded.get(3)));
     assertEquals(0x80, Byte.toUnsignedInt(encoded.get(4)));
+  }
+
+  @Test
+  void rowAndCommandTextCopiesRejectBeforeChangingTheDestination() {
+    RowResult row = new RowResult();
+    CommandResult command = new CommandResult();
+    int[] types = {SqlTypeDescriptor.varchar(2), SqlTypeDescriptor.BIGINT,
+        SqlTypeDescriptor.varchar(2), SqlTypeDescriptor.varchar(2)};
+    long[] values = new long[types.length];
+    assertEquals(StatusCode.OK, row.complete(1, values, 1L << 2, types, types.length));
+    assertEquals(StatusCode.OK,
+        command.complete(0, 0, false, true, 1, values, 1L << 2, types, types.length));
+    char[] text = "A😀".toCharArray();
+    assertEquals(StatusCode.OK, row.setTextAt(0, text, 0, text.length));
+    assertEquals(StatusCode.OK, command.setTextAt(0, text, 0, text.length));
+    assertEquals(StatusCode.OK, row.setTextAt(3, new char[0], 0, 0));
+    assertEquals(StatusCode.OK, command.setTextAt(3, new char[0], 0, 0));
+    char[] destination = {'x', 'x', 'x', 'x'};
+    for (int index : new int[] {-1, 1, 2, 4}) {
+      assertEquals(-1, row.copyTextAt(index, destination, 0));
+      assertEquals(-1, command.copyTextAt(index, destination, 0));
+    }
+    for (int offset : new int[] {-1, 2, Integer.MAX_VALUE}) {
+      assertEquals(-1, row.copyTextAt(0, destination, offset));
+      assertEquals(-1, command.copyTextAt(0, destination, offset));
+    }
+    assertEquals(-1, row.copyTextAt(0, null, 0));
+    assertEquals(-1, command.copyTextAt(0, null, 0));
+    assertArrayEquals(new char[] {'x', 'x', 'x', 'x'}, destination);
+    assertEquals(0, row.copyTextAt(3, destination, destination.length));
+    assertEquals(0, command.copyTextAt(3, destination, destination.length));
+    assertEquals(text.length, row.copyTextAt(0, destination, 1));
+    assertArrayEquals(new char[] {'x', 'A', text[1], text[2]}, destination);
+    assertEquals(text.length, command.copyTextAt(0, destination, 0));
+    assertArrayEquals(new char[] {'A', text[1], text[2], text[2]}, destination);
   }
 
   @Test

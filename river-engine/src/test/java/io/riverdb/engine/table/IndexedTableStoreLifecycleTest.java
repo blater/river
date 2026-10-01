@@ -1,26 +1,25 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+import static io.riverdb.engine.TestDurableStorage.openWal;
+
 import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.runtime.DatabaseProviderLease;
 import io.riverdb.engine.runtime.DatabaseStoreLease;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalOpenResult;
 import io.riverdb.wal.local.LocalWalReservation;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
@@ -34,7 +33,7 @@ final class IndexedTableStoreLifecycleTest {
   @Test
   void providerLeaseOwnsExactlyOnePublishedStore(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     DatabaseProviderLease providers = databaseProviderLease(4);
     IndexedTableStoreOpenResult first = new IndexedTableStoreOpenResult();
     IndexedTableStoreOpenResult duplicate = new IndexedTableStoreOpenResult();
@@ -67,7 +66,7 @@ final class IndexedTableStoreLifecycleTest {
   @Test
   void walReservationConflictCancelsStagedTransaction(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
     TransactionManager manager = new TransactionManager(
@@ -126,19 +125,6 @@ final class IndexedTableStoreLifecycleTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, session.insert(0, key, row(value)));
     assertEquals(StatusCode.OK, session.commit(outcome));
-  }
-
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult result = new NioDirectoryOpenResult();
-    assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
-        root, new FatalStateFence(), new NioIoCounters(), 8, result));
-    return result.directory();
-  }
-
-  private static LocalWal openWal(NioDurableDirectory directory) {
-    LocalWalOpenResult result = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
-    return result.wal();
   }
 
   private static IndexedTableStore createStore(

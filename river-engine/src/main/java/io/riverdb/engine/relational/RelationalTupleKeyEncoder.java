@@ -32,6 +32,16 @@ final class RelationalTupleKeyEncoder {
     return scratch.bytes(length);
   }
 
+  boolean sameBytes(RelationalTupleKeyEncoder other) {
+    if (length != other.length) return false;
+    ByteBuffer left = bytes();
+    ByteBuffer right = other.bytes();
+    for (int index = 0; index < length; index++) {
+      if (left.get(index) != right.get(index)) return false;
+    }
+    return true;
+  }
+
   int length() { return length; }
   boolean containsNull() { return containsNull; }
 

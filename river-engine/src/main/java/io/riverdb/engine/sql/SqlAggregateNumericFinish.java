@@ -1,5 +1,7 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.base.type.ExactDecimalDescriptors.scale;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.ExactDecimalAverage;
@@ -114,10 +116,5 @@ final class SqlAggregateNumericFinish {
     }
     values[slot] = bits;
     return StatusCode.OK;
-  }
-
-  private static int scale(int descriptor) {
-    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? SqlTypeDescriptor.parameterTwo(descriptor) : 0;
   }
 }

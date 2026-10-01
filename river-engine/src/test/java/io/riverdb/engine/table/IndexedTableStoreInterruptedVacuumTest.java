@@ -1,23 +1,22 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+import static io.riverdb.engine.TestDurableStorage.openWal;
+
 import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.format.wal.WalRecordCodec;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalOpenResult;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -33,7 +32,7 @@ final class IndexedTableStoreInterruptedVacuumTest {
   @Test
   void vacuumTraversesSiblingOrderAfterNonRightmostSplits(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     commitDescendingVersions(table, 400, 50);
     assertEquals(800, table.rowCount());
@@ -64,7 +63,7 @@ final class IndexedTableStoreInterruptedVacuumTest {
   @Test
   void admitsVacuumAboveLegacyAtomicPageBound(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     commitWideVersions(table, 10);
     assertEquals(StatusCode.OK, table.vacuumPreflight());
@@ -83,7 +82,7 @@ final class IndexedTableStoreInterruptedVacuumTest {
   @Test
   void streamsMultiChunkVacuumThroughOneDurableDecision(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
     commitWideVersions(table);
@@ -184,30 +183,11 @@ final class IndexedTableStoreInterruptedVacuumTest {
     }
   }
 
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult result = new NioDirectoryOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        NioDurableDirectory.openExisting(
-            root,
-            new FatalStateFence(),
-            new NioIoCounters(),
-            8,
-            result));
-    return result.directory();
-  }
-
   private static IndexedTransactionSession openSession(
       IndexedSessionContext context, int maximumRowBytes) {
     IndexedTransactionSessionOpenResult result = new IndexedTransactionSessionOpenResult();
     assertEquals(StatusCode.OK, context.openSession(maximumRowBytes, result));
     return result.session();
-  }
-
-  private static LocalWal openWal(NioDurableDirectory directory) {
-    LocalWalOpenResult result = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
-    return result.wal();
   }
 
   private static IndexedTableStore createStore(

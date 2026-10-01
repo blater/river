@@ -1,5 +1,8 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.sql.SqlScanAssertions.assertRows;
+import static io.riverdb.engine.sql.SqlScanAssertions.assertPlanRow;
+
 import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -8,7 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.base.text.PackedText;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import java.nio.file.Path;
@@ -497,20 +499,6 @@ final class SqlBlockAggregateViewTest {
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
 
-  private static void assertPlanRow(
-      SqlSession session,
-      SqlScanCursor cursor,
-      SqlScanRowResult row,
-      String operator,
-      long detail,
-      long rows) {
-    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack(operator), row.valueAt(0));
-    assertEquals(detail, row.valueAt(1));
-    assertEquals(rows < 0, row.isNull(2));
-    if (rows >= 0) assertEquals(rows, row.valueAt(2));
-  }
-
   private static void createFixture(
       SqlSession session, SqlExecutionResult result) {
     assertEquals(
@@ -542,24 +530,6 @@ final class SqlBlockAggregateViewTest {
     SqlSessionOpenResult opened = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, opened));
     return opened.session();
-  }
-
-  private static void assertRows(
-      SqlSession session,
-      SqlExecutionResult result,
-      String sql,
-      long[][] expected) {
-    SqlScanCursor cursor = new SqlScanCursor();
-    SqlScanRowResult row = new SqlScanRowResult();
-    assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
-    for (long[] values : expected) {
-      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-      for (int column = 0; column < values.length; column++) {
-        assertEquals(values[column], row.valueAt(column));
-      }
-    }
-    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
-    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
 
   private static void assertTextRows(

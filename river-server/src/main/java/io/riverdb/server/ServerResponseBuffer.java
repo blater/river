@@ -5,6 +5,7 @@ import io.riverdb.engine.api.RetainedMemoryLease;
 import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.engine.api.TransactionProgramResultAdmission;
 import io.riverdb.protocol.ProtocolFrameCodec;
+import io.riverdb.protocol.ProtocolResponseCapacity;
 import io.riverdb.protocol.ProtocolRowBatch;
 import java.nio.ByteBuffer;
 
@@ -115,7 +116,7 @@ final class ServerResponseBuffer implements TransactionProgramResultAdmission {
   }
 
   StatusCode ensureCapacity(int required) {
-    if (required < 0 || required > ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES) {
+    if (ProtocolResponseCapacity.select(bytes.length, required) < 0) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = StatusCode.OK;
@@ -124,20 +125,16 @@ final class ServerResponseBuffer implements TransactionProgramResultAdmission {
   }
 
   private StatusCode growAdmitted() {
-    if (bytes.length >= ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    int capacity = Math.min(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES, bytes.length << 1);
+    int capacity = ProtocolResponseCapacity.select(bytes.length, bytes.length + 1);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
     StatusCode admitted = memory.resize(capacity + (batchBytes == null ? 0 : BATCH_BYTES));
     if (!admitted.isOk()) return admitted;
     return replace(capacity, bytes.length);
   }
 
   private StatusCode growReserved() {
-    if (bytes.length >= ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    int capacity = Math.min(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES, bytes.length << 1);
+    int capacity = ProtocolResponseCapacity.select(bytes.length, bytes.length + 1);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
     return replace(capacity, ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
   }
 

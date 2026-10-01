@@ -1,5 +1,6 @@
 package io.riverdb.server.app;
 
+import io.riverdb.base.text.CanonicalLongParser;
 import io.riverdb.base.id.DatabaseIncarnation;
 import java.nio.file.Path;
 
@@ -17,8 +18,10 @@ final class RiverDaemonIdentityRecords {
         RiverDaemonRecordEnvelope.decodePadded(bytes, 4, INSTANCE_FORMAT);
     if (envelope == null || !"initial-wal-generation=1".equals(envelope.fields[3])) return null;
     try {
-      long high = canonicalLong(value(envelope.fields[1], "database-incarnation-high="));
-      long low = canonicalLong(value(envelope.fields[2], "database-incarnation-low="));
+      CanonicalLongParser numbers = new CanonicalLongParser();
+      long high = numbers.signed(value(envelope.fields[1], "database-incarnation-high="));
+      long low = numbers.signed(value(envelope.fields[2], "database-incarnation-low="));
+      if (!numbers.isValid()) return null;
       return new InstanceRecord(DatabaseIncarnation.of(high, low), 1L);
     } catch (RuntimeException failure) {
       return null;
@@ -31,13 +34,14 @@ final class RiverDaemonIdentityRecords {
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
-      long high = canonicalLong(value(fields[2], "database-incarnation-high="));
-      long low = canonicalLong(value(fields[3], "database-incarnation-low="));
-      long pid = canonicalLong(value(fields[4], "pid="));
-      long start = canonicalLong(value(fields[5], "process-start-epoch-millis="));
+      CanonicalLongParser numbers = new CanonicalLongParser();
+      long high = numbers.signed(value(fields[2], "database-incarnation-high="));
+      long low = numbers.signed(value(fields[3], "database-incarnation-low="));
+      long pid = numbers.signed(value(fields[4], "pid="));
+      long start = numbers.signed(value(fields[5], "process-start-epoch-millis="));
       String datadir = value(fields[1], "datadir=");
       String nonce = value(fields[6], "owner-nonce=");
-      if (!DatabaseIncarnation.of(high, low).isValid() || pid <= 0 || start < 0
+      if (!numbers.isValid() || !DatabaseIncarnation.of(high, low).isValid() || pid <= 0 || start < 0
           || !validDatadir(datadir)
           || !nonce.matches("[0-9a-f]{32}")) return null;
       return new LockRecord(datadir, high, low, pid, start, nonce);
@@ -52,16 +56,17 @@ final class RiverDaemonIdentityRecords {
     if (envelope == null) return null;
     String[] fields = envelope.fields;
     try {
-      long high = canonicalLong(value(fields[1], "database-incarnation-high="));
-      long low = canonicalLong(value(fields[2], "database-incarnation-low="));
-      long pid = canonicalLong(value(fields[3], "pid="));
-      long start = canonicalLong(value(fields[4], "process-start-epoch-millis="));
+      CanonicalLongParser numbers = new CanonicalLongParser();
+      long high = numbers.signed(value(fields[1], "database-incarnation-high="));
+      long low = numbers.signed(value(fields[2], "database-incarnation-low="));
+      long pid = numbers.signed(value(fields[3], "pid="));
+      long start = numbers.signed(value(fields[4], "process-start-epoch-millis="));
       String nonce = value(fields[5], "attempt-nonce=");
       String database = value(fields[6], "database-name=");
       String security = value(fields[7], "security-name=");
       String staging = value(fields[8], "staging-name=");
       String instanceStage = value(fields[9], "instance-stage-name=");
-      if (!DatabaseIncarnation.of(high, low).isValid() || pid <= 0 || start < 0
+      if (!numbers.isValid() || !DatabaseIncarnation.of(high, low).isValid() || pid <= 0 || start < 0
           || !nonce.matches("[0-9a-f]{32}")
           || !RiverDaemonIdentity.DATABASE_NAME.equals(database)
           || !RiverDaemonIdentity.SECURITY_NAME.equals(security)) return null;
@@ -74,13 +79,6 @@ final class RiverDaemonIdentityRecords {
 
   private static String value(String field, String key) {
     return field.startsWith(key) ? field.substring(key.length()) : "";
-  }
-
-  private static long canonicalLong(String value) {
-    if (value == null || value.isEmpty()) throw new NumberFormatException();
-    long parsed = Long.parseLong(value);
-    if (!Long.toString(parsed).equals(value)) throw new NumberFormatException();
-    return parsed;
   }
 
   static boolean validDatadir(String value) {

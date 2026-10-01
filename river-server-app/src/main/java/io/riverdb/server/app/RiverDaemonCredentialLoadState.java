@@ -1,5 +1,6 @@
 package io.riverdb.server.app;
 
+import io.riverdb.base.text.CanonicalLongParser;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.engine.api.SessionPermissions;
@@ -48,10 +49,11 @@ final class RiverDaemonCredentialLoadState {
       manifestFields = RiverDaemonCredentialManifest.parse(manifest);
       if (manifestFields == null) return StatusCode.CORRUPTION;
       String[] fields = manifestFields.publicFields;
-      long high = canonicalLong(fields[1]);
-      long low = canonicalLong(fields[2]);
-      long generation = canonicalPositiveLong(fields[3]);
-      if (high != incarnation.high() || low != incarnation.low()
+      CanonicalLongParser numbers = new CanonicalLongParser();
+      long high = numbers.signed(fields[1]);
+      long low = numbers.signed(fields[2]);
+      long generation = numbers.positive(fields[3]);
+      if (!numbers.isValid() || high != incarnation.high() || low != incarnation.low()
           || !"1".equals(fields[4])
           || !Integer.toString(SessionPermissions.ALL).equals(fields[5])
           || !"raw-256".equals(fields[6]) || !"ec-secp256r1".equals(fields[7])
@@ -115,8 +117,10 @@ final class RiverDaemonCredentialLoadState {
         new java.io.ByteArrayInputStream(certificateBytes));
     Instant createdAt = certificate.getNotBefore().toInstant()
         .plusSeconds(RiverDaemonCredentialCertificate.VALIDITY_BACKDATE_SECONDS);
-    if (canonicalLong(fields[9]) != certificate.getNotBefore().toInstant().getEpochSecond()
-        || canonicalPositiveLong(fields[10]) != certificate.getNotAfter().toInstant().getEpochSecond()) {
+    CanonicalLongParser numbers = new CanonicalLongParser();
+    if (numbers.signed(fields[9]) != certificate.getNotBefore().toInstant().getEpochSecond()
+        || numbers.positive(fields[10]) != certificate.getNotAfter().toInstant().getEpochSecond()
+        || !numbers.isValid()) {
       return StatusCode.CORRUPTION;
     }
     RiverDaemonCredentials.Material material = new RiverDaemonCredentials.Material(
@@ -181,17 +185,5 @@ final class RiverDaemonCredentialLoadState {
 
   private static void clearBytes(byte[] bytes) {
     if (bytes != null) Arrays.fill(bytes, (byte) 0);
-  }
-
-  private static long canonicalLong(String value) {
-    long parsed = Long.parseLong(value);
-    if (!Long.toString(parsed).equals(value)) throw new IllegalArgumentException("noncanonical");
-    return parsed;
-  }
-
-  private static long canonicalPositiveLong(String value) {
-    long parsed = canonicalLong(value);
-    if (parsed <= 0) throw new IllegalArgumentException("nonpositive");
-    return parsed;
   }
 }

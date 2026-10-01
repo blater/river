@@ -1,5 +1,16 @@
 # River delivery Kanban and priority queue
 
+## Cataloged DRY refactoring — 2026-10-01
+
+[Tic-damrod](tickets/tic-damrod.md) delivered the bounded refactoring work in
+the [WET catalog](wet.md): matching policy consolidated for 16 entries and
+evidence-based retention for the two distinct ordering/container contracts.
+The catalog records each disposition and implementation reference; the ticket
+records independent review and validation.
+[Tic-curufin](tickets/tic-curufin.md) follows that delivery to evaluate the wider
+SQL ordering, JDBC cursor-state, public result API, and primitive paged-container
+opportunities with explicit implementation-or-retain decisions.
+
 ## Current indexed-read frontier — 2026-09-29
 
 [tic-thranduil](tickets/tic-thranduil.md) measured the complete full-cardinality

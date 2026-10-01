@@ -5,38 +5,15 @@ import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.sql.SqlCommand;
-import io.riverdb.tx.api.IsolationLevel;
 
 /** Renames one published descriptor table transactionally without changing its identity. */
-final class SqlDescriptorTableRename {
+final class SqlDescriptorTableRename extends SqlDescriptorDdl {
   private final SchemaPin current = new SchemaPin();
   private final StatusDetail detail = new StatusDetail(128);
-  private boolean legacyTable;
 
-  StatusCode execute(
-      RelationalSession session,
-      SqlTransactionState transactions,
-      SqlAtomicStatementLifecycle atomic,
-      SqlCommand command,
-      SqlExecutionResult result) {
-    legacyTable = false;
-    StatusCode status = atomic.begin(IsolationLevel.SERIALIZABLE);
-    boolean began = status.isOk();
-    boolean implicit = began && atomic.implicit();
-    if (status.isOk()) status = prepare(status, session, command);
-    status = release(status);
-    if (began) status = atomic.finish(status);
-    if (!status.isOk()) return status;
-    long commit = implicit ? transactions.commitSequence() : 0;
-    result.setUpdate(0, commit);
-    result.setTransaction(transactions.isExplicit(), commit);
-    return StatusCode.OK;
-  }
-
-  private StatusCode prepare(
-      StatusCode status, RelationalSession session, SqlCommand command) {
-    if (!status.isOk()) return status;
-    status = session.resolveDescriptor(command.tableName(), current, detail);
+  @Override
+  StatusCode executeBody(RelationalSession session, SqlCommand command) {
+    StatusCode status = session.resolveDescriptor(command.tableName(), current, detail);
     if (status == StatusCode.CONFLICT) legacyTable = true;
     if (!status.isOk()) return status;
     status = session.checkViewReferences(current.tableId());
@@ -45,9 +22,8 @@ final class SqlDescriptorTableRename {
         command.tableName(), command.renamedTableName(), current, detail);
   }
 
-  boolean legacyTable() { return legacyTable; }
-
-  private StatusCode release(StatusCode status) {
+  @Override
+  StatusCode release(StatusCode status) {
     if (!current.isActive()) return status;
     StatusCode released = current.release();
     return status.isOk() ? released : status;

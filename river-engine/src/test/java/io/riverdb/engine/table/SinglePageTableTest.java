@@ -1,22 +1,21 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+import static io.riverdb.engine.TestDurableStorage.openWal;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.page.SinglePageStore;
 import io.riverdb.engine.page.SinglePageStoreOpenResult;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.storage.heap.HeapScanCursor;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalOpenResult;
 import io.riverdb.wal.local.LocalWalReadResult;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
@@ -30,7 +29,7 @@ final class SinglePageTableTest {
   @Test
   void insertsFetchesScansFlushesAndReopens(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     SinglePageStore store = createPageStore(directory, wal);
     SinglePageTable table = createTable(store);
     byte[] expected = {5, 8, 9, 7, 9, 3};
@@ -60,7 +59,7 @@ final class SinglePageTableTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     store = openPageStore(directory, wal);
     table = openTable(store);
     assertEquals(1, table.rowCount());
@@ -74,7 +73,7 @@ final class SinglePageTableTest {
   @Test
   void crashAfterCommitBeforePageFlushRecoversHeapRow(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     SinglePageTable table = createTable(createPageStore(directory, wal));
     byte[] expected = {3, 2, 3, 8, 4, 6};
     assertEquals(
@@ -85,7 +84,7 @@ final class SinglePageTableTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     table = openTable(openPageStore(directory, wal));
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetch(1, fetched));
@@ -109,25 +108,6 @@ final class SinglePageTableTest {
       offset = read.nextOffset();
     }
     return read;
-  }
-
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult result = new NioDirectoryOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        NioDurableDirectory.openExisting(
-            root,
-            new FatalStateFence(),
-            new NioIoCounters(),
-            8,
-            result));
-    return result.directory();
-  }
-
-  private static LocalWal openWal(NioDurableDirectory directory) {
-    LocalWalOpenResult result = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
-    return result.wal();
   }
 
   private static SinglePageStore createPageStore(

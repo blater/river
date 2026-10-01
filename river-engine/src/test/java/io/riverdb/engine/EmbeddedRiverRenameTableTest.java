@@ -1,5 +1,7 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.EmbeddedQueryAssertions.countRows;
+
 import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -9,11 +11,8 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
-import io.riverdb.engine.api.QueryOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
-import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RiverSession;
-import io.riverdb.engine.api.RowResult;
 import io.riverdb.engine.api.SessionOpenResult;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -113,21 +112,5 @@ final class EmbeddedRiverRenameTableTest {
     assertEquals(0, countRows(session, "SELECT id FROM accounts"));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
-  }
-
-  private static int countRows(RiverSession session, String sql) {
-    QueryOpenResult opened = new QueryOpenResult();
-    assertEquals(StatusCode.OK, session.beginQuery(sql, opened));
-    RiverQuery query = opened.query();
-    RowResult row = new RowResult();
-    int count = 0;
-    StatusCode status = query.next(row);
-    while (status.isOk() && row.isAvailable()) {
-      count++;
-      status = query.next(row);
-    }
-    assertEquals(StatusCode.OK, status);
-    assertEquals(StatusCode.OK, query.close(new CommandResult()));
-    return count;
   }
 }

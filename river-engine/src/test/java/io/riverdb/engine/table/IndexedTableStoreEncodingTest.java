@@ -1,21 +1,20 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+import static io.riverdb.engine.TestDurableStorage.openWal;
+
 import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.page.PageHeader;
 import io.riverdb.format.wal.WalFileHeaderCodec;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalOpenResult;
 import io.riverdb.wal.local.LocalWalReadResult;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -34,7 +33,7 @@ final class IndexedTableStoreEncodingTest {
   @Test
   void pageImageAndCheckpointUseCurrentEncoding(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
 
@@ -90,7 +89,6 @@ final class IndexedTableStoreEncodingTest {
     assertEquals(StatusCode.OK, directory.close());
   }
 
-
   private static byte[] expectedPageImageHeader() {
     byte[] expected = new byte[24];
     putLong(expected, 0, OPERATION_MAGIC);
@@ -100,7 +98,6 @@ final class IndexedTableStoreEncodingTest {
     putInt(expected, 20, 0);
     return expected;
   }
-
 
   private static void assertRecordHeader(
       LocalWalReadResult record,
@@ -177,25 +174,6 @@ final class IndexedTableStoreEncodingTest {
     }
   }
 
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult result = new NioDirectoryOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        NioDurableDirectory.openExisting(
-            root,
-            new FatalStateFence(),
-            new NioIoCounters(),
-            8,
-            result));
-    return result.directory();
-  }
-
-  private static LocalWal openWal(NioDurableDirectory directory) {
-    LocalWalOpenResult result = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
-    return result.wal();
-  }
-
   private static IndexedTableStore createStore(
       NioDurableDirectory directory,
       LocalWal wal) {
@@ -212,5 +190,4 @@ final class IndexedTableStoreEncodingTest {
     assertEquals(StatusCode.OK, IndexedTable.create(store, result));
     return result.table();
   }
-
 }

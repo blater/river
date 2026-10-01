@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
-import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
@@ -187,18 +186,7 @@ final class RiverPrimaryKeyResultSet extends RiverMetadataResultSet {
       throw JdbcExceptions.invalid("target type must not be null");
     }
     Object value = readValue(column);
-    if (value == null || type.isInstance(value)) {
-      return type.cast(value);
-    }
-    if (type == String.class) {
-      return type.cast(value.toString());
-    }
-    throw JdbcExceptions.unsupported();
-  }
-
-  @Override
-  public <T> T getObject(String label, Class<T> type) throws SQLException {
-    return getObject(findColumn(label), type);
+    return convert(value, type);
   }
 
   @Override
@@ -214,14 +202,6 @@ final class RiverPrimaryKeyResultSet extends RiverMetadataResultSet {
   public int getFetchSize() throws SQLException {
     requireOpen();
     return io.riverdb.base.sql.SqlShapeLimits.MAX_KEY_PARTS;
-  }
-
-  @Override
-  public void setFetchSize(int rows) throws SQLException {
-    requireOpen();
-    if (rows < 0 || rows > io.riverdb.base.sql.SqlShapeLimits.MAX_KEY_PARTS) {
-      throw JdbcExceptions.unsupported();
-    }
   }
 
   @Override
@@ -251,20 +231,6 @@ final class RiverPrimaryKeyResultSet extends RiverMetadataResultSet {
   @Override
   public boolean isClosed() {
     return closed;
-  }
-
-  @Override
-  public <T> T unwrap(Class<T> type) throws SQLException {
-    requireOpen();
-    if (type != null && type.isInstance(this)) {
-      return type.cast(this);
-    }
-    throw JdbcExceptions.unsupported();
-  }
-
-  @Override
-  public boolean isWrapperFor(Class<?> type) {
-    return !closed && type != null && type.isInstance(this);
   }
 
   private void resolvePrimaryKey() throws SQLException {

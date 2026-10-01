@@ -1,5 +1,7 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDurableStorage.openWal;
+
 import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -26,7 +28,6 @@ import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
 import io.riverdb.tx.api.lock.LockMode;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalOpenResult;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
@@ -46,7 +47,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void preparedLogicalCommitRejectsSameCardinalityContentChange(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
@@ -80,7 +81,7 @@ final class IndexedTransactionSessionTest {
   void abortCleansADeadlockTerminatedStatementAndAllowsImmediateReuse(
       @TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
@@ -108,7 +109,7 @@ final class IndexedTransactionSessionTest {
   void readCommittedLocksAndUpdatesTheCurrentSuccessorAfterAWait(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -159,7 +160,7 @@ final class IndexedTransactionSessionTest {
   void serializableUpdateCandidatesSerializeBeforeExclusiveConversion(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -217,7 +218,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void repeatableReadLockCurrentReturnsANewerCurrentSuccessor(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -250,7 +251,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void lockCurrentRejectsDeleteReinsertAsAReplacementRow(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -286,7 +287,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void ownPendingCandidateStagesWithoutRepeatingCurrentDiscovery(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
@@ -315,7 +316,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void scanResultsCarryCommittedAndPendingIdentityIntoLockCurrent(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 3);
@@ -364,7 +365,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void savepointRollbackTruncatesTupleLifecycleRequests(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -395,7 +396,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void repeatableReadHidesLaterCommitAndReadCommittedRefreshes(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
@@ -428,7 +429,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void readCommittedPinsOneSnapshotAcrossAStatement(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
@@ -462,7 +463,7 @@ final class IndexedTransactionSessionTest {
   void concurrentUniqueConflictAbortsOnlyLosingTransaction(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -497,7 +498,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void tupleOperationsRejectMalformedKeysBeforeProjection(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
@@ -538,7 +539,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void physicalAndUserKeysShareProtectionAtNonzeroOffsets(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
@@ -587,7 +588,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void tupleKeyLockCancellationDoesNotSerializeUnrelatedKeys(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -637,7 +638,7 @@ final class IndexedTransactionSessionTest {
   void deadlockAbortsDeterministicVictimAndSurvivorCommits(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -682,7 +683,7 @@ final class IndexedTransactionSessionTest {
   void serializableMissingKeyReadBlocksInsertUntilReadOnlyCommit(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -714,7 +715,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void serializablePointReadCapturesCurrentFrontierAfterKeyProtection(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -741,7 +742,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void serializableReaderCanUpgradeMissingKeyToInsert(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -766,7 +767,7 @@ final class IndexedTransactionSessionTest {
   void serializableScanLocksPhantomsThroughPublication(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -818,7 +819,7 @@ final class IndexedTransactionSessionTest {
       @TempDir Path root) throws Exception {
     NioIoCounters counters = new NioIoCounters();
     NioDurableDirectory directory = openDirectory(root, counters);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
@@ -911,7 +912,7 @@ final class IndexedTransactionSessionTest {
   void serializableScanCapturesCurrentFrontierAfterQueuedRangeGrant(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -956,7 +957,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void nestedScansRetainIndependentCursorOwnership(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -997,7 +998,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void abortDiscardsPendingInsertAndReleasesKey(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1030,7 +1031,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void repeatedKeyMutationsReadLatestAndCommitOneEffectiveVersion(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1090,7 +1091,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void savepointRollsBackPendingRowsButRetainsLocks(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1132,7 +1133,7 @@ final class IndexedTransactionSessionTest {
   void tupleKeySavepointRollbackRetainsExactProtection(
       @TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1173,7 +1174,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void outerSavepointInvalidatesNestedSavepoints(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1205,7 +1206,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void publishesMultipleRowsAtOneCommitSequence(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1241,7 +1242,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void commitsOneBatchAcrossHeapPagesAndRecoversIt(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1269,7 +1270,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -1289,7 +1290,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void duplicateInWriteSetRollsBackEveryStagedRow(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1319,7 +1320,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void multiWriteCommitCanPublishLeafSplit(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1352,7 +1353,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void mixedMutationsPreserveOldSnapshotAndRecoverBeforeFlush(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 6);
@@ -1395,7 +1396,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -1419,7 +1420,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void mixedMutationCommitSplitsFullLeafAndRecoversVersions(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
@@ -1461,7 +1462,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -1486,7 +1487,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void staleRepeatableReadCannotOverwriteNewerVersion(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
@@ -1516,7 +1517,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void deleteThenReinsertPreservesEachSnapshotVersion(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 7);
@@ -1566,7 +1567,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void deleteReinsertFormsRecoverFromWalBeforePageFlush(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
@@ -1602,7 +1603,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
         IndexedTableStore.open(
@@ -1626,7 +1627,7 @@ final class IndexedTransactionSessionTest {
       throws Exception {
     NioIoCounters counters = new NioIoCounters();
     NioDurableDirectory directory = openDirectory(root, counters);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
@@ -1677,7 +1678,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
         IndexedTableStore.open(
@@ -1694,7 +1695,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void quiescentVacuumReclaimsVersionsAndRecoversBeforePageFlush(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
@@ -1754,7 +1755,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -1776,7 +1777,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void vacuumRetriesCleanlyAfterActiveSnapshotEnds(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1809,7 +1810,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void vacuumCompactsMoreThanOneWalPayloadAndRecovers(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
@@ -1857,7 +1858,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -1878,7 +1879,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void recoveryDiscardsVacuumChunksWithoutCommitMarker(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
@@ -1905,7 +1906,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -1930,7 +1931,7 @@ final class IndexedTransactionSessionTest {
     close(table, wal, directory);
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     storeResult = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
         IndexedTableStore.open(
@@ -1949,7 +1950,7 @@ final class IndexedTransactionSessionTest {
   void automaticVacuumWaitsForCapacityPressureWhileExplicitVacuumRecovers(
       @TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
@@ -1998,7 +1999,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -2017,7 +2018,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void commitsDistinctTransactionsFromConcurrentSessions(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
@@ -2059,7 +2060,7 @@ final class IndexedTransactionSessionTest {
       throws Exception {
     NioIoCounters counters = new NioIoCounters();
     NioDurableDirectory directory = openDirectory(root, counters);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
     TransactionManager manager = new TransactionManager(
@@ -2123,7 +2124,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -2144,7 +2145,7 @@ final class IndexedTransactionSessionTest {
   void coordinatorGroupInstallsOneAtomicMemberFrontier(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -2206,7 +2207,7 @@ final class IndexedTransactionSessionTest {
       throws Exception {
     NioIoCounters counters = new NioIoCounters();
     NioDurableDirectory directory = openDirectory(root, counters);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
     TransactionManager manager = new TransactionManager(
@@ -2275,7 +2276,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -2291,7 +2292,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void recoversCommittedVisibilityBeforePageFlush(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -2310,7 +2311,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -2341,7 +2342,7 @@ final class IndexedTransactionSessionTest {
   @Test
   void orderedScanCrossesLeavesAndRetainsSnapshotVersions(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 6);
@@ -2548,12 +2549,6 @@ final class IndexedTransactionSessionTest {
             8,
             result));
     return result.directory();
-  }
-
-  private static LocalWal openWal(NioDurableDirectory directory) {
-    LocalWalOpenResult result = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
-    return result.wal();
   }
 
   private static IndexedTableStore createStore(

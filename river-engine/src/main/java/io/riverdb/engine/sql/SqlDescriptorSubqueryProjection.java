@@ -31,9 +31,9 @@ final class SqlDescriptorSubqueryProjection {
     if (symbol < 0) return StatusCode.FEATURE_NOT_SUPPORTED;
     CharSequence qualifier = command.projections().symbolTable(symbol);
     if (qualifier.length() != 0
-        && !SqlDescriptorPrimaryPredicate.same(qualifier, command.tableName())
+        && !SqlBindingNames.same(qualifier, command.tableName())
         && !(command.tableAlias().length() > 0
-            && SqlDescriptorPrimaryPredicate.same(qualifier, command.tableAlias()))) {
+            && SqlBindingNames.same(qualifier, command.tableAlias()))) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     column = table.findColumn(command.projections().symbolName(symbol));

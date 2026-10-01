@@ -1,5 +1,8 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.sql.SqlScanAssertions.assertRows;
+import static io.riverdb.engine.sql.SqlScanAssertions.assertPlanRow;
+
 import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -8,7 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.base.text.PackedText;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
@@ -422,37 +424,5 @@ final class SqlNTableJoinTest {
             "CREATE VIEW invalid_derived AS SELECT id FROM ("
                 + invalid + ") invalid_source",
             result));
-  }
-
-  private static void assertRows(
-      SqlSession session,
-      SqlExecutionResult result,
-      String sql,
-      long[][] expected) {
-    SqlScanCursor cursor = new SqlScanCursor();
-    SqlScanRowResult row = new SqlScanRowResult();
-    assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
-    for (long[] values : expected) {
-      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-      for (int column = 0; column < values.length; column++) {
-        assertEquals(values[column], row.valueAt(column));
-      }
-    }
-    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
-    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
-  }
-
-  private static void assertPlanRow(
-      SqlSession session,
-      SqlScanCursor cursor,
-      SqlScanRowResult row,
-      String operator,
-      long detail,
-      long actualRows) {
-    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack(operator), row.valueAt(0));
-    assertEquals(detail, row.valueAt(1));
-    assertEquals(actualRows < 0, row.isNull(2));
-    if (actualRows >= 0) assertEquals(actualRows, row.valueAt(2));
   }
 }

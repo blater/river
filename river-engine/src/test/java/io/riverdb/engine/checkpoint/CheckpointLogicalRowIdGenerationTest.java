@@ -1,14 +1,13 @@
 package io.riverdb.engine.checkpoint;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
@@ -136,13 +135,6 @@ final class CheckpointLogicalRowIdGenerationTest {
     return state;
   }
 
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult result = new NioDirectoryOpenResult();
-    assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
-        root, new FatalStateFence(), new NioIoCounters(), 8, result));
-    return result.directory();
-  }
-
   private static class ArraySource implements CheckpointLogicalRowIdSource {
     private final long[] objectIds;
     private final long[] floors;
@@ -177,5 +169,4 @@ final class CheckpointLogicalRowIdGenerationTest {
     @Override
     public int floorCount() { return declaredCount; }
   }
-
 }

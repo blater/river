@@ -14,12 +14,4 @@ final class SqlDescriptorPrimaryPredicate {
   StatusCode bind(SqlCommand sql, TableDescriptor descriptor) {
     return binding.bind(sql, descriptor);
   }
-
-  static boolean same(CharSequence left, CharSequence right) {
-    if (left.length() != right.length()) return false;
-    for (int index = 0; index < left.length(); index++) {
-      if (left.charAt(index) != right.charAt(index)) return false;
-    }
-    return true;
-  }
 }

@@ -1,14 +1,13 @@
 package io.riverdb.bench.tpcc;
 
 /** Owns bounded transaction latency histograms and latency maxima. */
-final class TpccLatencyMetrics {
+final class TpccLatencyMetrics extends TpccCounterArithmetic {
   private static final int BUCKETS = 64;
   private static final int TYPE_COUNT = TpccTransactionType.values().length;
   private final long[][] histogram = new long[TYPE_COUNT][BUCKETS];
   private final long[] maximumLatencyNanosByType =
       new long[TYPE_COUNT];
   private long maximumLatencyNanos;
-  private boolean overflowed;
 
   void record(TpccTransactionType type, long nanos) {
     int index = type.ordinal();
@@ -67,22 +66,6 @@ final class TpccLatencyMetrics {
   }
 
   boolean overflowed() { return overflowed; }
-
-  private long increment(long value) {
-    if (value == Long.MAX_VALUE) {
-      overflowed = true;
-      return value;
-    }
-    return value + 1;
-  }
-
-  private long add(long current, long value) {
-    if (current < 0 || value < 0 || current > Long.MAX_VALUE - value) {
-      overflowed = true;
-      return Long.MAX_VALUE;
-    }
-    return current + value;
-  }
 
   private static int bucket(long nanos) {
     if (nanos <= 1) return 0;

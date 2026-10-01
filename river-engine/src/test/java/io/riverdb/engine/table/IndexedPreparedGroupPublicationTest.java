@@ -1,17 +1,17 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+import static io.riverdb.engine.TestDurableStorage.openWal;
+
 import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.Transaction;
@@ -20,7 +20,6 @@ import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalOpenResult;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutorService;
@@ -38,7 +37,7 @@ final class IndexedPreparedGroupPublicationTest {
   void preservesEachMemberCsnWhenBothChangeOneScalarLeaf(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = manager(table, 4);
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
@@ -72,7 +71,7 @@ final class IndexedPreparedGroupPublicationTest {
   void splitAllocationsRetainMemberSnapshotsAndRecoverFromWal(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = manager(table, 4);
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
@@ -97,7 +96,7 @@ final class IndexedPreparedGroupPublicationTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
         IndexedTableStore.open(
@@ -112,7 +111,7 @@ final class IndexedPreparedGroupPublicationTest {
   void cancellationBeforeForceKeepsFrontierInvisibleAndAllowsNextCommit(
       @TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = manager(table, 4);
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
@@ -255,19 +254,6 @@ final class IndexedPreparedGroupPublicationTest {
     IndexedTransactionSessionOpenResult result = new IndexedTransactionSessionOpenResult();
     assertEquals(StatusCode.OK, context.openSession(Long.BYTES, result));
     return result.session();
-  }
-
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult result = new NioDirectoryOpenResult();
-    assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
-        root, new FatalStateFence(), new NioIoCounters(), 8, result));
-    return result.directory();
-  }
-
-  private static LocalWal openWal(NioDurableDirectory directory) {
-    LocalWalOpenResult result = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
-    return result.wal();
   }
 
   private static IndexedTableStore createStore(

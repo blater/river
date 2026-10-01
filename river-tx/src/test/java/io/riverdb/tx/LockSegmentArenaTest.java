@@ -1,6 +1,7 @@
 package io.riverdb.tx;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -203,6 +204,40 @@ final class LockSegmentArenaTest {
     assertEquals(StatusCode.OK, store.reserve(retried));
     assertEquals(reused, retried.slot);
     assertEquals(firstGeneration + 1, store.generation(retried.slot));
+  }
+
+  @Test
+  void typedStoresKeepOccupancyAndReuseIndependentAcrossWordsAndChunks() {
+    LockSegmentArena arena = new LockSegmentArena(new LockMemoryEnvelope(1L << 20));
+    LockTypedSlots[] stores = {
+        new LockExactResourceStore(arena), new LockExactHoldingStore(arena),
+        new LockExactRequestStore(arena), new LockExactTransactionStore(arena)
+    };
+    for (LockTypedSlots store : stores) {
+      LockSlotReservation reservation = new LockSlotReservation();
+      for (long slot = 0; slot <= 256; slot++) {
+        assertEquals(StatusCode.OK, store.reserve(reservation));
+        assertEquals(slot, reservation.slot);
+        store.commit(reservation);
+      }
+      for (long slot : new long[] {63, 64, 255, 256}) {
+        long generation = store.generation(slot);
+        store.free(slot);
+        assertFalse(store.occupied(slot));
+        assertTrue(store.occupied(slot - 1));
+        assertEquals(StatusCode.OK, store.reserve(reservation));
+        assertEquals(slot, reservation.slot);
+        assertTrue(store.occupied(slot));
+        store.rollback(reservation);
+        assertFalse(store.occupied(slot));
+        assertEquals(generation, store.generation(slot));
+        assertEquals(StatusCode.OK, store.reserve(reservation));
+        assertEquals(slot, reservation.slot);
+        assertEquals(generation + 1, store.generation(slot));
+        store.commit(reservation);
+      }
+      for (long slot = 0; slot <= 256; slot++) assertTrue(store.occupied(slot));
+    }
   }
 
   @Test

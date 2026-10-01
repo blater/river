@@ -1,5 +1,8 @@
 package io.riverdb.engine.schema.catalog;
 
+import static io.riverdb.engine.schema.catalog.CatalogStatus.fail;
+import static io.riverdb.engine.schema.catalog.CatalogStatus.succeed;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.schema.TableDescriptor;
@@ -86,15 +89,5 @@ final class CatalogTableOpener {
       if (status.isOk()) status = cancelled;
     }
     return fail(detail, status);
-  }
-
-  private static StatusCode succeed(StatusDetail detail) {
-    if (detail != null) detail.set(StatusCode.OK);
-    return StatusCode.OK;
-  }
-
-  private static StatusCode fail(StatusDetail detail, StatusCode status) {
-    if (detail != null && detail.code() == StatusCode.OK) detail.set(status);
-    return status;
   }
 }

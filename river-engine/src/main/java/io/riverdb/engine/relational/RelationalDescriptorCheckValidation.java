@@ -1,5 +1,7 @@
 package io.riverdb.engine.relational;
 
+import static io.riverdb.base.type.ExactDecimalDescriptors.scale;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal128;
 import io.riverdb.base.type.ExactDecimal128Conversion;
@@ -67,10 +69,5 @@ final class RelationalDescriptorCheckValidation {
       return SqlNumericValue.doubleValue(low, descriptor);
     }
     return ExactDecimal128Conversion.toDouble(high, low, scale(descriptor), scratch);
-  }
-
-  private static int scale(int descriptor) {
-    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? SqlTypeDescriptor.parameterTwo(descriptor) : 0;
   }
 }

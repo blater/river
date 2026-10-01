@@ -1,10 +1,11 @@
 package io.riverdb.engine.control;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
@@ -24,9 +25,7 @@ import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
@@ -188,19 +187,6 @@ final class DatabaseControlStoreTest {
     DatabaseControlResult result = new DatabaseControlResult();
     result.set(new ControlFile(DatabaseIncarnation.of(3, 5), WalGeneration.of(7)));
     return result;
-  }
-
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult open = new NioDirectoryOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        NioDurableDirectory.openExisting(
-            root,
-            new FatalStateFence(),
-            new NioIoCounters(),
-            8,
-            open));
-    return open.directory();
   }
 
   private static final class FaultFixture {
