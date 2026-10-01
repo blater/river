@@ -1,5 +1,6 @@
 package io.riverdb.client;
 
+import io.riverdb.base.text.CanonicalLongParser;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.platform.riverd.RiverDaemonFileSystem;
@@ -59,13 +60,14 @@ final class RiverClientConfigurationParser {
           || !("river-v" + io.riverdb.protocol.ProtocolFrameCodec.VERSION).equals(values[6])) {
         return StatusCode.CORRUPTION;
       }
-      long high = canonicalLong(values[1]);
-      long low = canonicalLong(values[2]);
+      CanonicalLongParser numbers = new CanonicalLongParser();
+      long high = numbers.signed(values[1]);
+      long low = numbers.signed(values[2]);
       DatabaseIncarnation incarnation = DatabaseIncarnation.of(high, low);
-      long generation = canonicalPositiveLong(values[3]);
+      long generation = numbers.positive(values[3]);
       if (!validHost(values[7])) return StatusCode.CORRUPTION;
-      long portValue = canonicalPositiveLong(values[8]);
-      if (portValue > 65535) return StatusCode.CORRUPTION;
+      long portValue = numbers.positive(values[8]);
+      if (!numbers.isValid() || portValue > 65535) return StatusCode.CORRUPTION;
       Path certificate = absoluteNormalized(values[9]);
       Path token = absoluteNormalized(values[11]);
       if (certificate == null || token == null || !lowerHex(values[10], 64)) {
@@ -90,18 +92,6 @@ final class RiverClientConfigurationParser {
         .onUnmappableCharacter(CodingErrorAction.REPORT)
         .decode(ByteBuffer.wrap(bytes))
         .toString();
-  }
-
-  private static long canonicalLong(String value) {
-    long parsed = Long.parseLong(value);
-    if (!Long.toString(parsed).equals(value)) throw new IllegalArgumentException("noncanonical");
-    return parsed;
-  }
-
-  private static long canonicalPositiveLong(String value) {
-    long parsed = canonicalLong(value);
-    if (parsed <= 0) throw new IllegalArgumentException("nonpositive");
-    return parsed;
   }
 
   private static Path absoluteNormalized(String value) {
