@@ -10,10 +10,9 @@ import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
-import io.riverdb.tx.api.IsolationLevel;
 
 /** Builds and publishes one bounded catalog-v2 secondary tuple index. */
-final class SqlDescriptorIndexCreation {
+final class SqlDescriptorIndexCreation extends SqlDescriptorDdl {
   private final RelationalDescriptorIndexChange change =
       new RelationalDescriptorIndexChange();
   private final TableDescriptor.Result proposal = new TableDescriptor.Result();
@@ -23,25 +22,9 @@ final class SqlDescriptorIndexCreation {
   private final SchemaPin staged = new SchemaPin();
   private final StatusDetail detail = new StatusDetail(128);
   private final int[] ordinals = new int[KeyDescriptor.MAXIMUM_PARTS];
-  private boolean legacyTable;
 
-  StatusCode execute(
-      RelationalSession session,
-      SqlTransactionState transactions,
-      SqlAtomicStatementLifecycle atomic,
-      SqlCommand command,
-      SqlExecutionResult result) {
-    legacyTable = false;
-    StatusCode status = atomic.begin(IsolationLevel.SERIALIZABLE);
-    boolean began = status.isOk();
-    boolean implicit = began && atomic.implicit();
-    if (status.isOk()) status = executeBody(session, command);
-    status = release(status);
-    if (began) status = atomic.finish(status);
-    return publishResult(status, implicit, transactions, result);
-  }
-
-  private StatusCode executeBody(RelationalSession session, SqlCommand command) {
+  @Override
+  StatusCode executeBody(RelationalSession session, SqlCommand command) {
     StatusCode status = session.resolveDescriptor(command.tableName(), current, detail);
     if (status == StatusCode.CONFLICT) legacyTable = true;
     if (!status.isOk()) return status;
@@ -60,8 +43,6 @@ final class SqlDescriptorIndexCreation {
     return status.isOk()
         ? session.stagePreparedDescriptorSuccessor(command.tableName(), detail) : status;
   }
-
-  boolean legacyTable() { return legacyTable; }
 
   private StatusCode backfill(
       RelationalSession session, SqlCommand command, int index) {
@@ -85,7 +66,8 @@ final class SqlDescriptorIndexCreation {
     return StatusCode.OK;
   }
 
-  private StatusCode release(StatusCode status) {
+  @Override
+  StatusCode release(StatusCode status) {
     StatusCode released = release(staged);
     if (status.isOk()) status = released;
     released = release(measured);
@@ -96,17 +78,5 @@ final class SqlDescriptorIndexCreation {
 
   private static StatusCode release(SchemaPin pin) {
     return pin.isActive() ? pin.release() : StatusCode.OK;
-  }
-
-  private static StatusCode publishResult(
-      StatusCode status,
-      boolean implicit,
-      SqlTransactionState transactions,
-      SqlExecutionResult result) {
-    if (!status.isOk()) return status;
-    long commit = implicit ? transactions.commitSequence() : 0;
-    result.setUpdate(0, commit);
-    result.setTransaction(transactions.isExplicit(), commit);
-    return StatusCode.OK;
   }
 }

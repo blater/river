@@ -7,10 +7,9 @@ import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.sql.SqlCommand;
-import io.riverdb.tx.api.IsolationLevel;
 
 /** Removes one descriptor secondary key by publishing an atomic successor. */
-final class SqlDescriptorIndexDrop {
+final class SqlDescriptorIndexDrop extends SqlDescriptorDdl {
   private final RelationalDescriptorIndexChange change =
       new RelationalDescriptorIndexChange();
   private final SqlDescriptorIndexDependencies dependencies =
@@ -18,28 +17,10 @@ final class SqlDescriptorIndexDrop {
   private final TableDescriptor.Result proposal = new TableDescriptor.Result();
   private final SchemaPin current = new SchemaPin();
   private final StatusDetail detail = new StatusDetail(128);
-  private boolean legacyTable;
 
-  StatusCode execute(
-      RelationalSession session,
-      SqlTransactionState transactions,
-      SqlAtomicStatementLifecycle atomic,
-      SqlCommand command,
-      SqlExecutionResult result) {
-    legacyTable = false;
-    StatusCode status = atomic.begin(IsolationLevel.SERIALIZABLE);
-    boolean began = status.isOk();
-    boolean implicit = began && atomic.implicit();
-    if (status.isOk()) status = prepare(status, session, command);
-    status = release(status);
-    if (began) status = atomic.finish(status);
-    return publish(status, implicit, transactions, result);
-  }
-
-  private StatusCode prepare(
-      StatusCode status, RelationalSession session, SqlCommand command) {
-    if (!status.isOk()) return status;
-    status = session.resolveDescriptor(command.tableName(), current, detail);
+  @Override
+  StatusCode executeBody(RelationalSession session, SqlCommand command) {
+    StatusCode status = session.resolveDescriptor(command.tableName(), current, detail);
     if (status == StatusCode.CONFLICT) legacyTable = true;
     if (!status.isOk()) return status;
     status = change.drop(
@@ -51,23 +32,10 @@ final class SqlDescriptorIndexDrop {
         command.tableName(), current, proposal.value(), detail);
   }
 
-  boolean legacyTable() { return legacyTable; }
-
-  private StatusCode release(StatusCode status) {
+  @Override
+  StatusCode release(StatusCode status) {
     if (!current.isActive()) return status;
     StatusCode released = current.release();
     return status.isOk() ? released : status;
-  }
-
-  private static StatusCode publish(
-      StatusCode status,
-      boolean implicit,
-      SqlTransactionState transactions,
-      SqlExecutionResult result) {
-    if (!status.isOk()) return status;
-    long commit = implicit ? transactions.commitSequence() : 0;
-    result.setUpdate(0, commit);
-    result.setTransaction(transactions.isExplicit(), commit);
-    return StatusCode.OK;
   }
 }
