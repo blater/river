@@ -424,7 +424,7 @@ final class SqlBooleanPredicateEvaluator {
         : exact.compareExact(
             first.highValue(), first.value(), first.descriptor(),
             second.highValue(), second.value(), second.descriptor());
-    return matches(compared, comparison) ? TRUE : FALSE;
+    return SqlDescriptorComparison.matches(compared, comparison) ? TRUE : FALSE;
   }
 
   private int compareMember(int leaf, int member) {
@@ -483,18 +483,6 @@ final class SqlBooleanPredicateEvaluator {
         block ? null : table,
         block ? blockRow : null,
         result);
-  }
-
-  private static boolean matches(int compared, SqlComparison comparison) {
-    return switch (comparison) {
-      case EQUAL -> compared == 0;
-      case NOT_EQUAL -> compared != 0;
-      case LESS_THAN -> compared < 0;
-      case LESS_OR_EQUAL -> compared <= 0;
-      case GREATER_THAN -> compared > 0;
-      case GREATER_OR_EQUAL -> compared >= 0;
-      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
-    };
   }
 
   private static boolean text(int descriptor) {

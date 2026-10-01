@@ -71,15 +71,6 @@ final class SqlDescriptorPredicateLeaf {
         bindings.descriptor(leaf));
     status = literals.status();
     if (!status.isOk()) return -1;
-    return switch (bindings.comparison(leaf)) {
-      case EQUAL -> compared == 0 ? 1 : 0;
-      case NOT_EQUAL -> compared != 0 ? 1 : 0;
-      case LESS_THAN -> compared < 0 ? 1 : 0;
-      case LESS_OR_EQUAL -> compared <= 0 ? 1 : 0;
-      case GREATER_THAN -> compared > 0 ? 1 : 0;
-      case GREATER_OR_EQUAL -> compared >= 0 ? 1 : 0;
-      default -> 0;
-    };
+    return SqlDescriptorComparison.matches(compared, bindings.comparison(leaf)) ? 1 : 0;
   }
-
 }

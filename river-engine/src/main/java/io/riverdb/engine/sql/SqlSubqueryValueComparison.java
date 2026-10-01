@@ -18,14 +18,6 @@ final class SqlSubqueryValueComparison {
         : expressions.compareExact(
             left.highValue(), left.value(), left.descriptor(),
             right.highValue(), right.value(), right.descriptor());
-    return switch (comparison) {
-      case EQUAL -> compared == 0;
-      case NOT_EQUAL -> compared != 0;
-      case LESS_THAN -> compared < 0;
-      case LESS_OR_EQUAL -> compared <= 0;
-      case GREATER_THAN -> compared > 0;
-      case GREATER_OR_EQUAL -> compared >= 0;
-      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
-    };
+    return SqlDescriptorComparison.matches(compared, comparison);
   }
 }
