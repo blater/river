@@ -1,16 +1,19 @@
 ---
 id: tic-damrod
-status: in_progress
+status: closed
 type: story
 priority: 1
 assignee: blater
 delivery: code
 base-commit: 4ac490321a9f1110900d34562d671a6709af8fc5
 branch: ticket/tic-damrod-dry-refactoring
+delivered-commit: 3646b75d43fc1eba087bd356e31f0b073929d820
 tags:
     - refactor
     - dry
     - maintainability
+links:
+    - tic-curufin
 created: 2026-10-01T14:47:06.64208Z
 ---
 # Consolidate cataloged DRY responsibilities into concise, coherent owners
@@ -86,26 +89,105 @@ with its disposition and implementation reference as each slice lands.
 
 ## Acceptance Criteria
 
-- [ ] Every WET-01 through WET-18 entry has a reviewed disposition: consolidated
+- [x] Every WET-01 through WET-18 entry has a reviewed disposition: consolidated
   with an implementation reference, already resolved on the implementation
   base, or retained with concrete evidence of distinct contracts or increased
   complexity from extraction. Deferred work has a linked ticket and prevents
   claiming the catalog fully resolved.
-- [ ] Each implemented responsibility has one clear policy owner. All affected
+- [x] Each implemented responsibility has one clear policy owner. All affected
   River-owned callers use it; duplicate implementations, transitional adapters,
   dead state, and superseded tests are removed in the same slice.
-- [ ] Review confirms that the affected code is more concise and easier to
+- [x] Review confirms that the affected code is more concise and easier to
   follow as a whole. Avoid arbitrary line-count, source-token, or score targets;
   explain the removed duplication and any necessary new abstraction briefly.
-- [ ] Focused tests exercise the shared owner through materially different
+- [x] Focused tests exercise the shared owner through materially different
   callers, including relevant failure and cleanup boundaries. Affected-module
   checks pass with `--no-daemon`; required public behavior, durable bytes,
   SQL semantics, status precedence, and ownership remain covered.
-- [ ] Durable, recovery, concurrency, and security changes receive independent
+- [x] Durable, recovery, concurrency, and security changes receive independent
   review appropriate to their boundary. Hot-path changes retain allocation/copy
   expectations and use the proportionate measurement and slopmark checks in
   AGENTS.md. Expand validation only for a concrete concern; no new benchmark
   campaign or performance claim is part of this ticket.
-- [ ] The catalog records final dispositions and the ticket records immutable
+- [x] The catalog records final dispositions and the ticket records immutable
   delivery commits before closure under the existing ticket delivery policy.
+
+## Notes
+
+### 2026-10-01T15:35:06Z
+
+### Delivery — 2026-10-01
+
+Implemented on `ticket/tic-damrod-dry-refactoring` from
+`4ac490321a9f1110900d34562d671a6709af8fc5`. Sixteen cohesive code commits span
+`2a2ec986d1b7490833ee3102eea4f3fadc58183b` through
+`3646b75d43fc1eba087bd356e31f0b073929d820`; each carries `Ticket: tic-damrod`.
+The catalog maps each responsibility to its delivery commit. Its WET-08 and
+WET-17 retention decisions reflect live, distinct contracts. WET-09 and WET-12
+share matching operations while retaining different lifecycles. Optional wider
+migration decisions are recorded in [tic-curufin](tic-curufin.md).
+
+The new owners replace the duplicate bodies directly. There are no transitional
+adapters, new formats, result representations, executors, or dependency edges.
+Lock chunks retain the same primitive arrays and budget charges. Durable
+primitives retain absolute access and byte order. Existing warmed public-result,
+SQL/transaction allocation and resource-pressure tests remain part of the
+passing affected-module suite.
+
+### Validation
+
+- Focused tests cover independent durable byte expectations through all four
+  codecs, operator truth at signed extrema, canonical parser admission, response
+  bounds, all four lock stores across occupancy words/chunks and generation
+  rollback/reuse, and text-copy rejection before destination mutation through
+  both public wrappers. Existing relational, DDL, JDBC, daemon, allocation,
+  pressure, and recovery tests pass.
+- All affected checks pass with `--no-daemon`: base, format, storage, engine,
+  tx, engine-api, protocol, client, server, server-app, JDBC, and bench. The
+  complete affected run took 3m 28s. Final tx/API/base checks and final
+  protocol/client/server checks pass after additional boundary coverage and the
+  response-owner refinement.
+- `verifyModuleGraph`, `verifyProjectDependencyVisibility`,
+  `verifyIndexedTableClassReferences`, and `verifySqlRuntimeInvocationPolicy`
+  pass. `verifySourcePolicy` passes against a snapshot of tracked/current
+  unignored sources at `/private/tmp/tic-damrod-policy-checkout`. In the main
+  checkout it also scans two pre-existing ignored benchmark XML artifacts with
+  tabs; those artifacts are untouched. The raw Unicode escape in the new parser
+  test was corrected before the passing snapshot check. `git diff --check`
+  passes.
+- Repository-wide `tk validate` reports 173 pre-existing issues in older
+  tickets; neither tic-damrod nor tic-curufin has a reported issue. All commits
+  in `4ac49032..3646b75d` have the required exact tic-damrod trailer. Closure
+  succeeded with the immutable delivered code commit recorded above.
+- One standalone authenticated JDBC smoke passed on OpenJDK 27 / macOS arm64:
+  `tools/tps-test.sh --version=tic-damrod-structural --mix=new-order
+  --profile=tiny --terminals=1 --warmup-seconds=1 --measured-seconds=3 --seed=42
+  --output-dir=/private/tmp/tic-damrod-boundary-smoke`. It reported status OK,
+  pre/post invariants passed, 1,548 measured commits, 16 expected rollbacks,
+  zero errors/retries, and no metric overflow; owned process/database cleanup
+  completed. This is a correctness smoke, not comparative performance evidence.
+  Logs and artifact are outside Git at the named path. The smoke used the exact
+  delivered code before the slice commits were recorded.
+
+### Independent review and ownership check
+
+Read-only reviewer Avicenna independently approved durable access, exact numeric
+reachability, SQL comparison/names, relational equality/lookup, all six DDL
+lifecycles, canonical parser admission/credential cleanup, JDBC extraction,
+lock metadata/generation accounting, response leases/failure restoration,
+public copy admission, catalog status precedence, test fixtures, and metrics
+arithmetic. Review included the final helper move and added boundary tests;
+reviewer performed no edits or builds. Tests were run by the integrator.
+
+Slopmark before/after inspection was used as a responsibility check, not a
+quality or performance gate. Representative touched scores: Columns result set
+145.123 → 119.416; metadata base 15.587 → 23.790; TpccMetrics
+117.584 → 109.487; descriptor index creation 21.856 → 17.420;
+LockTypedSlots 15.364 → 17.496. New owner increases were reviewed against removed
+caller bodies. Tool boundary coverage is partial. Adding capacity selection to
+ProtocolFrameCodec raised its score from 41.062 to 117.476 and prompted a stop
+and ownership review. The unchanged calculation moved to the concrete
+`ProtocolResponseCapacity` owner (3.410); the codec returns to 41.062. Both
+immediate consumers delegate directly. This change keeps encoding/decoding and
+response-capacity policy coherent without introducing a configurable framework.
 

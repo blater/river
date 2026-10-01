@@ -2,11 +2,14 @@
 
 ## Cataloged DRY refactoring — 2026-10-01
 
-[Tic-damrod](tickets/tic-damrod.md) implements the bounded refactoring work in
-the [WET catalog](wet.md), emphasizing concise code and coherent ownership of
-shared responsibilities. Its scope is the 18 cataloged entries, delivered in
-cohesive slices with P1 findings first. The ticket defines scope limits and
-acceptance; the catalog retains source evidence and per-entry dispositions.
+[Tic-damrod](tickets/tic-damrod.md) delivered the bounded refactoring work in
+the [WET catalog](wet.md): matching policy consolidated for 16 entries and
+evidence-based retention for the two distinct ordering/container contracts.
+The catalog records each disposition and implementation reference; the ticket
+records independent review and validation.
+[Tic-curufin](tickets/tic-curufin.md) follows that delivery to evaluate the wider
+SQL ordering, JDBC cursor-state, public result API, and primitive paged-container
+opportunities with explicit implementation-or-retain decisions.
 
 ## Current indexed-read frontier — 2026-09-29
 
