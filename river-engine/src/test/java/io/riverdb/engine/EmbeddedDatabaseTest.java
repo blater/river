@@ -1,12 +1,13 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+
 import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import static io.riverdb.engine.TestDatabaseResources.databasePlan;
 import static io.riverdb.engine.TestDatabaseResources.runtimeRoot;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
@@ -16,9 +17,7 @@ import io.riverdb.engine.control.DatabaseControlStore;
 import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.storage.heap.HeapRowResult;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
@@ -584,19 +583,6 @@ final class EmbeddedDatabaseTest {
         EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2,
             EmbeddedLockDiagnosticsConfig.disabled(), opened));
     assertEquals(StatusCode.OK, opened.database().close());
-  }
-
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult result = new NioDirectoryOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        NioDurableDirectory.openExisting(
-            root,
-            new FatalStateFence(),
-            new NioIoCounters(),
-            8,
-            result));
-    return result.directory();
   }
 
   private static ByteBuffer row(long value) {

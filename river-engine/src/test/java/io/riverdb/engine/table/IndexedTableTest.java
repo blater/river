@@ -1,11 +1,13 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDurableStorage.openDirectory;
+import static io.riverdb.engine.TestDurableStorage.openWal;
+
 import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
@@ -15,16 +17,13 @@ import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
-import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
-import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
-import io.riverdb.wal.local.LocalWalOpenResult;
 import io.riverdb.platform.file.FileIoMode;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
@@ -38,7 +37,7 @@ final class IndexedTableTest {
   @Test
   void catalogRangeExcludesHeadsUntilItsExclusiveUpperBoundPassesFirstRow(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer value = ByteBuffer.allocateDirect(Long.BYTES);
@@ -78,7 +77,7 @@ final class IndexedTableTest {
   @Test
   void repairsFlushedRootCorruptionAndAcceptsSubsequentInsert(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
@@ -101,7 +100,7 @@ final class IndexedTableTest {
 
     directory = openDirectory(root);
     corruptRootPage(directory, damagedRootPageId);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     table = openTable(openStore(directory, wal));
     assertEquals(entries, table.rowCount());
     assertAllRows(table, entries);
@@ -120,7 +119,7 @@ final class IndexedTableTest {
   @Test
   void persistsAndScansFullSignedPairsAcrossSpaces(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
@@ -141,7 +140,7 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     table = openTable(openStore(directory, wal));
     IndexedScanCursor cursor = new IndexedScanCursor();
     IndexedScanResult result = new IndexedScanResult();
@@ -165,7 +164,7 @@ final class IndexedTableTest {
   @Test
   void recoversHeapIndexAndRootAfterSplitBeforePageFlush(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
@@ -187,7 +186,7 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     table = openTable(openStore(directory, wal));
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKey( 0,10_000, fetched));
@@ -200,7 +199,7 @@ final class IndexedTableTest {
   @Test
   void recoversLogicalInsertBeforePageFlush(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
@@ -213,7 +212,7 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     table = openTable(openStore(directory, wal));
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKey( 0,77, fetched));
@@ -224,7 +223,7 @@ final class IndexedTableTest {
   @Test
   void appendsAndRecoversRowsAcrossHeapPages(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionWriter writer = new TransactionWriter(table, 256);
     ByteBuffer row = ByteBuffer.allocateDirect(256);
@@ -251,7 +250,7 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     table = openTable(openStore(directory, wal));
     assertEquals(rows, table.rowCount());
     assertEquals(StatusCode.OK, table.fetchByKey( 0,0, fetched));
@@ -266,7 +265,7 @@ final class IndexedTableTest {
   @Test
   void crossesFormer65536RowCeilingThroughRealInsertIndexScanAndRecovery(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     int rows = 65_537;
     int batchSize = 64;
@@ -313,7 +312,7 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     table = openTable(openStore(directory, wal));
     assertEquals(rows, table.rowCount());
     assertEquals(StatusCode.OK, table.fetchByKey(0, 65_536, fetched));
@@ -324,7 +323,7 @@ final class IndexedTableTest {
   @Test
   void snapshotHidesRowsCommittedAfterItsBoundary(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     long beforeInsert = table.visibleCommitSequence();
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
@@ -346,7 +345,7 @@ final class IndexedTableTest {
   @Test
   void reportsRegularAndSplitCopyAmplification(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
@@ -381,7 +380,7 @@ final class IndexedTableTest {
   @Test
   void maintainsModelAcrossMultipleSplitsAndRecovery(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
@@ -401,7 +400,7 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     table = openTable(openStore(directory, wal));
     HeapRowResult fetched = new HeapRowResult();
     for (int index = 0; index < entries; index++) {
@@ -415,7 +414,7 @@ final class IndexedTableTest {
   @Test
   void growsToThreeLevelsCheckpointsAndRecovers(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
+    LocalWal wal = openWal(directory, DATABASE, GENERATION);
     IndexedTable table = createTable(createStore(directory, wal));
     int batchCapacity = 64;
     int entries = BTreePage.MAX_ENTRIES * (BTreePage.MAX_ENTRIES / 2 + 1) + 1;
@@ -463,7 +462,7 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, directory.close());
 
     directory = openDirectory(root);
-    wal = openWal(directory);
+    wal = openWal(directory, DATABASE, GENERATION);
     table = openTable(openStore(directory, wal));
     assertEquals(recoveredEntries, table.rowCount());
     assertEquals(3, table.treeHeight());
@@ -522,25 +521,6 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, file.write(offset, oneByte, io));
     assertEquals(StatusCode.OK, file.force(ForceMode.CONTENT_AND_METADATA));
     assertEquals(StatusCode.OK, file.close());
-  }
-
-  private static NioDurableDirectory openDirectory(Path root) {
-    NioDirectoryOpenResult result = new NioDirectoryOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        NioDurableDirectory.openExisting(
-            root,
-            new FatalStateFence(),
-            new NioIoCounters(),
-            8,
-            result));
-    return result.directory();
-  }
-
-  private static LocalWal openWal(NioDurableDirectory directory) {
-    LocalWalOpenResult result = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
-    return result.wal();
   }
 
   private static IndexedTableStore createStore(
