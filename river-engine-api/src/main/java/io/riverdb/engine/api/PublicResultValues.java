@@ -177,6 +177,9 @@ final class PublicResultValues {
   }
 
   int copyTextAt(int index, char[] destination, int offset) {
+    int length = textLengthAt(index);
+    if (length < 0 || destination == null || offset < 0
+        || offset > destination.length - length) return -1;
     int bytes = isText(index) && !isNull(index) ? lanes.textLength(index) : -1;
     return bytes < 0
         ? -1 : text.copyChars(lanes.textOffset(index), bytes, destination, offset);

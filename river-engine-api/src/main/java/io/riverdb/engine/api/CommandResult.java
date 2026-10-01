@@ -140,7 +140,6 @@ public final class CommandResult {
     return values.setText(index, source, offset, length);
   }
 
-
   public int affectedRows() {
     return affectedRows;
   }
@@ -246,13 +245,6 @@ public final class CommandResult {
   }
 
   public int copyTextAt(int index, char[] destination, int offset) {
-    int length = textLengthAt(index);
-    if (length < 0
-        || destination == null
-        || offset < 0
-        || offset > destination.length - length) {
-      return -1;
-    }
     return values.copyTextAt(index, destination, offset);
   }
 
@@ -273,5 +265,4 @@ public final class CommandResult {
   public long retainedBytes() { return values.retainedBytes(); }
   public static long maximumRetainedBytes() { return PublicResultValues.maximumRetainedBytes(); }
   public static long retainedFloorBytes() { return PublicResultValues.retainedFloorBytes(); }
-
 }
