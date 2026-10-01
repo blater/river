@@ -3,7 +3,7 @@ package io.riverdb.bench.tpcc;
 import io.riverdb.base.error.StatusCode;
 
 /** Owns measured/drain attempt, retry outcome, and correlation accounting. */
-final class TpccRetryMetrics {
+final class TpccRetryMetrics extends TpccCounterArithmetic {
   private static final TpccTransactionType[] TRANSACTION_TYPES = TpccTransactionType.values();
   private static final StatusCode[] STATUS_VALUES = StatusCode.values();
   private static final int TYPE_COUNT = TRANSACTION_TYPES.length;
@@ -21,7 +21,6 @@ final class TpccRetryMetrics {
   private long drainUnclassifiedRetryFailures;
   private long retryCorrelationOverflows;
   private long retryCorrelationCount;
-  private boolean overflowed;
 
   void attemptStarted(TpccTransactionType type, long attemptId, boolean measured) {
     if (attemptId <= 0) throw new IllegalArgumentException("attempt ID must be positive");
@@ -218,21 +217,5 @@ final class TpccRetryMetrics {
     long total = 0;
     for (long[] row : values) total = add(total, sum(row));
     return total;
-  }
-
-  private long increment(long value) {
-    if (value == Long.MAX_VALUE) {
-      overflowed = true;
-      return value;
-    }
-    return value + 1;
-  }
-
-  private long add(long current, long value) {
-    if (current < 0 || value < 0 || current > Long.MAX_VALUE - value) {
-      overflowed = true;
-      return Long.MAX_VALUE;
-    }
-    return current + value;
   }
 }

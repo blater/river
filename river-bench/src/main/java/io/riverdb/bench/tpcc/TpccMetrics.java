@@ -1,7 +1,7 @@
 package io.riverdb.bench.tpcc;
 
 /** Fixed-size per-terminal latency histogram and outcome counters. */
-final class TpccMetrics {
+final class TpccMetrics extends TpccCounterArithmetic {
   private static final TpccTransactionType[] TRANSACTION_TYPES = TpccTransactionType.values();
   static final int TYPE_COUNT = TRANSACTION_TYPES.length;
   private final TpccLatencyMetrics latency = new TpccLatencyMetrics();
@@ -21,7 +21,6 @@ final class TpccMetrics {
   private boolean allocationObserved;
   private final long[] started = new long[TYPE_COUNT];
   private long inFlightAtCutoff;
-  private boolean overflowed;
 
   void markStarted(TpccTransactionType type) {
     int index = type.ordinal();
@@ -204,30 +203,4 @@ final class TpccMetrics {
     for (long value : values) total = add(total, value);
     return total;
   }
-
-  private long increment(long value) {
-    if (value == Long.MAX_VALUE) {
-      overflowed = true;
-      return value;
-    }
-    return value + 1;
-  }
-
-  private long add(long current, long value) {
-    if (current < 0 || value < 0 || current > Long.MAX_VALUE - value) {
-      overflowed = true;
-      return Long.MAX_VALUE;
-    }
-    return current + value;
-  }
-
-  private long addSigned(long current, long value) {
-    if (value > 0 && current > Long.MAX_VALUE - value
-        || value < 0 && current < Long.MIN_VALUE - value) {
-      overflowed = true;
-      return value < 0 ? Long.MIN_VALUE : Long.MAX_VALUE;
-    }
-    return current + value;
-  }
-
 }

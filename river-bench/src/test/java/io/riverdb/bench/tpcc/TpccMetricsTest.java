@@ -9,6 +9,25 @@ import org.junit.jupiter.api.Test;
 
 final class TpccMetricsTest {
   @Test
+  void allCounterOwnersRetainSaturationAndIndependentOverflowState() {
+    TpccCounterArithmetic[] owners = {
+        new TpccMetrics(), new TpccRetryMetrics(), new TpccLatencyMetrics()};
+    for (TpccCounterArithmetic owner : owners) {
+      assertEquals(Long.MAX_VALUE, owner.add(Long.MAX_VALUE - 1, 1));
+      assertFalse(owner.overflowed);
+      assertEquals(Long.MAX_VALUE, owner.increment(Long.MAX_VALUE));
+      assertTrue(owner.overflowed);
+      assertEquals(Long.MAX_VALUE, owner.add(1, Long.MAX_VALUE));
+      assertEquals(Long.MAX_VALUE, owner.add(0, -1));
+      assertEquals(Long.MIN_VALUE, owner.addSigned(Long.MIN_VALUE, -1));
+      assertEquals(Long.MAX_VALUE, owner.addSigned(Long.MAX_VALUE, 1));
+    }
+    assertFalse(new TpccMetrics().overflowed());
+    assertFalse(new TpccRetryMetrics().overflowed());
+    assertFalse(new TpccLatencyMetrics().overflowed());
+  }
+
+  @Test
   void combinesBoundedHistogramsAndOutcomes() {
     TpccMetrics first = new TpccMetrics();
     TpccMetrics second = new TpccMetrics();
