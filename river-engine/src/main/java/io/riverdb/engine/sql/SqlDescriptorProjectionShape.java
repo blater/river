@@ -95,7 +95,7 @@ final class SqlDescriptorProjectionShape {
   private int orderAlias(SqlCommand command, int expression) {
     int found = -1;
     for (int projection = 0; projection < count; projection++) {
-      if (!SqlDescriptorPrimaryPredicate.same(
+      if (!SqlBindingNames.same(
           command.columnOutputName(projection), command.orderBy().name(expression))) continue;
       if (found >= 0 || columns[projection] < 0) return -1;
       found = columns[projection];
@@ -110,9 +110,9 @@ final class SqlDescriptorProjectionShape {
     if (symbol < 0) return -2;
     CharSequence qualifier = command.projections().symbolTable(symbol);
     if (qualifier.length() != 0
-        && !SqlDescriptorPrimaryPredicate.same(qualifier, command.tableName())
+        && !SqlBindingNames.same(qualifier, command.tableName())
         && !(command.tableAlias().length() > 0
-            && SqlDescriptorPrimaryPredicate.same(qualifier, command.tableAlias()))) return -2;
+            && SqlBindingNames.same(qualifier, command.tableAlias()))) return -2;
     int column = table.findColumn(command.projections().symbolName(symbol));
     return column < 0 ? -2 : column;
   }

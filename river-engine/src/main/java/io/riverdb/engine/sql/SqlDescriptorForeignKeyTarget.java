@@ -23,7 +23,7 @@ final class SqlDescriptorForeignKeyTarget {
       CharSequence sourceName, TableDescriptor source, int[] localParts, int count,
       StatusDetail detail) {
     CharSequence table = command.tableConstraints().table(constraint);
-    if (sameName(table, sourceName)) {
+    if (SqlBindingNames.same(table, sourceName)) {
       for (int part = 0; part < count; part++) {
         targetParts[part] = source.findColumn(
             command.tableConstraints().target(constraint, part));
@@ -57,13 +57,5 @@ final class SqlDescriptorForeignKeyTarget {
     StatusCode status = matcher.match(source, target, localParts, targetParts, count, self);
     if (status.isOk()) referencedKeyId = matcher.keyId();
     return status;
-  }
-
-  private static boolean sameName(CharSequence left, CharSequence right) {
-    if (left == null || right == null || left.length() != right.length()) return false;
-    for (int index = 0; index < left.length(); index++) {
-      if (left.charAt(index) != right.charAt(index)) return false;
-    }
-    return true;
   }
 }

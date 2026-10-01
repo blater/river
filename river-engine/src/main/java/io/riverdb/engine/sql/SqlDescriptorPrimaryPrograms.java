@@ -61,7 +61,7 @@ final class SqlDescriptorPrimaryPrograms {
     int symbol = (int) where.programOperand(leaf, columnProgram, 0);
     CharSequence qualifier = command.projections().symbolTable(symbol);
     if (qualifier.length() != 0
-        && !SqlDescriptorPrimaryPredicate.same(qualifier, command.tableName())) {
+        && !SqlBindingNames.same(qualifier, command.tableName())) {
       return StatusCode.CONFLICT;
     }
     int column = table.findColumn(command.projections().symbolName(symbol));

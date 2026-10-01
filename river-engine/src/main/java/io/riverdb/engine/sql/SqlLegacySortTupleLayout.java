@@ -66,7 +66,7 @@ final class SqlLegacySortTupleLayout {
   private int groupOrderKey(SqlCommand command, int order) {
     int outputs = command.columnCount() - command.aggregates().outputCount();
     for (int output = 0; output < outputs; output++) {
-      if (same(command.orderBy().name(order), command.columnOutputName(output))) {
+      if (SqlBindingNames.sameIgnoringCase(command.orderBy().name(order), command.columnOutputName(output))) {
         return SqlGroupExpressions.groupKey(command, output);
       }
     }
@@ -75,8 +75,8 @@ final class SqlLegacySortTupleLayout {
 
   private static int outputOrderKey(SqlCommand command, int order) {
     for (int output = 0; output < command.columnCount(); output++) {
-      if (same(command.orderBy().name(order), command.columnOutputName(output))
-          || same(command.orderBy().name(order), command.columnName(output))) return output;
+      if (SqlBindingNames.sameIgnoringCase(command.orderBy().name(order), command.columnOutputName(output))
+          || SqlBindingNames.sameIgnoringCase(command.orderBy().name(order), command.columnName(output))) return output;
     }
     return -1;
   }
@@ -86,17 +86,5 @@ final class SqlLegacySortTupleLayout {
       if (lanes[index] == candidate) return true;
     }
     return false;
-  }
-
-  private static boolean same(CharSequence left, CharSequence right) {
-    if (left == null || right == null || left.length() != right.length()) return false;
-    for (int index = 0; index < left.length(); index++) {
-      char first = left.charAt(index);
-      char second = right.charAt(index);
-      if (first != second && Character.toUpperCase(first) != Character.toUpperCase(second)) {
-        return false;
-      }
-    }
-    return true;
   }
 }

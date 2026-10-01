@@ -59,7 +59,7 @@ final class SqlCreateTableLifecycleAdmission {
 
   private static int findColumn(SqlCommand command, CharSequence name) {
     for (int column = 0; column < command.columnCount(); column++) {
-      if (SqlDescriptorPrimaryPredicate.same(name, command.columnName(column))) return column;
+      if (SqlBindingNames.same(name, command.columnName(column))) return column;
     }
     return -1;
   }

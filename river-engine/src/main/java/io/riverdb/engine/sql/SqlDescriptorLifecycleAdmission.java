@@ -68,7 +68,7 @@ final class SqlDescriptorLifecycleAdmission {
     CharSequence table = command.projections().symbolTable(symbol);
     CharSequence name = command.projections().symbolName(symbol);
     return table != null && table.length() == 0 && name != null
-        && SqlDescriptorPrimaryPredicate.same(name, command.columnName(owner))
+        && SqlBindingNames.same(name, command.columnName(owner))
         && SqlTypeDescriptor.typeId(command.columnCheckTypeDescriptor(owner))
             != SqlTypeDescriptor.TYPE_ID_VARCHAR
         && SqlTypeDescriptor.canCompare(
@@ -80,7 +80,7 @@ final class SqlDescriptorLifecycleAdmission {
     CharSequence name = command.tableConstraints().part(constraint, 0);
     for (int column = 0; column < command.columnCount(); column++) {
       if (command.columnHasCheck(column)
-          && SqlDescriptorPrimaryPredicate.same(name, command.columnName(column))) return true;
+          && SqlBindingNames.same(name, command.columnName(column))) return true;
     }
     return false;
   }

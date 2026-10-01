@@ -43,7 +43,7 @@ final class SqlDescriptorSetOrdering {
     if (command.grouping().count() == 0) return projectionKey(command, order);
     int outputs = command.columnCount() - command.aggregates().outputCount();
     for (int output = 0; output < outputs; output++) {
-      if (same(command.orderBy().name(order), command.columnOutputName(output))) {
+      if (SqlBindingNames.same(command.orderBy().name(order), command.columnOutputName(output))) {
         return groupKey(command, output);
       }
     }
@@ -56,13 +56,9 @@ final class SqlDescriptorSetOrdering {
 
   private static int projectionKey(SqlCommand command, int order) {
     for (int output = 0; output < command.columnCount(); output++) {
-      if (same(command.orderBy().name(order), command.columnOutputName(output))) return output;
+      if (SqlBindingNames.same(command.orderBy().name(order), command.columnOutputName(output))) return output;
     }
     return -1;
-  }
-
-  private static boolean same(CharSequence left, CharSequence right) {
-    return SqlDescriptorPrimaryPredicate.same(left, right);
   }
 
   private static boolean contains(int[] values, int count, int candidate) {

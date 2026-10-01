@@ -16,15 +16,6 @@ final class SqlDescriptorIndexNames {
   static boolean primary(TableDescriptor table, CharSequence name) {
     KeyDescriptor primary = table.primaryKey();
     return primary != null
-        && (primary.matchesName(name) || same(PRIMARY_NAME, name));
-  }
-
-  private static boolean same(CharSequence left, CharSequence right) {
-    if (left == null || right == null || left.length() != right.length()) return false;
-    for (int index = 0; index < left.length(); index++) {
-      if (Character.toUpperCase(left.charAt(index))
-          != Character.toUpperCase(right.charAt(index))) return false;
-    }
-    return true;
+        && (primary.matchesName(name) || SqlBindingNames.sameIgnoringCase(PRIMARY_NAME, name));
   }
 }

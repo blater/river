@@ -89,8 +89,8 @@ final class SqlDescriptorCorrelatedOperandBinding {
   }
 
   private static boolean matches(CharSequence qualifier, SqlCommand command) {
-    return SqlDescriptorPrimaryPredicate.same(qualifier, command.tableName())
+    return SqlBindingNames.same(qualifier, command.tableName())
         || command.tableAlias().length() > 0
-            && SqlDescriptorPrimaryPredicate.same(qualifier, command.tableAlias());
+            && SqlBindingNames.same(qualifier, command.tableAlias());
   }
 }
