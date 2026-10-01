@@ -1,5 +1,10 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.format.FormatBytes.getInt;
+import static io.riverdb.format.FormatBytes.getLong;
+import static io.riverdb.format.FormatBytes.putInt;
+import static io.riverdb.format.FormatBytes.putLong;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
@@ -29,7 +34,6 @@ final class IndexedWalCodec {
   private static final int COMMON_VERSION_OFFSET = 8;
   private static final int COMMON_TYPE_OFFSET = 12;
   private static final int COMMON_HEADER_BYTES = 16;
-  private static final int LONG_HIGH_WORD_OFFSET = 4;
 
   private static final int PAGE_COUNT_OFFSET = COMMON_HEADER_BYTES;
   private static final int PAGE_VERSION_COUNT_OFFSET = 20;
@@ -301,32 +305,8 @@ final class IndexedWalCodec {
     return false;
   }
 
-  static void putInt(ByteBuffer target, int offset, int value) {
-    target.put(offset, (byte) value);
-    target.put(offset + 1, (byte) (value >>> 8));
-    target.put(offset + 2, (byte) (value >>> 16));
-    target.put(offset + 3, (byte) (value >>> 24));
-  }
-
-  private static int getInt(ByteBuffer source, int offset) {
-    return Byte.toUnsignedInt(source.get(offset))
-        | Byte.toUnsignedInt(source.get(offset + 1)) << 8
-        | Byte.toUnsignedInt(source.get(offset + 2)) << 16
-        | Byte.toUnsignedInt(source.get(offset + 3)) << 24;
-  }
-
   private static long unsignedInt(ByteBuffer source, int offset) {
     return Integer.toUnsignedLong(getInt(source, offset));
-  }
-
-  static void putLong(ByteBuffer target, int offset, long value) {
-    putInt(target, offset, (int) value);
-    putInt(target, offset + LONG_HIGH_WORD_OFFSET, (int) (value >>> 32));
-  }
-
-  private static long getLong(ByteBuffer source, int offset) {
-    return Integer.toUnsignedLong(getInt(source, offset))
-        | Integer.toUnsignedLong(getInt(source, offset + LONG_HIGH_WORD_OFFSET)) << 32;
   }
 
   private static void encodeCommonHeader(ByteBuffer target, int operationType) {
