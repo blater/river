@@ -5,6 +5,25 @@ work. Full historical commands, individual samples, decisions and artifact IDs
 through 2026-09-16 are in the [checkpoint archive](performance-checkpoints-archive-2026-09-16.md).
 Diagnostic samples are not audited TPC-C results or general performance claims.
 
+## 2026-10-01 — Reviewed DRY responsibility checkpoint
+
+[Tic-damrod](tickets/tic-damrod.md) is integrated at merge
+`496656700a2a06b5331481076b25c7a0f5535d30`, annotated tag
+`perf-checkpoint-20261001-tic-damrod-dry`. This structural refactoring consolidates
+matching policy across durable codecs, SQL, locks, protocol boundaries, result
+access, and test support. It establishes no throughput improvement or new
+baseline. Independent review, the 12 affected-module checks, and build policy
+checks are recorded in the ticket; [the catalog](wet.md) records each disposition.
+
+The exact merged source passed its authenticated JDBC post-merge smoke:
+`tools/tps-test.sh --version=tic-damrod-merged-49665670 --mix=new-order
+--profile=tiny --terminals=1 --warmup-seconds=1 --measured-seconds=3 --seed=42
+--output-dir=/private/tmp/tic-damrod-post-merge-smoke`. It reported status OK,
+pre/post invariants passed, zero errors/retries, and completed owned cleanup
+with zero active transactions, locks, or waiters. Logs and acceptance artifact
+remain at that path outside Git. The prior feature smoke is recorded separately;
+these short correctness smokes are not a performance comparison.
+
 ## 2026-09-29 — Erebor clustered-row candidate diagnostic
 
 The [Stock Level candidate evidence](delivery/evidence/2026-09-29-tic-erebor-candidate-stock-level.md)

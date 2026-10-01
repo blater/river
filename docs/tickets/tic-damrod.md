@@ -7,7 +7,8 @@ assignee: blater
 delivery: code
 base-commit: 4ac490321a9f1110900d34562d671a6709af8fc5
 branch: ticket/tic-damrod-dry-refactoring
-delivered-commit: 3646b75d43fc1eba087bd356e31f0b073929d820
+delivered-commit: 496656700a2a06b5331481076b25c7a0f5535d30
+checkpoint-tag: perf-checkpoint-20261001-tic-damrod-dry
 tags:
     - refactor
     - dry
@@ -190,3 +191,24 @@ and ownership review. The unchanged calculation moved to the concrete
 `ProtocolResponseCapacity` owner (3.410); the codec returns to 41.062. Both
 immediate consumers delegate directly. This change keeps encoding/decoding and
 response-capacity policy coherent without introducing a configurable framework.
+
+### 2026-10-01T20:38:13Z
+
+**Integration and post-merge smoke — 2026-10-01**
+
+Integrated into the repository default branch `master` at
+`496656700a2a06b5331481076b25c7a0f5535d30` with an explicit merge commit and
+`Ticket: tic-damrod`. The remote has no `main` branch. The merged tree matches
+the independently reviewed delivery exactly. Annotated checkpoint:
+`perf-checkpoint-20261001-tic-damrod-dry`.
+
+Refreshed `:river-bench:installTps` with `--no-daemon`; the exact merged source
+passed `tools/tps-test.sh --version=tic-damrod-merged-49665670 --mix=new-order
+--profile=tiny --terminals=1 --warmup-seconds=1 --measured-seconds=3 --seed=42
+--output-dir=/private/tmp/tic-damrod-post-merge-smoke`.
+Status OK; pre/post invariants passed; 2,118 measured commits, 25 expected
+rollbacks, zero errors/retries, zero active transactions/locks/waiters, and
+completed owned cleanup. This is a correctness smoke without a performance
+claim. The checkpoint registry links this evidence. A short integration lease
+covers merge, smoke, and push; publication includes master, the delivery branch,
+and the annotated tag.
