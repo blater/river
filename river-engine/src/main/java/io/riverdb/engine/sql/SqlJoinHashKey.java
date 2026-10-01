@@ -1,5 +1,8 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.base.type.ExactDecimalDescriptors.precision;
+import static io.riverdb.base.type.ExactDecimalDescriptors.scale;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal128;
 import io.riverdb.base.type.SqlNumericTypeRules;
@@ -90,21 +93,6 @@ final class SqlJoinHashKey {
     }
     long hash = mix(OFFSET, normalized.high);
     return mix(mix(hash, normalized.low), targetScale);
-  }
-
-  private static int precision(int descriptor) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_SMALLINT -> 5;
-      case SqlTypeDescriptor.TYPE_ID_INTEGER -> 10;
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> 19;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL -> SqlTypeDescriptor.parameterOne(descriptor);
-      default -> 0;
-    };
-  }
-
-  private static int scale(int descriptor) {
-    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? SqlTypeDescriptor.parameterTwo(descriptor) : 0;
   }
 
   private static long mix(long hash, long value) {

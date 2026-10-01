@@ -1,5 +1,7 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.base.type.ExactDecimalDescriptors.precision;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.ExactDecimalQuantize;
@@ -131,16 +133,6 @@ final class SqlMutationFixedValues {
             low, targetPrecision, targetScale, decimal128, decimal128Scratch);
     if (status.isOk()) result.value = decimal128.low;
     return status;
-  }
-
-  private static int precision(int descriptor) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_SMALLINT -> 5;
-      case SqlTypeDescriptor.TYPE_ID_INTEGER -> 10;
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> 19;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL -> SqlTypeDescriptor.parameterOne(descriptor);
-      default -> 0;
-    };
   }
 
   private static boolean sameLocalTemporalType(int source, int target) {

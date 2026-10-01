@@ -1,5 +1,8 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.base.type.ExactDecimalDescriptors.precision;
+import static io.riverdb.base.type.ExactDecimalDescriptors.scale;
+
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
@@ -47,20 +50,5 @@ final class SqlUnionTypeResolver {
     int integer = Math.max(precision(left) - scale(left), precision(right) - scale(right));
     return integer + scale > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION
         ? 0 : SqlTypeDescriptor.decimal(Math.max(1, integer + scale), scale);
-  }
-
-  private static int scale(int descriptor) {
-    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? SqlTypeDescriptor.parameterTwo(descriptor) : 0;
-  }
-
-  private static int precision(int descriptor) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_SMALLINT -> 5;
-      case SqlTypeDescriptor.TYPE_ID_INTEGER -> 10;
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> 19;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL -> SqlTypeDescriptor.parameterOne(descriptor);
-      default -> 0;
-    };
   }
 }
