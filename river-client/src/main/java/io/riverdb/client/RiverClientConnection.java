@@ -8,6 +8,7 @@ import io.riverdb.engine.api.RiverSession;
 import io.riverdb.engine.api.SessionOpenResult;
 import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
+import io.riverdb.protocol.ProtocolResponseCapacity;
 import io.riverdb.protocol.ProtocolFrameHeader;
 import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.protocol.ProtocolResponse;
@@ -15,13 +16,10 @@ import io.riverdb.protocol.auth.TokenProof;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLParameters;
-import javax.net.ssl.SSLSocket;
 
 /**
  * Reusable ordered client connection exposing the same bounded API as the
@@ -248,12 +246,9 @@ public final class RiverClientConnection implements RiverDatabase {
   }
 
   StatusCode reserveResponseBytes(int required) {
-    if (required < 0 || required > ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    if (required <= responseBytes.length) return StatusCode.OK;
-    int capacity = Math.min(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES,
-        Math.max(required, responseBytes.length << 1));
+    int capacity = ProtocolResponseCapacity.select(responseBytes.length, required);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    if (capacity == responseBytes.length) return StatusCode.OK;
     try {
       byte[] grown = Arrays.copyOf(responseBytes, capacity);
       ByteBuffer view = ByteBuffer.wrap(grown);
