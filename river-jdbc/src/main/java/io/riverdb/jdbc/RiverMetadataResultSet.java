@@ -60,4 +60,39 @@ abstract class RiverMetadataResultSet extends AbstractResultSet {
     requireOpen();
     return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
+
+  @Override
+  public <T> T getObject(String label, Class<T> type) throws SQLException {
+    return getObject(findColumn(label), type);
+  }
+
+  @Override
+  public <T> T unwrap(Class<T> type) throws SQLException {
+    requireOpen();
+    if (type != null && type.isInstance(this)) return type.cast(this);
+    throw JdbcExceptions.unsupported();
+  }
+
+  @Override
+  public boolean isWrapperFor(Class<?> type) throws SQLException {
+    return !isClosed() && type != null && type.isInstance(this);
+  }
+
+  @Override
+  public int getFetchSize() throws SQLException {
+    requireOpen();
+    return 1;
+  }
+
+  @Override
+  public void setFetchSize(int rows) throws SQLException {
+    requireOpen();
+    if (rows < 0 || rows > getFetchSize()) throw JdbcExceptions.unsupported();
+  }
+
+  static <T> T convert(Object value, Class<T> type) throws SQLException {
+    if (value == null || type.isInstance(value)) return type.cast(value);
+    if (type == String.class) return type.cast(value.toString());
+    throw JdbcExceptions.unsupported();
+  }
 }

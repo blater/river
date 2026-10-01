@@ -5,7 +5,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
-import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 
@@ -240,31 +239,12 @@ final class RiverCatalogResultSet extends RiverMetadataResultSet {
   }
 
   @Override
-  public <T> T getObject(String label, Class<T> type) throws SQLException {
-    return getObject(findColumn(label), type);
-  }
-
-  @Override
   public boolean wasNull() throws SQLException {
     requireOpen();
     if (!rowAvailable || !lastValueRead) {
       throw JdbcExceptions.invalid("no catalog column value has been read");
     }
     return lastWasNull;
-  }
-
-  @Override
-  public int getFetchSize() throws SQLException {
-    requireOpen();
-    return 1;
-  }
-
-  @Override
-  public void setFetchSize(int rows) throws SQLException {
-    requireOpen();
-    if (rows < 0 || rows > 1) {
-      throw JdbcExceptions.unsupported();
-    }
   }
 
   @Override
@@ -294,20 +274,6 @@ final class RiverCatalogResultSet extends RiverMetadataResultSet {
   @Override
   public boolean isClosed() {
     return closed;
-  }
-
-  @Override
-  public <T> T unwrap(Class<T> type) throws SQLException {
-    requireOpen();
-    if (type != null && type.isInstance(this)) {
-      return type.cast(this);
-    }
-    throw JdbcExceptions.unsupported();
-  }
-
-  @Override
-  public boolean isWrapperFor(Class<?> type) {
-    return !closed && type != null && type.isInstance(this);
   }
 
   @Override
