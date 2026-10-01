@@ -1,5 +1,7 @@
 package io.riverdb.engine.schema.catalog;
 
+import static io.riverdb.engine.schema.catalog.CatalogStatus.fail;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.schema.KeyDescriptor;
@@ -51,10 +53,5 @@ final class CatalogSuccessorProposalValidation {
       if (current.secondaryKeyAt(index).keyId() == key.keyId()) return index;
     }
     return -1;
-  }
-
-  private static StatusCode fail(StatusDetail detail, StatusCode status) {
-    if (detail != null && detail.code() == StatusCode.OK) detail.set(status);
-    return status;
   }
 }

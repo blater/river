@@ -1,5 +1,7 @@
 package io.riverdb.engine.schema.catalog;
 
+import static io.riverdb.engine.schema.catalog.CatalogStatus.fail;
+
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.schema.TableDescriptor;
@@ -51,10 +53,5 @@ final class CatalogDirectTableCreation {
       completed = StatusCode.INVARIANT_BROKEN;
     }
     return terminal.isOk() ? completed : fail(detail, terminal);
-  }
-
-  private static StatusCode fail(StatusDetail detail, StatusCode status) {
-    if (detail != null && detail.code() == StatusCode.OK) detail.set(status);
-    return status;
   }
 }
