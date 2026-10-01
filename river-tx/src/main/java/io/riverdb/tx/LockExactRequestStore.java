@@ -4,9 +4,7 @@ import io.riverdb.tx.api.lock.LockWaitHandle;
 
 /** Narrow typed arena for execution-lane requests and reserved grants. */
 final class LockExactRequestStore extends LockTypedSlots {
-  static final class Chunk {
-    final long[] generations = new long[256];
-    final long[] free = new long[256];
+  static final class Chunk extends LockTypedSlots.Chunk {
     final long[] resources = new long[256];
     final long[] transactions = new long[256];
     final long[] transactionRecordGenerations = new long[256];
@@ -30,29 +28,12 @@ final class LockExactRequestStore extends LockTypedSlots {
     final byte[] modes = new byte[256];
     final byte[] states = new byte[256];
     final byte[] actuallyBlocked = new byte[256];
-    final long[] occupied = new long[4];
     final long[] conversions = new long[4];
-    int used;
   }
 
   LockExactRequestStore(LockSegmentArena arena) { super(arena, 45_440); }
   Chunk record(long slot) { return (Chunk) chunk(slot); }
   @Override Object newChunk(long index) { return new Chunk(); }
-  @Override long generation(long slot) { return record(slot).generations[offset(slot)]; }
-  @Override void generation(long slot, long value) { record(slot).generations[offset(slot)] = value; }
-  @Override long freeLink(long slot) { return record(slot).free[offset(slot)]; }
-  @Override void freeLink(long slot, long value) { record(slot).free[offset(slot)] = value; }
-  @Override void used(long slot, int delta) { record(slot).used += delta; }
-  @Override void occupied(long slot, boolean value) {
-    Chunk chunk = record(slot);
-    int offset = offset(slot);
-    if (value) chunk.occupied[offset >>> 6] |= 1L << offset;
-    else chunk.occupied[offset >>> 6] &= ~(1L << offset);
-  }
-  @Override boolean occupied(long slot) {
-    int offset = offset(slot);
-    return (record(slot).occupied[offset >>> 6] & (1L << offset)) != 0;
-  }
   @Override void clear(long slot) {
     Chunk chunk = record(slot);
     int offset = offset(slot);

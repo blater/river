@@ -8,9 +8,7 @@ import io.riverdb.tx.api.lock.LockRequest;
 final class LockExactResourceStore extends LockTypedSlots {
   private static final int MODE_COUNT = LockMode.EXCLUSIVE.ordinal() + 1;
 
-  static final class Chunk {
-    final long[] generations = new long[256];
-    final long[] free = new long[256];
+  static final class Chunk extends LockTypedSlots.Chunk {
     final long[] first = new long[256];
     final long[] second = new long[256];
     final long[] third = new long[256];
@@ -35,8 +33,6 @@ final class LockExactResourceStore extends LockTypedSlots {
     final byte[] scopes = new byte[256];
     final byte[] tupleFlags = new byte[256];
     final byte[] scheduled = new byte[256];
-    final long[] occupied = new long[4];
-    int used;
   }
 
   private final LockTupleResourceBytes tupleStorage;
@@ -47,21 +43,6 @@ final class LockExactResourceStore extends LockTypedSlots {
   }
   Chunk record(long slot) { return (Chunk) chunk(slot); }
   @Override Object newChunk(long index) { return new Chunk(); }
-  @Override long generation(long slot) { return record(slot).generations[offset(slot)]; }
-  @Override void generation(long slot, long value) { record(slot).generations[offset(slot)] = value; }
-  @Override long freeLink(long slot) { return record(slot).free[offset(slot)]; }
-  @Override void freeLink(long slot, long value) { record(slot).free[offset(slot)] = value; }
-  @Override void used(long slot, int delta) { record(slot).used += delta; }
-  @Override void occupied(long slot, boolean value) {
-    Chunk chunk = record(slot);
-    int offset = offset(slot);
-    if (value) chunk.occupied[offset >>> 6] |= 1L << offset;
-    else chunk.occupied[offset >>> 6] &= ~(1L << offset);
-  }
-  @Override boolean occupied(long slot) {
-    int offset = offset(slot);
-    return (record(slot).occupied[offset >>> 6] & (1L << offset)) != 0;
-  }
   @Override void clear(long slot) {
     Chunk chunk = record(slot);
     int offset = offset(slot);
