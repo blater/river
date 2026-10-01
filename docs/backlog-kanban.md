@@ -1,5 +1,13 @@
 # River delivery Kanban and priority queue
 
+## Cataloged DRY refactoring — 2026-10-01
+
+[Tic-damrod](tickets/tic-damrod.md) implements the bounded refactoring work in
+the [WET catalog](wet.md), emphasizing concise code and coherent ownership of
+shared responsibilities. Its scope is the 18 cataloged entries, delivered in
+cohesive slices with P1 findings first. The ticket defines scope limits and
+acceptance; the catalog retains source evidence and per-entry dispositions.
+
 ## Current indexed-read frontier — 2026-09-29
 
 [tic-thranduil](tickets/tic-thranduil.md) measured the complete full-cardinality
