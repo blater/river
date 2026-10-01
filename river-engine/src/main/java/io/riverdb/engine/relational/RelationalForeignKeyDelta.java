@@ -3,7 +3,6 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
-import java.nio.ByteBuffer;
 
 /** Reusable before/after classification for outbound foreign-key validation. */
 final class RelationalForeignKeyDelta {
@@ -24,7 +23,7 @@ final class RelationalForeignKeyDelta {
       KeyDescriptor foreign = table.foreignKeyAt(index);
       status = before.encodeUser(foreign, beforeValues);
       if (status.isOk()) status = after.encodeUser(foreign, afterValues);
-      if (status.isOk()) changed[index] = !equal(before, after);
+      if (status.isOk()) changed[index] = !before.sameBytes(after);
     }
     if (!status.isOk()) reset();
     return status;
@@ -53,16 +52,5 @@ final class RelationalForeignKeyDelta {
     } catch (OutOfMemoryError failure) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-  }
-
-  private static boolean equal(
-      RelationalTupleKeyEncoder left, RelationalTupleKeyEncoder right) {
-    if (left.length() != right.length()) return false;
-    ByteBuffer leftBytes = left.bytes();
-    ByteBuffer rightBytes = right.bytes();
-    for (int index = 0; index < left.length(); index++) {
-      if (leftBytes.get(index) != rightBytes.get(index)) return false;
-    }
-    return true;
   }
 }

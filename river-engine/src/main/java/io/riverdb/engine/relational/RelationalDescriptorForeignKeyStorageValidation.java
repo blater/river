@@ -45,7 +45,7 @@ final class RelationalDescriptorForeignKeyStorageValidation {
     StatusCode status = services.descriptors().open(state.ownerObjectId(), referenced, detail);
     if (status == StatusCode.CONFLICT) return StatusCode.CORRUPTION;
     if (!status.isOk()) return status;
-    KeyDescriptor target = physicalKey(referenced.descriptor(), foreign.referencedKeyId());
+    KeyDescriptor target = referenced.descriptor().physicalKey(foreign.referencedKeyId());
     boolean valid = target != null && target.isUnique() && sameShape(target, foreign);
     StatusCode released = referenced.release();
     if (!valid) return StatusCode.CORRUPTION;
@@ -68,17 +68,6 @@ final class RelationalDescriptorForeignKeyStorageValidation {
       }
     }
     return StatusCode.OK;
-  }
-
-  private static KeyDescriptor physicalKey(TableDescriptor table, long keyId) {
-    if (table.primaryKey() != null && table.primaryKey().keyId() == keyId) {
-      return table.primaryKey();
-    }
-    for (int index = 0; index < table.secondaryKeyCount(); index++) {
-      KeyDescriptor key = table.secondaryKeyAt(index);
-      if (key.keyId() == keyId) return key;
-    }
-    return null;
   }
 
   private static boolean sameShape(KeyDescriptor left, KeyDescriptor right) {
